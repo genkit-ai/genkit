@@ -135,6 +135,13 @@ func TestModelConfigSchema(t *testing.T) {
 	}{
 		{"mistyped value", gemini.InputSchema, map[string]any{"temperature": "hot"}},
 		{"unknown nested field", gemini.InputSchema, map[string]any{"thinkingConfig": map[string]any{"nope": 1}}},
+		// The root and tools[] hide a field each, and hiding it by replacing it
+		// with the permissive schema rather than deleting it is what keeps them
+		// closed. Deleting would have forced additionalProperties open on both,
+		// and these two typos would sail through and be silently ignored.
+		{"unknown top-level field", gemini.InputSchema, map[string]any{"nope": 1}},
+		{"camelCase slip on a hiding object", gemini.InputSchema, map[string]any{"max_output_tokens": 100}},
+		{"unknown field on a config tool", gemini.InputSchema, map[string]any{"tools": []any{map[string]any{"nope": 1}}}},
 		// Image models advertise the images config, so a chat config's fields
 		// are not valid there.
 		{"chat config on an image model", imagen.InputSchema, map[string]any{"temperature": 0.4}},
