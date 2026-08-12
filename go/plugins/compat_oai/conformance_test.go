@@ -24,6 +24,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
 )
 
 // canonicalTypes is the JSON type each shared config field must have wherever
@@ -52,15 +53,18 @@ var canonicalTypes = map[string]string{
 func TestConfigSchemaConformance(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
+	t.Setenv("KIMI_API_KEY", "test-key")
 
 	g := genkit.Init(context.Background(), genkit.WithPlugins(
 		&anthropic.Anthropic{},
 		&dashscope.DashScope{},
+		&kimi.Kimi{},
 	))
 
 	models := []string{
 		"anthropic/claude-sonnet-4-5-20250929",
 		"dashscope/qwen-plus",
+		"kimi/kimi-k3",
 	}
 
 	for _, name := range models {
@@ -141,6 +145,7 @@ func requireDescriptions(t *testing.T, path string, props map[string]any) {
 func TestModelsOverrideConformance(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
+	t.Setenv("KIMI_API_KEY", "test-key")
 
 	// Keyed provider-prefixed on half of them, bare on the rest: both forms
 	// name the same model.
@@ -150,11 +155,13 @@ func TestModelsOverrideConformance(t *testing.T) {
 		&anthropic.Anthropic{Models: map[string]ai.ModelOptions{
 			"anthropic/claude-sonnet-4-5-20250929": pinned}},
 		&dashscope.DashScope{Models: map[string]ai.ModelOptions{"qwen-plus": pinned}},
+		&kimi.Kimi{Models: map[string]ai.ModelOptions{"kimi-k3": pinned}},
 	))
 
 	for _, name := range []string{
 		"anthropic/claude-sonnet-4-5-20250929",
 		"dashscope/qwen-plus",
+		"kimi/kimi-k3",
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := genkit.LookupModel(g, name)
