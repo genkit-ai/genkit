@@ -38,7 +38,7 @@ OutputT = TypeVar('OutputT')
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
-    """Create an action key matching JS format: /{actionType}/{name}.
+    """Create an action key in format: /{actionType}/{name}.
 
     Args:
         action_type: The action type (e.g., 'background-model').
@@ -50,12 +50,8 @@ def _make_action_key(action_type: ActionKind | str, name: str) -> str:
     return f'/{action_type}/{name}'
 
 
-# Type aliases for background model functions matching JS signatures
-# JS: start: (input, options) => Promise<Operation<OutputT>>
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-# JS: check: (input: Operation<OutputT>) => Promise<Operation<OutputT>>
 CheckModelOpFn = Callable[[Operation], Awaitable[Operation]]
-# JS: cancel?: (input: Operation<OutputT>) => Promise<Operation<OutputT>>
 CancelModelOpFn = Callable[[Operation], Awaitable[Operation]]
 
 
@@ -65,11 +61,8 @@ class BackgroundAction(Generic[OutputT]):
     Unlike regular actions, background actions can run for extended periods.
     The returned operation can be used to check status and retrieve the response.
 
-    This class matches the JS BackgroundAction interface from
-    js/core/src/background-action.ts.
-
     Attributes:
-        __action: Action metadata (matches JS __action property).
+        __action: Action metadata.
         start_action: Action to start the operation.
         check_action: Action to check operation status.
         cancel_action: Optional action to cancel operations.
@@ -93,7 +86,7 @@ class BackgroundAction(Generic[OutputT]):
         self.check_action = check_action
         self.cancel_action = cancel_action
 
-        # Match JS __action property structure
+        # Store action metadata
         self.__action = {
             'name': start_action.name,
             'description': start_action.description,
@@ -118,8 +111,6 @@ class BackgroundAction(Generic[OutputT]):
     ) -> Operation:
         """Start a background operation.
 
-        Matches JS: start(input?, options?) => Promise<Operation<OutputT>>
-
         Args:
             input: The input request.
             options: Optional run options.
@@ -133,8 +124,6 @@ class BackgroundAction(Generic[OutputT]):
     async def check(self, operation: Operation) -> Operation:
         """Check the status of a background operation.
 
-        Matches JS: check(operation) => Promise<Operation<OutputT>>
-
         Args:
             operation: The operation to check.
 
@@ -147,8 +136,6 @@ class BackgroundAction(Generic[OutputT]):
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel a background operation.
 
-        Matches JS: cancel(operation) => Promise<Operation<OutputT>>
-
         If cancellation is not supported, returns the operation unchanged
         (matching JS behavior).
 
@@ -159,7 +146,7 @@ class BackgroundAction(Generic[OutputT]):
             Updated Operation reflecting cancellation attempt.
         """
         if self.cancel_action is None:
-            # Match JS behavior: return operation unchanged if cancel not supported
+            # Return operation unchanged if cancel not supported
             return operation
         result = await self.cancel_action.run(operation)
         return _ensure_operation(result.response)
@@ -176,8 +163,6 @@ def _ensure_operation(response: Any) -> Operation:  # noqa: ANN401
 
 class DefineBackgroundModelOptions(BaseModel):
     """Options for defining a background model.
-
-    Matches JS DefineBackgroundModelOptions from js/ai/src/model.ts.
 
     Attributes:
         name: Unique name for this background model.
@@ -207,8 +192,6 @@ def define_background_model(
     description: str | None = None,
 ) -> BackgroundAction[ModelResponse]:
     """Define and register a background model.
-
-    This matches the JS defineBackgroundModel function from js/ai/src/model.ts.
 
     A background model consists of three actions:
     - Start action: /{background-model}/{name}
@@ -244,7 +227,7 @@ def define_background_model(
     """
     action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
-    # Build model metadata matching JS structure
+    # Build model metadata
     model_meta: dict[str, Any] = metadata.copy() if metadata else {}
     model_options: dict[str, Any] = {}
 
@@ -260,15 +243,15 @@ def define_background_model(
 
     model_meta['model'] = model_options
 
-    # Build output schema metadata (matching JS)
+    # Build output schema metadata
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing (matching JS)
+    # Wrap the start function to add the action key and timing
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         start_time = time.perf_counter()
         op = await start(request, ctx)
-        # Set action key matching JS format: /{actionType}/{name}
+        # Set action key in format: /{actionType}/{name}
         op.action = action_key
         latency_ms = (time.perf_counter() - start_time) * 1000
         if op.metadata is None:
@@ -276,7 +259,7 @@ def define_background_model(
         op.metadata['latencyMs'] = latency_ms
         return op
 
-    # Wrap the check function (matching JS - no ctx parameter)
+    # Wrap the check function (no ctx parameter)
     async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
         updated = await check(op)
         # Preserve action key
@@ -284,8 +267,6 @@ def define_background_model(
         return updated
 
     # Register the start action
-    # JS: actionType: config.actionType (background-model)
-    # JS: name: config.name
     start_action = registry.register_action(
         name=name,
         kind=ActionKind.BACKGROUND_MODEL,
@@ -295,8 +276,6 @@ def define_background_model(
     )
 
     # Register the check action
-    # JS: actionType: 'check-operation'
-    # JS: name: `${config.name}/check`
     check_action = registry.register_action(
         name=f'{name}/check',
         kind=ActionKind.CHECK_OPERATION,
@@ -306,8 +285,6 @@ def define_background_model(
     )
 
     # Register the cancel action if provided
-    # JS: actionType: 'cancel-operation'
-    # JS: name: `${config.name}/cancel`
     cancel_action = None
     if cancel is not None:
         # Capture cancel in local scope for the nested function
