@@ -11,66 +11,49 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package internal
 
-import "github.com/firebase/genkit/go/ai"
+import (
+	"strings"
+
+	"github.com/firebase/genkit/go/core/api"
+)
 
 // A plugin's model catalog answers two questions that must agree: what
-// ListActions advertises, and what ResolveAction builds when a request names a
-// model. A caller who knows better than the catalog supplies an override
-// through plugin config, and both paths overlay it on what the plugin already
-// knows. Overlaying rather than replacing is what lets a caller pin one
-// capability without restating the label, the config schema and the rest,
-// which a plugin needs set for the model to work at all.
-//
-// A zero-value field means "not specified" and leaves the base value in place.
-// Every field of both options structs distinguishes its zero value from a
-// meaningful one: the maps and slices are nil when unset, Supports is a
-// pointer, and the string and int fields have no meaningful zero.
+// ListActions advertises, and what ResolveAction builds to serve a request. A
+// caller who knows better than the catalog supplies an override through plugin
+// config, and both paths lay it over what the plugin already knows with
+// [ai.ModelOptions.Overlay].
 
-// OverlayModelOptions returns base with every field set in override replacing
-// base's. Fields left at their zero value in override keep base's value.
-func OverlayModelOptions(base, override ai.ModelOptions) ai.ModelOptions {
-	if override.ConfigSchema != nil {
-		base.ConfigSchema = override.ConfigSchema
+// LookupOverride returns the caller's entry for id in a plugin's override map,
+// accepting the key bare or provider-prefixed since both name the same model
+// everywhere else. id may itself carry the prefix.
+func LookupOverride[T any](overrides map[string]T, provider, id string) (T, bool) {
+	id = TrimProvider(provider, id)
+	if o, ok := overrides[id]; ok {
+		return o, true
 	}
-	if override.Label != "" {
-		base.Label = override.Label
-	}
-	if override.Stage != "" {
-		base.Stage = override.Stage
-	}
-	if override.Supports != nil {
-		base.Supports = override.Supports
-	}
-	if override.Versions != nil {
-		base.Versions = override.Versions
-	}
-	if override.Metadata != nil {
-		base.Metadata = override.Metadata
-	}
-	return base
+	o, ok := overrides[api.NewName(provider, id)]
+	return o, ok
 }
 
-// OverlayEmbedderOptions returns base with every field set in override
-// replacing base's. Fields left at their zero value in override keep base's
-// value.
-func OverlayEmbedderOptions(base, override ai.EmbedderOptions) ai.EmbedderOptions {
-	if override.ConfigSchema != nil {
-		base.ConfigSchema = override.ConfigSchema
+// TrimProvider returns id without its leading "provider/" prefix, inverting
+// [api.NewName] and leaving an id that does not carry the prefix unchanged.
+// Prefer it to [api.ParseName] when the provider is already known: only the
+// prefix is removed, so an ID with slashes of its own (a tuned Vertex
+// endpoint, say) survives intact.
+func TrimProvider(provider, id string) string {
+	return strings.TrimPrefix(id, provider+"/")
+}
+
+// ProviderLabel joins a provider's display name and a model's into the label
+// the dev UI lists a model under, e.g. "Anthropic - Claude Opus 5".
+func ProviderLabel(provider, name string) string {
+	if provider == "" {
+		return name
 	}
-	if override.Label != "" {
-		base.Label = override.Label
-	}
-	if override.Supports != nil {
-		base.Supports = override.Supports
-	}
-	if override.Dimensions != 0 {
-		base.Dimensions = override.Dimensions
-	}
-	if override.Metadata != nil {
-		base.Metadata = override.Metadata
-	}
-	return base
+	return provider + " - " + name
 }

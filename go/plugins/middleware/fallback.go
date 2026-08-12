@@ -67,8 +67,10 @@ type Fallback struct {
 	Statuses []status.Name `json:"statuses,omitempty"`
 }
 
+// Name implements [ai.Middleware].
 func (f *Fallback) Name() string { return provider + "/fallback" }
 
+// New implements [ai.Middleware], hooking the model stage.
 func (f *Fallback) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: f.wrapModel,
@@ -120,7 +122,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 // requires an explicit classification; without this, a deterministic bug in a
 // model plugin would silently reroute every request to the fallback.
 func isFallbackRetryable(err error, statuses []status.Name) bool {
-	if s, ok := classifiedStatus(err); ok {
+	if s, ok := status.Classified(err); ok {
 		return slices.Contains(statuses, s)
 	}
 	return false

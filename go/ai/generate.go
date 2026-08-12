@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -175,12 +174,19 @@ type resumedToolRequestOutput struct {
 
 // ModelOptions represents the configuration options for a model.
 type ModelOptions struct {
-	ConfigSchema map[string]any // JSON schema for the model's config.
-	Label        string         // User-friendly name for the model.
-	Stage        ModelStage     // Indicates the maturity stage of the model.
-	Supports     *ModelSupports // Capabilities of the model.
-	Versions     []string       // Available versions of the model.
-	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
+	// ConfigSchema is the JSON schema for the model's config. Inferred from the
+	// constructor's Config type parameter when nil.
+	ConfigSchema map[string]any
+	// Label is a user-friendly name for the model. Defaults to its name.
+	Label string
+	// Stage indicates the maturity stage of the model.
+	Stage ModelStage
+	// Supports describes what the model can do. A nil value claims nothing.
+	Supports *ModelSupports
+	// Versions lists the model versions a request may pin through its config.
+	Versions []string
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any
 }
 
 // DefineGenerateAction defines a utility generate action.
@@ -231,17 +237,17 @@ func NewModelAction[Config any](
 		panic("ai.NewModelAction: name is required")
 	}
 
-	if opts == nil {
-		opts = &ModelOptions{
-			Label: name,
-		}
+	o := ModelOptions{}
+	if opts != nil {
+		o = *opts
 	}
-	if opts.Supports == nil {
-		opts.Supports = &ModelSupports{}
+	if o.Label == "" {
+		o.Label = name
 	}
+	o.Supports = cloneModelSupports(o.Supports)
 
-	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema, opts.Versions)
-	metadata := modelActionMetadata(api.ActionTypeModel, opts, configSchema, opts.Metadata)
+	configSchema, inputSchema := modelConfigSchemas[Config](o.ConfigSchema, o.Versions)
+	metadata := modelActionMetadata(api.ActionTypeModel, &o, configSchema, o.Metadata)
 
 	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// req.Config was normalized to the exact Config type by
@@ -256,10 +262,10 @@ func NewModelAction[Config any](
 	// normalizeConfig runs outermost so that the built-in wrappers and the
 	// model function all see the typed, converted config on the request.
 	rawFn := core.ChainMiddleware(
-		normalizeConfig[Config](name, opts.Versions),
-		simulateSystemPrompt(opts, nil),
-		augmentWithContext(opts, nil),
-		validateSupport(name, opts),
+		normalizeConfig[Config](name, o.Versions),
+		simulateSystemPrompt(&o, nil),
+		augmentWithContext(&o, nil),
+		validateSupport(name, &o),
 		addAutomaticTelemetry(),
 	)(typedFn)
 
@@ -270,20 +276,9 @@ func NewModelAction[Config any](
 }
 
 // modelActionMetadata builds the descriptor metadata shared by model and
-// background-model actions: the caller metadata maps are merged in order,
-// then the reserved type and model keys are stamped over them so they cannot
-// be corrupted; registry discovery depends on them.
+// background-model actions.
 func modelActionMetadata(actionType api.ActionType, opts *ModelOptions, configSchema map[string]any, callerMetadata ...map[string]any) map[string]any {
-	size := 2
-	for _, m := range callerMetadata {
-		size += len(m)
-	}
-	metadata := make(map[string]any, size)
-	for _, m := range callerMetadata {
-		maps.Copy(metadata, m)
-	}
-	metadata["type"] = actionType
-	metadata["model"] = map[string]any{
+	model := map[string]any{
 		"label": opts.Label,
 		"supports": map[string]any{
 			"media":       opts.Supports.Media,
@@ -301,7 +296,7 @@ func modelActionMetadata(actionType api.ActionType, opts *ModelOptions, configSc
 		"stage":         opts.Stage,
 		"customOptions": configSchema,
 	}
-	return metadata
+	return actionMetadata(actionType, map[string]any{"model": model}, callerMetadata...)
 }
 
 // NewModel creates a new [Model].
@@ -747,10 +742,12 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 // what the tool call resolved to rather than how long the hooks took to
 // resolve it.
 func recordToolShortCircuit(ctx context.Context, name string, input any, resp *MultipartToolResponse, err error) (*MultipartToolResponse, error) {
+	// Mirrors the span core builds for a tool action, subtype included, so the
+	// two are indistinguishable in a trace.
 	spanMeta := &tracing.SpanMetadata{
 		Name:            name,
 		Type:            "action",
-		Subtype:         "tool",
+		Subtype:         string(api.ActionTypeToolV2),
 		Metadata:        map[string]string{},
 		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
 	}

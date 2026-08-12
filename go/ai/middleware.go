@@ -169,6 +169,7 @@ type MiddlewareFunc func(ctx context.Context) (*Hooks, error)
 // in [resolveRefs] and never goes through a name-keyed registry lookup.
 func (MiddlewareFunc) Name() string { return "inline" }
 
+// New implements [Middleware] by calling f.
 func (f MiddlewareFunc) New(ctx context.Context) (*Hooks, error) { return f(ctx) }
 
 // middlewareRefArg is a lazy [Middleware] that carries only a registered

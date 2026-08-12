@@ -30,6 +30,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
@@ -92,25 +93,21 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	}
 }
 
-// NewModel creates a Claude model action without registering it. name is the
-// Genkit action name and apiModel is the model ID sent to the API, which
-// differ when the name is an alias for a dated release; an empty apiModel
-// falls back to name. opts is used as given, except that a nil ConfigSchema
-// defaults to the reflected [anthropic.MessageNewParams] schema and an empty
-// label is derived from the provider and the name.
+// NewModel creates a Claude model action without registering it. name is both
+// the Genkit action name and the model ID requests are sent to: Anthropic
+// resolves an alias like claude-opus-4-5 to its current dated release itself.
 //
-// The framework validates the request's config against the config schema and
-// deserializes it into [anthropic.MessageNewParams] before the model function
-// runs, so the request arrives with the config already typed.
-func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.ModelOptions) *ai.ModelAction {
+// opts is used as given, except that a nil ConfigSchema defaults to the
+// reflected [anthropic.MessageNewParams] schema and an empty Label is derived
+// from the provider and the name. The framework validates the request's config
+// against that schema and deserializes it into [anthropic.MessageNewParams]
+// before the model function runs.
+func NewModel(client anthropic.Client, provider, name string, opts ai.ModelOptions) *ai.ModelAction {
 	if opts.ConfigSchema == nil {
 		opts.ConfigSchema = defaultConfigSchema
 	}
 	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", ProviderLabel(provider), name)
-	}
-	if apiModel == "" {
-		apiModel = name
+		opts.Label = internal.ProviderLabel(DisplayName(provider), name)
 	}
 
 	return ai.NewModelAction(api.NewName(provider, name), &opts, func(
@@ -119,15 +116,14 @@ func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.
 		config anthropic.MessageNewParams,
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, apiModel, input, config, cb)
+		return Generate(ctx, client, provider, name, input, config, cb)
 	})
 }
 
-// ProviderLabel is the display name Claude models are labeled with when the
-// caller supplies no label of its own. Callers that curate their own labels
-// use it to prefix them, so every Claude model names its provider the same way
-// whichever plugin serves it.
-func ProviderLabel(provider string) string {
+// DisplayName is how a provider is spelled in a model's dev UI label. Plugins
+// that curate their own labels join it with [internal.ProviderLabel], so every Claude
+// model names its provider the same way whichever plugin serves it.
+func DisplayName(provider string) string {
 	if provider == "vertexai" {
 		return "Vertex AI"
 	}
@@ -168,12 +164,10 @@ func reflectConfigSchema(config any) map[string]any {
 		}
 		return nil
 	}
-	schema := r.Reflect(config)
+	schema := base.SchemaAsMap(r.Reflect(config))
 	stripParamObjArtifact(schema)
-	applyConfigOverrides(schema, mncOverrides)
-	result := base.SchemaAsMap(schema)
-
-	return result
+	internal.ApplySchemaOverrides(schema, mncOverrides)
+	return schema
 }
 
 // rejectManagedConfig reports a config field that a Genkit primitive owns.

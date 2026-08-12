@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package dashscope provides a Genkit plugin for Alibaba Cloud DashScope's Qwen models.
 package dashscope
 
 import (
@@ -226,10 +227,13 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 	return actions
 }
 
+// Model returns a registered DashScope model.
 func (d *DashScope) Model(g *genkit.Genkit, id string) ai.Model {
 	return d.openAICompatible.Model(g, api.NewName(provider, id))
 }
 
+// DefineModel registers a DashScope model, including models not in the
+// built-in list.
 func (d *DashScope) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 	return d.openAICompatible.DefineModel(provider, id, opts)
 }

@@ -499,67 +499,33 @@ func ListTools(g *Genkit) []ai.Tool {
 	return tools
 }
 
-// DefineModelAction defines a custom model implementation, registers it
-// as a [core.Action] of type Model, and returns the concrete [ai.ModelAction].
+// DefineModelAction defines a custom model implementation, registers it as a
+// [core.Action] of type Model, and returns the concrete [ai.ModelAction].
 //
-// The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
-// The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
-// The `fn` argument ([ai.ModelActionFunc]) implements the actual generation logic,
-// handling input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
-// potentially streaming chunks ([ai.ModelResponseChunk]) via the callback.
+// name identifies the model (e.g. "myProvider/myModel"), opts describes what it
+// supports, and fn implements generation, streaming chunks through its callback.
 //
 // Config is the model's typed configuration; it is usually inferred from fn's
 // signature. See [ai.NewModelAction] for how the request's config is
 // deserialized and validated.
 //
-// For models that don't need to be registered (e.g., for plugin development or testing),
-// use [ai.NewModelAction] instead.
+// For models that don't need to be registered (e.g., for plugin development or
+// testing), use [ai.NewModelAction] instead.
 //
 // Example:
 //
 //	echoModel := genkit.DefineModelAction(g, "custom/echo",
-//		&ai.ModelOptions{
-//			Label:    "Echo Model",
-//			Supports: &ai.ModelSupports{Multiturn: true},
-//		},
-//		func(ctx context.Context, req *ai.ModelRequest, config MyConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-//			// Simple echo implementation
-//			resp := &ai.ModelResponse{
-//				Message: &ai.Message{
-//					Role:    ai.RoleModel,
-//					Content: []*ai.Part{},
-//				},
-//			}
-//			// Combine content from the last user message
-//			var responseText strings.Builder
-//			if len(req.Messages) > 0 {
-//				lastMsg := req.Messages[len(req.Messages)-1]
-//				if lastMsg.Role == ai.RoleUser {
-//					for _, part := range lastMsg.Content {
-//						if part.IsText() {
-//							responseText.WriteString(part.Text)
-//						}
-//					}
-//				}
-//			}
-//			if responseText.Len() == 0 {
-//				responseText.WriteString("...")
-//			}
-//
-//			resp.Message.Content = append(resp.Message.Content, ai.NewTextPart(responseText.String()))
-//
-//			// Example of streaming (optional)
+//		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+//		func(ctx context.Context, req *ai.ModelRequest, cfg *echoConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+//			text := req.Messages[len(req.Messages)-1].Text()
 //			if cb != nil {
-//				chunk := &ai.ModelResponseChunk{ Index: 0, Content: resp.Message.Content }
-//				if err := cb(ctx, chunk); err != nil {
-//					return nil, err // Handle streaming error
-//				}
+//				cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
 //			}
-//
-//			resp.FinishReason = ai.FinishReasonStop
-//			return resp, nil
-//		},
-//	)
+//			return &ai.ModelResponse{
+//				Message:      ai.NewModelTextMessage(text),
+//				FinishReason: ai.FinishReasonStop,
+//			}, nil
+//		})
 func DefineModelAction[Config any](
 	g *Genkit,
 	name string,
@@ -590,8 +556,11 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 // The `checkFn` is the function that checks the status of the background model.
 //
 // Config is the model's typed configuration; it is usually inferred from
-// startFn's signature. See [ai.NewModelAction] for how the request's
-// config is deserialized and validated.
+// startFn's signature. See [ai.NewModelAction] for how the request's config is
+// deserialized and validated.
+//
+// For background models that don't need to be registered (e.g., for plugin
+// development), use [ai.NewBackgroundModelAction] instead.
 func DefineBackgroundModelAction[Config any](
 	g *Genkit,
 	name string,
@@ -1574,8 +1543,11 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 // ([ai.EvaluatorCallbackRequest]) in the evaluation dataset.
 //
 // Config is the evaluator's typed configuration; it is usually inferred from
-// fn's signature. See [ai.NewEvaluatorAction] for how the request's
-// options are deserialized.
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's options are
+// deserialized.
+//
+// For evaluators that don't need to be registered (e.g., for plugin
+// development), use [ai.NewEvaluatorAction] instead.
 func DefineEvaluatorAction[Config any](
 	g *Genkit,
 	name string,
@@ -1608,8 +1580,11 @@ func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.Ev
 // such as batching calls to external services or parallelizing computations.
 //
 // Config is the evaluator's typed configuration; it is usually inferred from
-// fn's signature. See [ai.NewEvaluatorAction] for how the request's
-// options are deserialized.
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's options are
+// deserialized.
+//
+// For evaluators that don't need to be registered (e.g., for plugin
+// development), use [ai.NewBatchEvaluatorAction] instead.
 func DefineBatchEvaluatorAction[Config any](
 	g *Genkit,
 	name string,

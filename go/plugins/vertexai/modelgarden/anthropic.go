@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/firebase/genkit/go/plugins/internal"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
@@ -50,10 +51,6 @@ func (a *Anthropic) Name() string {
 // Init initializes the VertexAI Model Garden for Anthropic plugin and all its known models.
 // After calling Init, you may call [DefineModel] to create and register any additional models.
 func (a *Anthropic) Init(ctx context.Context) []api.Action {
-	if a == nil {
-		a = &Anthropic{}
-	}
-
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.initted {
@@ -75,8 +72,8 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 		// The catalog stores bare display names ("Claude Opus 4.6"). Prefix
 		// the provider so these sit alongside the other Vertex AI models in a
 		// picker instead of looking like they came from somewhere else.
-		opts.Label = fmt.Sprintf("%s - %s", ant.ProviderLabel(provider), opts.Label)
-		actions = append(actions, ant.NewModel(a.client, provider, name, name, opts))
+		opts.Label = internal.ProviderLabel(ant.DisplayName(provider), opts.Label)
+		actions = append(actions, ant.NewModel(a.client, provider, name, opts))
 	}
 
 	return actions
@@ -102,5 +99,5 @@ func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, e
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
-	return ant.NewModel(a.client, provider, name, name, *opts), nil
+	return ant.NewModel(a.client, provider, name, *opts), nil
 }

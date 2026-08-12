@@ -302,3 +302,25 @@ func TestDefineModelRejectsBackgroundModel(t *testing.T) {
 		t.Errorf("DefineModel(%q, opts) = nil error, want the modality checked before opts", veo31GeneratePreview)
 	}
 }
+
+// TestOverrideKeysAcceptProviderPrefix pins that both spellings of a model ID
+// reach the same entry. Callers write the prefixed form everywhere else
+// (ai.WithModelName("googleai/...")), and an ignored key is a silent no-op,
+// the worst way for a config map to fail.
+func TestOverrideKeysAcceptProviderPrefix(t *testing.T) {
+	for _, key := range []string{"gemini-flash-latest", "googleai/gemini-flash-latest"} {
+		ga := &GoogleAI{Models: map[string]ai.ModelOptions{key: {Label: "custom"}}}
+		for _, id := range []string{"gemini-flash-latest", "googleai/gemini-flash-latest"} {
+			if got := ga.catalog().modelOptions(id).Label; got != "custom" {
+				t.Errorf("Models[%q] did not apply to %q: label = %q", key, id, got)
+			}
+			if !ga.catalog().modelOverridden(id) {
+				t.Errorf("Models[%q] not reported as overriding %q", key, id)
+			}
+		}
+	}
+	v := &VertexAI{Embedders: map[string]ai.EmbedderOptions{"vertexai/text-embedding-005": {Label: "custom"}}}
+	if got := v.catalog().embedderOptions("text-embedding-005").Label; got != "custom" {
+		t.Errorf("prefixed embedder key did not apply: label = %q", got)
+	}
+}

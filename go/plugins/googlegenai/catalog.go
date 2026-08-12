@@ -35,8 +35,8 @@ func (v *VertexAI) catalog() catalog {
 // entry works the same for each.
 func (c catalog) modelOptions(id string) ai.ModelOptions {
 	base := GetModelOptions(id, c.provider)
-	if override, ok := c.models[id]; ok {
-		return internal.OverlayModelOptions(base, override)
+	if override, ok := internal.LookupOverride(c.models, c.provider, id); ok {
+		return base.Overlay(override)
 	}
 	return base
 }
@@ -44,7 +44,7 @@ func (c catalog) modelOptions(id string) ai.ModelOptions {
 // modelOverridden reports whether the caller described this model ID, which
 // makes an ID the plugin does not ship a known one.
 func (c catalog) modelOverridden(id string) bool {
-	_, ok := c.models[id]
+	_, ok := internal.LookupOverride(c.models, c.provider, id)
 	return ok
 }
 
@@ -53,8 +53,8 @@ func (c catalog) modelOverridden(id string) bool {
 // when there is one.
 func (c catalog) embedderOptions(id string) ai.EmbedderOptions {
 	base := GetEmbedderOptions(id, c.provider)
-	if override, ok := c.embedders[id]; ok {
-		return internal.OverlayEmbedderOptions(base, override)
+	if override, ok := internal.LookupOverride(c.embedders, c.provider, id); ok {
+		return base.Overlay(override)
 	}
 	return base
 }

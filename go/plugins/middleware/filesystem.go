@@ -162,6 +162,7 @@ type Filesystem struct {
 	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
 }
 
+// Name implements [ai.Middleware].
 func (f *Filesystem) Name() string { return provider + "/filesystem" }
 
 // New initializes a per-call instance: opens the [os.Root], builds the tool

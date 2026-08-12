@@ -122,7 +122,7 @@ func TestNewModelDescriptor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			desc := newModel(anthropic.Client{}, tt.name, tt.name, (&Anthropic{}).modelOptions(tt.name)).Desc()
+			desc := newModel(anthropic.Client{}, tt.name, (&Anthropic{}).modelOptions(tt.name)).Desc()
 
 			model, ok := desc.Metadata["model"].(map[string]any)
 			if !ok {
@@ -177,26 +177,12 @@ func TestModelsOverlaysCuratedCapabilities(t *testing.T) {
 	}
 }
 
-// TestModelsKeyAcceptsEitherForm pins that an entry is found under the bare ID
-// and the provider-prefixed one, matching every other model entry point in the
-// package.
-func TestModelsKeyAcceptsEitherForm(t *testing.T) {
-	for _, key := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
-		a := &Anthropic{Models: map[string]ai.ModelOptions{
-			key: {Label: "Custom Claude"},
-		}}
-		if got := a.modelOptions("claude-opus-4-5").Label; got != "Custom Claude" {
-			t.Errorf("keyed by %q: Label = %q, want the entry to be found", key, got)
-		}
-	}
-}
-
 // TestModelConfigIsValidated pins that the config schema reaches the request
 // input schema, so the framework rejects a config the SDK type cannot hold
 // before it reaches the model function.
 func TestModelConfigIsValidated(t *testing.T) {
 	const name = "claude-opus-4-5"
-	inputSchema := newModel(anthropic.Client{}, name, name, (&Anthropic{}).modelOptions(name)).Desc().InputSchema
+	inputSchema := newModel(anthropic.Client{}, name, (&Anthropic{}).modelOptions(name)).Desc().InputSchema
 
 	req := func(config any) *ai.ModelRequest {
 		return &ai.ModelRequest{
@@ -598,5 +584,18 @@ func TestDefineModelRequiresInit(t *testing.T) {
 
 	if _, err := a.DefineModel(g, "claude-opus-4-5", nil); err == nil {
 		t.Error("DefineModel() error = nil on an uninitialized plugin, want it refused")
+	}
+}
+
+// TestOverrideKeysAcceptProviderPrefix mirrors the googlegenai test: both
+// spellings of a model ID must reach the same entry in Models.
+func TestOverrideKeysAcceptProviderPrefix(t *testing.T) {
+	for _, key := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
+		a := &Anthropic{Models: map[string]ai.ModelOptions{key: {Label: "custom"}}}
+		for _, id := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
+			if got := a.modelOptions(id).Label; got != "custom" {
+				t.Errorf("Models[%q] did not apply to %q: label = %q", key, id, got)
+			}
+		}
 	}
 }

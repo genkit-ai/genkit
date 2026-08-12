@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/plugins/internal"
 	"google.golang.org/genai"
 )
 
@@ -507,15 +508,10 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		opts.ConfigSchema = mt.configSchema()
 	}
 
-	// Set label with provider prefix
-	prefix := googleAILabelPrefix
-	if provider == vertexAIProvider {
-		prefix = vertexAILabelPrefix
-	}
 	if opts.Label == "" {
 		opts.Label = name
 	}
-	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+	opts.Label = internal.ProviderLabel(displayName(provider), opts.Label)
 
 	return opts
 }
@@ -527,14 +523,10 @@ func GetEmbedderOptions(name, provider string) ai.EmbedderOptions {
 		opts = defaultEmbedOpts
 	}
 
-	prefix := googleAILabelPrefix
-	if provider == vertexAIProvider {
-		prefix = vertexAILabelPrefix
-	}
 	if opts.Label == "" {
 		opts.Label = name
 	}
-	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+	opts.Label = internal.ProviderLabel(displayName(provider), opts.Label)
 
 	return opts
 }

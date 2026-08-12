@@ -55,6 +55,8 @@ var chatCompletionParamFields = func() map[string]struct{} {
 	return fields
 }()
 
+// GetRequest returns the request built so far, for tests and for plugins that
+// need to inspect what will be sent.
 func (g *ModelGenerator) GetRequest() *openai.ChatCompletionNewParams {
 	return g.request
 }

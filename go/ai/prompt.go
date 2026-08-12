@@ -405,7 +405,7 @@ func buildVariables(variables any) (map[string]any, error) {
 		return resultVariables, nil
 	}
 	if v.Kind() != reflect.Struct {
-		return nil, errors.New("prompt.buildVariables: fields not a struct or pointer to a struct or a map")
+		return nil, status.Errorf(status.ErrInvalidArgument, "prompt input must be a struct, a pointer to one, or a map")
 	}
 	vt := v.Type()
 
@@ -820,7 +820,7 @@ func convertToPartPointers(parts []dotprompt.Part) ([]*Part, error) {
 // The dir parameter specifies the directory within the filesystem where prompts are located.
 func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 	if fsys == nil {
-		panic(errors.New("no prompt filesystem provided"))
+		panic("ai.LoadPrompt: no prompt filesystem provided")
 	}
 
 	if _, err := fs.Stat(fsys, dir); err != nil {
@@ -1011,24 +1011,24 @@ func parseDotpromptUse(raw any) ([]Middleware, error) {
 	}
 	entries, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("`use` must be a list, got %T", raw)
+		return nil, status.Errorf(status.ErrInvalidArgument, "`use` must be a list, got %T", raw)
 	}
 	uses := make([]Middleware, 0, len(entries))
 	for i, entry := range entries {
 		switch v := entry.(type) {
 		case string:
 			if v == "" {
-				return nil, fmt.Errorf("`use[%d]` is an empty string", i)
+				return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` is an empty string", i)
 			}
 			uses = append(uses, middlewareRefArg{name: v})
 		case map[string]any:
 			name, _ := v["name"].(string)
 			if name == "" {
-				return nil, fmt.Errorf("`use[%d]` is missing required `name` field", i)
+				return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` is missing required `name` field", i)
 			}
 			uses = append(uses, middlewareRefArg{name: name, config: v["config"]})
 		default:
-			return nil, fmt.Errorf("`use[%d]` must be a string or map, got %T", i, entry)
+			return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` must be a string or map, got %T", i, entry)
 		}
 	}
 	return uses, nil
@@ -1063,7 +1063,7 @@ func variantKey(variant string) string {
 // contentType determines the MIME content type of the given data URI
 func contentType(ct, uri string) (string, []byte, error) {
 	if uri == "" {
-		return "", nil, errors.New("found empty URI in part")
+		return "", nil, status.Errorf(ErrInvalidPart, "found empty URI in part")
 	}
 
 	if strings.HasPrefix(uri, "gs://") || strings.HasPrefix(uri, "http") {
@@ -1078,7 +1078,7 @@ func contentType(ct, uri string) (string, []byte, error) {
 	if contents, isData := strings.CutPrefix(uri, "data:"); isData {
 		prefix, _, found := strings.Cut(contents, ",")
 		if !found {
-			return "", nil, errors.New("failed to parse data URI: missing comma")
+			return "", nil, status.Errorf(ErrInvalidPart, "failed to parse data URI: missing comma")
 		}
 
 		if p, isBase64 := strings.CutSuffix(prefix, ";base64"); isBase64 {
@@ -1089,7 +1089,7 @@ func contentType(ct, uri string) (string, []byte, error) {
 		}
 	}
 
-	return "", nil, errors.New("uri content type not found")
+	return "", nil, status.Errorf(ErrInvalidPart, "uri content type not found")
 }
 
 // DefineDataPrompt creates a new data prompt and registers it.
@@ -1232,7 +1232,7 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 // Render renders the typed prompt template with the given input.
 func (dp *DataPrompt[In, Out]) Render(ctx context.Context, input In) (*GenerateActionOptions, error) {
 	if dp == nil {
-		return nil, errors.New("DataPrompt.Render: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Render: prompt is nil")
 	}
 
 	return dp.prompt.Render(ctx, input)

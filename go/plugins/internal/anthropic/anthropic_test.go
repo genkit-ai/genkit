@@ -86,7 +86,7 @@ func validateConfig(t *testing.T, inputSchema map[string]any, config any) error 
 // The schema is enforced on every request, so a form that the two disagree on
 // is either a request rejected for no reason or a value silently dropped.
 func TestModelConfig(t *testing.T) {
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-5", "", ai.ModelOptions{}).Desc()
+	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-5", ai.ModelOptions{}).Desc()
 
 	sampled := anthropic.MessageNewParams{
 		Temperature: anthropic.Float(1.0),
@@ -181,7 +181,7 @@ func TestModelLabel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.provider+"/"+tt.name, func(t *testing.T) {
-			desc := NewModel(anthropic.Client{}, tt.provider, tt.name, "", tt.opts).Desc()
+			desc := NewModel(anthropic.Client{}, tt.provider, tt.name, tt.opts).Desc()
 			got := desc.Metadata["model"].(map[string]any)["label"]
 			if got != tt.want {
 				t.Errorf("label = %v, want %q", got, tt.want)

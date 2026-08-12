@@ -4,38 +4,19 @@
 package googlegenai
 
 import (
-	"strings"
-
-	"github.com/invopop/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal"
 	"google.golang.org/genai"
 )
 
-// configOverrides describes per-property metadata layered onto a reflected
-// JSON schema before it is exposed to the Genkit Developer UI. The genai
-// SDK structs do not carry JSON Schema descriptions, and a few of their
-// fields are managed by Genkit primitives and rejected when supplied
-// directly, so we curate that information here.
-//
-// All path application is best-effort: if the upstream SDK renames or
-// removes a field, the corresponding entry silently no-ops rather than
-// panicking. The cost is that stale entries quietly stop applying — caught
-// by the snapshot tests, not at runtime.
-type configOverrides struct {
-	// descriptions maps a JSON property path to the help text shown as the
-	// field's tooltip in the dev UI. Keys may be a top-level property name
-	// ("temperature") or a dotted path with "[]" denoting a descent into an
-	// array's item shape ("safetySettings[].category").
-	descriptions map[string]string
-	// hidden lists JSON property paths to hide from the schema. Same
-	// notation as descriptions. Use this for fields the plugin rejects at
-	// runtime or that the Genkit framework manages directly. Hidden means
-	// typeless rather than absent; see applyConfigOverrides.
-	hidden []string
-}
+// The presentation layered onto each reflected genai config schema before it
+// reaches the dev UI: the SDK structs carry no schema descriptions, and a few
+// of their fields are owned by a Genkit option and rejected when supplied
+// directly. See [internal.SchemaOverrides] for the path notation; a stale entry is
+// a no-op, which TestConfigOverridePathsResolve catches.
 
 // gccOverrides controls dev UI presentation of [genai.GenerateContentConfig].
-var gccOverrides = configOverrides{
-	descriptions: map[string]string{
+var gccOverrides = internal.SchemaOverrides{
+	Descriptions: map[string]string{
 		// Top-level fields.
 		"temperature":                "Controls the degree of randomness in token selection. Lower values produce more deterministic responses; higher values produce more diverse or creative ones.",
 		"topP":                       "Considers tokens whose cumulative probability exceeds this value. Lower values constrain the model to high-probability tokens; higher values allow more variety.",
@@ -114,7 +95,7 @@ var gccOverrides = configOverrides{
 		// modelSelectionConfig sub-fields.
 		"modelSelectionConfig.featureSelectionPreference": "Preference for which model features to prioritize (PRIORITIZE_QUALITY, BALANCED, PRIORITIZE_COST, etc.).",
 	},
-	hidden: []string{
+	Hidden: []string{
 		// Managed by Genkit primitives; the plugin rejects these when set.
 		"systemInstruction",            // ai.WithSystemPrompt
 		"cachedContent",                // ai.WithCacheTTL
@@ -128,8 +109,8 @@ var gccOverrides = configOverrides{
 }
 
 // gicOverrides controls dev UI presentation of [genai.GenerateImagesConfig].
-var gicOverrides = configOverrides{
-	descriptions: map[string]string{
+var gicOverrides = internal.SchemaOverrides{
+	Descriptions: map[string]string{
 		"numberOfImages":           "Number of images to generate. Defaults to 4 when unset.",
 		"aspectRatio":              "Aspect ratio of the generated images. Supported values: 1:1, 3:4, 4:3, 9:16, 16:9.",
 		"negativePrompt":           "Free-form description of what to discourage in the generated images.",
@@ -160,8 +141,8 @@ var gicOverrides = configOverrides{
 }
 
 // gvcOverrides controls dev UI presentation of [genai.GenerateVideosConfig].
-var gvcOverrides = configOverrides{
-	descriptions: map[string]string{
+var gvcOverrides = internal.SchemaOverrides{
+	Descriptions: map[string]string{
 		"numberOfVideos":     "Number of videos to generate per request.",
 		"fps":                "Frames per second for the generated video.",
 		"durationSeconds":    "Length of the generated clip in seconds.",
@@ -187,120 +168,9 @@ var gvcOverrides = configOverrides{
 	},
 }
 
-// applyConfigOverrides mutates schema in place: hides the managed properties
-// and writes descriptions onto the rest. Best-effort, so a path that no longer
-// resolves (because the upstream SDK renamed or removed a field) silently
-// no-ops rather than panicking.
-//
-// A hidden property is replaced by the permissive `true` schema rather than
-// deleted. Both hide it from the dev UI, which renders only properties whose
-// type it recognizes, but they differ on everything else. The config schema is
-// enforced by input validation on every request, and a hidden field must still
-// reach the plugin's own check, which names the Genkit option to use instead;
-// deleting it would instead fail validation as an unknown property. Deleting
-// also forces the parent open with additionalProperties: true to let the value
-// back through, which gives up rejecting genuinely unknown fields anywhere in
-// that object. Replacing keeps additionalProperties: false intact, so a typo
-// like maxTokens for maxOutputTokens is still caught.
-func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
-	if schema == nil || schema.Properties == nil {
-		return
-	}
-	hideTop := make(map[string]struct{})
-	for _, path := range o.hidden {
-		steps := parsePath(path)
-		if len(steps) == 1 {
-			hideTop[steps[0]] = struct{}{}
-		}
-		hideAtPath(schema, steps)
-	}
-	if len(hideTop) > 0 && len(schema.Required) > 0 {
-		kept := schema.Required[:0]
-		for _, r := range schema.Required {
-			if _, drop := hideTop[r]; !drop {
-				kept = append(kept, r)
-			}
-		}
-		schema.Required = kept
-	}
-	for path, desc := range o.descriptions {
-		if target := schemaAtPath(schema, parsePath(path)); target != nil {
-			target.Description = desc
-		}
-	}
-}
-
-// parsePath splits an override path into navigation steps. Each step is
-// either a property name or the literal "[]" meaning "descend into an
-// array's item schema." Examples:
-//
-//	"systemInstruction"             -> ["systemInstruction"]
-//	"tools[].functionDeclarations"  -> ["tools", "[]", "functionDeclarations"]
-//	"foo[].bar[].baz"               -> ["foo", "[]", "bar", "[]", "baz"]
-func parsePath(path string) []string {
-	var steps []string
-	for _, tok := range strings.Split(path, ".") {
-		if name := strings.TrimSuffix(tok, "[]"); name != tok {
-			steps = append(steps, name, "[]")
-		} else {
-			steps = append(steps, tok)
-		}
-	}
-	return steps
-}
-
-// schemaAtPath descends a schema by walking `Items` for "[]" steps and
-// `Properties` for named ones. Returns nil if any step doesn't resolve —
-// callers should treat that as a no-op, not an error.
-func schemaAtPath(schema *jsonschema.Schema, steps []string) *jsonschema.Schema {
-	cur := schema
-	for _, step := range steps {
-		if cur == nil {
-			return nil
-		}
-		if step == "[]" {
-			cur = cur.Items
-			continue
-		}
-		if cur.Properties == nil {
-			return nil
-		}
-		next, ok := cur.Properties.Get(step)
-		if !ok {
-			return nil
-		}
-		cur = next
-	}
-	return cur
-}
-
-// hideAtPath replaces the leaf property at the given path with the permissive
-// `true` schema, which hides it from the dev UI while still accepting whatever
-// value a caller sends so the plugin's own check can answer it. Reports
-// whether it applied, so a path that no longer resolves is distinguishable
-// from one that did.
-func hideAtPath(schema *jsonschema.Schema, steps []string) bool {
-	if len(steps) == 0 {
-		return false
-	}
-	leaf := steps[len(steps)-1]
-	if leaf == "[]" {
-		return false
-	}
-	parent := schemaAtPath(schema, steps[:len(steps)-1])
-	if parent == nil || parent.Properties == nil {
-		return false
-	}
-	if _, ok := parent.Properties.Get(leaf); !ok {
-		return false
-	}
-	parent.Properties.Set(leaf, jsonschema.TrueSchema)
-	return true
-}
-
-// overridesFor returns the overrides matching a given config struct value,
-// or a zero (no-op) value for unknown types.
-func overridesFor(config any) configOverrides {
+// overridesFor returns the overrides matching a config struct value, or a zero
+// (no-op) value for unknown types.
+func overridesFor(config any) internal.SchemaOverrides {
 	switch config.(type) {
 	case genai.GenerateContentConfig, *genai.GenerateContentConfig:
 		return gccOverrides
@@ -309,5 +179,5 @@ func overridesFor(config any) configOverrides {
 	case genai.GenerateVideosConfig, *genai.GenerateVideosConfig:
 		return gvcOverrides
 	}
-	return configOverrides{}
+	return internal.SchemaOverrides{}
 }

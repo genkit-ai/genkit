@@ -72,6 +72,7 @@ func (m *Message) Clone() *Message {
 	return &cp
 }
 
+// PartKind is what a [Part] carries: text, media, a tool request, and so on.
 type PartKind int8
 
 const (

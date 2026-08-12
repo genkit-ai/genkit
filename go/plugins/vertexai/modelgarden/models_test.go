@@ -135,7 +135,7 @@ func TestResolveVertexMaasEnv_PanicsWithoutLocation(t *testing.T) {
 // it the way the rest of the Vertex AI models do, which means an entry that
 // carried its own prefix would come out as "Vertex AI - Vertex AI - Claude".
 func TestAnthropicModelLabelsAreBare(t *testing.T) {
-	prefix := ant.ProviderLabel(provider)
+	prefix := ant.DisplayName(provider)
 	for name, opts := range AnthropicModels {
 		if opts.Label == "" {
 			t.Errorf("AnthropicModels[%q].Label is empty, want a display name", name)

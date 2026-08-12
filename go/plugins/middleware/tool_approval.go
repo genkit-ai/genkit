@@ -53,8 +53,10 @@ type ToolApproval struct {
 	AllowedTools []string `json:"allowedTools,omitempty"`
 }
 
+// Name implements [ai.Middleware].
 func (t *ToolApproval) Name() string { return provider + "/toolApproval" }
 
+// New implements [ai.Middleware], hooking tool execution.
 func (t *ToolApproval) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapTool: t.wrapTool,

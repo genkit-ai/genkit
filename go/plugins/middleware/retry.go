@@ -20,7 +20,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"math"
 	"math/rand"
 	"slices"
@@ -88,8 +87,10 @@ type Retry struct {
 	NoJitter bool `json:"noJitter,omitempty"`
 }
 
+// Name implements [ai.Middleware].
 func (r *Retry) Name() string { return provider + "/retry" }
 
+// New implements [ai.Middleware], hooking the model stage.
 func (r *Retry) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: r.wrapModel,
@@ -174,26 +175,8 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 // preserving the v1 contract that non-GenkitError errors are retried
 // regardless of the Statuses setting.
 func isRetryable(err error, statuses []status.Name) bool {
-	if s, ok := classifiedStatus(err); ok {
+	if s, ok := status.Classified(err); ok {
 		return slices.Contains(statuses, s)
 	}
 	return true
-}
-
-// classifiedStatus returns the status err was explicitly classified with, or
-// false when nothing in err's chain carries one. The distinction keeps these
-// middlewares matching their v1 contracts: a classified error is checked
-// against the configured status list, while an unclassified one (a plain error
-// from a provider SDK or the network) keeps its v1 behavior instead of
-// silently inheriting INTERNAL's membership in the list. Cancellation and
-// deadline expiry count as classified, reporting CANCELLED and
-// DEADLINE_EXCEEDED per [status.Of].
-func classifiedStatus(err error) (status.Name, bool) {
-	var e *status.Error
-	var s *status.Sentinel
-	if errors.As(err, &e) || errors.As(err, &s) ||
-		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return status.Of(err), true
-	}
-	return "", false
 }

@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
@@ -173,6 +172,8 @@ var statusName = map[ScoreStatus]string{
 	ScoreStatusPass:    "PASS",
 }
 
+// String returns the wire name of the score status ("PASS", "FAIL", or
+// "UNKNOWN").
 func (ss ScoreStatus) String() string {
 	return statusName[ss]
 }
@@ -203,6 +204,8 @@ type EvaluationResult struct {
 // represents the result on the entire input dataset.
 type EvaluatorResponse = []EvaluationResult
 
+// EvaluatorOptions configures an evaluator created with
+// [NewEvaluatorAction] or [NewBatchEvaluatorAction].
 type EvaluatorOptions struct {
 	// ConfigSchema is the JSON schema for the evaluator's config.
 	ConfigSchema map[string]any `json:"configSchema,omitempty"`
@@ -229,19 +232,14 @@ type EvaluatorCallbackResponse = EvaluationResult
 
 // evaluatorMetadata builds the shared action metadata for an evaluator.
 func evaluatorMetadata(opts *EvaluatorOptions, configSchema map[string]any) map[string]any {
-	// Seed from the caller's metadata, then stamp the built-in keys over it so
-	// they cannot be corrupted; registry discovery depends on them.
-	metadata := make(map[string]any, len(opts.Metadata)+2)
-	maps.Copy(metadata, opts.Metadata)
-	// TODO(ssbushi): Set this on `evaluator` key on action metadata
-	metadata["type"] = api.ActionTypeEvaluator
-	metadata["evaluator"] = map[string]any{
-		"evaluatorIsBilled":    opts.IsBilled,
-		"evaluatorDisplayName": opts.DisplayName,
-		"evaluatorDefinition":  opts.Definition,
-		"customOptions":        configSchema,
-	}
-	return metadata
+	return actionMetadata(api.ActionTypeEvaluator, map[string]any{
+		"evaluator": map[string]any{
+			"evaluatorIsBilled":    opts.IsBilled,
+			"evaluatorDisplayName": opts.DisplayName,
+			"evaluatorDefinition":  opts.Definition,
+			"customOptions":        configSchema,
+		},
+	}, opts.Metadata)
 }
 
 // NewEvaluatorAction creates an unregistered [EvaluatorAction]: return it from
@@ -262,29 +260,18 @@ func NewEvaluatorAction[Config any](
 	fn EvaluatorActionFunc[Config],
 ) *EvaluatorAction {
 	if name == "" {
-		panic("ai.NewEvaluatorAction: evaluator name is required")
+		panic("ai.NewEvaluatorAction: name is required")
 	}
 
-	if opts == nil {
-		opts = &EvaluatorOptions{}
+	o := EvaluatorOptions{}
+	if opts != nil {
+		o = *opts
 	}
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+	configSchema, inputSchema := actionConfigSchemas[Config](o.ConfigSchema, EvaluatorRequest{}, "options")
 
-	return &EvaluatorAction{
-		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata:    evaluatorMetadata(opts, configSchema),
-			InputSchema: inputSchema,
-		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
-			// Normalize a shallow copy so the type-erased Options and the
-			// typed parameter always agree without clobbering the caller-owned
-			// request.
-			reqCopy := *req
-			req = &reqCopy
-			cfg, err := resolveConfigInto[Config](&req.Options)
-			if err != nil {
-				return nil, err
-			}
+	rawFn := typedConfigFn(func(r *EvaluatorRequest) *any { return &r.Options },
+		func(ctx context.Context, req *EvaluatorRequest, cfg Config) (*EvaluatorResponse, error) {
 			// The callback's Options slot is type-erased like the request's,
 			// so it takes the same guard: boxing a typed nil would make it
 			// compare non-nil while dereferences still panic, and would split
@@ -341,7 +328,13 @@ func NewEvaluatorAction[Config any](
 				}
 			}
 			return &results, nil
-		}),
+		})
+
+	return &EvaluatorAction{
+		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    evaluatorMetadata(&o, configSchema),
+			InputSchema: inputSchema,
+		}, rawFn),
 	}
 }
 
@@ -367,32 +360,21 @@ func NewBatchEvaluatorAction[Config any](
 	fn BatchEvaluatorActionFunc[Config],
 ) *EvaluatorAction {
 	if name == "" {
-		panic("ai.NewBatchEvaluatorAction: batch evaluator name is required")
+		panic("ai.NewBatchEvaluatorAction: name is required")
 	}
 
-	if opts == nil {
-		opts = &EvaluatorOptions{}
+	o := EvaluatorOptions{}
+	if opts != nil {
+		o = *opts
 	}
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
-
-	rawFn := func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
-		// Normalize a shallow copy so the type-erased Options and the typed
-		// parameter always agree without clobbering the caller-owned request.
-		reqCopy := *req
-		req = &reqCopy
-		cfg, err := resolveConfigInto[Config](&req.Options)
-		if err != nil {
-			return nil, err
-		}
-		return fn(ctx, req, cfg)
-	}
+	configSchema, inputSchema := actionConfigSchemas[Config](o.ConfigSchema, EvaluatorRequest{}, "options")
 
 	return &EvaluatorAction{
 		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata:    evaluatorMetadata(opts, configSchema),
+			Metadata:    evaluatorMetadata(&o, configSchema),
 			InputSchema: inputSchema,
-		}, rawFn),
+		}, typedConfigFn(func(r *EvaluatorRequest) *any { return &r.Options }, fn)),
 	}
 }
 
@@ -404,7 +386,7 @@ func NewBatchEvaluatorAction[Config any](
 // request.
 func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
 	if name == "" {
-		panic("ai.NewEvaluator: evaluator name is required")
+		panic("ai.NewEvaluator: name is required")
 	}
 	return NewEvaluatorAction(name, opts, func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
 		return fn(ctx, req)
@@ -420,7 +402,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 // request.
 func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
 	if name == "" {
-		panic("ai.NewBatchEvaluator: batch evaluator name is required")
+		panic("ai.NewBatchEvaluator: name is required")
 	}
 	return NewBatchEvaluatorAction(name, opts, func(ctx context.Context, req *EvaluatorRequest, _ any) (*EvaluatorResponse, error) {
 		return fn(ctx, req)

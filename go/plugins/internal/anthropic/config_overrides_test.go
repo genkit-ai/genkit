@@ -11,16 +11,30 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/plugins/internal"
 )
 
-// configProps returns the advertised config schema's property map.
-func configProps(t *testing.T) map[string]any {
-	t.Helper()
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", "", ai.ModelOptions{}).Desc()
-	cfg := desc.InputSchema["properties"].(map[string]any)["config"].(map[string]any)
-	first := cfg["anyOf"].([]any)[0].(map[string]any)
-	return first["properties"].(map[string]any)
+// advertisedSchema is the config schema the dev UI reads, before the framework
+// widens a copy of it for enforcement.
+func advertisedSchema() map[string]any {
+	return reflectConfigSchema(anthropic.MessageNewParams{})
+}
+
+// modelDesc is the descriptor a Claude model advertises, whose input schema is
+// what requests are validated against.
+func modelDesc() api.ActionDesc {
+	return NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", ai.ModelOptions{}).Desc()
+}
+
+// TestConfigOverridePathsResolve is the guard that keeps the override map
+// honest. Applying a path the SDK no longer has is a silent no-op, so an entry
+// left behind by a renamed field would quietly stop describing anything.
+func TestConfigOverridePathsResolve(t *testing.T) {
+	if stale := mncOverrides.UnresolvedPaths(advertisedSchema()); len(stale) > 0 {
+		t.Errorf("override paths no longer in the SDK schema: %v", stale)
+	}
 }
 
 // TestManagedFieldsAreHiddenButAccepted pins the two halves of hiding a field
@@ -34,31 +48,15 @@ func configProps(t *testing.T) map[string]any {
 // would force additionalProperties open on the parent to let the value back
 // through, which is what gives up the unknown-field rejection below.
 func TestManagedFieldsAreHiddenButAccepted(t *testing.T) {
-	props := configProps(t)
-
-	for _, path := range mncOverrides.hidden {
-		name, _, nested := strings.Cut(path, ".")
-		if nested {
-			continue // checked separately below
-		}
-		got, ok := props[name]
-		if !ok {
-			t.Errorf("%s is absent from the schema, want the permissive true schema", name)
-			continue
-		}
-		if got != true {
-			t.Errorf("%s = %v, want true (typeless, so the dev UI skips it)", name, got)
+	schema := advertisedSchema()
+	for _, path := range mncOverrides.Hidden {
+		if got := internal.SchemaAt(schema, path); got != true {
+			t.Errorf("%q = %v, want true (typeless, so the dev UI skips it)", path, got)
 		}
 	}
-
-	// output_config keeps effort and hides only format.
-	oc := props["output_config"].(map[string]any)
-	ocProps := oc["properties"].(map[string]any)
-	if got := ocProps["format"]; got != true {
-		t.Errorf("output_config.format = %v, want true", got)
-	}
-	if _, ok := ocProps["effort"].(map[string]any)["type"]; !ok {
-		t.Error("output_config.effort lost its type; it is not managed by Genkit")
+	// Hiding is per-field: output_config.format goes, effort stays usable.
+	if effort, ok := internal.SchemaAt(schema, "output_config.effort").(map[string]any); !ok || effort["type"] == nil {
+		t.Errorf("output_config.effort lost its type; it is not managed by Genkit: %#v", effort)
 	}
 }
 
@@ -66,7 +64,7 @@ func TestManagedFieldsAreHiddenButAccepted(t *testing.T) {
 // deleting exists to preserve. A misspelled field is the common mistake, and
 // the SDK's wire names are snake_case, so camelCase must not slip through.
 func TestUnknownFieldsStillRejected(t *testing.T) {
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", "", ai.ModelOptions{}).Desc()
+	desc := modelDesc()
 	for _, cfg := range []map[string]any{
 		{"nope": 1},
 		{"maxTokens": 10},
@@ -119,7 +117,7 @@ func TestManagedConfigRejected(t *testing.T) {
 		},
 	}
 
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", "", ai.ModelOptions{}).Desc()
+	desc := modelDesc()
 	req := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hello"))}}
 
 	for _, tt := range tests {
@@ -152,34 +150,20 @@ func TestManagedConfigRejected(t *testing.T) {
 // schema. The SDK carries Go doc comments but no JSON Schema descriptions, so
 // without this the dev UI shows every field bare.
 func TestConfigDescriptionsApplied(t *testing.T) {
-	props := configProps(t)
-
-	if got := props["temperature"].(map[string]any)["description"]; got == nil {
-		t.Error("temperature has no description")
-	} else if !strings.Contains(got.(string), "4.7") {
-		// The deprecation is the part a caller most needs: the API rejects a
-		// value here rather than ignoring it.
-		t.Errorf("temperature description does not mention the 4.7 deprecation: %q", got)
-	}
-
-	// A nested path must apply too, not just top-level ones.
-	oc := props["output_config"].(map[string]any)["properties"].(map[string]any)
-	if got := oc["effort"].(map[string]any)["description"]; got == nil {
-		t.Error("output_config.effort has no description")
-	}
-
-	// Every description path must still resolve, or the entry is dead weight
-	// that silently stopped applying when the SDK renamed something.
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", "", ai.ModelOptions{}).Desc()
-	full := desc.InputSchema["properties"].(map[string]any)["config"].(map[string]any)
-	blob, err := json.Marshal(full)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for path, text := range mncOverrides.descriptions {
-		if !strings.Contains(string(blob), text) {
-			t.Errorf("description for %q never landed; the path no longer resolves", path)
+	schema := advertisedSchema()
+	for path, want := range mncOverrides.Descriptions {
+		target, ok := internal.SchemaAt(schema, path).(map[string]any)
+		if !ok {
+			continue // reported by TestConfigOverridePathsResolve
 		}
+		if got, _ := target["description"].(string); got != want {
+			t.Errorf("description for %q\n got: %q\nwant: %q", path, got, want)
+		}
+	}
+	// The 4.7 deprecation is the part a caller most needs: the API rejects a
+	// value there rather than ignoring it.
+	if !strings.Contains(mncOverrides.Descriptions["temperature"], "4.7") {
+		t.Error("the temperature description no longer mentions the 4.7 deprecation")
 	}
 }
 
@@ -188,8 +172,7 @@ func TestConfigDescriptionsApplied(t *testing.T) {
 // object at every depth, which the dev UI would render as a junk field on each
 // one.
 func TestParamObjArtifactStripped(t *testing.T) {
-	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-8", "", ai.ModelOptions{}).Desc()
-	blob, err := json.Marshal(desc.InputSchema)
+	blob, err := json.Marshal(modelDesc().InputSchema)
 	if err != nil {
 		t.Fatal(err)
 	}

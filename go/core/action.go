@@ -293,18 +293,16 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 	}, err
 }
 
-// spanMetadata builds the trace span metadata for one run of this action,
-// injecting the flow name when ctx carries one. spanInit, when non-nil, is
-// recorded as the span's genkit:init attribute. IsRoot is determined later by
-// the tracing package from parent span presence.
+// spanMetadata builds the trace span metadata for one run of this action.
+// spanInit, when non-nil, is recorded as the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) spanMetadata(ctx context.Context, spanInit any) *tracing.SpanMetadata {
 	sm := &tracing.SpanMetadata{
 		Name:            a.desc.Name,
 		Type:            "action",
 		Subtype:         string(a.desc.Type), // The actual action type becomes the subtype.
+		Init:            spanInit,
 		Metadata:        make(map[string]string),
 		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
-		Init:            spanInit,
 	}
 	if flowName := FlowNameFromContext(ctx); flowName != "" {
 		sm.Metadata["flow:name"] = flowName

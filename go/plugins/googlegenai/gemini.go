@@ -34,6 +34,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
+	plugininternal "github.com/firebase/genkit/go/plugins/internal"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 )
 
@@ -57,10 +58,9 @@ func configToMap(config any) map[string]any {
 		},
 	}
 
-	schema := r.Reflect(config)
-	applyConfigOverrides(schema, overridesFor(config))
-	result := base.SchemaAsMap(schema)
-	return result
+	schema := base.SchemaAsMap(r.Reflect(config))
+	plugininternal.ApplySchemaOverrides(schema, overridesFor(config))
+	return schema
 }
 
 // newModel creates a model without registering it. The model's config type

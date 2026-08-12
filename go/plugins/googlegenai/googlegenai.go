@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 
 	"cloud.google.com/go/auth"
@@ -20,6 +19,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/genai"
@@ -33,13 +33,12 @@ const (
 	vertexAILabelPrefix = "Vertex AI"
 )
 
-// trimProvider drops a leading provider prefix from a model or embedder ID.
-// Callers reach for the spelling ai.WithModelName takes
-// ("googleai/gemini-flash-latest"), but the prefix is applied downstream by
-// concatenation, so without the trim it would double up and name an action
-// that resolves nowhere. The bare ID is also what the genai API expects.
-func trimProvider(provider, id string) string {
-	return strings.TrimPrefix(id, provider+"/")
+// displayName is how a provider is spelled in a model's dev UI label.
+func displayName(provider string) string {
+	if provider == vertexAIProvider {
+		return vertexAILabelPrefix
+	}
+	return googleAILabelPrefix
 }
 
 // rejectBackgroundModel refuses IDs whose modality is served by a background
@@ -251,9 +250,6 @@ func (v *VertexAI) customEndpointOnly() bool {
 // After calling Init, you may call [DefineModel] and [DefineEmbedder] to create
 // and register any additional generative models and embedders
 func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
-	if ga == nil {
-		ga = &GoogleAI{}
-	}
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if ga.initted {
@@ -299,9 +295,6 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 // After calling Init, you may call [DefineModel] and [DefineEmbedder] to create
 // and register any additional generative models and embedders
 func (v *VertexAI) Init(ctx context.Context) []api.Action {
-	if v == nil {
-		v = &VertexAI{}
-	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.initted {
@@ -450,7 +443,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
-	id = trimProvider(googleAIProvider, id)
+	id = internal.TrimProvider(googleAIProvider, id)
 	if err := rejectBackgroundModel(googleAIProvider, id); err != nil {
 		return nil, err
 	}
@@ -487,7 +480,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	id = trimProvider(vertexAIProvider, id)
+	id = internal.TrimProvider(vertexAIProvider, id)
 	if err := rejectBackgroundModel(vertexAIProvider, id); err != nil {
 		return nil, err
 	}
@@ -521,7 +514,7 @@ func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Em
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
-	id = trimProvider(googleAIProvider, id)
+	id = internal.TrimProvider(googleAIProvider, id)
 	if embedOpts == nil {
 		opts := ga.catalog().embedderOptions(id)
 		embedOpts = &opts
@@ -539,7 +532,7 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Emb
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	id = trimProvider(vertexAIProvider, id)
+	id = internal.TrimProvider(vertexAIProvider, id)
 	if embedOpts == nil {
 		opts := v.catalog().embedderOptions(id)
 		embedOpts = &opts
@@ -553,7 +546,7 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Emb
 // would register the very action the caller is checking for and answer true
 // for any ID.
 func isDefined(g *genkit.Genkit, atype api.ActionType, provider, id string) bool {
-	return genkit.LookupAction(g, api.NewKey(atype, provider, trimProvider(provider, id))) != nil
+	return genkit.LookupAction(g, api.NewKey(atype, provider, internal.TrimProvider(provider, id))) != nil
 }
 
 // IsDefinedEmbedder reports whether the [Embedder] is defined by this plugin.

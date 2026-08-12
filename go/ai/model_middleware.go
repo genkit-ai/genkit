@@ -48,6 +48,8 @@ type DownloadMediaOptions struct {
 	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
 }
 
+// CalculateInputOutputUsage fills in the character, image, and video counts on
+// resp.Usage, for providers whose API reports token counts only.
 func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 	if resp.Usage == nil {
 		resp.Usage = &GenerationUsage{}

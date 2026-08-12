@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal"
 )
 
 type EmbedOptions struct {
@@ -152,7 +153,7 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 	}
 
 	if meta.Label == "" {
-		meta.Label = "Ollama Embedding - " + model
+		meta.Label = internal.ProviderLabel("Ollama Embedding", model)
 	}
 	if meta.Supports == nil {
 		meta.Supports = &ai.EmbedderSupports{}

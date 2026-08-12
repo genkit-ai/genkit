@@ -679,7 +679,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 			}
 			span := toolSpans[0]
 			assertSpanAttr(t, span, "genkit:type", "action")
-			assertSpanAttr(t, span, "genkit:metadata:subtype", "tool")
+			assertSpanAttr(t, span, "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 			assertSpanAttr(t, span, "genkit:state", tt.wantState)
 			assertSpanAttr(t, span, "genkit:input", `{"value":"x"}`)
 		})
@@ -747,6 +747,10 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
 			assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
+			// The short-circuit span is meant to be indistinguishable from
+			// this one, so pin them to the same shape from both sides.
+			assertSpanAttr(t, toolSpans[0], "genkit:type", "action")
+			assertSpanAttr(t, toolSpans[0], "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 		})
 	}
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/plugins/internal"
 )
 
 // Capability sets shared by the entries below. claudeSupports is what every
@@ -57,7 +58,7 @@ var (
 // is shared by every entry, so it lives here rather than in each one.
 func structuredModel(label string) ai.ModelOptions {
 	return ai.ModelOptions{
-		Label:    anthropicLabelPrefix + " - " + label,
+		Label:    internal.ProviderLabel(anthropicLabelPrefix, label),
 		Supports: &structuredClaudeSupports,
 		Versions: []string{},
 		Stage:    ai.ModelStageStable,

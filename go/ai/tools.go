@@ -553,7 +553,7 @@ func (t *ToolAction[In, Out]) RunRawMultipart(ctx context.Context, input any) (*
 
 	mi, err := json.Marshal(input)
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling tool input for %v: %v", t.Name(), err)
+		return nil, status.Errorf(status.ErrInvalidInput, "marshalling input for tool %q: %w", t.Name(), err)
 	}
 	output, err := t.action.RunJSON(ctx, mi, nil)
 	if err != nil {
@@ -562,7 +562,7 @@ func (t *ToolAction[In, Out]) RunRawMultipart(ctx context.Context, input any) (*
 
 	var resp MultipartToolResponse
 	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, fmt.Errorf("error parsing tool output for %v: %v", t.Name(), err)
+		return nil, status.Errorf(status.ErrInvalidOutput, "parsing output of tool %q: %w", t.Name(), err)
 	}
 	return &resp, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
@@ -197,6 +198,7 @@ func (o *OpenAICompatible) IsDefinedModel(g *genkit.Genkit, name string) bool {
 	return genkit.LookupModel(g, name) != nil
 }
 
+// ListActions describes every model the configured endpoint advertises.
 func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 	actions := []api.ActionDesc{}
 
@@ -232,11 +234,12 @@ func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 	return actions
 }
 
+// ResolveAction builds a model action on demand for an ID the endpoint serves.
 func (o *OpenAICompatible) ResolveAction(atype api.ActionType, name string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
 		if model := o.DefineModel(o.Provider, name, ai.ModelOptions{
-			Label:    fmt.Sprintf("%s - %s", o.Provider, name),
+			Label:    internal.ProviderLabel(o.Provider, name),
 			Stage:    ai.ModelStageStable,
 			Versions: []string{},
 			Supports: &Multimodal,

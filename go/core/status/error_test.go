@@ -474,3 +474,39 @@ func formatVerbs(format string) []rune {
 	}
 	return verbs
 }
+
+// TestClassifiedDistinguishesUnclassified covers the distinction Of cannot
+// make: it reports Internal for an unclassified error and for a deliberately
+// classified one alike, and only the second is a decision someone made.
+func TestClassifiedDistinguishesUnclassified(t *testing.T) {
+	var typedNil *Error
+	var nilSentinel *Sentinel
+	for _, tt := range []struct {
+		name string
+		err  error
+		want Name
+		ok   bool
+	}{
+		{"nil", nil, OK, false},
+		{"plain error", errors.New("network blip"), Internal, false},
+		// A chain can carry a typed-nil *Error (Convert returns one, and the
+		// generated AgentOutput.Error field is one whenever nothing failed). It
+		// must not read as a deliberate INTERNAL.
+		{"wrapped typed-nil", fmt.Errorf("provider: %w", typedNil), Internal, false},
+		// The same for a typed-nil *Sentinel: it matches errors.As but carries
+		// no classification, and must not panic the walk.
+		{"wrapped typed-nil sentinel", fmt.Errorf("provider: %w", nilSentinel), Internal, false},
+		{"classified internal", Errorf(ErrInternal, "boom"), Internal, true},
+		{"classified elsewhere", Errorf(ErrNotFound, "gone"), NotFound, true},
+		{"bare sentinel", ErrUnavailable, Unavailable, true},
+		{"wrapped sentinel", fmt.Errorf("calling: %w", ErrResourceExhausted), ResourceExhausted, true},
+		{"cancelled", context.Canceled, Cancelled, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := Classified(tt.err)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("Classified() = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}

@@ -16,7 +16,6 @@ package ai
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -176,6 +175,68 @@ func injectInstructions(messages []*Message, instructions string) []*Message {
 	return out
 }
 
+// Every handler carries the same three things: the instructions it embeds in
+// the prompt, the output config it puts on the request, and the text streamed
+// so far for the turn it is parsing. baseHandler holds all three so a handler
+// is only its own parsing.
+type baseHandler struct {
+	instructions string
+	config       ModelOutputConfig
+	text         string // Text accumulated for the current turn.
+	index        int    // Index of that turn.
+	cursor       int    // How much of text has already been emitted.
+}
+
+// Instructions returns the instructions for the formatter.
+func (h *baseHandler) Instructions() string { return h.instructions }
+
+// Config returns the output config for the formatter.
+func (h *baseHandler) Config() ModelOutputConfig { return h.config }
+
+// ParseMessage returns the message unchanged. Handlers that rewrite a message
+// into parsed parts override it.
+func (h *baseHandler) ParseMessage(m *Message) (*Message, error) { return m, nil }
+
+// accumulate appends chunk's text to the turn in progress and returns the text
+// so far. A chunk from a new turn resets the state first: a handler instance
+// spans the whole request, and a tool loop starts a fresh message each turn.
+func (h *baseHandler) accumulate(chunk *ModelResponseChunk) string {
+	if chunk.Index != h.index {
+		h.text, h.index, h.cursor = "", chunk.Index, 0
+	}
+	for _, part := range chunk.Content {
+		if part.IsText() {
+			h.text += part.Text
+		}
+	}
+	return h.text
+}
+
+// splitTextParts separates a message's text, concatenated, from its other
+// parts, which the handlers that rewrite a message carry through untouched.
+func splitTextParts(m *Message) (text string, others []*Part) {
+	var b strings.Builder
+	for _, part := range m.Content {
+		if part.IsText() {
+			b.WriteString(part.Text)
+		} else {
+			others = append(others, part)
+		}
+	}
+	return b.String(), others
+}
+
+// requireContent rejects the messages a handler cannot parse at all.
+func requireContent(m *Message) error {
+	if m == nil {
+		return status.Errorf(status.ErrInvalidOutput, "message is empty")
+	}
+	if len(m.Content) == 0 {
+		return status.Errorf(status.ErrInvalidOutput, "message has no content")
+	}
+	return nil
+}
+
 type textFormatter struct{}
 
 // Name returns the name of the formatter.
@@ -185,31 +246,10 @@ func (t textFormatter) Name() string {
 
 // Handler returns a new formatter handler for the given schema.
 func (t textFormatter) Handler(schema map[string]any) (FormatHandler, error) {
-	handler := &textHandler{
-		config: ModelOutputConfig{
-			ContentType: "text/plain",
-		},
-	}
-
-	return handler, nil
+	return &textHandler{baseHandler{config: ModelOutputConfig{ContentType: "text/plain"}}}, nil
 }
 
-type textHandler struct {
-	instructions    string
-	config          ModelOutputConfig
-	accumulatedText string
-	currentIndex    int
-}
-
-// Config returns the output config for the formatter.
-func (t *textHandler) Config() ModelOutputConfig {
-	return t.config
-}
-
-// Instructions returns the instructions for the formatter.
-func (t *textHandler) Instructions() string {
-	return t.instructions
-}
+type textHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the text content.
 func (t *textHandler) ParseOutput(m *Message) (any, error) {
@@ -218,23 +258,7 @@ func (t *textHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (t *textHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	if chunk.Index != t.currentIndex {
-		t.accumulatedText = ""
-		t.currentIndex = chunk.Index
-	}
-
-	for _, part := range chunk.Content {
-		if part.IsText() {
-			t.accumulatedText += part.Text
-		}
-	}
-
-	return t.accumulatedText, nil
-}
-
-// ParseMessage parses the message and returns the formatted message.
-func (t *textHandler) ParseMessage(m *Message) (*Message, error) {
-	return m, nil
+	return t.accumulate(chunk), nil
 }
 
 type jsonFormatter struct{}
@@ -250,13 +274,13 @@ func (j jsonFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	if schema != nil {
 		jsonBytes, err := json.Marshal(schema)
 		if err != nil {
-			return nil, fmt.Errorf("error marshalling schema to JSON: %w", err)
+			return nil, status.Errorf(status.ErrInvalidSchema, "marshalling schema to JSON: %w", err)
 		}
 
 		instructions = fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(jsonBytes))
 	}
 
-	handler := &jsonHandler{
+	return &jsonHandler{baseHandler{
 		instructions: instructions,
 		config: ModelOutputConfig{
 			Constrained: true,
@@ -264,28 +288,11 @@ func (j jsonFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 			Schema:      schema,
 			ContentType: "application/json",
 		},
-	}
-
-	return handler, nil
+	}}, nil
 }
 
 // jsonHandler is a handler for the JSON formatter.
-type jsonHandler struct {
-	instructions    string
-	config          ModelOutputConfig
-	accumulatedText string
-	currentIndex    int
-}
-
-// Instructions returns the instructions for the formatter.
-func (j *jsonHandler) Instructions() string {
-	return j.instructions
-}
-
-// Config returns the output config for the formatter.
-func (j *jsonHandler) Config() ModelOutputConfig {
-	return j.config
-}
+type jsonHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the parsed JSON value.
 func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
@@ -305,59 +312,36 @@ func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (j *jsonHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	if chunk.Index != j.currentIndex {
-		j.accumulatedText = ""
-		j.currentIndex = chunk.Index
-	}
-
-	for _, part := range chunk.Content {
-		if part.IsText() {
-			j.accumulatedText += part.Text
-		}
-	}
-
-	return j.parseJSON(j.accumulatedText)
+	return j.parseJSON(j.accumulate(chunk))
 }
 
-// ParseMessage parses the message and returns the formatted message.
+// ParseMessage rewrites the message's text as a single JSON part, validated
+// against the schema when there is one, and carries any non-text parts through.
 func (j *jsonHandler) ParseMessage(m *Message) (*Message, error) {
-	if m == nil {
-		return nil, errors.New("message is empty")
+	if err := requireContent(m); err != nil {
+		return nil, err
 	}
-	if len(m.Content) == 0 {
-		return nil, errors.New("message has no content")
-	}
-
-	var nonTextParts []*Part
-	accumulatedText := strings.Builder{}
-
-	for _, part := range m.Content {
-		if !part.IsText() {
-			nonTextParts = append(nonTextParts, part)
-		} else {
-			accumulatedText.WriteString(part.Text)
-		}
-	}
+	rawText, nonTextParts := splitTextParts(m)
 
 	newParts := []*Part{}
-	text := base.ExtractJSONFromMarkdown(accumulatedText.String())
+	text := base.ExtractJSONFromMarkdown(rawText)
 	if text == "" && len(nonTextParts) == 0 {
 		// Every part was empty text. Falling through would hand back a message
 		// with no content at all, which is the one input this method rejects.
-		return nil, errors.New("message has no content to parse as JSON")
+		return nil, status.Errorf(status.ErrInvalidOutput, "message has no content to parse as JSON")
 	}
 	if text != "" {
 		if j.config.Schema != nil {
 			schemaBytes, err := json.Marshal(j.config.Schema)
 			if err != nil {
-				return nil, fmt.Errorf("expected schema is not valid: %w", err)
+				return nil, status.Errorf(status.ErrInvalidSchema, "expected schema is not valid: %w", err)
 			}
 			if err = base.ValidateRaw([]byte(text), schemaBytes); err != nil {
 				return nil, err
 			}
 		} else {
 			if !base.ValidJSON(text) {
-				return nil, errors.New("message is not a valid JSON")
+				return nil, status.Errorf(status.ErrInvalidOutput, "message is not a valid JSON")
 			}
 		}
 		newParts = append(newParts, NewJSONPart(text))
@@ -399,56 +383,32 @@ func (j jsonlFormatter) Name() string {
 // Handler returns a new formatter handler for the given schema.
 func (j jsonlFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	if schema == nil || !base.ValidateIsJSONArray(schema) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "schema must be an array of objects for JSONL format")
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema must be an array of objects for JSONL format")
 	}
 
 	jsonBytes, err := json.Marshal(schema["items"])
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling schema to JSONL: %w", err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "marshalling schema to JSONL: %w", err)
 	}
 
 	instructions := fmt.Sprintf("Output should be JSONL format, a sequence of JSON objects (one per line) separated by a newline '\\n' character. Each line should be a JSON object conforming to the following schema:\n\n```%s```", string(jsonBytes))
 
-	handler := &jsonlHandler{
+	return &jsonlHandler{baseHandler{
 		instructions: instructions,
 		config: ModelOutputConfig{
 			Format:      OutputFormatJSONL,
 			Schema:      schema,
 			ContentType: "application/jsonl",
 		},
-	}
-
-	return handler, nil
+	}}, nil
 }
 
-type jsonlHandler struct {
-	instructions    string
-	config          ModelOutputConfig
-	accumulatedText string
-	currentIndex    int
-	cursor          int
-}
-
-// Instructions returns the instructions for the formatter.
-func (j *jsonlHandler) Instructions() string {
-	return j.instructions
-}
-
-// Config returns the output config for the formatter.
-func (j *jsonlHandler) Config() ModelOutputConfig {
-	return j.config
-}
+type jsonlHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the parsed array of objects.
 func (j *jsonlHandler) ParseOutput(m *Message) (any, error) {
-	var sb strings.Builder
-	for _, part := range m.Content {
-		if part.IsText() {
-			sb.WriteString(part.Text)
-		}
-	}
-
-	result, _, err := j.parseJSONL(sb.String(), 0, false)
+	text, _ := splitTextParts(m)
+	result, _, err := j.parseJSONL(text, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -464,29 +424,12 @@ func (j *jsonlHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (j *jsonlHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	if chunk.Index != j.currentIndex {
-		j.accumulatedText = ""
-		j.currentIndex = chunk.Index
-		j.cursor = 0
-	}
-
-	for _, part := range chunk.Content {
-		if part.IsText() {
-			j.accumulatedText += part.Text
-		}
-	}
-
-	items, newCursor, err := j.parseJSONL(j.accumulatedText, j.cursor, true)
+	items, cursor, err := j.parseJSONL(j.accumulate(chunk), j.cursor, true)
 	if err != nil {
 		return nil, err
 	}
-	j.cursor = newCursor
+	j.cursor = cursor
 	return items, nil
-}
-
-// ParseMessage parses the message and returns the formatted message.
-func (j *jsonlHandler) ParseMessage(m *Message) (*Message, error) {
-	return m, nil
 }
 
 // parseJSONL parses JSONL starting from the cursor position.
@@ -518,7 +461,7 @@ func (j *jsonlHandler) parseJSONL(text string, cursor int, allowPartial bool) ([
 					// Don't advance cursor for partial line.
 					break
 				}
-				return nil, cursor, fmt.Errorf("invalid JSON on line %d: %w", i+1, err)
+				return nil, cursor, status.Errorf(status.ErrInvalidOutput, "invalid JSON on line %d: %w", i+1, err)
 			}
 			if result != nil {
 				results = append(results, result)
@@ -549,16 +492,16 @@ func (a arrayFormatter) Name() string {
 // Handler returns a new formatter handler for the given schema.
 func (a arrayFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	if schema == nil || !base.ValidateIsJSONArray(schema) {
-		return nil, fmt.Errorf("schema is not valid JSON array")
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema must be an array of objects for array format")
 	}
 
 	jsonBytes, err := json.Marshal(schema["items"])
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling schema to JSON, must supply an 'array' schema type when using the 'array' parser format.: %w", err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "marshalling schema to JSON: %w", err)
 	}
 	instructions := fmt.Sprintf("Output should be a JSON array conforming to the following schema:\n\n```%s```", string(jsonBytes))
 
-	handler := &arrayHandler{
+	return &arrayHandler{baseHandler{
 		instructions: instructions,
 		config: ModelOutputConfig{
 			Constrained: true,
@@ -566,28 +509,10 @@ func (a arrayFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 			Schema:      schema,
 			ContentType: "application/json",
 		},
-	}
-
-	return handler, nil
+	}}, nil
 }
 
-type arrayHandler struct {
-	instructions    string
-	config          ModelOutputConfig
-	accumulatedText string
-	currentIndex    int
-	cursor          int
-}
-
-// Instructions returns the instructions for the formatter.
-func (a *arrayHandler) Instructions() string {
-	return a.instructions
-}
-
-// Config returns the output config for the formatter.
-func (a *arrayHandler) Config() ModelOutputConfig {
-	return a.config
-}
+type arrayHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the parsed array.
 func (a *arrayHandler) ParseOutput(m *Message) (any, error) {
@@ -597,26 +522,9 @@ func (a *arrayHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (a *arrayHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	if chunk.Index != a.currentIndex {
-		a.accumulatedText = ""
-		a.currentIndex = chunk.Index
-		a.cursor = 0
-	}
-
-	for _, part := range chunk.Content {
-		if part.IsText() {
-			a.accumulatedText += part.Text
-		}
-	}
-
-	result := base.ExtractItems(a.accumulatedText, a.cursor)
+	result := base.ExtractItems(a.accumulate(chunk), a.cursor)
 	a.cursor = result.Cursor
 	return result.Items, nil
-}
-
-// ParseMessage parses the message and returns the formatted message.
-func (a *arrayHandler) ParseMessage(m *Message) (*Message, error) {
-	return m, nil
 }
 
 type enumFormatter struct{}
@@ -630,41 +538,28 @@ func (e enumFormatter) Name() string {
 func (e enumFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	enums := objectEnums(schema)
 	if schema == nil || len(enums) == 0 {
-		return nil, status.Errorf(status.ErrInvalidArgument, "schema must be an object with an 'enum' property for enum format")
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema must be an object with an 'enum' property for enum format")
 	}
 
 	instructions := fmt.Sprintf("Output should be ONLY one of the following enum values. Do not output any additional information or add quotes.\n\n```%s```", strings.Join(enums, "\n"))
 
-	handler := &enumHandler{
-		instructions: instructions,
-		config: ModelOutputConfig{
-			Constrained: true,
-			Format:      OutputFormatEnum,
-			Schema:      schema,
-			ContentType: "text/enum",
+	return &enumHandler{
+		baseHandler: baseHandler{
+			instructions: instructions,
+			config: ModelOutputConfig{
+				Constrained: true,
+				Format:      OutputFormatEnum,
+				Schema:      schema,
+				ContentType: "text/enum",
+			},
 		},
 		enums: enums,
-	}
-
-	return handler, nil
+	}, nil
 }
 
 type enumHandler struct {
-	instructions    string
-	config          ModelOutputConfig
-	enums           []string
-	accumulatedText string
-	currentIndex    int
-}
-
-// Instructions returns the instructions for the formatter.
-func (e *enumHandler) Instructions() string {
-	return e.instructions
-}
-
-// Config returns the output config for the formatter.
-func (e *enumHandler) Config() ModelOutputConfig {
-	return e.config
+	baseHandler
+	enums []string
 }
 
 // ParseOutput parses the final message and returns the enum value.
@@ -674,56 +569,23 @@ func (e *enumHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (e *enumHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	if chunk.Index != e.currentIndex {
-		e.accumulatedText = ""
-		e.currentIndex = chunk.Index
-	}
-
-	for _, part := range chunk.Content {
-		if part.IsText() {
-			e.accumulatedText += part.Text
-		}
-	}
-
-	// Ignore error since we are doing best effort parsing.
-	enum, _ := e.parseEnum(e.accumulatedText)
-
+	// Ignore the error: a partial stream is not yet a whole enum value.
+	enum, _ := e.parseEnum(e.accumulate(chunk))
 	return enum, nil
 }
 
-// ParseMessage parses the message and returns the formatted message.
+// ParseMessage rewrites the message's text as the single enum value it names,
+// and carries any non-text parts through.
 func (e *enumHandler) ParseMessage(m *Message) (*Message, error) {
-	if e.config.Format == OutputFormatEnum {
-		if m == nil {
-			return nil, errors.New("message is empty")
-		}
-		if len(m.Content) == 0 {
-			return nil, errors.New("message has no content")
-		}
-
-		var nonTextParts []*Part
-		accumulatedText := strings.Builder{}
-		for _, part := range m.Content {
-			if !part.IsText() {
-				nonTextParts = append(nonTextParts, part)
-			} else {
-				accumulatedText.WriteString(part.Text)
-			}
-		}
-
-		// replace single and double quotes, then trim whitespace
-		trimmed := strings.TrimSpace(quoteStripper.Replace(accumulatedText.String()))
-
-		if !slices.Contains(e.enums, trimmed) {
-			return nil, fmt.Errorf("message %s not in list of valid enums: %s", trimmed, strings.Join(e.enums, ", "))
-		}
-
-		newParts := []*Part{NewTextPart(trimmed)}
-		newParts = append(newParts, nonTextParts...)
-
-		m.Content = newParts
+	if err := requireContent(m); err != nil {
+		return nil, err
 	}
-
+	text, nonTextParts := splitTextParts(m)
+	value, err := e.parseEnum(text)
+	if err != nil {
+		return nil, err
+	}
+	m.Content = append([]*Part{NewTextPart(value)}, nonTextParts...)
 	return m, nil
 }
 
@@ -774,13 +636,13 @@ func extractEnumStrings(v any) []string {
 // parseEnum is the shared parsing logic used by both ParseOutput and ParseChunk.
 func (e *enumHandler) parseEnum(text string) (string, error) {
 	if text == "" {
-		return "", nil
+		return "", status.Errorf(status.ErrInvalidOutput, "message has no enum value, want one of: %s", strings.Join(e.enums, ", "))
 	}
 
 	trimmed := strings.TrimSpace(quoteStripper.Replace(text))
 
 	if !slices.Contains(e.enums, trimmed) {
-		return "", fmt.Errorf("message %s not in list of valid enums: %s", trimmed, strings.Join(e.enums, ", "))
+		return "", status.Errorf(status.ErrInvalidOutput, "message %s not in list of valid enums: %s", trimmed, strings.Join(e.enums, ", "))
 	}
 
 	return trimmed, nil

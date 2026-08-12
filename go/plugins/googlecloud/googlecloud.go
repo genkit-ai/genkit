@@ -383,7 +383,7 @@ func (e *AdjustingTraceExporter) tickTelemetry(span sdktrace.ReadOnlySpan) {
 			// Report generate metrics for all model actions
 			generateTelemetry.Tick(span, e.logInputAndOutput, e.projectId)
 		}
-		if spanType == "action" && subtype == "tool" {
+		if spanType == "action" && (subtype == "tool" || subtype == "tool.v2") {
 			// TODO: Report input and output for tool actions
 		}
 		if spanType == "action" || spanType == "flow" || spanType == "flowStep" || spanType == "util" {
