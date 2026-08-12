@@ -159,6 +159,15 @@ func stripRequired(schema map[string]any) {
 	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
 		stripRequired(extra)
 	}
+	// A recursive config type keeps its definitions, and the properties a $ref
+	// points at live only in there, so skipping $defs leaves them required.
+	if defs, ok := schema["$defs"].(map[string]any); ok {
+		for _, sub := range defs {
+			if m, ok := sub.(map[string]any); ok {
+				stripRequired(m)
+			}
+		}
+	}
 }
 
 // tolerateNulls widens every property of an inferred config schema, at every
@@ -198,6 +207,18 @@ func tolerateNulls(schema map[string]any) {
 	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
 		tolerateNulls(extra)
 		schema["additionalProperties"] = allowNull(extra)
+	}
+	// See the $defs note on stripRequired: a recursive config's fields are only
+	// reachable through its definitions.
+	if defs, ok := schema["$defs"].(map[string]any); ok {
+		for name, sub := range defs {
+			m, ok := sub.(map[string]any)
+			if !ok {
+				continue
+			}
+			tolerateNulls(m)
+			defs[name] = m
+		}
 	}
 }
 

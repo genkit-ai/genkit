@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"reflect"
 	"regexp"
@@ -269,7 +270,26 @@ func inlineRefs(node any, inlineable map[string]map[string]any) any {
 	case map[string]any:
 		if ref, ok := n["$ref"].(string); ok {
 			if body, ok := inlineable[refName(ref)]; ok {
-				return inlineRefs(body, inlineable)
+				inlined := inlineRefs(body, inlineable)
+				// JSON Schema 2020-12 applies keywords alongside a $ref on top
+				// of the referenced schema, so a struct-typed field carries its
+				// own description and title next to the ref. Inlining must not
+				// drop them, or those annotations vanish from every inferred
+				// schema; the local keywords win, since they are what the
+				// author wrote at the use site.
+				body, ok := inlined.(map[string]any)
+				if !ok || len(n) == 1 {
+					return inlined
+				}
+				out := make(map[string]any, len(body)+len(n)-1)
+				maps.Copy(out, body)
+				for k, v := range n {
+					if k == "$ref" {
+						continue
+					}
+					out[k] = inlineRefs(v, inlineable)
+				}
+				return out
 			}
 			return n
 		}
