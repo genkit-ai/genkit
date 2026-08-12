@@ -19,7 +19,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, TypeAlias, cast
 
 from pydantic import BaseModel
 
@@ -29,6 +30,7 @@ from genkit._core._action import (
     ActionRunContext,
     get_func_description,
 )
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     Message,
     ModelConfig,
@@ -48,6 +50,65 @@ from genkit._core._typing import ActionMetadata, ModelInfo
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
 ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+
+# Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
+ModelArg: TypeAlias = str | ModelRef[BaseModel]
+ConfigArg: TypeAlias = BaseModel | Mapping[str, Any]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResolvedModel:
+    """Concrete wire model name + config dict after veneer normalization."""
+
+    name: str
+    config: dict[str, Any]
+
+
+def normalize_config(*, config: object) -> dict[str, Any]:
+    """Turn a Pydantic config, mapping, or None into a plain dict."""
+    if config is None:
+        return {}
+    if isinstance(config, BaseModel):
+        return config.model_dump(exclude_unset=True)
+    return dict(cast(Mapping[str, Any], config))
+
+
+def resolve_model_name(
+    *,
+    model: str | None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> str:
+    """Return an explicit model name or the registry default; error if neither exists."""
+    name = model if model is not None else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    if not name:
+        raise GenkitError(status='INVALID_ARGUMENT', message=message)
+    return name
+
+
+def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
+    """Merge a ModelRef's defaults with per-call config for the plugin request.
+
+    Precedence (lowest to highest): ``ref.version``, ``ref.config``, then
+    call-time ``config``. Each layer overwrites keys from the layers below.
+
+    The merged dict is forwarded to the plugin as-is — no schema validation or
+    key stripping at this layer. ``ModelRef`` typing catches config mistakes at
+    construction; at call time we still pass unknown keys through so plugins can
+    accept new provider options before the SDK schema is updated.
+
+    An explicitly set ``None`` clears a value inherited from a lower layer.
+    After merge, ``None`` values are removed so plugins see a missing key rather
+    than ``null``.
+    """
+    merged: dict[str, Any] = {}
+    if model.version is not None:
+        merged['version'] = model.version
+    if model.config is not None:
+        merged.update(normalize_config(config=model.config))
+    merged.update(config)
+    merged = {k: v for k, v in merged.items() if v is not None}
+    return ResolvedModel(name=model.name, config=merged)
 
 
 def model_action_metadata(
