@@ -136,8 +136,7 @@ class BackgroundAction(Generic[OutputT]):
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel a background operation.
 
-        If cancellation is not supported, returns the operation unchanged
-        (matching JS behavior).
+        If cancellation is not supported, returns the operation unchanged.
 
         Args:
             operation: The operation to cancel.
