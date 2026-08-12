@@ -8,9 +8,11 @@ import (
 	"github.com/firebase/genkit/go/plugins/internal"
 )
 
-// catalog is what one plugin instance knows about the models and embedders it
-// serves: the capabilities the plugin ships, with the caller's overrides laid
-// over them, plus the plugin-level settings that building an action depends on.
+// catalog is the per-instance context for describing and building one plugin's
+// actions: the capabilities the plugin ships with the caller's overrides laid
+// over them, alongside the instance-level settings an action is built from.
+// The provider is here for the same reason, since resolving capabilities and
+// naming an action both depend on which backend this instance speaks to.
 //
 // Both paths that describe an action consult it, [listActions] and
 // [resolveAction], which is what makes an override authoritative regardless of
@@ -21,10 +23,11 @@ type catalog struct {
 	embedders map[string]ai.EmbedderOptions
 
 	// legacyResponseSchema is [GoogleAI.LegacyResponseSchema] /
-	// [VertexAI.LegacyResponseSchema]. It rides here because it is settled per
-	// plugin instance, not per model, and every path that builds a Gemini
-	// model already carries the catalog. The zero value is the current
-	// default, so a catalog literal that omits it gets the new behaviour.
+	// [VertexAI.LegacyResponseSchema]. It is settled per plugin instance rather
+	// than per model, so it travels with the rest of the instance's settings
+	// instead of as an argument through call paths (Veo, embedders) that have
+	// no use for it. The zero value is the current default, so a catalog
+	// literal that omits it gets ResponseJsonSchema.
 	legacyResponseSchema bool
 }
 

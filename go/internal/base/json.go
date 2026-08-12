@@ -194,6 +194,14 @@ func InlineAcyclicDefs(root map[string]any) map[string]any {
 	}
 
 	// Keep recursive defs, with their own non-recursive refs inlined.
+	//
+	// A definition retained here is the one case where a $ref reaches the
+	// output. If such a type were also generic, its name would carry its type
+	// argument's import path, and "#/$defs/Box[example.com/pkg.T]" is not a
+	// resolvable JSON Pointer without RFC 6901 escaping. Nothing reaches that
+	// today: the generic types the framework infers over (Operation, AgentInit)
+	// are acyclic and inline away above. Escape the name here if a recursive
+	// generic ever turns up.
 	newDefs := map[string]any{}
 	for name := range recursive {
 		newDefs[name] = inlineRefs(defs[name], inlineable)
