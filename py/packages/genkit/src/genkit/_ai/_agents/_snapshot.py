@@ -174,13 +174,22 @@ async def abort_snapshot_in_store(
     an already-finished one untouched, so a late abort never rewrites a
     completed/failed result. The write also notifies any status subscribers,
     which is how a detached turn learns it was aborted. Returns the snapshot's
-    resulting status (aborted when this call did the flip), or None if it doesn't
-    exist.
+    *previous* status ('pending' when this call did the flip, the unchanged
+    terminal status for an already-finished turn), or None if it doesn't exist.
+    This matches the JS/Go implementations and the wire contract pinned by
+    tests/specs/agent.yaml.
     """
-    saved = await store.save_snapshot(snapshot_id, abort_if_pending, context=context)
-    if saved is not None:
-        return saved.status
-    # The mutator skipped the write: either the snapshot is gone or already
-    # terminal. Report its current status without touching it.
+    previous: list[SnapshotStatus | None] = []
+
+    def capture_and_abort(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        if existing is not None:
+            previous.append(existing.status)
+        return abort_if_pending(existing)
+
+    await store.save_snapshot(snapshot_id, capture_and_abort, context=context)
+    if previous:
+        return previous[0]
+    # The mutator never saw a snapshot: it doesn't exist (or the store skipped
+    # the mutator entirely). Report the current status without touching it.
     current = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     return current.status if current is not None else None

@@ -307,7 +307,8 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     assert out.snapshot_id is not None
 
     prev = await abort_snapshot_in_store(store=store, snapshot_id=out.snapshot_id)
-    assert prev == SnapshotStatus.ABORTED
+    # Previous-status semantics: the snapshot was pending when we aborted it.
+    assert prev == SnapshotStatus.PENDING
 
     await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.ABORTED, timeout_s=2.0)
     await asyncio.wait_for(aborted.wait(), timeout=2.0)

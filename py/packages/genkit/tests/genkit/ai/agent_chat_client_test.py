@@ -1139,7 +1139,9 @@ async def test_session_abort() -> None:
 
     # Abort the running snapshot on the server (requires a store)
     status = await chat.abort()
-    assert status == SnapshotStatus.ABORTED
+    # abort() returns the snapshot's *previous* status — pending, since the
+    # detached turn was still running (spec: tests/specs/agent.yaml).
+    assert status == SnapshotStatus.PENDING
 
     # Give the background task a moment to process cancellation
     await asyncio.sleep(0.5)

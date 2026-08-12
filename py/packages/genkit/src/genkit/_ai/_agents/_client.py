@@ -1420,7 +1420,13 @@ class DetachedTask(Generic[StateT]):
         for this turn, so its view doesn't strand an unanswered message.
         """
         status = await self._transport.abort_snapshot(self.snapshot_id)
-        if status == SnapshotStatus.ABORTED and self._on_abort_rollback is not None:
+        # abort_snapshot returns the *previous* status (spec: tests/specs/
+        # agent.yaml): 'pending' means this call performed the flip and the turn
+        # was genuinely cancelled — that's when the optimistic prompt rolls back.
+        # An already-terminal previous status means the turn finished first and
+        # its history stands. ('aborted' also rolls back for wire compatibility
+        # with servers that report the resulting status.)
+        if status in (SnapshotStatus.PENDING, SnapshotStatus.ABORTED) and self._on_abort_rollback is not None:
             self._on_abort_rollback()
         return status
 
