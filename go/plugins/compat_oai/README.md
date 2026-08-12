@@ -186,9 +186,10 @@ providers disagree about which ones exist and what they are called: DeepSeek
 dropped the frequency and presence penalties, Z.ai caps `temperature` at 1,
 Kimi's K-series takes neither, and `maxOutputTokens` is `max_tokens` on some
 providers and `max_completion_tokens` on others. Use the same camelCase name
-other plugins use for the same setting.
+other plugins use for the same setting; `conformance_test.go` enforces that
+across the package.
 
-See the `openai` directory for a complete implementation.
+See the `openai` and `anthropic` directories for complete implementations.
 
 ## Running Tests
 
