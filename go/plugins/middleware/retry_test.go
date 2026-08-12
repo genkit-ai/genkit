@@ -36,7 +36,7 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 
 func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return ai.DefineModel(r, name, &ai.ModelOptions{
+	return registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
 	}, fn)
 }
@@ -55,7 +55,7 @@ func TestRetrySucceedsOnFirstAttempt(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -81,7 +81,7 @@ func TestRetryRecoversAfterTransientError(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -104,7 +104,7 @@ func TestRetryExhaustsMaxRetries(t *testing.T) {
 	})
 
 	retry := &Retry{MaxRetries: 2}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -125,7 +125,7 @@ func TestRetryDoesNotRetryNonMatchingGenkitError(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -148,7 +148,7 @@ func TestRetryRetriesNonGenkitErrors(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -159,6 +159,34 @@ func TestRetryRetriesNonGenkitErrors(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("got %d calls, want 2", calls)
+	}
+}
+
+// The v1 contract: unclassified errors are retried regardless of Statuses, so
+// narrowing the list must not silently stop retrying transient network errors.
+func TestRetryRetriesUnclassifiedErrorWithNarrowedStatuses(t *testing.T) {
+	r := newTestRegistry(t)
+	calls := 0
+	m := defineModel(t, r, "test/narrowed", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("connection reset")
+		}
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
+	})
+
+	retry := &Retry{Statuses: []core.StatusName{core.UNAVAILABLE}}
+	registerTestMiddleware(r, "retry", retry)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "ok" {
+		t.Errorf("got %q, want %q", resp.Text(), "ok")
+	}
+	if calls != 2 {
+		t.Errorf("got %d calls, want 2 (unclassified errors retry regardless of Statuses)", calls)
 	}
 }
 
@@ -174,7 +202,7 @@ func TestRetryCustomStatuses(t *testing.T) {
 		Statuses:   []core.StatusName{core.PERMISSION_DENIED},
 		MaxRetries: 1,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -203,7 +231,7 @@ func TestRetryBackoffDelays(t *testing.T) {
 		BackoffFactor:  2,
 		NoJitter:       true,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, _ = ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 
@@ -237,7 +265,7 @@ func TestRetryMaxDelayClamp(t *testing.T) {
 		BackoffFactor:  2,
 		NoJitter:       true,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, _ = ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 
@@ -272,7 +300,7 @@ func TestRetryStopsWhenContextCanceledDuringBackoff(t *testing.T) {
 	defer func() { sleepFunc = origSleep }()
 
 	retry := &Retry{MaxRetries: 5}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(reqCtx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {

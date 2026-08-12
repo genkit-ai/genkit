@@ -89,6 +89,18 @@ ai.defineFlow(
   }
 );
 
+ai.defineFlow('multi-regional', async () => {
+  const { text } = await ai.generate({
+    model: vertexAI.model('gemini-3.5-flash'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+    config: {
+      location: 'us', // OR 'eu'
+      apiVersion: 'v1',
+    },
+  });
+  return text;
+});
+
 ai.defineFlow(
   {
     name: 'thinking-level-flash',
@@ -600,7 +612,7 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
-    model: vertexAI.model('veo-3.0-generate-001'),
+    model: vertexAI.model('veo-3.1-generate-001'),
     prompt: [
       {
         text: 'make the subject in the photo move',
@@ -622,6 +634,86 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
   const doneOp = await waitForOperation(operation, sendChunk);
 
   const mediaPart = doneOp.output?.message?.content.find(
+    (p: Part) => !!p.media
+  );
+  if (!mediaPart) {
+    throw new Error('Failed to find the generated video');
+  }
+
+  // Download for now until we have DevUI support for video
+  const videoBuffer = Buffer.from(mediaPart.media.url.split(',')[1], 'base64');
+  fs.writeFileSync('veo-output.mp4', videoBuffer);
+
+  return mediaPart.media;
+});
+
+// An example of overriding the region used by a Veo background model at
+// call time via config overrides, rather than relying on the
+// plugin-configured location ('global', from the plugin init above). This
+// is useful when per-request routing (e.g. picking a region closer to the
+// caller, or a region where a specific model is available) should override
+// the plugin-wide default. Because Veo is a background model, the same
+// context must be supplied on both the initial ai.generate() call and every
+// subsequent ai.checkOperation() call.
+//
+// Note: apiKey overrides can't be demonstrated with Veo on Vertex AI
+// because (a) standard (non-Express) Vertex AI mode authenticates via
+// Application Default Credentials, not an apiKey (apiKey there is only a
+// supplementary header, never a replacement for the Bearer token), and
+// (b) Vertex AI Express mode -- which *does* use an apiKey for auth --
+// does not support Veo's predictLongRunning/fetchPredictOperation methods
+// at all. Overriding location is a good stand-in to demonstrate the same
+// context-override mechanism working end-to-end.
+ai.defineFlow('veo-photo-move-location-override', async (_, { sendChunk }) => {
+  const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
+
+  let { operation } = await ai.generate({
+    model: vertexAI.model('veo-3.1-generate-001'),
+    prompt: [
+      {
+        text: 'make the subject in the photo move',
+      },
+      {
+        media: {
+          contentType: 'image/jpeg',
+          url: `data:image/jpeg;base64,${startingImage}`,
+        },
+      },
+    ],
+    config: {
+      durationSeconds: 8,
+      aspectRatio: '9:16',
+      personGeneration: 'allow_adult',
+    },
+    // The plugin is initialized with location: 'global' above; override it
+    // to 'us-central1' here to prove the override takes effect. On
+    // generate(), config overrides ride in context.config.
+    context: {
+      config: {
+        location: 'us-central1',
+      },
+    },
+  });
+
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    // On checkOperation(), config overrides go in the top-level `config`.
+    operation = await ai.checkOperation(operation, {
+      config: { location: 'us-central1' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  if (operation.error) {
+    sendChunk('Error: ' + operation.error.message);
+    throw new Error('failed to generate video: ' + operation.error.message);
+  }
+
+  const mediaPart = operation.output?.message?.content.find(
     (p: Part) => !!p.media
   );
   if (!mediaPart) {

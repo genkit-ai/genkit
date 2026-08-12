@@ -17,6 +17,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -112,53 +113,122 @@ func TestGenkitErrorError(t *testing.T) {
 	})
 }
 
-func TestGenkitErrorToReflectionError(t *testing.T) {
-	t.Run("converts error with stack", func(t *testing.T) {
-		ge := NewError(NOT_FOUND, "resource not found")
-		re := ge.ToReflectionError()
-
-		if re.Message != "resource not found" {
-			t.Errorf("Message = %q, want %q", re.Message, "resource not found")
+func TestGenkitErrorJSONRoundtrip(t *testing.T) {
+	t.Run("marshals canonical wire shape", func(t *testing.T) {
+		ge := &GenkitError{
+			Status:   NOT_FOUND,
+			Message:  "missing",
+			Details:  map[string]any{"id": "abc"},
+			HTTPCode: 999,                                      // not on the wire
+			Source:   func() *string { s := "x"; return &s }(), // not on the wire
 		}
-		if re.Code != http.StatusNotFound {
-			t.Errorf("Code = %d, want %d", re.Code, http.StatusNotFound)
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
 		}
-		if re.Details == nil || re.Details.Stack == nil {
-			t.Error("expected stack in details")
+		// Key order follows the generated wire struct's field order.
+		want := `{"details":{"id":"abc"},"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
 		}
 	})
 
-	t.Run("converts error with traceId", func(t *testing.T) {
-		ge := &GenkitError{
-			Status:  INTERNAL,
-			Message: "internal error",
-			Details: map[string]any{
-				"traceId": "trace-123",
-			},
+	t.Run("omits empty details", func(t *testing.T) {
+		ge := &GenkitError{Status: NOT_FOUND, Message: "missing"}
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
 		}
-		re := ge.ToReflectionError()
-
-		if re.Details == nil || re.Details.TraceID == nil {
-			t.Fatal("expected traceId in details")
-		}
-		if *re.Details.TraceID != "trace-123" {
-			t.Errorf("TraceID = %q, want %q", *re.Details.TraceID, "trace-123")
+		want := `{"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
 		}
 	})
 
-	t.Run("handles empty details", func(t *testing.T) {
-		ge := &GenkitError{
-			Status:  OK,
-			Message: "success",
-			Details: nil,
+	t.Run("omits the auto-captured stack detail", func(t *testing.T) {
+		ge := NewError(NOT_FOUND, "missing")
+		ge.Details["id"] = "abc"
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
 		}
-		re := ge.ToReflectionError()
+		// The stack is in-process diagnostics; only the other details
+		// cross the wire.
+		want := `{"details":{"id":"abc"},"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
+		}
+		if _, ok := ge.Details["stack"]; !ok {
+			t.Error("marshaling must not mutate the in-process Details")
+		}
+	})
 
-		if re.Message != "success" {
-			t.Errorf("Message = %q, want %q", re.Message, "success")
+	t.Run("omits details entirely when stack is the only entry", func(t *testing.T) {
+		ge := NewError(NOT_FOUND, "missing")
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
 		}
-		if re.Details != nil {
-			t.Error("expected nil details")
+		want := `{"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("unmarshals and derives HTTPCode", func(t *testing.T) {
+		raw := `{"status":"NOT_FOUND","message":"missing","details":{"id":"abc"}}`
+		var ge GenkitError
+		if err := json.Unmarshal([]byte(raw), &ge); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		if ge.Status != NOT_FOUND {
+			t.Errorf("Status = %q, want %q", ge.Status, NOT_FOUND)
+		}
+		if ge.Message != "missing" {
+			t.Errorf("Message = %q, want %q", ge.Message, "missing")
+		}
+		if ge.HTTPCode != http.StatusNotFound {
+			t.Errorf("HTTPCode = %d, want %d", ge.HTTPCode, http.StatusNotFound)
+		}
+		if ge.Details["id"] != "abc" {
+			t.Errorf("Details[id] = %v, want %q", ge.Details["id"], "abc")
+		}
+	})
+}
+
+func TestAsGenkitError(t *testing.T) {
+	t.Run("nil returns nil", func(t *testing.T) {
+		if got := AsGenkitError(nil); got != nil {
+			t.Errorf("AsGenkitError(nil) = %+v, want nil", got)
+		}
+	})
+
+	t.Run("returns existing GenkitError unchanged", func(t *testing.T) {
+		orig := &GenkitError{Status: NOT_FOUND, Message: "missing"}
+		if got := AsGenkitError(orig); got != orig {
+			t.Errorf("expected same pointer, got %+v", got)
+		}
+	})
+
+	t.Run("unwraps nested GenkitError", func(t *testing.T) {
+		orig := &GenkitError{Status: NOT_FOUND, Message: "missing"}
+		wrapped := fmt.Errorf("wrap: %w", orig)
+		got := AsGenkitError(wrapped)
+		if got != orig {
+			t.Errorf("expected unwrapped pointer, got %+v", got)
+		}
+	})
+
+	t.Run("wraps plain error with INTERNAL", func(t *testing.T) {
+		got := AsGenkitError(errors.New("boom"))
+		if got.Status != INTERNAL {
+			t.Errorf("Status = %q, want INTERNAL", got.Status)
+		}
+		if got.Message != "boom" {
+			t.Errorf("Message = %q, want boom", got.Message)
+		}
+		if got.HTTPCode != http.StatusInternalServerError {
+			t.Errorf("HTTPCode = %d, want %d", got.HTTPCode, http.StatusInternalServerError)
 		}
 	})
 }
@@ -224,59 +294,6 @@ func TestGenkitErrorUnwrap(t *testing.T) {
 
 		if ge.Unwrap() != nil {
 			t.Errorf("Unwrap() = %v, want nil", ge.Unwrap())
-		}
-	})
-}
-
-func TestToReflectionError(t *testing.T) {
-	t.Run("handles GenkitError directly", func(t *testing.T) {
-		ge := NewError(INVALID_ARGUMENT, "bad input")
-		re := ToReflectionError(ge)
-
-		if re.Message != "bad input" {
-			t.Errorf("Message = %q, want %q", re.Message, "bad input")
-		}
-		if re.Code != http.StatusBadRequest {
-			t.Errorf("Code = %d, want %d", re.Code, http.StatusBadRequest)
-		}
-	})
-
-	t.Run("handles wrapped GenkitError", func(t *testing.T) {
-		ge := NewError(NOT_FOUND, "not found")
-		wrapped := fmt.Errorf("context: %w", ge)
-		re := ToReflectionError(wrapped)
-
-		if re.Message != "not found" {
-			t.Errorf("Message = %q, want %q", re.Message, "not found")
-		}
-		if re.Code != http.StatusNotFound {
-			t.Errorf("Code = %d, want %d", re.Code, http.StatusNotFound)
-		}
-	})
-
-	t.Run("handles plain error", func(t *testing.T) {
-		plainErr := errors.New("plain error")
-		re := ToReflectionError(plainErr)
-
-		if re.Message != "plain error" {
-			t.Errorf("Message = %q, want %q", re.Message, "plain error")
-		}
-		if re.Code != http.StatusInternalServerError {
-			t.Errorf("Code = %d, want %d", re.Code, http.StatusInternalServerError)
-		}
-	})
-
-	t.Run("handles doubly wrapped GenkitError", func(t *testing.T) {
-		ge := NewError(PERMISSION_DENIED, "denied")
-		wrapped1 := fmt.Errorf("layer1: %w", ge)
-		wrapped2 := fmt.Errorf("layer2: %w", wrapped1)
-		re := ToReflectionError(wrapped2)
-
-		if re.Message != "denied" {
-			t.Errorf("Message = %q, want %q", re.Message, "denied")
-		}
-		if re.Code != http.StatusForbidden {
-			t.Errorf("Code = %d, want %d", re.Code, http.StatusForbidden)
 		}
 	})
 }

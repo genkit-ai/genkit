@@ -315,6 +315,94 @@ describe('local-file-store', () => {
   }
 });
 
+describe('local-file-store path traversal', () => {
+  let storeRoot: string;
+  let indexRoot: string;
+  let store: LocalFileTraceStore;
+
+  beforeEach(() => {
+    const base = path.resolve(
+      os.tmpdir(),
+      `./telemetry-server-traversal-test-${Date.now()}-${Math.floor(
+        Math.random() * 1000
+      )}`
+    );
+    storeRoot = path.resolve(base, 'traces');
+    indexRoot = path.resolve(base, 'traces_idx');
+    store = new LocalFileTraceStore({ storeRoot, indexRoot });
+  });
+
+  afterEach(() => {
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+    fs.rmSync(indexRoot, { recursive: true, force: true });
+  });
+
+  const maliciousIds = [
+    '../../pwned',
+    '../../../etc/passwd',
+    '..\\..\\pwned',
+    '/etc/passwd',
+    'foo/bar',
+    'foo\\bar',
+    '.',
+    '..',
+    'has\0null',
+    '',
+  ];
+
+  const trace = {
+    traceId: 'x',
+    displayName: 'trace',
+    spans: { [SPAN_A]: span('x', SPAN_A, 100, 100) },
+  } as TraceData;
+
+  for (const id of maliciousIds) {
+    it(`rejects save with malicious id ${JSON.stringify(id)}`, async () => {
+      await assert.rejects(() => store.save(id, trace), /Invalid trace id/);
+    });
+
+    it(`rejects load with malicious id ${JSON.stringify(id)}`, async () => {
+      await assert.rejects(() => store.load(id), /Invalid trace id/);
+    });
+  }
+
+  it('does not write outside of storeRoot on traversal save', async () => {
+    const outside = path.resolve(storeRoot, '..', 'pwned');
+    await assert.rejects(
+      () => store.save('../pwned', trace),
+      /Invalid trace id/
+    );
+    assert.strictEqual(fs.existsSync(outside), false);
+  });
+
+  it('does not read outside of storeRoot on traversal load', async () => {
+    // Plant a file just outside storeRoot and confirm it cannot be read.
+    const secretPath = path.resolve(storeRoot, '..', 'secret');
+    fs.writeFileSync(secretPath, JSON.stringify({ hello: 'world' }));
+    try {
+      await assert.rejects(() => store.load('../secret'), /Invalid trace id/);
+    } finally {
+      fs.rmSync(secretPath, { force: true });
+    }
+  });
+
+  it('still allows valid trace ids', async () => {
+    const validTrace = {
+      traceId: 'valid_1234',
+      displayName: 'trace',
+      spans: { [SPAN_A]: span('valid_1234', SPAN_A, 100, 100) },
+    } as TraceData;
+    await store.save('valid_1234', validTrace);
+    const loaded = await store.load('valid_1234');
+    assert.ok(loaded);
+    assert.strictEqual(loaded?.traceId, 'valid_1234');
+    // The store writes trace files under `<storeRoot>/.genkit/traces`.
+    assert.ok(
+      fs.existsSync(path.resolve(storeRoot, '.genkit/traces', 'valid_1234'))
+    );
+  });
+});
+
 describe('index', () => {
   let indexRoot: string;
   let index: Index;

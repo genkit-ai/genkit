@@ -17,7 +17,7 @@
 """Error classes and utilities for the Genkit framework."""
 
 from enum import IntEnum
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -153,6 +153,17 @@ class HttpErrorWireFormat(BaseModel):
     status: str = StatusCodes.INTERNAL.name
 
 
+class ErrorResponseMetadata(TypedDict, total=False):
+    """Metadata from the HTTP response that triggered an error.
+
+    This metadata is available only in-process and is not serialized into
+    callable or reflection error wire formats.
+    """
+
+    retry_after_ms: float
+    headers: dict[str, str]
+
+
 class GenkitInterrupt(Exception):  # noqa: N818 - marker base class; intentionally not suffixed *Error
     """Marker base class for tool interrupts.
 
@@ -174,6 +185,7 @@ class GenkitError(Exception):
         details: Any = None,  # noqa: ANN401
         trace_id: str | None = None,
         source: str | None = None,
+        response_metadata: ErrorResponseMetadata | None = None,
     ) -> None:
         """Initialize a GenkitError.
 
@@ -184,6 +196,7 @@ class GenkitError(Exception):
             details: Optional detail information.
             trace_id: A unique identifier for tracing the action execution.
             source: Optional source of the error.
+            response_metadata: Optional HTTP response metadata for in-process use.
         """
         temp_status: StatusName
         if status:
@@ -216,6 +229,7 @@ class GenkitError(Exception):
         self.source: str | None = source
         self.trace_id: str | None = trace_id
         self.cause: Exception | None = cause
+        self.response_metadata: ErrorResponseMetadata | None = response_metadata
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
         """Returns a JSON-serializable representation of this object.

@@ -146,8 +146,9 @@ function appRoute<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   opts?: {
     contextProvider?: ContextProvider<C, I>;
     streamManager?: StreamManager;
@@ -155,7 +156,10 @@ function appRoute<
 ) {
   return async (req: NextRequest): Promise<NextResponse> => {
     let context: C = {} as C;
-    const { data: input } = await req.json();
+    const { data: input, init } = (await req.json()) as {
+      data: z.infer<I>;
+      init?: z.infer<Init>;
+    };
     const streamId = req.headers.get('x-genkit-stream-id');
     if (req.headers.get('accept') !== 'text/event-stream') {
       try {
@@ -171,6 +175,7 @@ function appRoute<
         const resp = await action.run(input, {
           context,
           abortSignal: req.signal,
+          init,
         });
         const response = NextResponse.json({ result: resp.result });
         if (opts?.streamManager && streamId) {
@@ -223,6 +228,7 @@ function appRoute<
         const output = action.run(input, {
           context,
           abortSignal: req.signal,
+          init,
           onChunk: (chunk) => {
             if (durableStream) {
               taskQueue.enqueue(() => durableStream!.write(chunk));

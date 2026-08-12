@@ -44,24 +44,38 @@ export type { AnthropicCacheControl, AnthropicCitation } from './types.js';
 export { cacheControl } from './utils.js';
 
 /**
- * Gets or creates an Anthropic client instance.
- * Supports test client injection for internal testing.
+ * Gets the test client if injected (for testing only).
+ * @internal
  */
-function getAnthropicClient(options?: PluginOptions): Anthropic {
-  // Check for test client injection first (internal use only)
+function getTestClient(options?: PluginOptions): Anthropic | undefined {
   const internalOptions = options as InternalPluginOptions | undefined;
-  if (internalOptions?.[__testClient]) {
-    return internalOptions[__testClient];
+  return internalOptions?.[__testClient];
+}
+
+/**
+ * Validates the API key configuration at plugin initialization.
+ * When apiKey is false, validation is deferred to request time.
+ *
+ * @throws Error if API key is required but not available
+ */
+function validateApiKey(options?: PluginOptions): void {
+  // If apiKey is explicitly false, defer validation to request time
+  if (options?.apiKey === false) {
+    return;
   }
 
-  // Production path: create real client
+  // Check for test client injection (for testing only)
+  if (getTestClient(options)) {
+    return;
+  }
+
+  // Validate that we have an API key available
   const apiKey = options?.apiKey || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
       'Please pass in the API key or set the ANTHROPIC_API_KEY environment variable'
     );
   }
-  return new Anthropic({ apiKey });
 }
 
 /**
@@ -94,8 +108,12 @@ function getAnthropicClient(options?: PluginOptions): Anthropic {
  * ```
  */
 function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
-  const client = getAnthropicClient(options);
+  // Validate API key at plugin init (unless deferred with apiKey: false)
+  validateApiKey(options);
+
+  const pluginApiKey = options?.apiKey;
   const defaultApiVersion = options?.apiVersion;
+  const testClient = getTestClient(options);
 
   let listActionsCache: ActionMetadata[] | null = null;
 
@@ -103,7 +121,9 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
     name: 'anthropic',
     init: async () => {
       const actions: ModelAction[] = [];
-      actions.push(...listKnownModels(client, defaultApiVersion));
+      actions.push(
+        ...listKnownModels({ pluginApiKey, defaultApiVersion, testClient })
+      );
       return actions;
     },
     resolve: (actionType: ActionType, name: string) => {
@@ -112,14 +132,25 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
         const modelName = name.startsWith('anthropic/') ? name.slice(10) : name;
         return claudeModel({
           name: modelName,
-          client,
+          pluginApiKey,
           defaultApiVersion,
+          testClient,
         });
       }
       return undefined;
     },
     list: async () => {
       if (listActionsCache) return listActionsCache;
+      // For listing, we need a client. Create one if we have an API key available.
+      const listApiKey =
+        pluginApiKey !== false
+          ? pluginApiKey || process.env.ANTHROPIC_API_KEY
+          : undefined;
+      if (!listApiKey && !testClient) {
+        // Can't list models without an API key
+        return [];
+      }
+      const client = testClient ?? new Anthropic({ apiKey: listApiKey });
       listActionsCache = await listActions(client);
       return listActionsCache;
     },

@@ -38,4 +38,5 @@ func CurrentEnvironment() Environment {
 const (
 	DefaultModelKey = "genkit/defaultModel"
 	PromptDirKey    = "genkit/promptDir"
+	ExperimentalKey = "genkit/experimental"
 )

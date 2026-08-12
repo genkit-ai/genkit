@@ -15,15 +15,39 @@
  */
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
-import { Command } from 'commander';
+import {
+  findProjectRoot,
+  forceStderr,
+  logger,
+} from '@genkit-ai/tools-common/utils';
+import { yellow } from 'colorette';
+import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter';
+
+/**
+ * Options for the `trace:get` CLI command.
+ */
+export interface TraceGetOptions {
+  /** Output format: 'tree' (default execution tree) or 'json' (parsed nested telemetry JSON). */
+  format: 'tree' | 'json';
+  /** If true, preserves raw base64 data instead of sanitizing them with placeholders. */
+  keepBase64?: boolean;
+}
 
 /** Command to get a trace. */
 export const traceGet = new Command('trace:get')
   .description('get a trace by id')
   .argument('<traceId>', 'id of the trace to get')
-  .action(async (traceId: string) => {
+  .addOption(
+    new Option('-f, --format <format>', 'output format')
+      .choices(['tree', 'json'])
+      .default('tree')
+  )
+  .option('--keep-base64', 'do not strip base64 data URLs in output', false)
+  .action(async (traceId: string, options: TraceGetOptions) => {
+    // Redirect logging to stdout for clean JSON
+    forceStderr();
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -33,7 +57,20 @@ export const traceGet = new Command('trace:get')
           logger.error(`Trace with ID '${traceId}' not found.`);
           return;
         }
-        console.log(JSON.stringify(response, undefined, 2));
+
+        const keepBase64 = !!options.keepBase64;
+        const processedTrace = cleanTraceJson(response, keepBase64);
+
+        if (options.format === 'json') {
+          console.log(JSON.stringify(processedTrace, undefined, 2));
+        } else {
+          console.log(
+            yellow(
+              'Hint: pass `--format json` flag to get trace data in JSON format\n'
+            )
+          );
+          console.log(formatTraceTree(processedTrace));
+        }
       } catch (e) {
         logger.error(`Error retrieving trace: ${e}`);
       }

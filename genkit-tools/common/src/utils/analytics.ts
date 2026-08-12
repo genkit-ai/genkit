@@ -58,6 +58,20 @@ export class PageViewEvent extends GAEvent {
   }
 }
 
+export class SelectContentEvent extends GAEvent {
+  name = 'select_content';
+  duration = 1;
+
+  constructor(content_type: string, content_id: string, page_title: string) {
+    super();
+    this.parameters = {
+      content_type,
+      content_id,
+      page_title,
+    };
+  }
+}
+
 export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;
@@ -81,9 +95,13 @@ export class RunCommandEvent extends GAEvent {
   name = 'run_command';
   duration = 1; // Should we actually track command duration?
 
-  constructor(command: string, runtime_type: string) {
+  constructor(command: string, runtime_type: string, project_runtime?: string) {
     super();
-    this.stickyParameters = { command, runtime_type };
+    this.stickyParameters = {
+      command,
+      runtime_type,
+      ...(project_runtime && { project_runtime }),
+    };
   }
 }
 
@@ -116,6 +134,49 @@ export class ConfigEvent extends GAEvent {
 export async function record(event: GAEvent): Promise<void> {
   if (!isAnalyticsEnabled()) return;
   await recordInternal(event, getSession());
+}
+
+/**
+ * Creates a ToolsRequestEvent with validated duration and optional action parameter.
+ */
+export function createToolsRequestEvent(
+  route: string,
+  durationMs: number,
+  status: string,
+  options?: { action?: string; project_runtime?: string }
+): ToolsRequestEvent {
+  const event = new ToolsRequestEvent(route);
+  event.duration = Math.max(1, durationMs);
+  event.parameters = {
+    ...event.parameters,
+    status,
+    ...(options?.action && { action: options.action }),
+    ...(options?.project_runtime && {
+      project_runtime: options.project_runtime,
+    }),
+  };
+  return event;
+}
+
+/**
+ * Fire-and-forget helper to record a request analytics event with error logging.
+ */
+export function recordRequestEvent(event: GAEvent): void {
+  record(event).catch((err) => {
+    logger.error(`Failed to send analytics ${err}`);
+  });
+}
+
+/**
+ * Extracts action type from a request action key.
+ */
+export function extractActionType(key?: unknown): string {
+  const keyStr = typeof key === 'string' ? key : '';
+  if (keyStr === '/util/generate' || keyStr === 'util/generate') {
+    return keyStr;
+  }
+  const splits = keyStr.split('/');
+  return splits.length > 1 ? splits[1] : 'unknown';
 }
 
 /** Displays a notification that analytics are in use. */

@@ -128,32 +128,71 @@ func concatenateText(doc *ai.Document) string {
 	return result
 }
 
-// DefineEmbedder defines an embedder with a given server address.
-func (o *Ollama) DefineEmbedder(g *genkit.Genkit, serverAddress string, model string, embedOpts *ai.EmbedderOptions) ai.Embedder {
+// DefineEmbedder defines an embedder with a given model.
+func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, embedOpts *ai.EmbedderOptions) ai.Embedder {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
 		panic("ollama.Init not called")
 	}
-	return genkit.DefineEmbedder(g, api.NewName(provider, serverAddress), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+
+	if dimensions <= 0 {
+		panic("ollama.DefineEmbedder: dimensions must be greater than 0")
+	}
+
+	meta := &ai.EmbedderOptions{}
+
+	if embedOpts != nil {
+		*meta = *embedOpts
+	}
+
+	if embedOpts != nil && embedOpts.Supports != nil {
+		supports := *embedOpts.Supports
+		meta.Supports = &supports
+	}
+
+	if meta.Label == "" {
+		meta.Label = "Ollama Embedding - " + model
+	}
+	if meta.Supports == nil {
+		meta.Supports = &ai.EmbedderSupports{}
+	}
+	if len(meta.Supports.Input) == 0 {
+		meta.Supports.Input = []string{"text"}
+	}
+
+	meta.Dimensions = dimensions
+
+	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+		normalizedReq := *req
+
 		if req.Options == nil {
-			req.Options = &EmbedOptions{Model: model}
+			normalizedReq.Options = &EmbedOptions{Model: model}
 		} else if opts, ok := req.Options.(*EmbedOptions); ok {
-			if opts.Model == "" {
-				opts.Model = model
+			if opts == nil {
+				normalizedReq.Options = &EmbedOptions{Model: model}
+			} else {
+				normalisedOpts := *opts
+				if normalisedOpts.Model == "" {
+					normalisedOpts.Model = model
+				} else if normalisedOpts.Model != model {
+					return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, opts.Model)
+				}
+				normalizedReq.Options = &normalisedOpts
 			}
 		}
-		return embed(ctx, serverAddress, req)
+
+		return embed(ctx, o.ServerAddress, &normalizedReq)
 	})
 }
 
-// IsDefinedEmbedder reports whether the embedder with the given server address is defined by this plugin.
-func IsDefinedEmbedder(g *genkit.Genkit, serverAddress string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(provider, serverAddress)) != nil
+// IsDefinedEmbedder reports whether the embedder with the given model is defined by this plugin.
+func IsDefinedEmbedder(g *genkit.Genkit, model string) bool {
+	return genkit.LookupEmbedder(g, api.NewName(provider, model)) != nil
 }
 
-// Embedder returns the [ai.Embedder] with the given server address.
+// Embedder returns the [ai.Embedder] with the given model.
 // It returns nil if the embedder was not defined.
-func Embedder(g *genkit.Genkit, serverAddress string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(provider, serverAddress))
+func Embedder(g *genkit.Genkit, model string) ai.Embedder {
+	return genkit.LookupEmbedder(g, api.NewName(provider, model))
 }

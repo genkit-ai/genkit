@@ -19,10 +19,10 @@
 import pathlib
 
 import httpx
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, Part, Role, TextPart
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
 

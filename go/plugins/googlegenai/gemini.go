@@ -26,14 +26,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/invopop/jsonschema"
+	"google.golang.org/genai"
+
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"github.com/invopop/jsonschema"
-	"google.golang.org/genai"
 )
 
 var (
@@ -62,70 +63,41 @@ func configToMap(config any) map[string]any {
 	return result
 }
 
-// configFromRequest converts any supported config type to [genai.GenerateContentConfig].
-func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, error) {
-	var result genai.GenerateContentConfig
-
-	switch config := input.Config.(type) {
-	case genai.GenerateContentConfig:
-		result = config
-	case *genai.GenerateContentConfig:
-		result = *config
-	case map[string]any:
-		// TODO: Log warnings if unknown parameters are found.
-		var err error
-		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
-		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
-		}
-	case nil:
-		// Empty but valid config
-	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config), nil)
-	}
-
-	return &result, nil
-}
-
-// newModel creates a model without registering it.
-func newModel(client *genai.Client, name string, opts ai.ModelOptions, legacyResponseSchema bool) ai.Model {
+// newModel creates a model without registering it. The model's config type
+// follows its modality: image models take a [genai.GenerateImagesConfig],
+// everything else speaks generateContent and takes a
+// [genai.GenerateContentConfig]. The framework validates and deserializes the
+// request's config into that type before the model function runs, which
+// yields the request's own copy; the plugin passes that copy by pointer from
+// here down rather than copying the struct again at every hop.
+//
+// legacyResponseSchema is the plugin-level opt-out that sends constrained
+// output through GenerateContentConfig.ResponseSchema instead of
+// ResponseJsonSchema; see [GoogleAI.LegacyResponseSchema].
+func newModel(client *genai.Client, id string, opts ai.ModelOptions, legacyResponseSchema bool) *ai.ModelAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	mt := ClassifyModel(name)
-
+	mt := ClassifyModel(id)
 	if opts.ConfigSchema == nil {
-		if config := mt.DefaultConfig(); config != nil {
-			opts.ConfigSchema = configToMap(config)
-		}
+		opts.ConfigSchema = mt.configSchema()
 	}
 
-	meta := &ai.ModelOptions{
-		Label:        opts.Label,
-		Supports:     opts.Supports,
-		Versions:     opts.Versions,
-		ConfigSchema: opts.ConfigSchema,
-		Stage:        opts.Stage,
+	// Image generation reads only the request's text prompt, so imagen models
+	// skip the media-download middleware the generateContent path gets.
+	if mt == ModelTypeImagen {
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
+			func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateImagesConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return generateImage(ctx, client, id, input, &config, cb)
+			})
 	}
 
-	fn := func(
-		ctx context.Context,
-		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
-	) (*ai.ModelResponse, error) {
-		switch mt {
-		case ModelTypeImagen:
-			return generateImage(ctx, client, name, input, cb)
-		default:
-			return generate(ctx, client, name, input, cb, legacyResponseSchema)
-		}
-	}
-
-	// the gemini api doesn't support downloading media from http(s)
-	if opts.Supports.Media {
-		fn = core.ChainMiddleware(ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
+	// The gemini api doesn't support downloading media from http(s).
+	var download ai.ModelMiddleware
+	if opts.Supports != nil && opts.Supports.Media {
+		download = ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
 			MaxBytes: 1024 * 1024 * 20, // 20MB
 			Filter: func(part *ai.Part) bool {
 				u, err := url.Parse(part.Text)
@@ -141,9 +113,40 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions, legacyRes
 					u.Hostname(),
 				)
 			},
-		}))(fn)
+		})
 	}
-	return ai.NewModel(api.NewName(provider, name), meta, fn)
+
+	return ai.NewModelAction(api.NewName(provider, id), &opts,
+		func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateContentConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			// The middleware wraps per call because it must run over the
+			// request while generate needs the per-request typed config.
+			if download != nil {
+				return download(func(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+					return generate(ctx, client, id, input, &config, cb, legacyResponseSchema)
+				})(ctx, input, cb)
+			}
+			return generate(ctx, client, id, input, &config, cb, legacyResponseSchema)
+		})
+}
+
+// resolveVertexModelName prepares a model name for the google.golang.org/genai
+// SDK. The SDK transforms most names into `publishers/google/models/NAME`,
+// which is wrong for tuned endpoints. For a short-form tuned endpoint name
+// (`endpoints/ID`), this expands it to the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID` using the client's
+// configured project and location. Other names are returned unchanged.
+func resolveVertexModelName(client *genai.Client, name string) string {
+	if !isTunedGeminiName(name) {
+		return name
+	}
+	if strings.HasPrefix(name, "projects/") {
+		return name
+	}
+	cc := client.ClientConfig()
+	if cc.Backend != genai.BackendVertexAI || cc.Project == "" || cc.Location == "" {
+		return name
+	}
+	return fmt.Sprintf("projects/%s/locations/%s/%s", cc.Project, cc.Location, name)
 }
 
 // generate requests generate call to the specified model with the provided
@@ -153,39 +156,28 @@ func generate(
 	client *genai.Client,
 	model string,
 	input *ai.ModelRequest,
+	config *genai.GenerateContentConfig,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 	legacyResponseSchema bool,
 ) (*ai.ModelResponse, error) {
 	if model == "" {
 		return nil, errors.New("model not provided")
 	}
+	model = resolveVertexModelName(client, model)
 
 	cache, err := handleCache(ctx, client, input, model)
 	if err != nil {
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, cache, legacyResponseSchema)
+	gcc, err := toGeminiRequest(input, config, cache, legacyResponseSchema, model)
 	if err != nil {
 		return nil, err
 	}
 
-	var contents []*genai.Content
-	for _, m := range input.Messages {
-		// system parts are handled separately
-		if m.Role == ai.RoleSystem {
-			continue
-		}
-
-		parts, err := toGeminiParts(m.Content)
-		if err != nil {
-			return nil, err
-		}
-
-		contents = append(contents, &genai.Content{
-			Parts: parts,
-			Role:  string(m.Role),
-		})
+	contents, err := toGeminiContents(input)
+	if err != nil {
+		return nil, err
 	}
 	if len(contents) == 0 {
 		return nil, fmt.Errorf("at least one message is required in generate request")
@@ -241,7 +233,10 @@ func generate(
 
 	}
 
-	if len(genaiResp.Candidates) == 0 {
+	// A stream that ends without yielding a chunk leaves genaiResp nil. The
+	// SDK only logs a scanner failure rather than surfacing it, so an empty or
+	// truncated 2xx body reaches here with no error to report.
+	if genaiResp == nil || len(genaiResp.Candidates) == 0 {
 		return nil, fmt.Errorf("no valid candidates found")
 	}
 
@@ -272,51 +267,125 @@ func generate(
 	return r, nil
 }
 
-// toGeminiRequest translates an [*ai.ModelRequest] to
-// *genai.GenerateContentConfig
-func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, legacyResponseSchema bool) (*genai.GenerateContentConfig, error) {
-	gcc, err := configFromRequest(input)
-	if err != nil {
-		return nil, err
+// toGeminiContents converts the non-system messages of an [*ai.ModelRequest]
+// to a slice of [*genai.Content]. System messages are handled separately via
+// the request's system instruction.
+func toGeminiContents(input *ai.ModelRequest) ([]*genai.Content, error) {
+	var contents []*genai.Content
+	for _, m := range input.Messages {
+		// system parts are handled separately
+		if m.Role == ai.RoleSystem {
+			continue
+		}
+
+		parts, err := toGeminiParts(m.Content)
+		if err != nil {
+			return nil, err
+		}
+
+		contents = append(contents, &genai.Content{
+			Parts: parts,
+			Role:  toGeminiRole(m.Role),
+		})
 	}
+	return contents, nil
+}
+
+// toGeminiRole maps a Genkit [ai.Role] to a Gemini content role. The Gemini
+// Content API only accepts "user" or "model"; tool responses are sent under
+// the "user" role.
+func toGeminiRole(role ai.Role) string {
+	switch role {
+	case ai.RoleModel:
+		return string(ai.RoleModel)
+	case ai.RoleTool:
+		return string(ai.RoleUser)
+	default:
+		return string(ai.RoleUser)
+	}
+}
+
+// toGeminiRequest folds an [*ai.ModelRequest] into the config the framework
+// deserialized for the request, and returns the result to send to the API.
+// The Genkit primitives (system prompt, tools, cache, output schema) own the
+// equivalent config fields, so setting those directly is rejected. config is
+// the request's own copy and is amended in place; that copy is shallow, so
+// nested pointers and slices are still shared with the caller and must be
+// cloned before being amended.
+//
+// legacyResponseSchema selects which config field carries a constrained
+// output schema: ResponseSchema (the OpenAPI 3.0 subset) when set, otherwise
+// ResponseJsonSchema, which takes the raw JSON Schema and so can express
+// recursion.
+func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig, cache *genai.CachedContent, legacyResponseSchema bool, modelName ...string) (*genai.GenerateContentConfig, error) {
+	gcc := config
+
+	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
 
 	// candidate count might not be set to 1 and will keep its zero value if not set
-	// e.g. default value from reflection server is 0
-	if gcc.CandidateCount == 0 {
+	// e.g. default value from reflection server is 0. TTS models leave it unset.
+	if gcc.CandidateCount == 0 && !isTTS {
 		gcc.CandidateCount = 1
+	}
+	if isTTS && len(gcc.ResponseModalities) == 0 {
+		gcc.ResponseModalities = []string{"AUDIO"}
+	}
+	// TTS generateContent requires a speechConfig with a voice; the API rejects
+	// audio requests without one. Supply a default voice so the dedicated TTS
+	// models are runnable from a bare prompt (e.g. the dev UI), while still
+	// letting callers override it via ai.WithConfig.
+	if isTTS && !hasSpeechVoiceConfig(gcc.SpeechConfig) {
+		// Clone before amending: the caller's own SpeechConfig rides the
+		// shallow config copy, and the default voice must not be written
+		// into it.
+		sc := genai.SpeechConfig{}
+		if gcc.SpeechConfig != nil {
+			sc = *gcc.SpeechConfig
+		}
+		sc.VoiceConfig = &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: defaultTTSVoice},
+		}
+		gcc.SpeechConfig = &sc
 	}
 
 	// Genkit primitive fields must be used instead of go-genai fields
 	// i.e.: system prompt, tools, cached content, response schema, etc
-	if gcc.CandidateCount != 1 {
-		return nil, errors.New("multiple candidates is not supported")
+	//
+	// Classified ErrInvalidArgument: the request is the caller's to fix, so
+	// these reach the dev UI and any HTTP transport as a 400 rather than a
+	// 500. Not ErrInvalidInput, which means a value failed the action's input
+	// schema; these pass the schema and are refused on what they mean.
+	if !isTTS && gcc.CandidateCount != 1 {
+		return nil, status.Errorf(status.ErrInvalidArgument, "multiple candidates is not supported")
+	}
+	if isTTS && gcc.CandidateCount > 1 {
+		return nil, status.Errorf(status.ErrInvalidArgument, "multiple candidates is not supported")
 	}
 	if gcc.SystemInstruction != nil {
-		return nil, errors.New("system instruction must be set using Genkit feature: ai.WithSystemPrompt()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "system instruction must be set using Genkit feature: ai.WithSystemPrompt()")
 	}
 	if gcc.CachedContent != "" {
-		return nil, errors.New("cached content must be set using Genkit feature: ai.WithCacheTTL()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "cached content must be set using Genkit feature: ai.WithCacheTTL()")
 	}
 	if gcc.ResponseSchema != nil {
-		return nil, errors.New("response schema must be set using Genkit feature: ai.WithTools() or ai.WithOuputType()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response schema must be set using Genkit feature: ai.WithTools() or ai.WithOuputType()")
 	}
 	if gcc.ResponseMIMEType != "" {
-		return nil, errors.New("response MIME type must be set using Genkit feature: ai.WithOuputType(), ai.WithOutputSchema(), ai.WithOutputSchemaByName()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response MIME type must be set using Genkit feature: ai.WithOuputType(), ai.WithOutputSchema(), ai.WithOutputSchemaByName()")
 	}
 	if gcc.ResponseJsonSchema != nil {
-		return nil, errors.New("response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
 	}
 	for _, t := range gcc.Tools {
 		if t != nil && len(t.FunctionDeclarations) > 0 {
-			return nil, errors.New("custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.)")
+			return nil, status.Errorf(status.ErrInvalidArgument, "custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.)")
 		}
 	}
 
 	// Set response MIME type and schema based on output format.
 	// Gemini supports constrained output with application/json and text/x.enum.
 	hasOutput := input.Output != nil
-	// JSON mode is not compatible with tools
-	if hasOutput && len(input.Tools) == 0 {
+	if hasOutput {
 		switch {
 		case input.Output.ContentType == "application/json" || input.Output.Format == "json":
 			gcc.ResponseMIMEType = "application/json"
@@ -347,7 +416,9 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, legacyR
 		if err != nil {
 			return nil, err
 		}
-		gcc.Tools = mergeTools(append(gcc.Tools, tools...))
+		// Clip so the append cannot write into the caller's backing array
+		// through the shallow config copy.
+		gcc.Tools = mergeTools(append(slices.Clip(gcc.Tools), tools...))
 
 		// Then set up the tool configuration based on ToolChoice
 		tc, err := toGeminiToolChoice(gcc.ToolConfig, input.ToolChoice, input.Tools)
@@ -380,6 +451,27 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, legacyR
 	}
 
 	return gcc, nil
+}
+
+// defaultTTSVoice is the prebuilt voice used for TTS requests that don't
+// specify one. It must be a valid Gemini TTS voice name.
+const defaultTTSVoice = "Algenib"
+
+func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.MultiSpeakerVoiceConfig != nil {
+		return true
+	}
+	if sc.VoiceConfig == nil {
+		return false
+	}
+	return sc.VoiceConfig.PrebuiltVoiceConfig != nil || sc.VoiceConfig.ReplicatedVoiceConfig != nil
+}
+
+func isTTSModelName(name string) bool {
+	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

@@ -23,27 +23,29 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/genai"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"google.golang.org/genai"
 )
 
-// defineVeoModels defines a new Veo background model for video generation.
-// using Google's Veo API through the genai client.
+// newVeoModel creates a new Veo background model for video generation using
+// Google's Veo API through the genai client. The framework validates and
+// deserializes the request's config into [genai.GenerateVideosConfig] before
+// the start function runs.
 func newVeoModel(
 	client *genai.Client,
 	name string,
 	info ai.ModelOptions,
-) ai.BackgroundModel {
+) *ai.BackgroundModelAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	startFunc := func(ctx context.Context, req *ai.ModelRequest) (*ai.ModelOperation, error) {
+	startFunc := func(ctx context.Context, req *ai.ModelRequest, videoConfig genai.GenerateVideosConfig) (*ai.ModelOperation, error) {
 		// Extract text prompt from the request
 		prompt := extractTextFromRequest(req)
 		if prompt == "" {
@@ -52,10 +54,6 @@ func newVeoModel(
 
 		video := extractVeoVideoFromRequest(req)
 		image := extractVeoImageFromRequest(req)
-		videoConfig, err := toVeoParameters(req)
-		if err != nil {
-			return nil, err
-		}
 
 		// prevent SDK to pick a default number of video generation (usually 2)
 		// if users do not provide this setting
@@ -73,7 +71,7 @@ func newVeoModel(
 			ctx,
 			name,
 			sourceConfig,
-			videoConfig,
+			&videoConfig,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("veo video generation failed: %w", err)
@@ -128,7 +126,7 @@ func newVeoModel(
 		return updatedOp, nil
 	}
 
-	return ai.NewBackgroundModel(api.NewName(provider, name), &ai.BackgroundModelOptions{ModelOptions: info}, startFunc, checkFunc)
+	return ai.NewBackgroundModelAction(api.NewName(provider, name), &ai.BackgroundModelOptions{ModelOptions: info}, startFunc, checkFunc)
 }
 
 // extractTextFromRequest extracts the text prompt from a model request.
@@ -198,30 +196,6 @@ func extractVeoVideoFromRequest(request *ai.ModelRequest) *genai.Video {
 	}
 
 	return nil
-}
-
-// toVeoParameters converts model request configuration to Veo video generation parameters.
-func toVeoParameters(request *ai.ModelRequest) (*genai.GenerateVideosConfig, error) {
-	if request.Config == nil {
-		return &genai.GenerateVideosConfig{}, nil
-	}
-
-	switch config := request.Config.(type) {
-	case *genai.GenerateVideosConfig:
-		return config, nil
-	case genai.GenerateVideosConfig:
-		return &config, nil
-	case map[string]any:
-		var result genai.GenerateVideosConfig
-		var err error
-		result, err = base.MapToStruct[genai.GenerateVideosConfig](config)
-		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
-		}
-		return &result, nil
-	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config), nil)
-	}
 }
 
 // fromVeoOperation converts a Veo API operation to a Genkit core operation.

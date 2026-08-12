@@ -20,10 +20,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 )
@@ -34,7 +36,7 @@ func inc(_ context.Context, x int, _ noStream) (int, error) {
 
 func TestActionRun(t *testing.T) {
 	r := registry.New()
-	a := defineAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	got, err := a.Run(context.Background(), 3, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +48,7 @@ func TestActionRun(t *testing.T) {
 
 func TestActionRunJSON(t *testing.T) {
 	r := registry.New()
-	a := defineAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	input := []byte("3")
 	want := []byte("4")
 	got, err := a.RunJSON(context.Background(), input, nil)
@@ -55,6 +57,56 @@ func TestActionRunJSON(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestActionInvalidInput pins how an action classifies input it refuses, on
+// both entry points: Run validates the typed value against the schema, and
+// RunJSON fails earlier, deserializing the bytes. Each is reported with
+// [status.ErrInvalidInput] so callers match a sentinel rather than a concrete
+// error type, and each keeps the underlying validation error reachable
+// through errors.Unwrap.
+func TestActionInvalidInput(t *testing.T) {
+	r := registry.New()
+	// Stricter than the Go type, so a valid int can still violate it.
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil,
+		map[string]any{"type": "integer", "minimum": 10}, inc)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{"Run rejects a value the schema refuses", func() error {
+			_, err := a.Run(context.Background(), 3, nil)
+			return err
+		}},
+		{"RunJSON rejects bytes that do not deserialize", func() error {
+			_, err := a.RunJSON(context.Background(), []byte(`"not a number"`), nil)
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !errors.Is(err, status.ErrInvalidInput) {
+				t.Errorf("errors.Is(err, ErrInvalidInput) = false, err = %v", err)
+			}
+			// The subtype classifies as its base, which is what reaches the wire.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Error("errors.Is(err, ErrInvalidArgument) = false")
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
+			}
+			// %w rather than %v, so the validation error stays matchable.
+			if errors.Unwrap(err) == nil {
+				t.Error("errors.Unwrap = nil, want the underlying validation error")
+			}
+		})
 	}
 }
 
@@ -73,7 +125,7 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 func TestActionStreaming(t *testing.T) {
 	ctx := context.Background()
 	r := registry.New()
-	a := defineAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
+	a := defineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
 	const n = 3
 
 	// Non-streaming.
@@ -108,7 +160,7 @@ func TestActionTracing(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 	name := api.NewName("test", "TestTracing-inc")
-	a := defineAction(r, name, api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +313,7 @@ func TestActionDesc(t *testing.T) {
 		}
 
 		r := registry.New()
-		a := DefineAction(r, "test/describe", api.ActionTypeCustom, meta, nil, fn)
+		a := defineAction(r, "test/describe", api.ActionTypeCustom, meta, nil, fn)
 
 		desc := a.Desc()
 
@@ -297,8 +349,8 @@ func TestActionDesc(t *testing.T) {
 				"answer": map[string]any{"type": "string"},
 			},
 		}
-		DefineSchema(r, "AgentRequest", inputSchema)
-		DefineSchema(r, "AgentResponse", outputSchema)
+		r.RegisterSchema("AgentRequest", inputSchema)
+		r.RegisterSchema("AgentResponse", outputSchema)
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
 		a := NewAction("test/refs", api.ActionTypeCustom, nil, SchemaRef("AgentRequest"), fn)
@@ -327,7 +379,7 @@ func TestActionDesc(t *testing.T) {
 		r := registry.New()
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
-		a := DefineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
+		a := defineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
 
 		desc := a.Desc()
 
@@ -365,7 +417,7 @@ func TestResolveActionFor(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input + 1, nil
 		}
-		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
+		defineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
 
 		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/resolvable")
 
@@ -394,7 +446,7 @@ func TestLookupActionFor(t *testing.T) {
 		fn := func(ctx context.Context, input string) (string, error) {
 			return "found: " + input, nil
 		}
-		DefineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
+		defineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
 
 		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/lookupable")
 
@@ -420,7 +472,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input * 2, nil
 		}
-		a := DefineAction(r, "test/telemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := defineAction(r, "test/telemetry", api.ActionTypeCustom, nil, nil, fn)
 
 		result, err := a.RunJSONWithTelemetry(context.Background(), []byte("5"), nil)
 
@@ -454,7 +506,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 			}
 			return n, nil
 		}
-		a := DefineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := defineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, nil, fn)
 
 		var chunks []string
 		cb := func(ctx context.Context, chunk json.RawMessage) error {
@@ -480,7 +532,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input, nil
 		}
-		a := DefineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, nil, fn)
+		a := defineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, nil, fn)
 
 		_, err := a.RunJSONWithTelemetry(context.Background(), []byte("not valid json"), nil)
 

@@ -19,7 +19,6 @@ package modelgarden
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -31,11 +30,7 @@ import (
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
-const (
-	// TODO: The provider value should be updated in the next major version to avoid collisions with the main vertexai plugin.
-	provider   = "vertexai"
-	pluginName = "vertex-model-garden-anthropic"
-)
+const pluginName = "vertex-model-garden-anthropic"
 
 // Anthropic is a Genkit plugin for interacting with Anthropic models in Vertex AI Model Garden
 type Anthropic struct {
@@ -65,27 +60,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 		panic("plugin already initialized")
 	}
 
-	projectID := a.ProjectID
-	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
-		if projectID == "" {
-			projectID = os.Getenv("GCLOUD_PROJECT")
-			if projectID == "" {
-				panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
-			}
-		}
-	}
-
-	location := a.Location
-	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
-		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
-		}
-		if location == "" {
-			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
-		}
-	}
+	projectID, location := resolveVertexMaasEnv(a.ProjectID, a.Location)
 
 	c := anthropic.NewClient(
 		vertex.WithGoogleAuth(ctx, location, projectID, "https://www.googleapis.com/auth/cloud-platform"),
@@ -97,8 +72,11 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	// Models must be defined manually
 	var actions []api.Action
 	for name, opts := range AnthropicModels {
-		model := ant.DefineModel(a.client, provider, name, opts)
-		actions = append(actions, model.(api.Action))
+		// The catalog stores bare display names ("Claude Opus 4.6"). Prefix
+		// the provider so these sit alongside the other Vertex AI models in a
+		// picker instead of looking like they came from somewhere else.
+		opts.Label = fmt.Sprintf("%s - %s", ant.ProviderLabel(provider), opts.Label)
+		actions = append(actions, ant.NewModel(a.client, provider, name, name, opts))
 	}
 
 	return actions
@@ -110,10 +88,19 @@ func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(provider, id))
 }
 
-// DefineModel adds the model to the registry
+// DefineModel builds a Model Garden Claude model and returns it. It does not
+// register the model: generation resolves a model from its name, so passing
+// the result to ai.WithModel contributes only that name and serves the request
+// with a model resolved from it instead. Pass the result to
+// [genkit.RegisterAction] to make these capabilities the ones used.
 func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.initted {
+		return nil, fmt.Errorf("modelgarden anthropic: plugin not initialized")
+	}
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
-	return ant.DefineModel(a.client, provider, name, *opts), nil
+	return ant.NewModel(a.client, provider, name, name, *opts), nil
 }

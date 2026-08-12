@@ -367,3 +367,54 @@ func TestInferJSONSchema_RecursiveSharedType(t *testing.T) {
 		t.Errorf("expected Node definition to expose 'value' field, got %v", nodeProps)
 	}
 }
+
+// genericBox is instantiated below with a type argument from another package,
+// which the reflector names after that argument's full import path. The
+// definition name therefore contains "/" characters.
+type genericBox[T any] struct {
+	Item T `json:"item"`
+}
+
+// TestInferJSONSchemaMap_GenericTypeName covers a definition name that
+// contains "/", as an instantiated generic's does: it is named after its type
+// argument, import path and all. Reading the name off the last "/" segment of
+// a "#/$defs/..." reference misidentifies it, leaving the reference behind
+// while its definition is dropped as acyclic — a dangling $ref that no
+// validator can resolve.
+func TestInferJSONSchemaMap_GenericTypeName(t *testing.T) {
+	schema := InferJSONSchemaMap(genericBox[json.RawMessage]{})
+
+	if _, ok := schema["$defs"]; ok {
+		t.Errorf("acyclic generic type should inline fully, got $defs: %v", schema["$defs"])
+	}
+	assertNoRefs(t, schema)
+
+	if schema["type"] != "object" {
+		t.Errorf("expected the definition to be inlined at the root, got %v", schema)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties, got %v", schema)
+	}
+	if _, ok := props["item"]; !ok {
+		t.Errorf("expected inlined 'item' property, got %v", props)
+	}
+}
+
+// assertNoRefs fails if any $ref survives anywhere in node.
+func assertNoRefs(t *testing.T, node any) {
+	t.Helper()
+	switch n := node.(type) {
+	case map[string]any:
+		if ref, ok := n["$ref"]; ok {
+			t.Errorf("unresolved $ref left in schema: %v", ref)
+		}
+		for _, v := range n {
+			assertNoRefs(t, v)
+		}
+	case []any:
+		for _, v := range n {
+			assertNoRefs(t, v)
+		}
+	}
+}

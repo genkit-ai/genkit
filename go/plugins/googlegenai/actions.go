@@ -5,26 +5,24 @@ package googlegenai
 
 import (
 	"context"
-	"fmt"
+	"slices"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"google.golang.org/genai"
 )
 
 // ListActions lists all the actions supported by the Google AI plugin.
 func (ga *GoogleAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return listActions(ctx, ga.gclient, googleAIProvider, ga.LegacyResponseSchema)
+	return listActions(ctx, ga.gclient, ga.catalog())
 }
 
 // ListActions lists all the actions supported by the Vertex AI plugin.
 func (v *VertexAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return listActions(ctx, v.gclient, vertexAIProvider, v.LegacyResponseSchema)
+	return listActions(ctx, v.gclient, v.catalog())
 }
 
 // listActions is the shared implementation for listing actions.
-func listActions(ctx context.Context, client *genai.Client, provider string, legacyResponseSchema bool) []api.ActionDesc {
+func listActions(ctx context.Context, client *genai.Client, c catalog) []api.ActionDesc {
 	models, err := listGenaiModels(ctx, client)
 	if err != nil {
 		return nil
@@ -32,119 +30,60 @@ func listActions(ctx context.Context, client *genai.Client, provider string, leg
 
 	actions := []api.ActionDesc{}
 
-	// Gemini models
-	for _, name := range models.gemini {
-		opts := GetModelOptions(name, provider)
-		model := newModel(client, name, opts, legacyResponseSchema)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	// Imagen models
-	for _, name := range models.imagen {
-		opts := GetModelOptions(name, provider)
-		model := newModel(client, name, opts, legacyResponseSchema)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+	// Gemini and Imagen models
+	for _, name := range slices.Concat(models.gemini, models.imagen) {
+		actions = append(actions, newModel(client, name, c.modelOptions(name), c.legacyResponseSchema).Desc())
 	}
 
 	// Veo models (background models)
 	for _, name := range models.veo {
-		opts := GetModelOptions(name, provider)
-		veoModel := newVeoModel(client, name, opts)
-		if actionDef, ok := veoModel.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, newVeoModel(client, name, c.modelOptions(name)).Desc())
 	}
 
 	// Embedders
 	for _, name := range models.embedders {
-		opts := GetEmbedderOptions(name, provider)
-		embedder := newEmbedder(client, name, &opts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		opts := c.embedderOptions(name)
+		actions = append(actions, newEmbedder(client, name, &opts).Desc())
 	}
 
 	return actions
 }
 
-// ResolveAction resolves an action with the given name.
-func (ga *GoogleAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(ga.gclient, googleAIProvider, atype, name, ga.LegacyResponseSchema)
+// ResolveAction resolves an action with the given ID.
+func (ga *GoogleAI) ResolveAction(atype api.ActionType, id string) api.Action {
+	return resolveAction(ga.gclient, ga.catalog(), atype, id)
 }
 
-// ResolveAction resolves an action with the given name.
-func (v *VertexAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(v.gclient, vertexAIProvider, atype, name, v.LegacyResponseSchema)
+// ResolveAction resolves an action with the given ID.
+func (v *VertexAI) ResolveAction(atype api.ActionType, id string) api.Action {
+	return resolveAction(v.gclient, v.catalog(), atype, id)
 }
 
 // resolveAction is the shared implementation for resolving actions.
-func resolveAction(client *genai.Client, provider string, atype api.ActionType, name string, legacyResponseSchema bool) api.Action {
-	mt := ClassifyModel(name)
+func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id string) api.Action {
+	mt := ClassifyModel(id)
 
 	switch atype {
 	case api.ActionTypeEmbedder:
-		opts := GetEmbedderOptions(name, provider)
-		return newEmbedder(client, name, &opts).(api.Action)
+		opts := c.embedderOptions(id)
+		return newEmbedder(client, id, &opts)
 
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
 		if mt == ModelTypeVeo {
 			return nil
 		}
-		opts := GetModelOptions(name, provider)
-		return newModel(client, name, opts, legacyResponseSchema).(api.Action)
+		return newModel(client, id, c.modelOptions(id), c.legacyResponseSchema)
 
-	case api.ActionTypeBackgroundModel:
+	// A background model is a bundle: registering it registers both its start
+	// and check actions, so the same value resolves either key. The registry
+	// registers what we return and then looks up the key it was asked for.
+	case api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation:
 		if mt != ModelTypeVeo {
 			return nil
 		}
-		return createVeoBackgroundAction(client, name, provider)
-
-	case api.ActionTypeCheckOperation:
-		if mt != ModelTypeVeo {
-			return nil
-		}
-		return createVeoCheckAction(client, name, provider)
+		return newVeoModel(client, id, c.modelOptions(id))
 	}
 
 	return nil
-}
-
-// createVeoBackgroundAction creates a background model action for Veo.
-func createVeoBackgroundAction(client *genai.Client, name, provider string) api.Action {
-	opts := GetModelOptions(name, provider)
-	veoModel := newVeoModel(client, name, opts)
-	actionName := api.NewName(provider, name)
-
-	return core.NewAction(actionName, api.ActionTypeBackgroundModel, nil, nil,
-		func(ctx context.Context, input *ai.ModelRequest) (*core.Operation[*ai.ModelResponse], error) {
-			op, err := veoModel.Start(ctx, input)
-			if err != nil {
-				return nil, err
-			}
-			op.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
-			return op, nil
-		})
-}
-
-// createVeoCheckAction creates a check operation action for Veo.
-func createVeoCheckAction(client *genai.Client, name, provider string) api.Action {
-	opts := GetModelOptions(name, provider)
-	veoModel := newVeoModel(client, name, opts)
-	actionName := api.NewName(provider, name)
-
-	return core.NewAction(actionName, api.ActionTypeCheckOperation,
-		map[string]any{"description": fmt.Sprintf("Check status of %s operation", name)}, nil,
-		func(ctx context.Context, op *core.Operation[*ai.ModelResponse]) (*core.Operation[*ai.ModelResponse], error) {
-			updatedOp, err := veoModel.Check(ctx, op)
-			if err != nil {
-				return nil, err
-			}
-			updatedOp.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
-			return updatedOp, nil
-		})
 }

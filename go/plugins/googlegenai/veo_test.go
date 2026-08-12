@@ -21,6 +21,8 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/registry"
 	"google.golang.org/genai"
 )
 
@@ -160,104 +162,6 @@ func TestExtractVeoImageFromRequest(t *testing.T) {
 			result := extractVeoImageFromRequest(tt.request)
 			if result != tt.expected {
 				t.Errorf("extractVeoImageFromRequest() = %v, want %v", result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestToVeoParameters(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		request     *ai.ModelRequest
-		expected    genai.GenerateVideosConfig
-		expectError bool
-	}{
-		{
-			name: "request with no config",
-			request: &ai.ModelRequest{
-				Config: nil,
-			},
-			expected:    genai.GenerateVideosConfig{},
-			expectError: false,
-		},
-		{
-			name: "request with valid GenerateVideosConfig",
-			request: &ai.ModelRequest{
-				Config: &genai.GenerateVideosConfig{
-					AspectRatio:      "16:9",
-					DurationSeconds:  genai.Ptr(int32(5)),
-					PersonGeneration: "allow_adult",
-				},
-			},
-			expected: genai.GenerateVideosConfig{
-				AspectRatio:      "16:9",
-				DurationSeconds:  genai.Ptr(int32(5)),
-				PersonGeneration: "allow_adult",
-			},
-			expectError: false,
-		},
-		{
-			name: "request with valid map config",
-			request: &ai.ModelRequest{
-				Config: map[string]any{
-					"aspectRatio":      "16:9",
-					"durationSeconds":  5,
-					"personGeneration": "allow_adult",
-				},
-			},
-			expected: genai.GenerateVideosConfig{
-				AspectRatio:      "16:9",
-				DurationSeconds:  genai.Ptr(int32(5)),
-				PersonGeneration: "allow_adult",
-			},
-			expectError: false,
-		},
-		{
-			name: "request with different config type",
-			request: &ai.ModelRequest{
-				Config: &genai.GenerateContentConfig{
-					MaxOutputTokens: int32(100),
-				},
-			},
-			expected:    genai.GenerateVideosConfig{},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := toVeoParameters(tt.request)
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("toVeoParameters() expected error but got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("toVeoParameters() unexpected error: %v", err)
-			}
-
-			// Compare AspectRatio
-			if result.AspectRatio != tt.expected.AspectRatio {
-				t.Errorf("toVeoParameters() AspectRatio = %q, want %q", result.AspectRatio, tt.expected.AspectRatio)
-			}
-
-			// Compare DurationSeconds pointers
-			if (result.DurationSeconds == nil) != (tt.expected.DurationSeconds == nil) {
-				t.Errorf("toVeoParameters() DurationSeconds nil mismatch: got %v, want %v", result.DurationSeconds, tt.expected.DurationSeconds)
-			} else if result.DurationSeconds != nil && tt.expected.DurationSeconds != nil {
-				if *result.DurationSeconds != *tt.expected.DurationSeconds {
-					t.Errorf("toVeoParameters() DurationSeconds = %v, want %v", *result.DurationSeconds, *tt.expected.DurationSeconds)
-				}
-			}
-
-			// Compare PersonGeneration
-			if result.PersonGeneration != tt.expected.PersonGeneration {
-				t.Errorf("toVeoParameters() PersonGeneration = %q, want %q", result.PersonGeneration, tt.expected.PersonGeneration)
 			}
 		})
 	}
@@ -507,4 +411,67 @@ func TestCheckVeoOperationStructure(t *testing.T) {
 	} else {
 		t.Log("checkVeoOperation function structure test passed (mock client would be needed for full test)")
 	}
+}
+
+func TestResolveVeoActions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test-key",
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+
+	const modelName = "veo-3.0-generate-001"
+	startKey := api.KeyFromName(api.ActionTypeBackgroundModel, api.NewName(googleAIProvider, modelName))
+	checkKey := api.KeyFromName(api.ActionTypeCheckOperation, api.NewName(googleAIProvider, modelName))
+
+	// Resolving either key yields the background model bundle, and registering
+	// it makes both the start and check actions resolvable.
+	for _, tc := range []struct {
+		name  string
+		atype api.ActionType
+	}{
+		{"resolved as background model", api.ActionTypeBackgroundModel},
+		{"resolved as check operation", api.ActionTypeCheckOperation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			action := resolveAction(client, catalog{provider: googleAIProvider}, tc.atype, modelName)
+			if action == nil {
+				t.Fatalf("resolveAction(%s, %q) = nil", tc.atype, modelName)
+			}
+
+			r := registry.New()
+			action.Register(r)
+
+			for _, key := range []string{startKey, checkKey} {
+				if r.LookupAction(key) == nil {
+					t.Errorf("action %q not registered", key)
+				}
+			}
+		})
+	}
+
+	t.Run("start action carries model metadata", func(t *testing.T) {
+		action := resolveAction(client, catalog{provider: googleAIProvider}, api.ActionTypeBackgroundModel, modelName)
+		if action == nil {
+			t.Fatal("resolveAction returned nil")
+		}
+
+		desc := action.Desc()
+		if desc.Metadata["model"] == nil {
+			t.Errorf("start action is missing model metadata, got %v", desc.Metadata)
+		}
+	})
+
+	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
+		for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
+			if action := resolveAction(client, catalog{provider: googleAIProvider}, atype, "gemini-flash-latest"); action != nil {
+				t.Errorf("resolveAction(%s, gemini-flash-latest) = %v, want nil", atype, action)
+			}
+		}
+	})
 }

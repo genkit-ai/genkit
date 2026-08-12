@@ -21,10 +21,13 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import signal
 import sys
+import threading
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from types import TracebackType
+from types import FrameType, TracebackType
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._logger import get_logger
@@ -33,6 +36,50 @@ from genkit._core._reflection import ServerSpec
 logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
+ACTIVE_CLEANUPS: list[Callable[[], None]] = []
+# RLock so a SIGINT/SIGTERM mid-update can re-enter: signal handlers run on the
+# main thread, and a plain Lock would deadlock if that thread already holds it.
+ACTIVE_CLEANUPS_LOCK = threading.RLock()
+SIGNALS_REGISTERED = False
+
+
+def setup_signal_handlers() -> None:
+    """Setup global signal handlers once on the main thread."""
+    global SIGNALS_REGISTERED
+    if SIGNALS_REGISTERED:
+        return
+
+    try:
+        original_sigint = signal.getsignal(signal.SIGINT)
+        original_sigterm = signal.getsignal(signal.SIGTERM)
+
+        def handle_signal(signum: int, frame: FrameType | None) -> None:
+            handler = original_sigint if signum == signal.SIGINT else original_sigterm
+            if handler == signal.SIG_IGN:
+                return
+
+            with ACTIVE_CLEANUPS_LOCK:
+                cleanups = list(ACTIVE_CLEANUPS)
+            for cleanup_fn in cleanups:
+                try:
+                    cleanup_fn()
+                except Exception:  # noqa: S110
+                    pass
+
+            if callable(handler):
+                handler(signum, frame)
+            else:
+                sys.exit(128 + signum)
+
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+        SIGNALS_REGISTERED = True
+    except ValueError:
+        # In Python, signal.signal() can only be invoked from the primary main thread
+        # of the main process; calling it from a background worker thread raises ValueError.
+        # OS termination signals are only ever delivered to the main thread anyway, so
+        # registering handlers on background threads is both impossible and unnecessary.
+        pass
 
 
 def _remove_file(file_path: Path | None) -> bool:
@@ -41,18 +88,13 @@ def _remove_file(file_path: Path | None) -> bool:
     Returns:
         True if cleanup was successful or file didn't exist, False on error.
     """
-    # NOTE: Neither print nor logger appears to work during atexit, so print is intentional here.
+    # Logger is unreliable during atexit; only print on failure.
     if not file_path:
         return True
     try:
         if file_path.exists():
-            print(f'Removing file: {file_path}')  # noqa: T201 - atexit handler, logger unavailable
             file_path.unlink()
-            # Consider success if unlink didn't raise error
-            return True
-        else:
-            # Consider success if file already gone
-            return True
+        return True
     except Exception as e:
         print(f'Error deleting {file_path}: {e}')  # noqa: T201 - atexit handler, logger unavailable
         return False
@@ -111,7 +153,7 @@ def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec) -> Path:
     with Path(runtime_file_path).open('w', encoding='utf-8') as f:
         _ = f.write(metadata)
 
-    logger.info(f'Initialized runtime file: {runtime_file_path}')
+    logger.debug(f'Initialized runtime file: {runtime_file_path}')
     _ = sys.stdout.flush()
     _ = sys.stderr.flush()
     return runtime_file_path
@@ -247,10 +289,17 @@ class RuntimeManager:
 
         self._runtime_file_path = _create_and_write_runtime_file(self._runtime_dir, self.spec)
         _register_atexit_cleanup_handler(self._runtime_file_path)
+        with ACTIVE_CLEANUPS_LOCK:
+            ACTIVE_CLEANUPS.append(self.cleanup)
         return self._runtime_file_path
 
     def cleanup(self) -> None:
         """Explicitly cleanup the runtime file."""
+        with ACTIVE_CLEANUPS_LOCK:
+            if self.cleanup in ACTIVE_CLEANUPS:
+                ACTIVE_CLEANUPS.remove(self.cleanup)
+
         if self._runtime_file_path:
             logger.debug(f'Cleaning up runtime file: {self._runtime_file_path}')
             _ = _remove_file(self._runtime_file_path)
+            self._runtime_file_path = None

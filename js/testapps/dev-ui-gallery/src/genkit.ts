@@ -118,7 +118,7 @@ export const ai = genkit({
           metricSpec: {
             rougeType: 'rougeLsum',
             useStemmer: true,
-            splitSummaries: 'true',
+            splitSummaries: true,
           },
         },
       ],

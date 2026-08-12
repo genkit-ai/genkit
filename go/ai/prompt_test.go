@@ -24,9 +24,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
@@ -38,7 +36,7 @@ type InputOutput struct {
 }
 
 func testTool(reg api.Registry, name string) Tool {
-	return DefineTool(reg, name, "use when need to execute a test",
+	return defineTool(reg, name, "use when need to execute a test",
 		func(ctx *ToolContext, input struct {
 			Test string
 		},
@@ -152,7 +150,7 @@ type HelloPromptInput struct {
 }
 
 func definePromptModel(reg api.Registry) Model {
-	return DefineModel(reg, "test/chat",
+	return defineModel(reg, "test/chat",
 		&ModelOptions{Supports: &ModelSupports{
 			Tools:      true,
 			Multiturn:  true,
@@ -232,11 +230,11 @@ func TestValidPrompt(t *testing.T) {
 		name           string
 		model          Model
 		systemText     string
-		systemFn       PromptFn
+		systemFn       func(context.Context, HelloPromptInput) (string, error)
 		promptText     string
-		promptFn       PromptFn
+		promptFn       func(context.Context, HelloPromptInput) (string, error)
 		messages       []*Message
-		messagesFn     MessagesFn
+		messagesFn     func(context.Context, HelloPromptInput) ([]*Message, error)
 		tools          []ToolRef
 		config         *GenerationCommonConfig
 		inputType      any
@@ -284,11 +282,11 @@ func TestValidPrompt(t *testing.T) {
 			model:     model,
 			config:    &GenerationCommonConfig{Temperature: 11},
 			inputType: HelloPromptInput{},
-			systemFn: func(ctx context.Context, input any) (string, error) {
-				return "say hello to {{Name}}", nil
+			systemFn: func(ctx context.Context, input HelloPromptInput) (string, error) {
+				return "say hello to " + input.Name, nil
 			},
-			promptFn: func(ctx context.Context, input any) (string, error) {
-				return "my name is {{Name}}", nil
+			promptFn: func(ctx context.Context, input HelloPromptInput) (string, error) {
+				return "my name is " + input.Name, nil
 			},
 			input: HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
@@ -364,11 +362,11 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			messagesFn: func(ctx context.Context, input any) ([]*Message, error) {
+			messagesFn: func(ctx context.Context, input HelloPromptInput) ([]*Message, error) {
 				return []*Message{
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart("your name is {{Name}}")},
+						Content: []*Part{NewTextPart("your name is " + input.Name)},
 					},
 				}, nil
 			},
@@ -408,16 +406,11 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			messagesFn: func(ctx context.Context, input any) ([]*Message, error) {
-				var p HelloPromptInput
-				switch param := input.(type) {
-				case HelloPromptInput:
-					p = param
-				}
+			messagesFn: func(ctx context.Context, input HelloPromptInput) ([]*Message, error) {
 				return []*Message{
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart(fmt.Sprintf("your name is %s", p.Name))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("your name is %s", input.Name))},
 					},
 				}, nil
 			},
@@ -508,7 +501,10 @@ func TestValidPrompt(t *testing.T) {
 			},
 		},
 		{
-			name:       "execute with MessagesFn option",
+			// Message text is verbatim while the user prompt is still a
+			// template, so within one request {{Name}} survives in the
+			// message and expands in the prompt.
+			name:       "execute with Messages option",
 			model:      model,
 			config:     &GenerationCommonConfig{Temperature: 11},
 			inputType:  HelloPromptInput{},
@@ -519,7 +515,7 @@ func TestValidPrompt(t *testing.T) {
 				WithInput(HelloPromptInput{Name: "foo"}),
 				WithMessages(NewModelTextMessage("I remember you said your name is {{Name}}")),
 			},
-			wantTextOutput: "Echo: system: say hello; I remember you said your name is foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
+			wantTextOutput: "Echo: system: say hello; I remember you said your name is {{Name}}; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
 					Temperature: 11,
@@ -535,7 +531,7 @@ func TestValidPrompt(t *testing.T) {
 					},
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart("I remember you said your name is foo")},
+						Content: []*Part{NewTextPart("I remember you said your name is {{Name}}")},
 					},
 					{
 						Role:    RoleUser,
@@ -694,7 +690,7 @@ func TestOptionsPatternExecute(t *testing.T) {
 
 	ConfigureFormats(reg)
 
-	testModel := DefineModel(reg, "options/test", nil, testGenerate)
+	testModel := defineModel(reg, "options/test", nil, testGenerate)
 
 	t.Run("Streaming", func(t *testing.T) {
 		p := DefinePrompt(reg, "TestExecute", WithInputType(InputOutput{}), WithPrompt("TestExecute"))
@@ -746,7 +742,7 @@ func TestDefaultsOverride(t *testing.T) {
 	// Set up default formats
 	ConfigureFormats(reg)
 
-	testModel := DefineModel(reg, "defineoptions/test", nil, testGenerate)
+	testModel := defineModel(reg, "defineoptions/test", nil, testGenerate)
 	model := definePromptModel(reg)
 
 	tests := []struct {
@@ -1577,7 +1573,7 @@ Generate a recipe for {{food}}.
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Mock response that matches the expected schema structure
@@ -1595,8 +1591,8 @@ Generate a recipe for {{food}}.
 
 	// verify the prompt is loaded with a schema reference
 	// the internal representation stores the schema with $ref for lazy resolution
-	actionDef := prompt.(api.Action).Desc()
-	outputSchema := actionDef.Metadata["prompt"].(map[string]any)["output"].(map[string]any)["schema"]
+	desc := prompt.(api.Action).Desc()
+	outputSchema := desc.Metadata["prompt"].(map[string]any)["output"].(map[string]any)["schema"]
 	if outputSchema == nil {
 		t.Fatal("Output schema should not be nil")
 	}
@@ -1613,7 +1609,7 @@ Generate a recipe for {{food}}.
 	}
 
 	// define the "Recipe" schema (deferred resolution)
-	core.DefineSchema(reg, "Recipe", map[string]any{
+	reg.RegisterSchema("Recipe", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{"type": "string"},
@@ -1687,7 +1683,7 @@ Generate a recipe.
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1715,7 +1711,7 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1725,7 +1721,7 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 	})
 
 	// Define schema
-	core.DefineSchema(reg, "FooSchema", map[string]any{
+	reg.RegisterSchema("FooSchema", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"foo": map[string]any{"type": "string"},
@@ -1753,7 +1749,7 @@ func TestWithOutputSchemaName_DefinePrompt_Missing(t *testing.T) {
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1795,7 +1791,7 @@ func TestDataPromptExecute(t *testing.T) {
 	t.Run("typed input and output", func(t *testing.T) {
 		var capturedInput any
 
-		testModel := DefineModel(r, "test/dataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/dataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1837,7 +1833,7 @@ func TestDataPromptExecute(t *testing.T) {
 	})
 
 	t.Run("string output type", func(t *testing.T) {
-		testModel := DefineModel(r, "test/stringDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/stringDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
@@ -1876,7 +1872,7 @@ func TestDataPromptExecute(t *testing.T) {
 	t.Run("additional options passed through", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1914,7 +1910,7 @@ func TestDataPromptExecute(t *testing.T) {
 	})
 
 	t.Run("returns error for invalid output parsing", func(t *testing.T) {
-		testModel := DefineModel(r, "test/parseFailDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/parseFailDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1953,7 +1949,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	}
 
 	t.Run("typed streaming with struct output", func(t *testing.T) {
-		testModel := DefineModel(r, "test/streamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/streamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2010,7 +2006,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	})
 
 	t.Run("string output streaming", func(t *testing.T) {
-		testModel := DefineModel(r, "test/stringStreamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/stringStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -2080,7 +2076,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	t.Run("handles options passed at execute time", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2123,7 +2119,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	t.Run("propagates errors", func(t *testing.T) {
 		expectedErr := errors.New("stream failed")
 
-		testModel := DefineModel(r, "test/errorStreamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/errorStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
@@ -2149,6 +2145,40 @@ func TestDataPromptExecuteStream(t *testing.T) {
 			t.Errorf("expected error %v, got %v", expectedErr, receivedErr)
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := defineModel(r, "test/breakDataPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"text":"chunk","index":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"text":"done","index":4}`)},
+				},
+			}, nil
+		})
+
+		dp := DefineDataPrompt[StreamInput, StreamOutput](r, "breakStreamPrompt",
+			WithModel(testModel),
+			WithPrompt("Test {{topic}}"),
+		)
+
+		for _, err := range dp.ExecuteStream(t.Context(), StreamInput{Topic: "yielding"}) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestPromptExecuteStream(t *testing.T) {
@@ -2159,7 +2189,7 @@ func TestPromptExecuteStream(t *testing.T) {
 	t.Run("yields chunks then final response", func(t *testing.T) {
 		chunkTexts := []string{"A", "B", "C"}
 
-		testModel := DefineModel(r, "test/promptStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/promptStreamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -2230,7 +2260,7 @@ func TestPromptExecuteStream(t *testing.T) {
 	t.Run("handles execution options", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsPromptExecModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsPromptExecModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedConfig = req.Config
@@ -2263,24 +2293,51 @@ func TestPromptExecuteStream(t *testing.T) {
 			t.Errorf("expected temperature 0.9, got %v", config.Temperature)
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := defineModel(r, "test/breakPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		p := DefinePrompt(r, "breakStreamTestPrompt",
+			WithModel(testModel),
+			WithPrompt("Test"),
+		)
+
+		for _, err := range p.ExecuteStream(t.Context()) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
-// TestSessionStateInjection tests that session state is automatically injected
-// into prompt templates and accessible via {{@state.field}} syntax.
+// TestSessionStateInjection tests that state attached to the context via
+// base.WithPromptState is automatically injected into prompt templates and
+// accessible via {{@state.field}} syntax. Sessions attach their custom state
+// this way (see exp.NewSessionContext), decoupled so go/ai needs no dependency
+// on the session package.
 func TestSessionStateInjection(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
 
-	// Define a test state type
-	type UserState struct {
-		Name        string            `json:"name"`
-		Preferences map[string]string `json:"preferences"`
-	}
-
-	t.Run("session state accessible in prompt template", func(t *testing.T) {
+	t.Run("state accessible in prompt template", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/sessionStateModel", &ModelOptions{
+		testModel := defineModel(r, "test/sessionStateModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
@@ -2296,36 +2353,30 @@ func TestSessionStateInjection(t *testing.T) {
 			WithPrompt("Hello {{@state.name}}, your theme is {{@state.preferences.theme}}"),
 		)
 
-		// Create a session with state
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name:        "Alice",
-			Preferences: map[string]string{"theme": "dark"},
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{
+				"name":        "Alice",
+				"preferences": map[string]any{"theme": "dark"},
+			}
+		})
 
-		// Attach session to context
-		ctx = session.NewContext(ctx, sess)
-
-		// Execute prompt with session in context
-		_, err = p.Execute(ctx)
-		if err != nil {
+		// Execute prompt with state in context
+		if _, err := p.Execute(ctx); err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
 
-		// Verify the session state was injected into the template
+		// Verify the state was injected into the template
 		expected := "Hello Alice, your theme is dark"
 		if capturedPrompt != expected {
 			t.Errorf("Expected prompt %q, got %q", expected, capturedPrompt)
 		}
 	})
 
-	t.Run("prompt works without session in context", func(t *testing.T) {
+	t.Run("prompt works without state in context", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/noSessionModel", &ModelOptions{
+		testModel := defineModel(r, "test/noSessionModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
@@ -2357,10 +2408,10 @@ func TestSessionStateInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("session state and input variables can be used together", func(t *testing.T) {
+	t.Run("state and input variables can be used together", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/mixedModel", &ModelOptions{
+		testModel := defineModel(r, "test/mixedModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
@@ -2379,18 +2430,13 @@ func TestSessionStateInjection(t *testing.T) {
 			}{}),
 		)
 
-		// Create session
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name: "Charlie",
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
-		ctx = session.NewContext(ctx, sess)
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{"name": "Charlie"}
+		})
 
-		// Execute with both session and input
-		_, err = p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
+		// Execute with both state and input
+		_, err := p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
 		if err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
@@ -3062,11 +3108,13 @@ func TestContentType(t *testing.T) {
 			wantData: "gs://bucket/image.png",
 		},
 		{
-			name:        "gs:// URL without content type",
-			ct:          "",
-			uri:         "gs://bucket/image.png",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the model/plugin
+			// layer resolves gs:// URLs natively.
+			name:     "gs:// URL without content type",
+			ct:       "",
+			uri:      "gs://bucket/image.png",
+			wantCT:   "",
+			wantData: "gs://bucket/image.png",
 		},
 		{
 			name:     "http URL with content type",
@@ -3076,11 +3124,14 @@ func TestContentType(t *testing.T) {
 			wantData: "https://example.com/image.jpg",
 		},
 		{
-			name:        "http URL without content type",
-			ct:          "",
-			uri:         "https://example.com/image.jpg",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the download
+			// middleware fetches http(s) media and fills it in from the
+			// response's Content-Type header.
+			name:     "http URL without content type",
+			ct:       "",
+			uri:      "https://example.com/image.jpg",
+			wantCT:   "",
+			wantData: "https://example.com/image.jpg",
 		},
 		{
 			name:     "data URI with base64",
@@ -3140,6 +3191,65 @@ func TestContentType(t *testing.T) {
 			}
 			if string(gotData) != tt.wantData {
 				t.Errorf("data = %q, want %q", string(gotData), tt.wantData)
+			}
+		})
+	}
+}
+
+// TestPromptRenderMediaURL verifies that a prompt using {{media url=...}} with
+// an http(s) or gs:// URL renders without requiring an explicit content type.
+// The content type is resolved downstream: the download middleware fetches
+// http(s) media, and the model natively resolves gs:// and similar URLs.
+// Regression test for https://github.com/genkit-ai/genkit/issues/5332.
+func TestPromptRenderMediaURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "http URL", url: "https://example.com/image.jpg"},
+		{name: "gs:// URL", url: "gs://bucket/image.png"},
+	}
+
+	source := `---
+model: test/chat
+input:
+  schema:
+    image: string
+---
+Analyze the image.
+
+{{media url=image}}
+`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			p, err := LoadPromptFromSource(reg, source, "analyze", "")
+			if err != nil {
+				t.Fatalf("LoadPromptFromSource failed: %v", err)
+			}
+
+			actionOpts, err := p.Render(context.Background(), map[string]any{"image": tt.url})
+			if err != nil {
+				t.Fatalf("Render failed: %v", err)
+			}
+
+			var media *Part
+			for _, msg := range actionOpts.Messages {
+				for _, part := range msg.Content {
+					if part.IsMedia() {
+						media = part
+					}
+				}
+			}
+			if media == nil {
+				t.Fatal("expected a media part in the rendered messages, got none")
+			}
+			if media.Text != tt.url {
+				t.Errorf("media URL = %q, want %q", media.Text, tt.url)
+			}
+			if media.ContentType != "" {
+				t.Errorf("content type = %q, want empty (resolved downstream)", media.ContentType)
 			}
 		})
 	}

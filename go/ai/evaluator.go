@@ -18,23 +18,42 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
-	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // EvaluatorFunc is the function type for evaluator implementations.
 type EvaluatorFunc = func(context.Context, *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error)
 
+// EvaluatorActionFunc is an [EvaluatorFunc] that additionally receives
+// the request's typed Config: the framework deserializes the request's raw
+// options into it before calling the function (see [NewEvaluatorAction]).
+type EvaluatorActionFunc[Config any] = func(context.Context, *EvaluatorCallbackRequest, Config) (*EvaluatorCallbackResponse, error)
+
 // BatchEvaluatorFunc is the function type for batch evaluator implementations.
 type BatchEvaluatorFunc = func(context.Context, *EvaluatorRequest) (*EvaluatorResponse, error)
 
-// Evaluator represents a evaluator action.
+// BatchEvaluatorActionFunc is a [BatchEvaluatorFunc] that additionally
+// receives the request's typed Config: the framework deserializes the
+// request's raw options into it before calling the function (see
+// [NewBatchEvaluatorAction]).
+type BatchEvaluatorActionFunc[Config any] = func(context.Context, *EvaluatorRequest, Config) (*EvaluatorResponse, error)
+
+// Evaluator represents an evaluator. It is the type to accept as an argument
+// and to look up by name; implementations are created with
+// [NewEvaluatorAction] or [NewBatchEvaluatorAction], or their
+// [genkit.DefineEvaluatorAction] and [genkit.DefineBatchEvaluatorAction]
+// counterparts in an application.
 type Evaluator interface {
 	// Name returns the name of the evaluator.
 	Name() string
@@ -70,9 +89,54 @@ func (e EvaluatorRef) Config() any {
 	return e.config
 }
 
-// evaluator is an action with functions specific to evaluating a dataset.
-type evaluator struct {
-	core.ActionDef[*EvaluatorRequest, *EvaluatorResponse, struct{}]
+// EvaluatorAction is an evaluator backed by a registry action. It is the
+// concrete type returned by [NewEvaluatorAction] and [NewBatchEvaluatorAction];
+// pass it to [WithEvaluator], or return it from a plugin's Init for the
+// framework to register.
+//
+// It implements [Evaluator] and [api.Action], so it can be passed anywhere
+// either is accepted. It also promotes [core.Action.Run], the typed
+// equivalent of [EvaluatorAction.Evaluate].
+type EvaluatorAction struct {
+	action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
+}
+
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
+var (
+	_ api.Action = (*EvaluatorAction)(nil)
+	_ Evaluator  = (*EvaluatorAction)(nil)
+)
+
+// Name returns the registry name of the evaluator.
+func (e *EvaluatorAction) Name() string { return e.action.Name() }
+
+// Register registers the evaluator with r, making it available to lookups and
+// to the Dev UI. A plugin that returns the evaluator from its Init does not
+// need to call this.
+func (e *EvaluatorAction) Register(r api.Registry) { e.action.Register(r) }
+
+// Desc returns the evaluator's action descriptor: its name, schemas, and
+// metadata.
+func (e *EvaluatorAction) Desc() api.ActionDesc { return e.action.Desc() }
+
+// RunJSON runs the evaluator on a JSON-encoded [EvaluatorRequest] and returns
+// a JSON-encoded [EvaluatorResponse]. The framework uses it to serve
+// reflection and registry-driven calls; prefer [EvaluatorAction.Evaluate].
+func (e *EvaluatorAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.RunJSON: evaluator called on a nil evaluator; check that all evaluators are defined")
+	}
+	return e.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [EvaluatorAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (e *EvaluatorAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.RunJSONWithTelemetry: evaluator called on a nil evaluator; check that all evaluators are defined")
+	}
+	return e.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // Example is a single example that requires evaluation
@@ -142,6 +206,8 @@ type EvaluatorResponse = []EvaluationResult
 type EvaluatorOptions struct {
 	// ConfigSchema is the JSON schema for the evaluator's config.
 	ConfigSchema map[string]any `json:"configSchema,omitempty"`
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any `json:"-"`
 	// DisplayName is the name of the evaluator as it appears in the UI.
 	DisplayName string `json:"displayName"`
 	// Definition is the definition of the evaluator.
@@ -161,36 +227,70 @@ type EvaluatorCallbackRequest struct {
 // EvaluatorCallbackResponse is the result on evaluating a single [Example]
 type EvaluatorCallbackResponse = EvaluationResult
 
-// NewEvaluator creates a new [Evaluator].
+// evaluatorMetadata builds the shared action metadata for an evaluator.
+func evaluatorMetadata(opts *EvaluatorOptions, configSchema map[string]any) map[string]any {
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.Metadata)
+	// TODO(ssbushi): Set this on `evaluator` key on action metadata
+	metadata["type"] = api.ActionTypeEvaluator
+	metadata["evaluator"] = map[string]any{
+		"evaluatorIsBilled":    opts.IsBilled,
+		"evaluatorDisplayName": opts.DisplayName,
+		"evaluatorDefinition":  opts.Definition,
+		"customOptions":        configSchema,
+	}
+	return metadata
+}
+
+// NewEvaluatorAction creates an unregistered [EvaluatorAction]: return it from
+// a plugin's Init for the framework to register, or call
+// [EvaluatorAction.Register] directly. Applications should define evaluators
+// with [genkit.DefineEvaluatorAction].
 // This method processes the input dataset one-by-one.
-func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw options into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The config's JSON schema is inferred from
+// Config unless [EvaluatorOptions.ConfigSchema] overrides it.
+func NewEvaluatorAction[Config any](
+	name string,
+	opts *EvaluatorOptions,
+	fn EvaluatorActionFunc[Config],
+) *EvaluatorAction {
 	if name == "" {
-		panic("ai.NewEvaluator: evaluator name is required")
+		panic("ai.NewEvaluatorAction: evaluator name is required")
 	}
 
 	if opts == nil {
 		opts = &EvaluatorOptions{}
 	}
 
-	// TODO(ssbushi): Set this on `evaluator` key on action metadata
-	metadata := map[string]any{
-		"type": api.ActionTypeEvaluator,
-		"evaluator": map[string]any{
-			"evaluatorIsBilled":    opts.IsBilled,
-			"evaluatorDisplayName": opts.DisplayName,
-			"evaluatorDefinition":  opts.Definition,
-		},
-	}
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
 
-	inputSchema := core.InferSchemaMap(EvaluatorRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	return &EvaluatorAction{
+		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    evaluatorMetadata(opts, configSchema),
+			InputSchema: inputSchema,
+		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+			// Normalize a shallow copy so the type-erased Options and the
+			// typed parameter always agree without clobbering the caller-owned
+			// request.
+			reqCopy := *req
+			req = &reqCopy
+			cfg, err := resolveConfigInto[Config](&req.Options)
+			if err != nil {
+				return nil, err
+			}
+			// The callback's Options slot is type-erased like the request's,
+			// so it takes the same guard: boxing a typed nil would make it
+			// compare non-nil while dereferences still panic, and would split
+			// this path's semantics from NewBatchEvaluatorAction's.
+			cfgAny := req.Options
 
-	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
 				if datapoint.TestCaseId == "" {
@@ -208,10 +308,10 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 
 						callbackRequest := EvaluatorCallbackRequest{
 							Input:   *input,
-							Options: req.Options,
+							Options: cfgAny,
 						}
 
-						result, err := fn(ctx, &callbackRequest)
+						result, err := fn(ctx, &callbackRequest, cfg)
 						if err != nil {
 							failedScore := Score{
 								Status: ScoreStatusFail.String(),
@@ -245,65 +345,102 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	}
 }
 
-// DefineEvaluator creates a new [Evaluator] and registers it.
-// This method processes the input dataset one-by-one.
-func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
-	e := NewEvaluator(name, opts, fn)
-	e.Register(r)
-	return e
-}
-
-// NewBatchEvaluator creates a new [Evaluator].
+// NewBatchEvaluatorAction creates an unregistered [EvaluatorAction]: return it
+// from a plugin's Init for the framework to register, or call
+// [EvaluatorAction.Register] directly. Applications should define batch
+// evaluators with [genkit.DefineBatchEvaluatorAction].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [NewEvaluatorAction] for how the request's options
+// are deserialized.
+//
+// [EvaluatorOptions.ConfigSchema] is enforced: it becomes the options slot of
+// the action's input schema and every request is validated against it, so a
+// schema narrower than what callers actually send now fails at the action
+// boundary. Batch evaluators did not validate options before; leave
+// ConfigSchema unset to accept anything.
+func NewBatchEvaluatorAction[Config any](
+	name string,
+	opts *EvaluatorOptions,
+	fn BatchEvaluatorActionFunc[Config],
+) *EvaluatorAction {
 	if name == "" {
-		panic("ai.NewBatchEvaluator: batch evaluator name is required")
+		panic("ai.NewBatchEvaluatorAction: batch evaluator name is required")
 	}
 
 	if opts == nil {
 		opts = &EvaluatorOptions{}
 	}
 
-	metadata := map[string]any{
-		"type": api.ActionTypeEvaluator,
-		"evaluator": map[string]any{
-			"evaluatorIsBilled":    opts.IsBilled,
-			"evaluatorDisplayName": opts.DisplayName,
-			"evaluatorDefinition":  opts.Definition,
-		},
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+
+	rawFn := func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+		// Normalize a shallow copy so the type-erased Options and the typed
+		// parameter always agree without clobbering the caller-owned request.
+		reqCopy := *req
+		req = &reqCopy
+		cfg, err := resolveConfigInto[Config](&req.Options)
+		if err != nil {
+			return nil, err
+		}
+		return fn(ctx, req, cfg)
 	}
 
-	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
+	return &EvaluatorAction{
+		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    evaluatorMetadata(opts, configSchema),
+			InputSchema: inputSchema,
+		}, rawFn),
 	}
 }
 
-// DefineBatchEvaluator creates a new [Evaluator] and registers it.
+// NewEvaluator creates a new [Evaluator].
+// This method processes the input dataset one-by-one.
+//
+// Deprecated: Use [NewEvaluatorAction], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
+func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+	if name == "" {
+		panic("ai.NewEvaluator: evaluator name is required")
+	}
+	return NewEvaluatorAction(name, opts, func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
+		return fn(ctx, req)
+	})
+}
+
+// NewBatchEvaluator creates a new [Evaluator].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
-	e := NewBatchEvaluator(name, opts, fn)
-	e.(*evaluator).Register(r)
-	return e
+//
+// Deprecated: Use [NewBatchEvaluatorAction], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
+func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+	if name == "" {
+		panic("ai.NewBatchEvaluator: batch evaluator name is required")
+	}
+	return NewBatchEvaluatorAction(name, opts, func(ctx context.Context, req *EvaluatorRequest, _ any) (*EvaluatorResponse, error) {
+		return fn(ctx, req)
+	})
 }
 
-// LookupEvaluator looks up an [Evaluator] registered by [DefineEvaluator].
+// LookupEvaluator looks up a registered [Evaluator] by name.
 // It returns nil if the evaluator was not defined.
 func LookupEvaluator(r api.Registry, name string) Evaluator {
 	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}](r, api.ActionTypeEvaluator, name)
 	if action == nil {
 		return nil
 	}
-	return &evaluator{
-		ActionDef: *action,
-	}
+	return &EvaluatorAction{*action}
 }
 
 // Evaluate runs the given [Evaluator].
-func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+func (e *EvaluatorAction) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
 	}
 
 	return e.Run(ctx, req, nil)
@@ -313,9 +450,7 @@ func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*Evalu
 func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*EvaluatorResponse, error) {
 	evalOpts := &evaluatorOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEvaluator(evalOpts); err != nil {
-			return nil, err
-		}
+		opt.applyEvaluator(evalOpts)
 	}
 
 	if evalOpts.Evaluator == nil {

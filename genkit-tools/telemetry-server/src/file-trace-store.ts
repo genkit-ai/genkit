@@ -63,6 +63,37 @@ export class LocalFileTraceStore implements TraceStore {
     this.index = new Index(this.indexRoot);
   }
 
+  /**
+   * Resolves the on-disk path for a given trace id, guarding against path
+   * traversal. The `id` originates from unauthenticated HTTP input
+   * (`POST /api/traces` body and `GET /api/traces/:traceId`), so it must be
+   * treated as untrusted. Trace ids are expected to be simple file-name-safe
+   * tokens; anything containing a path separator, a traversal segment, a null
+   * byte, or that would otherwise resolve outside of `storeRoot` is rejected.
+   */
+  private resolveTracePath(id: string): string {
+    if (
+      typeof id !== 'string' ||
+      id.length === 0 ||
+      id === '.' ||
+      id === '..' ||
+      id.includes('/') ||
+      id.includes('\\') ||
+      id.includes('\0')
+    ) {
+      throw new Error(`Invalid trace id: ${JSON.stringify(id)}`);
+    }
+    const filePath = path.resolve(this.storeRoot, id);
+    // Defense in depth: ensure the resolved path stays within storeRoot. Using
+    // `path.relative` handles case-insensitive file systems and Windows drive
+    // letters more robustly than a `startsWith` prefix check.
+    const relative = path.relative(this.storeRoot, filePath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`Invalid trace id: ${JSON.stringify(id)}`);
+    }
+    return filePath;
+  }
+
   async init() {
     const metadata = this.index.getMetadata();
     // if the metadata file doesn't exist or it was for the older version or if
@@ -94,7 +125,7 @@ export class LocalFileTraceStore implements TraceStore {
   }
 
   async load(id: string): Promise<TraceData | undefined> {
-    const filePath = path.resolve(this.storeRoot, `${id}`);
+    const filePath = this.resolveTracePath(id);
     if (!fs.existsSync(filePath)) {
       return undefined;
     }
@@ -165,10 +196,7 @@ export class LocalFileTraceStore implements TraceStore {
         }
         trace = existing;
       }
-      fs.writeFileSync(
-        path.resolve(this.storeRoot, `${id}`),
-        JSON.stringify(trace)
-      );
+      fs.writeFileSync(this.resolveTracePath(id), JSON.stringify(trace));
       const hasRootSpan = !!Object.values(rawTrace.spans).find(
         (s) => !s.parentSpanId
       );
@@ -221,7 +249,7 @@ export class LocalFileTraceStore implements TraceStore {
       : 0;
     const stopAt = startFrom + (query?.limit || 10);
     const traces = files.slice(startFrom, stopAt).map((id) => {
-      const filePath = path.resolve(this.storeRoot, `${id}`);
+      const filePath = this.resolveTracePath(id);
       const data = fs.readFileSync(filePath, 'utf8');
       const parsed = JSON.parse(data);
       // For backwards compatibility, new field.

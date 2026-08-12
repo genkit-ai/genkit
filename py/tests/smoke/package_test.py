@@ -16,10 +16,10 @@
 
 """Smoke tests for package structure."""
 
-from genkit.plugins.google_cloud import package_name as google_cloud_package_name
-from genkit.plugins.google_genai import package_name as google_genai_package_name
-from genkit.plugins.ollama import package_name as ollama_package_name
-from genkit.plugins.vertex_ai import package_name as vertex_ai_package_name
+from genkit_google_cloud import package_name as google_cloud_package_name
+from genkit_google_genai import package_name as google_genai_package_name
+from genkit_ollama import package_name as ollama_package_name
+from genkit_vertexai import package_name as vertex_ai_package_name
 
 
 def test_package_names() -> None:
@@ -28,7 +28,7 @@ def test_package_names() -> None:
     This test verifies that the package imports work correctly from the
     end-user perspective.
     """
-    assert google_cloud_package_name() == 'genkit.plugins.google_cloud'
-    assert google_genai_package_name() == 'genkit.plugins.google_genai'
-    assert ollama_package_name() == 'genkit.plugins.ollama'
-    assert vertex_ai_package_name() == 'genkit.plugins.vertex_ai'
+    assert google_cloud_package_name() == 'genkit_google_cloud'
+    assert google_genai_package_name() == 'genkit_google_genai'
+    assert ollama_package_name() == 'genkit_ollama'
+    assert vertex_ai_package_name() == 'genkit_vertexai'

@@ -1,8 +1,8 @@
 ---
-model: googleai/gemini-2.5-flash
+model: googleai/gemini-flash-latest
 config:
   thinkingConfig:
-    thinkingBudget: 0
+    thinkingLevel: MINIMAL
 input:
   schema: RecipeRequest
 output:

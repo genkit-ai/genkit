@@ -18,23 +18,22 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
 
 // defaultFallbackStatuses are the status codes that trigger a fallback by default.
-var defaultFallbackStatuses = []core.StatusName{
-	core.UNAVAILABLE,
-	core.DEADLINE_EXCEEDED,
-	core.RESOURCE_EXHAUSTED,
-	core.ABORTED,
-	core.INTERNAL,
-	core.NOT_FOUND,
-	core.UNIMPLEMENTED,
+var defaultFallbackStatuses = []status.Name{
+	status.Unavailable,
+	status.DeadlineExceeded,
+	status.ResourceExhausted,
+	status.Aborted,
+	status.Internal,
+	status.NotFound,
+	status.Unimplemented,
 }
 
 // Fallback is a middleware that tries alternative models when the primary model
@@ -52,8 +51,8 @@ var defaultFallbackStatuses = []core.StatusName{
 //	    ai.WithModel(primary),
 //	    ai.WithPrompt("hello"),
 //	    ai.WithUse(&middleware.Fallback{Models: []ai.ModelRef{
-//	        googlegenai.ModelRef("googleai/gemini-2.5-flash", ...),
-//	        googlegenai.ModelRef("vertexai/gemini-2.5-flash", ...),
+//	        googlegenai.ModelRef("googleai/gemini-flash-latest", ...),
+//	        googlegenai.ModelRef("vertexai/gemini-flash-latest", ...),
 //	    }}),
 //	)
 type Fallback struct {
@@ -62,11 +61,10 @@ type Fallback struct {
 	// Config is used verbatim for that model -- the original request's
 	// Config is not inherited. Use [ai.NewModelRef] to attach config.
 	Models []ai.ModelRef `json:"models,omitempty"`
-	// Statuses is the set of status codes that trigger a fallback.
-	// Only [core.GenkitError] errors with a matching status will trigger fallback;
-	// non-GenkitError errors propagate immediately.
-	// Defaults to [defaultFallbackStatuses].
-	Statuses []core.StatusName `json:"statuses,omitempty"`
+	// Statuses is the set of status codes that trigger a fallback for
+	// classified errors; unclassified errors propagate immediately and never
+	// trigger one. Defaults to [defaultFallbackStatuses].
+	Statuses []status.Name `json:"statuses,omitempty"`
 }
 
 func (f *Fallback) Name() string { return provider + "/fallback" }
@@ -77,7 +75,7 @@ func (f *Fallback) New(ctx context.Context) (*ai.Hooks, error) {
 	}, nil
 }
 
-func (f *Fallback) statuses() []core.StatusName {
+func (f *Fallback) statuses() []status.Name {
 	if len(f.Statuses) > 0 {
 		return f.Statuses
 	}
@@ -99,7 +97,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 		name := ref.Name()
 		m := genkit.LookupModel(genkit.FromContext(ctx), name)
 		if m == nil {
-			return nil, core.NewError(core.NOT_FOUND, "fallback: model %q not found", name)
+			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)
 		}
 		req := *params.Request
 		req.Config = ref.Config()
@@ -115,12 +113,15 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	return nil, lastErr
 }
 
-// isFallbackRetryable reports whether err should trigger trying the next model.
-// Only GenkitErrors with a matching status trigger fallback.
-func isFallbackRetryable(err error, statuses []core.StatusName) bool {
-	var ge *core.GenkitError
-	if !errors.As(err, &ge) {
-		return false
+// isFallbackRetryable reports whether err should trigger trying the next model:
+// a classified error's status must be in statuses, and an unclassified error
+// propagates immediately, preserving the v1 contract. Failing over to a
+// different billed model is a bigger action than retrying the same one, so it
+// requires an explicit classification; without this, a deterministic bug in a
+// model plugin would silently reroute every request to the fallback.
+func isFallbackRetryable(err error, statuses []status.Name) bool {
+	if s, ok := classifiedStatus(err); ok {
+		return slices.Contains(statuses, s)
 	}
-	return slices.Contains(statuses, ge.Status)
+	return false
 }

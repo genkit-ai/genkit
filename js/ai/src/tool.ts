@@ -488,12 +488,21 @@ export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
 ): ToolAction<I, O> {
   const { requestMetadata, ...toolConfig } = config;
 
-  return tool<I, O>(toolConfig, async (input, { interrupt }) => {
-    if (!config.requestMetadata) interrupt();
-    else if (typeof config.requestMetadata === 'object')
-      interrupt(config.requestMetadata);
-    else interrupt(await Promise.resolve(config.requestMetadata(input)));
-  });
+  return tool<I, O>(
+    {
+      ...toolConfig,
+      metadata: {
+        ...(toolConfig.metadata || {}),
+        tool: { ...toolConfig.metadata?.tool, restartable: false },
+      },
+    },
+    async (input, { interrupt }) => {
+      if (!config.requestMetadata) interrupt();
+      else if (typeof config.requestMetadata === 'object')
+        interrupt(config.requestMetadata);
+      else interrupt(await Promise.resolve(config.requestMetadata(input)));
+    }
+  );
 }
 
 export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -617,7 +626,7 @@ function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
       metadata: {
         ...(config.metadata || {}),
         type: 'tool.v2',
-        tool: { multipart: true },
+        tool: { ...config.metadata?.tool, multipart: true },
         dynamic: true,
       },
     },

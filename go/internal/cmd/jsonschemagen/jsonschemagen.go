@@ -136,9 +136,14 @@ func run(infile, defaultPkgPath, configFile, outRoot string) error {
 
 	// Generate code by package.
 	for pkgPath, schemaMap := range schemasByPackage {
+		// Derive package name from path, with config override.
+		pkgName := path.Base(pkgPath)
+		if pc := cfg.configFor(pkgPath); pc != nil && pc.name != "" {
+			pkgName = pc.name
+		}
 		// Generate code for each type in the package.
 		gen := &generator{
-			pkgName: path.Base(pkgPath),
+			pkgName: pkgName,
 			schemas: schemaMap,
 			cfg:     cfg,
 		}
@@ -266,7 +271,7 @@ func nameAnonymousTypes(schemas map[string]*Schema) {
 }
 
 const license = `
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -302,7 +307,15 @@ func (g *generator) generate() ([]byte, error) {
 	g.pr("package %s\n\n", g.pkgName)
 
 	if pc := g.cfg.configFor(g.pkgName); pc != nil {
-		g.pr("import %q\n", pc.pkgPath)
+		if len(pc.imports) > 0 {
+			g.pr("import (\n")
+			for _, imp := range pc.imports {
+				g.pr("  %q\n", imp)
+			}
+			g.pr(")\n\n")
+		} else if pc.pkgPath != "" {
+			g.pr("import %q\n", pc.pkgPath)
+		}
 	}
 
 	// Sort the names so the output is deterministic.
@@ -409,7 +422,7 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 	if goName == "" {
 		goName = adjustIdentifier(name)
 	}
-	g.pr("type %s struct {\n", goName)
+	g.pr("type %s%s struct {\n", goName, tcfg.typeparams)
 	for _, field := range sortedKeys(s.Properties) {
 		fcfg := g.cfg.configFor(name + "." + field)
 		if fcfg == nil {
@@ -439,7 +452,7 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 		g.generateDoc(fs, fcfg)
 
 		jsonTag := fmt.Sprintf(`json:"%s,omitempty"`, field)
-		if skipOmitEmpty(goName, field) {
+		if skipOmitEmpty(goName, field) || fcfg.noOmitEmpty {
 			jsonTag = fmt.Sprintf(`json:"%s"`, field)
 		}
 		fieldName := fcfg.name
@@ -531,11 +544,20 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 		if ic != nil && ic.name != "" {
 			name = ic.name
 		}
+		// If the target type is generic, append its type-args so the
+		// reference is well-formed (e.g. `*SessionState[State]`). The
+		// referencing type is responsible for declaring matching
+		// typeparams; otherwise the generated code won't compile.
+		// Callers can override this with an explicit `type` directive.
+		var typeArgs string
+		if ic != nil {
+			typeArgs = typeParamArgs(ic.typeparams)
+		}
 		if s2.Enum != nil {
-			return name, nil
+			return name + typeArgs, nil
 		}
 		// If it's not an enum, it's a struct. Use a pointer to it.
-		return "*" + name, nil
+		return "*" + name + typeArgs, nil
 	}
 	// If there is no specified type, assume the schema represents any type.
 	if s.Type.Any() == nil {
@@ -652,6 +674,33 @@ func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 	return keys
 }
 
+// typeParamArgs converts a Go type-parameter list like "[State any]" or
+// "[A any, B comparable]" into the matching type-argument list "[State]"
+// or "[A, B]". Returns "" for an empty input. Used to forward the
+// type-args of a generic target type onto a reference (e.g. turn a ref
+// to `SessionState` into `SessionState[State]` when SessionState has
+// `typeparams [State any]`).
+func typeParamArgs(typeparams string) string {
+	inner := strings.TrimSpace(typeparams)
+	if inner == "" {
+		return ""
+	}
+	inner = strings.TrimPrefix(inner, "[")
+	inner = strings.TrimSuffix(inner, "]")
+	var names []string
+	for _, clause := range strings.Split(inner, ",") {
+		fields := strings.Fields(strings.TrimSpace(clause))
+		if len(fields) == 0 {
+			continue
+		}
+		names = append(names, fields[0])
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(names, ", ") + "]"
+}
+
 // config is the configuration for a schema file.
 // It describes modifications to the defaults of the code generator.
 type config struct {
@@ -670,12 +719,15 @@ func (c config) configFor(name string) *itemConfig {
 // itemConfig is configuration for one item: a type, a field or a package.
 // Not all itemConfig fields apply to both, but using one type simplifies the parser.
 type itemConfig struct {
-	omit     bool
-	name     string
-	pkgPath  string
-	typeExpr string
-	docLines []string
-	fields   []extraField
+	omit        bool
+	name        string
+	pkgPath     string
+	typeExpr    string
+	docLines    []string
+	fields      []extraField
+	typeparams  string   // Go type parameters (e.g., "[State any]")
+	noOmitEmpty bool     // omit the omitempty tag for this field
+	imports     []string // import paths for the package
 }
 
 // extraField represents an additional unexported field to add to a struct.
@@ -699,11 +751,20 @@ type extraField struct {
 //	type EXPR
 //	    use EXPR for the type expression (for fields only)
 //	doc
-//	    doc is following lines until the line "."
+//	    doc is following lines until the line "."; leading whitespace
+//	    is preserved so godoc lists survive generation
 //	pkg
 //	    package path, relative to outdir (last component is package name)
 //	import
-//	    path of package to import (for packages only)
+//	    path of package to import (for packages only, may be repeated)
+//	typeparams PARAMS
+//	    Go type parameters to add to the type declaration (e.g., "[State any]").
+//	    References to this type from other generated fields are
+//	    automatically rewritten to include the matching type-args
+//	    (e.g., "*SessionState[State]"). The referencing type must
+//	    declare matching typeparams.
+//	noomitempty
+//	    don't add omitempty to this field's json tag
 //	field NAME TYPE
 //	    add an unexported field to the struct (for types only)
 func parseConfigFile(filename string) (config, error) {
@@ -730,7 +791,10 @@ func parseConfigFile(filename string) (config, error) {
 			if line == "." {
 				docItem = nil
 			} else {
-				docItem.docLines = append(docItem.docLines, line)
+				// Keep leading whitespace: doc blocks may contain godoc
+				// lists, whose items and continuation lines must stay
+				// indented to render as lists.
+				docItem.docLines = append(docItem.docLines, strings.TrimRight(string(ln), " \t"))
 			}
 			continue
 		}
@@ -770,7 +834,14 @@ func parseConfigFile(filename string) (config, error) {
 			if len(words) < 3 {
 				return errf("need NAME import PATH")
 			}
-			ic.pkgPath = words[2]
+			ic.imports = append(ic.imports, words[2])
+		case "typeparams":
+			if len(words) < 3 {
+				return errf("need NAME typeparams PARAMS")
+			}
+			ic.typeparams = strings.Join(words[2:], " ")
+		case "noomitempty":
+			ic.noOmitEmpty = true
 		case "field":
 			if len(words) < 4 {
 				return errf("need NAME field FIELDNAME TYPE")

@@ -14,8 +14,9 @@
     "pack:ai": "cd ai && pnpm pack --pack-destination ../../dist",
     "pack:genkit": "cd genkit && pnpm pack --pack-destination ../../dist",
     "pack:plugins": "for i in plugins/*/; do cd $i && pnpm pack --pack-destination ../../../dist && cd ../..; done",
-    "test:all": "pnpm -r --workspace-concurrency -1 -F \"./(ai|core|plugins|genkit)/**\" test && pnpm test:esm",
+    "test:all": "pnpm -r --workspace-concurrency -1 -F \"./(ai|core|plugins|genkit)/**\" test && pnpm test:esm && pnpm test:testing-sample",
     "test:esm": "cd testapps/esm && pnpm test",
+    "test:testing-sample": "cd testapps/testing-sample && pnpm test && pnpm test:vitest",
     "gendocs": "pnpm build && pnpm typedoc",
     "typedoc-html": "typedoc --sortEntryPoints false --options typedoc.json"
   },

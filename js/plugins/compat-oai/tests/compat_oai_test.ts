@@ -1587,6 +1587,219 @@ describe('openAIModelRunner', () => {
     );
   });
 
+  it('should accumulate streamed tool call arguments into partial tool requests', async () => {
+    // Simulate how OpenAI streams tool calls: the first delta carries the tool
+    // name and id, subsequent deltas carry only fragments of the arguments JSON.
+    const deltas: any[] = [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_abc',
+              function: { name: 'getWeather', arguments: '' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+      {
+        index: 0,
+        delta: {
+          tool_calls: [{ index: 0, function: { arguments: '{"city":' } }],
+        },
+        finish_reason: null,
+      },
+      {
+        index: 0,
+        delta: {
+          tool_calls: [{ index: 0, function: { arguments: '"Tokyo"}' } }],
+        },
+        finish_reason: null,
+      },
+    ];
+    const openaiClient = {
+      beta: {
+        chat: {
+          completions: {
+            stream: jest.fn(
+              () =>
+                new (class {
+                  i = 0;
+                  [Symbol.asyncIterator]() {
+                    return {
+                      next: async () => {
+                        if (this.i < deltas.length) {
+                          return {
+                            value: { choices: [deltas[this.i++]] },
+                            done: false,
+                          };
+                        }
+                        return { done: true };
+                      },
+                    };
+                  }
+                  async finalChatCompletion() {
+                    return {
+                      choices: [
+                        {
+                          message: {
+                            role: 'assistant',
+                            tool_calls: [
+                              {
+                                id: 'call_abc',
+                                type: 'function',
+                                function: {
+                                  name: 'getWeather',
+                                  arguments: '{"city":"Tokyo"}',
+                                },
+                              },
+                            ],
+                          },
+                          finish_reason: 'tool_calls',
+                        },
+                      ],
+                    };
+                  }
+                })()
+            ),
+          },
+        },
+      },
+    };
+    const chunks: any[] = [];
+    const runner = openAIModelRunner(
+      'gpt-4o',
+      openaiClient as unknown as OpenAI
+    );
+    await runner(
+      { messages: [] },
+      {
+        streamingRequested: true,
+        sendChunk: (chunk) => chunks.push(chunk),
+      }
+    );
+
+    // Every emitted tool-request chunk should carry the tool name, ref and be
+    // marked partial. No chunk should contain an empty-string input.
+    const toolRequestChunks = chunks.filter((c) =>
+      c.content.some((p: any) => p.toolRequest)
+    );
+    expect(toolRequestChunks.length).toBe(3);
+    for (const chunk of toolRequestChunks) {
+      const part = chunk.content[0];
+      expect(part.toolRequest.name).toBe('getWeather');
+      expect(part.toolRequest.ref).toBe('call_abc');
+      expect(part.toolRequest.partial).toBe(true);
+      expect(part.toolRequest.input).not.toBe('');
+    }
+    // The last chunk should have the fully accumulated, parsed input.
+    const lastPart = toolRequestChunks.at(-1)!.content[0];
+    expect(lastPart.toolRequest.input).toStrictEqual({ city: 'Tokyo' });
+  });
+
+  it('should skip tool-call deltas received before the tool name', async () => {
+    // Simulate an (unusual) ordering where an arguments fragment arrives before
+    // the delta that carries the tool name. Such nameless deltas should be
+    // skipped entirely rather than emitting a tool request with no name.
+    const deltas: any[] = [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [{ index: 0, function: { arguments: '{"city":' } }],
+        },
+        finish_reason: null,
+      },
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_abc',
+              function: { name: 'getWeather', arguments: '"Tokyo"}' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ];
+    const openaiClient = {
+      beta: {
+        chat: {
+          completions: {
+            stream: jest.fn(
+              () =>
+                new (class {
+                  i = 0;
+                  [Symbol.asyncIterator]() {
+                    return {
+                      next: async () => {
+                        if (this.i < deltas.length) {
+                          return {
+                            value: { choices: [deltas[this.i++]] },
+                            done: false,
+                          };
+                        }
+                        return { done: true };
+                      },
+                    };
+                  }
+                  async finalChatCompletion() {
+                    return {
+                      choices: [
+                        {
+                          message: {
+                            role: 'assistant',
+                            tool_calls: [
+                              {
+                                id: 'call_abc',
+                                type: 'function',
+                                function: {
+                                  name: 'getWeather',
+                                  arguments: '{"city":"Tokyo"}',
+                                },
+                              },
+                            ],
+                          },
+                          finish_reason: 'tool_calls',
+                        },
+                      ],
+                    };
+                  }
+                })()
+            ),
+          },
+        },
+      },
+    };
+    const chunks: any[] = [];
+    const runner = openAIModelRunner(
+      'gpt-4o',
+      openaiClient as unknown as OpenAI
+    );
+    await runner(
+      { messages: [] },
+      {
+        streamingRequested: true,
+        sendChunk: (chunk) => chunks.push(chunk),
+      }
+    );
+
+    const toolRequestChunks = chunks.filter((c) =>
+      c.content.some((p: any) => p.toolRequest)
+    );
+    // The first (nameless) delta is skipped, so only one tool-request chunk is
+    // emitted once the name arrives.
+    expect(toolRequestChunks.length).toBe(1);
+    const part = toolRequestChunks[0].content[0];
+    expect(part.toolRequest.name).toBe('getWeather');
+    expect(part.toolRequest.ref).toBe('call_abc');
+    expect(part.toolRequest.partial).toBe(true);
+    expect(part.toolRequest.input).toStrictEqual({ city: 'Tokyo' });
+  });
+
   it('should run with requestBuilder', async () => {
     const openaiClient = {
       chat: {

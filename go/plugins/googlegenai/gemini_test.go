@@ -21,8 +21,22 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
+
+// toGeminiRequestFromRaw runs the two steps a real request goes through: the
+// framework deserializes the type-erased config into the model's config type,
+// then the plugin folds the request into it. The tests below set
+// [ai.ModelRequest.Config] the way callers do, so going through both keeps
+// them honest about what the model function actually receives.
+func toGeminiRequestFromRaw(input *ai.ModelRequest, cache *genai.CachedContent, legacyResponseSchema bool, modelName ...string) (*genai.GenerateContentConfig, error) {
+	config, err := base.ConvertToExact[genai.GenerateContentConfig](input.Config)
+	if err != nil {
+		return nil, err
+	}
+	return toGeminiRequest(input, &config, cache, legacyResponseSchema, modelName...)
+}
 
 func TestConvertRequest(t *testing.T) {
 	text := "hello"
@@ -57,6 +71,7 @@ func TestConvertRequest(t *testing.T) {
 		ToolChoice: ai.ToolChoiceAuto,
 		Output: &ai.ModelOutputConfig{
 			Constrained: true,
+			Format:      "json",
 			Schema: map[string]any{
 				"type": string("object"),
 				"properties": map[string]any{
@@ -121,7 +136,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,11 +172,17 @@ func TestConvertRequest(t *testing.T) {
 		if gcc.TopK == nil {
 			t.Errorf("topK: got: nil, want %d", ogCfg.TopK)
 		}
-		if gcc.ResponseMIMEType != "" {
-			t.Errorf("ResponseMIMEType should be empty if tools are present")
+		// Constrained JSON output is now compatible with tools: the request sets
+		// Output.Format "json" and Constrained, so we expect both the JSON MIME
+		// type and the response schema to be populated even though tools are
+		// present. The schema rides ResponseJsonSchema here because this is the
+		// default (non-legacy) path; which field carries it is asserted by
+		// TestConstrainedResponseSchemaField.
+		if gcc.ResponseMIMEType != "application/json" {
+			t.Errorf("ResponseMIMEType: got %q, want %q", gcc.ResponseMIMEType, "application/json")
 		}
-		if gcc.ResponseSchema != nil {
-			t.Errorf("ResponseSchema should be nil when tools are present (JSON mode is not compatible with tools)")
+		if gcc.ResponseJsonSchema == nil {
+			t.Error("ResponseJsonSchema should be set for constrained JSON output, even when tools are present")
 		}
 		if gcc.ThinkingConfig == nil {
 			t.Errorf("ThinkingConfig should not be empty")
@@ -203,7 +224,7 @@ func TestConvertRequest(t *testing.T) {
 		req := ai.ModelRequest{
 			Config: badCfg,
 		}
-		_, err := toGeminiRequest(&req, nil, false)
+		_, err := toGeminiRequestFromRaw(&req, nil, false)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -266,7 +287,7 @@ func TestConvertRequest(t *testing.T) {
 				req := ai.ModelRequest{
 					Config: tc.cfg,
 				}
-				_, err := toGeminiRequest(&req, nil, false)
+				_, err := toGeminiRequestFromRaw(&req, nil, false)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
@@ -279,9 +300,171 @@ func TestConvertRequest(t *testing.T) {
 				"temperature": "not a number", // This should fail map->struct conversion
 			},
 		}
-		_, err := toGeminiRequest(&req, nil, false)
+		_, err := toGeminiRequestFromRaw(&req, nil, false)
 		if err == nil {
 			t.Fatal("expected error for invalid config map")
+		}
+	})
+	t.Run("convert request for TTS model", func(t *testing.T) {
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					VoiceConfig: &genai.VoiceConfig{
+						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
+							VoiceName: "Algenib",
+						},
+					},
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.CandidateCount != 0 {
+			t.Errorf("CandidateCount = %d, want 0 for TTS models", gcc.CandidateCount)
+		}
+		if got := gcc.ResponseModalities; len(got) != 1 || got[0] != "AUDIO" {
+			t.Errorf("ResponseModalities = %v, want [AUDIO]", got)
+		}
+		if gcc.SpeechConfig == nil {
+			t.Fatal("SpeechConfig = nil, want configured voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != "Algenib" {
+			t.Errorf("VoiceName = %q, want the caller-provided %q", got, "Algenib")
+		}
+	})
+	t.Run("convert request for TTS model defaults voice when unset", func(t *testing.T) {
+		// TTS generateContent requires a speechConfig with a voice; without a
+		// default a bare prompt (e.g. from the dev UI) would be rejected by the
+		// API with INVALID_ARGUMENT.
+		req := &ai.ModelRequest{
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+			t.Fatal("SpeechConfig voice not populated, want a default voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != defaultTTSVoice {
+			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
+		}
+	})
+	t.Run("convert request for TTS model defaults voice when speech config has no voice", func(t *testing.T) {
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					LanguageCode: "en-US",
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := gcc.SpeechConfig.LanguageCode; got != "en-US" {
+			t.Errorf("LanguageCode = %q, want caller-provided %q", got, "en-US")
+		}
+		if gcc.SpeechConfig.VoiceConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+			t.Fatal("SpeechConfig voice not populated, want a default voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != defaultTTSVoice {
+			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
+		}
+	})
+	t.Run("convert request for TTS model defaults voice when voice config has no voice", func(t *testing.T) {
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					VoiceConfig: &genai.VoiceConfig{},
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig.VoiceConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+			t.Fatal("SpeechConfig voice not populated, want a default voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != defaultTTSVoice {
+			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
+		}
+	})
+	t.Run("convert request for TTS model preserves multi-speaker speech config", func(t *testing.T) {
+		msvc := &genai.MultiSpeakerVoiceConfig{
+			SpeakerVoiceConfigs: []*genai.SpeakerVoiceConfig{
+				{
+					Speaker: "Alice",
+					VoiceConfig: &genai.VoiceConfig{
+						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Kore"},
+					},
+				},
+				{
+					Speaker: "Bob",
+					VoiceConfig: &genai.VoiceConfig{
+						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Puck"},
+					},
+				},
+			},
+		}
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					MultiSpeakerVoiceConfig: msvc,
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig.MultiSpeakerVoiceConfig != msvc {
+			t.Errorf("MultiSpeakerVoiceConfig = %v, want caller-provided %v", gcc.SpeechConfig.MultiSpeakerVoiceConfig, msvc)
+		}
+		if gcc.SpeechConfig.VoiceConfig != nil {
+			t.Errorf("VoiceConfig = %v, want nil", gcc.SpeechConfig.VoiceConfig)
+		}
+	})
+	t.Run("convert request leaves non-TTS speech config untouched", func(t *testing.T) {
+		// Non-TTS models must not get a synthesized speechConfig.
+		req := &ai.ModelRequest{
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-2.5-flash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig != nil {
+			t.Errorf("SpeechConfig = %v, want nil for non-TTS models", gcc.SpeechConfig)
 		}
 	})
 	t.Run("convert tools with valid tool", func(t *testing.T) {
@@ -358,7 +541,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -402,7 +585,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -434,7 +617,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -474,7 +657,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -524,7 +707,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -571,7 +754,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -619,7 +802,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		if _, err := toGeminiRequest(req, nil, false); err == nil {
+		if _, err := toGeminiRequestFromRaw(req, nil, false); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -645,7 +828,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, false)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -1218,6 +1401,146 @@ func TestFinishReasonMapping(t *testing.T) {
 	}
 }
 
+// TestToGeminiRole verifies that Genkit roles map to Gemini content roles.
+// The Gemini Content API only accepts "user" or "model"; tool responses must
+// be sent under the "user" role.
+func TestToGeminiRole(t *testing.T) {
+	testCases := []struct {
+		name string
+		role ai.Role
+		want string
+	}{
+		{"user", ai.RoleUser, "user"},
+		{"model", ai.RoleModel, "model"},
+		{"tool maps to user", ai.RoleTool, "user"},
+		{"unknown defaults to user", ai.Role("something"), "user"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toGeminiRole(tc.role); got != tc.want {
+				t.Errorf("toGeminiRole(%q) = %q, want %q", tc.role, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestToGeminiContents verifies that messages are converted to Gemini contents,
+// that system messages are dropped, and that tool messages are sent as "user".
+func TestToGeminiContents(t *testing.T) {
+	input := &ai.ModelRequest{
+		Messages: []*ai.Message{
+			{Role: ai.RoleSystem, Content: []*ai.Part{ai.NewTextPart("you are helpful")}},
+			{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}},
+			{Role: ai.RoleModel, Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "myTool", Input: map[string]any{"Test": "x"}})}},
+			{Role: ai.RoleTool, Content: []*ai.Part{ai.NewToolResponsePart(&ai.ToolResponse{Name: "myTool", Output: "result"})}},
+		},
+	}
+
+	contents, err := toGeminiContents(input)
+	if err != nil {
+		t.Fatalf("toGeminiContents failed: %v", err)
+	}
+
+	// System message should be dropped.
+	if len(contents) != 3 {
+		t.Fatalf("len(contents) = %d, want 3", len(contents))
+	}
+
+	wantRoles := []string{"user", "model", "user"}
+	for i, want := range wantRoles {
+		if contents[i].Role != want {
+			t.Errorf("contents[%d].Role = %q, want %q", i, contents[i].Role, want)
+		}
+	}
+}
+
+// TestCallerConfigNotMutated pins that folding a request into the config
+// leaves the caller's own config untouched. The framework hands the plugin a
+// shallow copy, so the two amendments that reach through it, the TTS default
+// voice and the built-in tools merge, have to clone before writing.
+func TestCallerConfigNotMutated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tts default voice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{LanguageCode: "en-US"},
+		}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview"); err != nil {
+			t.Fatal(err)
+		}
+		if caller.SpeechConfig.VoiceConfig != nil {
+			t.Error("the plugin's default voice was written into the caller's SpeechConfig")
+		}
+	})
+
+	t.Run("tools merge", func(t *testing.T) {
+		// Spare capacity is what an append would scribble into.
+		tools := make([]*genai.Tool, 1, 4)
+		tools[0] = &genai.Tool{GoogleSearch: &genai.GoogleSearch{}}
+		caller := &genai.GenerateContentConfig{Tools: tools}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(caller.Tools) != 1 {
+			t.Errorf("caller's Tools length = %d, want 1", len(caller.Tools))
+		}
+		if spare := tools[:cap(tools)]; spare[1] != nil {
+			t.Error("the converted tools were appended into the caller's backing array")
+		}
+	})
+
+	// A config hoisted into a package var or a ModelRef is shared by every
+	// request, so writing the tool-calling mode through it would leak one
+	// request's allowed function names into the next and race between two in
+	// flight at once.
+	t.Run("tool choice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			ToolConfig: &genai.ToolConfig{
+				RetrievalConfig: &genai.RetrievalConfig{LanguageCode: "en-US"},
+			},
+		}
+		req := &ai.ModelRequest{
+			Config:     caller,
+			Messages:   []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			ToolChoice: ai.ToolChoiceRequired,
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		got, err := toGeminiRequestFromRaw(req, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if caller.ToolConfig.FunctionCallingConfig != nil {
+			t.Errorf("the request's tool choice was written into the caller's ToolConfig: %+v",
+				caller.ToolConfig.FunctionCallingConfig)
+		}
+		// The clone still has to carry the caller's own settings forward.
+		if got.ToolConfig == nil || got.ToolConfig.FunctionCallingConfig == nil {
+			t.Fatalf("request ToolConfig lost the tool choice, got %+v", got.ToolConfig)
+		}
+		if got.ToolConfig.RetrievalConfig != caller.ToolConfig.RetrievalConfig {
+			t.Error("cloning the ToolConfig dropped the caller's RetrievalConfig")
+		}
+	})
+}
+
 // TestConstrainedResponseSchemaField verifies which GenerateContentConfig field
 // carries the output schema: ResponseJsonSchema by default (raw JSON schema with
 // recursion support) and ResponseSchema in legacy mode.
@@ -1241,7 +1564,7 @@ func TestConstrainedResponseSchemaField(t *testing.T) {
 	}
 
 	t.Run("default uses ResponseJsonSchema", func(t *testing.T) {
-		gcc, err := toGeminiRequest(newReq(), nil, false)
+		gcc, err := toGeminiRequestFromRaw(newReq(), nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1258,7 +1581,7 @@ func TestConstrainedResponseSchemaField(t *testing.T) {
 	})
 
 	t.Run("legacy uses ResponseSchema", func(t *testing.T) {
-		gcc, err := toGeminiRequest(newReq(), nil, true)
+		gcc, err := toGeminiRequestFromRaw(newReq(), nil, true)
 		if err != nil {
 			t.Fatal(err)
 		}

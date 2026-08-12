@@ -16,10 +16,12 @@
 
 import { GenkitError, Operation } from '@genkit-ai/core';
 import { Registry } from '@genkit-ai/core/registry';
+import { toRunOptions, type OperationOptions } from './operation.js';
 
 export async function cancelOperation<T = unknown>(
   registry: Registry,
-  operation: Operation<T>
+  operation: Operation<T>,
+  options?: OperationOptions
 ): Promise<Operation<T>> {
   if (!operation.action) {
     throw new GenkitError({
@@ -42,5 +44,5 @@ export async function cancelOperation<T = unknown>(
       message: `Background action ${operation.action} does not support cancellation.`,
     });
   }
-  return await backgroundAction.cancel(operation);
+  return await backgroundAction.cancel(operation, toRunOptions(options));
 }

@@ -31,13 +31,51 @@ func TestConfigToMap_GenerateContentConfig(t *testing.T) {
 					t.Errorf("Gemini schema: tools[].%s should remain visible — got %v", expected, keys(itemProps))
 				}
 			}
-			if _, ok := itemProps["functionDeclarations"]; ok {
-				t.Error("Gemini schema: tools[].functionDeclarations should be hidden")
+			if got := itemProps["functionDeclarations"]; got != true {
+				t.Errorf("Gemini schema: tools[].functionDeclarations = %v, want true (hidden)", got)
 			}
 		}
 	}
 
 	checkDescriptions(t, "Gemini", schema, gccOverrides.descriptions)
+}
+
+// TestConfigToMap_HidingKeepsObjectsClosed pins the reason a hidden property
+// is replaced rather than deleted: every object stays strict, including the
+// ones that hide something.
+//
+// Deleting the property would fail a caller's value as an unknown one, so it
+// would have to be paid for by forcing additionalProperties open on the
+// parent, and that gives up rejecting unknown fields for every other property
+// of that object too. The root and tools[] are exactly the objects that hide
+// something, so they are the ones that would have gone open.
+func TestConfigToMap_HidingKeepsObjectsClosed(t *testing.T) {
+	schema := configToMap(genai.GenerateContentConfig{})
+
+	if schema["additionalProperties"] != false {
+		t.Errorf("root additionalProperties = %v, want false (hiding must not open the object)", schema["additionalProperties"])
+	}
+	if toolItem := navigate(schema, "tools", "[]"); toolItem != nil {
+		if toolItem["additionalProperties"] != false {
+			t.Errorf("tools[] additionalProperties = %v, want false (hiding must not open the object)", toolItem["additionalProperties"])
+		}
+	}
+	if thinking := navigate(schema, "thinkingConfig"); thinking != nil {
+		if thinking["additionalProperties"] != false {
+			t.Errorf("thinkingConfig additionalProperties = %v, want false", thinking["additionalProperties"])
+		}
+	}
+	for _, name := range []string{"Imagen", "Veo"} {
+		var s map[string]any
+		if name == "Imagen" {
+			s = configToMap(genai.GenerateImagesConfig{})
+		} else {
+			s = configToMap(genai.GenerateVideosConfig{})
+		}
+		if s["additionalProperties"] != false {
+			t.Errorf("%s schema additionalProperties = %v, want false (it hides nothing)", name, s["additionalProperties"])
+		}
+	}
 }
 
 func TestConfigToMap_GenerateImagesConfig(t *testing.T) {
@@ -54,8 +92,8 @@ func TestConfigToMap_GenerateVideosConfig(t *testing.T) {
 func TestConfigToMap_PointerVariant(t *testing.T) {
 	schema := configToMap(&genai.GenerateContentConfig{})
 	props, _ := schema["properties"].(map[string]any)
-	if _, present := props["systemInstruction"]; present {
-		t.Errorf("systemInstruction must be hidden for pointer config too")
+	if got := props["systemInstruction"]; got != true {
+		t.Errorf("systemInstruction = %v, want true (hidden) for pointer config too", got)
 	}
 	if prop, ok := props["temperature"].(map[string]any); !ok || prop["description"] == "" {
 		t.Errorf("temperature should carry a description for pointer config too: %#v", prop)
@@ -112,7 +150,12 @@ func checkDescriptions(t *testing.T, label string, schema map[string]any, want m
 }
 
 // assertHidden checks that a top-level or nested property (per parsePath
-// notation) is absent from the resolved schema map.
+// notation) resolves to the permissive `true` schema.
+//
+// Hidden means typeless, not absent. The dev UI renders only properties whose
+// type it recognizes, so `true` is enough to keep the field out of the form,
+// while leaving it in properties is what lets a caller's value survive input
+// validation and reach the plugin check that names the primitive to use.
 func assertHidden(t *testing.T, label string, schema map[string]any, path string) {
 	t.Helper()
 	steps := parsePath(path)
@@ -128,8 +171,13 @@ func assertHidden(t *testing.T, label string, schema map[string]any, path string
 	if props == nil && len(steps) == 1 {
 		t.Fatalf("%s schema missing top-level properties", label)
 	}
-	if _, present := props[leaf]; present {
-		t.Errorf("%s schema: %q must be hidden — found in properties %v", label, path, keys(props))
+	got, present := props[leaf]
+	if !present {
+		t.Errorf("%s schema: %q is absent, want the permissive true schema — properties %v", label, path, keys(props))
+		return
+	}
+	if got != true {
+		t.Errorf("%s schema: %q = %v, want true (typeless, so the dev UI skips it)", label, path, got)
 	}
 }
 

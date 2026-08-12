@@ -94,7 +94,7 @@ def define_model(
 
     # Start with info if provided
     if info:
-        model_options.update(info.model_dump())
+        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
     # Check if metadata has model info
     if metadata and 'model' in metadata:

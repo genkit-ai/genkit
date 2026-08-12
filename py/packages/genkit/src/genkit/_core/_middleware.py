@@ -18,11 +18,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, get_args, get_origin
+from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -34,7 +35,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
-from genkit._core._protocols import RegistryLike
+from genkit._core._protocols import GenkitLike, RegistryLike
 from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
 
 logger = get_logger(__name__)
@@ -101,7 +102,6 @@ class GenerateHookParams(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     options: GenerateActionOptions
-    request: ModelRequest
     iteration: int
     message_index: int = 0
 
@@ -127,15 +127,18 @@ class ToolHookParams(BaseModel):
 class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
-    Holds the call-scoped registry, caller-provided metadata (``custom_context``),
-    and streaming hooks for the whole generate invocation. Hook ``params`` carry
-    per-turn request data only.
+    ``ai`` is a lightweight Genkit-like view scoped to this one invocation: its
+    ``registry`` is the call's child registry (so middleware sees this call's own
+    tool/middleware registrations, not the global ones), and ``current_session()``
+    returns the active agent session when running inside one. Also carries
+    caller-provided metadata (``custom_context``), streaming hooks, and the abort
+    signal for the whole generate invocation.
     """
 
-    registry: RegistryLike
+    ai: GenkitLike
+    abort_signal: asyncio.Event = field(default_factory=asyncio.Event)
     custom_context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
-    abort_signal: Any | None = None
     telemetry_labels: dict[str, str] | None = None
 
     @property
@@ -165,7 +168,7 @@ class BaseMiddleware(Generic[TConfig]):
     and a set of hooks to inject logic into the generate pipeline.
 
     The base middleware has no custom configuration and noop hooks. The hooks
-    that are not overriden are still called by the engine when the middleware
+    that are not overridden are still called by the engine when the middleware
     is invoked.
 
     To author a middleware,
@@ -246,7 +249,7 @@ class BaseMiddleware(Generic[TConfig]):
                 raise TypeError(f'expected config type {self.Config.__name__}, got {type(config).__name__}')
             self.config = config
         else:
-            self.config = self.Config(**kwargs)  # type: ignore[assignment]
+            self.config = cast(Any, self.Config(**kwargs))
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return additional tools to expose to the model for this generate call."""

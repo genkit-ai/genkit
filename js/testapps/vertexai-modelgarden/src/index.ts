@@ -36,6 +36,30 @@ const ai = genkit({
   ],
 });
 
+export const anthropicSonnet5Model = ai.defineFlow(
+  {
+    name: 'claude-sonnet-5',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-5'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const anthropicSonnet4Model = ai.defineFlow(
   {
     name: 'claude-sonnet-4 - toolCallingFlow',
@@ -155,6 +179,36 @@ export const thinkingFlow = ai.defineFlow(
     for await (const chunk of stream) {
       sendChunk(chunk);
     }
+    return (await response).text;
+  }
+);
+
+export const anthropicFable5Model = ai.defineFlow(
+  {
+    name: 'claude-fable-5',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-fable-5'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Fable about a sunny day`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
     return (await response).text;
   }
 );

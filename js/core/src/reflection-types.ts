@@ -92,6 +92,7 @@ export type ReflectionListValuesParams = z.infer<
 export const ReflectionRunActionParamsSchema = z.object({
   key: z.string(),
   input: z.any().optional(),
+  init: z.any().optional(),
   context: z.any().optional(),
   telemetryLabels: z.record(z.string(), z.string()).optional(),
   stream: z.boolean().optional(),

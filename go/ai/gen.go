@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -78,6 +78,7 @@ const (
 	FinishReasonStop        FinishReason = "stop"
 	FinishReasonLength      FinishReason = "length"
 	FinishReasonBlocked     FinishReason = "blocked"
+	FinishReasonAborted     FinishReason = "aborted"
 	FinishReasonInterrupted FinishReason = "interrupted"
 	FinishReasonOther       FinishReason = "other"
 	FinishReasonUnknown     FinishReason = "unknown"
@@ -94,7 +95,7 @@ type GenerateActionOptions struct {
 	MaxTurns int `json:"maxTurns,omitempty"`
 	// Messages contains the conversation history for multi-turn prompting when supported.
 	Messages []*Message `json:"messages,omitempty"`
-	// Model is a model name (e.g., "vertexai/gemini-1.0-pro").
+	// Model is a model name (e.g., "vertexai/gemini-flash-latest").
 	Model string `json:"model,omitempty"`
 	// Output specifies the desired output format. Defaults to the model's default if unspecified.
 	Output    *GenerateActionOutputConfig `json:"output,omitempty"`
@@ -165,7 +166,7 @@ type GenerationCommonConfig struct {
 	// TopP (nucleus sampling) limits sampling to tokens whose cumulative probability exceeds P.
 	TopP float64 `json:"topP,omitempty"`
 	// Version specifies a particular version of a model family,
-	// e.g., "gemini-1.0-pro-001" for the "gemini-1.0-pro" family.
+	// e.g., "gemini-3.5-flash-001" for the "gemini-3.5-flash" family.
 	Version string `json:"version,omitempty"`
 }
 

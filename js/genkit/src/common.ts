@@ -94,6 +94,7 @@ export {
   type ModelRequest,
   type ModelResponseData,
   type MultipartToolAction,
+  type OperationOptions,
   type OutputOptions,
   type Part,
   type PromptAction,
@@ -124,12 +125,6 @@ export {
   type ToolResponse,
   type ToolResponsePart,
 } from '@genkit-ai/ai';
-export { Chat } from '@genkit-ai/ai/chat';
-export {
-  Session,
-  type SessionData,
-  type SessionStore,
-} from '@genkit-ai/ai/session';
 export { dynamicTool, tool } from '@genkit-ai/ai/tool';
 export {
   GENKIT_CLIENT_HEADER,

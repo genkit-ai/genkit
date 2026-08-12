@@ -26,9 +26,10 @@ type configOverrides struct {
 	// ("temperature") or a dotted path with "[]" denoting a descent into an
 	// array's item shape ("safetySettings[].category").
 	descriptions map[string]string
-	// hidden lists JSON property paths to remove from the schema. Same
+	// hidden lists JSON property paths to hide from the schema. Same
 	// notation as descriptions. Use this for fields the plugin rejects at
-	// runtime or that the Genkit framework manages directly.
+	// runtime or that the Genkit framework manages directly. Hidden means
+	// typeless rather than absent; see applyConfigOverrides.
 	hidden []string
 }
 
@@ -186,10 +187,21 @@ var gvcOverrides = configOverrides{
 	},
 }
 
-// applyConfigOverrides mutates schema in place: removes hidden properties
-// and writes descriptions onto the remaining ones. Best-effort — paths that
-// no longer resolve (because the upstream SDK renamed or removed a field)
-// silently no-op rather than panicking.
+// applyConfigOverrides mutates schema in place: hides the managed properties
+// and writes descriptions onto the rest. Best-effort, so a path that no longer
+// resolves (because the upstream SDK renamed or removed a field) silently
+// no-ops rather than panicking.
+//
+// A hidden property is replaced by the permissive `true` schema rather than
+// deleted. Both hide it from the dev UI, which renders only properties whose
+// type it recognizes, but they differ on everything else. The config schema is
+// enforced by input validation on every request, and a hidden field must still
+// reach the plugin's own check, which names the Genkit option to use instead;
+// deleting it would instead fail validation as an unknown property. Deleting
+// also forces the parent open with additionalProperties: true to let the value
+// back through, which gives up rejecting genuinely unknown fields anywhere in
+// that object. Replacing keeps additionalProperties: false intact, so a typo
+// like maxTokens for maxOutputTokens is still caught.
 func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 	if schema == nil || schema.Properties == nil {
 		return
@@ -200,7 +212,7 @@ func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 		if len(steps) == 1 {
 			hideTop[steps[0]] = struct{}{}
 		}
-		deleteAtPath(schema, steps)
+		hideAtPath(schema, steps)
 	}
 	if len(hideTop) > 0 && len(schema.Required) > 0 {
 		kept := schema.Required[:0]
@@ -262,21 +274,28 @@ func schemaAtPath(schema *jsonschema.Schema, steps []string) *jsonschema.Schema 
 	return cur
 }
 
-// deleteAtPath removes the leaf property at the given path from its parent's
-// Properties. Silent no-op if the path doesn't resolve.
-func deleteAtPath(schema *jsonschema.Schema, steps []string) {
+// hideAtPath replaces the leaf property at the given path with the permissive
+// `true` schema, which hides it from the dev UI while still accepting whatever
+// value a caller sends so the plugin's own check can answer it. Reports
+// whether it applied, so a path that no longer resolves is distinguishable
+// from one that did.
+func hideAtPath(schema *jsonschema.Schema, steps []string) bool {
 	if len(steps) == 0 {
-		return
+		return false
 	}
 	leaf := steps[len(steps)-1]
 	if leaf == "[]" {
-		return
+		return false
 	}
 	parent := schemaAtPath(schema, steps[:len(steps)-1])
 	if parent == nil || parent.Properties == nil {
-		return
+		return false
 	}
-	parent.Properties.Delete(leaf)
+	if _, ok := parent.Properties.Get(leaf); !ok {
+		return false
+	}
+	parent.Properties.Set(leaf, jsonschema.TrueSchema)
+	return true
 }
 
 // overridesFor returns the overrides matching a given config struct value,

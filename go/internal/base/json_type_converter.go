@@ -147,6 +147,14 @@ func normalizeArrayInput(arr []any, schema map[string]any) ([]any, error) {
 // For 'any' types, it preserves the actual types from the normalized data.
 // For structured types, it marshals and unmarshals to properly populate the fields.
 func UnmarshalAndNormalize[T any](input json.RawMessage, schema map[string]any) (T, error) {
+	return UnmarshalAndNormalizeWith[T](input, schema, nil)
+}
+
+// UnmarshalAndNormalizeWith is UnmarshalAndNormalize with an optional
+// precompiled schema: when compiled is non-nil, validation uses it instead of
+// recompiling schema, which matters on per-chunk streaming hot paths. schema
+// is still used for normalization and must describe the same schema.
+func UnmarshalAndNormalizeWith[T any](input json.RawMessage, schema map[string]any, compiled *CompiledSchema) (T, error) {
 	var zero T
 
 	if len(input) == 0 {
@@ -163,7 +171,12 @@ func UnmarshalAndNormalize[T any](input json.RawMessage, schema map[string]any) 
 		return zero, fmt.Errorf("invalid input: %w", err)
 	}
 
-	if err := ValidateValue(normalized, schema); err != nil {
+	if compiled != nil {
+		err = compiled.ValidateValue(normalized)
+	} else {
+		err = ValidateValue(normalized, schema)
+	}
+	if err != nil {
 		return zero, err
 	}
 

@@ -34,7 +34,7 @@ import (
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithPromptDir("prompts"),
 	)
@@ -63,7 +63,7 @@ func SimplePrompt(ctx context.Context, g *genkit.Genkit) {
 	// Define prompt with default model and system text.
 	helloPrompt := genkit.DefinePrompt(
 		g, "SimplePrompt",
-		ai.WithModelName("googleai/gemini-2.5-pro"), // Override the default model.
+		ai.WithModelName("googleai/gemini-3.5-flash"), // Override the default model.
 		ai.WithSystem("You are a helpful AI assistant named Walt. Greet the user."),
 		ai.WithPrompt("Hello, who are you?"),
 	)
@@ -208,7 +208,7 @@ func PromptWithMultiMessage(ctx context.Context, g *genkit.Genkit) {
 		log.Fatal("empty prompt")
 	}
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-pro"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{
 			"videoUrl":    "https://www.youtube.com/watch?v=K-hY0E6cGfo",
 			"contentType": "video/mp4",
@@ -265,7 +265,7 @@ func PromptWithMessageHistory(ctx context.Context, g *genkit.Genkit) {
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithMessageHistory",
 		ai.WithSystem("You are a helpful AI assistant named Walt"),
-		ai.WithModelName("googleai/gemini-2.5-flash-lite"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi, my name is Bob"),
 			ai.NewModelTextMessage("Hi, my name is Walt, what can I help you with?"),
@@ -282,16 +282,21 @@ func PromptWithMessageHistory(ctx context.Context, g *genkit.Genkit) {
 }
 
 func PromptWithExecuteOverrides(ctx context.Context, g *genkit.Genkit) {
-	// Define prompt with default settings.
+	// Define prompt with default settings. A prompt that declares a
+	// conversation of its own places the caller's messages: {{history}} is
+	// where the ones passed to Execute go. Written with WithMessages, the
+	// opening turn would be the whole conversation and the messages below
+	// would have nowhere to land.
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithExecuteOverrides",
 		ai.WithSystem("You are a helpful AI assistant named Walt."),
-		ai.WithMessages(ai.NewUserTextMessage("Hi, my name is Bob!")),
+		ai.WithMessagesTemplate(`{{role "user"}}Hi, my name is Bob!
+{{history}}`),
 	)
 
 	// Call the model and add additional messages from the user.
 	resp, err := helloPrompt.Execute(ctx,
-		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-2.5-flash-lite")),
+		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-3.5-flash")),
 		ai.WithMessages(ai.NewUserTextMessage("And I like turtles.")),
 	)
 	if err != nil {
@@ -307,15 +312,18 @@ func PromptWithFunctions(ctx context.Context, g *genkit.Genkit) {
 		Theme    string
 	}
 
-	// Define prompt with system and prompt functions.
+	// Define prompt with system and prompt functions. Declaring the input type
+	// on the function is all it takes: Genkit converts whatever the caller
+	// passed, so the same function works for an in-process call, a default
+	// input, and a run from the Dev UI.
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithFunctions",
 		ai.WithInputType(HelloPromptInput{Theme: "pirate"}),
-		ai.WithSystemFn(func(ctx context.Context, input any) (string, error) {
-			return fmt.Sprintf("You are a helpful AI assistant named Walt. Talk in the style of: %s", input.(HelloPromptInput).Theme), nil
+		ai.WithSystemFn(func(ctx context.Context, input HelloPromptInput) (string, error) {
+			return fmt.Sprintf("You are a helpful AI assistant named Walt. Talk in the style of: %s", input.Theme), nil
 		}),
-		ai.WithPromptFn(func(ctx context.Context, input any) (string, error) {
-			return fmt.Sprintf("Hello, my name is %s", input.(HelloPromptInput).UserName), nil
+		ai.WithPromptFn(func(ctx context.Context, input HelloPromptInput) (string, error) {
+			return fmt.Sprintf("Hello, my name is %s", input.UserName), nil
 		}),
 	)
 
@@ -338,7 +346,7 @@ func PromptWithMediaType(ctx context.Context, g *genkit.Genkit) {
 		log.Fatal("empty prompt")
 	}
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{"imageUrl": "data:image/jpeg;base64," + img}),
 	)
 	if err != nil {
@@ -380,7 +388,7 @@ func PromptWithOutputSchemaName(ctx context.Context, g *genkit.Genkit) {
 	})
 
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-pro"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{"food": "tacos", "ingredients": []string{"octopus", "shrimp"}}),
 	)
 	if err != nil {

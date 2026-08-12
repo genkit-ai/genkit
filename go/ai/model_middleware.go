@@ -28,8 +28,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // AugmentWithContextOptions configures how a request is augmented with context.
@@ -228,50 +228,41 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 				for _, msg := range input.Messages {
 					for _, part := range msg.Content {
 						if part.IsMedia() {
-							return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support media, but media was provided. Request: %+v", model, input)
+							return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support media, but media was provided. Request: %+v", model, input)
 						}
 					}
 				}
 			}
 
 			if !opts.Supports.Tools && len(input.Tools) > 0 {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool use, but tools were provided. Request: %+v", model, input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support tool use, but tools were provided. Request: %+v", model, input)
 			}
 
 			if !opts.Supports.Multiturn && len(input.Messages) > 1 {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support multiple messages, but %d were provided. Request: %+v", model, len(input.Messages), input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support multiple messages, but %d were provided. Request: %+v", model, len(input.Messages), input)
 			}
 
 			if !opts.Supports.ToolChoice && input.ToolChoice != "" && input.ToolChoice != ToolChoiceAuto {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool choice, but tool choice was provided. Request: %+v", model, input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support tool choice, but tool choice was provided. Request: %+v", model, input)
 			}
 
 			if !opts.Supports.SystemRole {
 				for _, msg := range input.Messages {
 					if msg.Role == RoleSystem {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support system role, but system role was provided. Request: %+v", model, input)
+						return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support system role, but system role was provided. Request: %+v", model, input)
 					}
 				}
 			}
 
-			if opts.Stage != "" {
-				switch opts.Stage {
-				case ModelStageDeprecated:
-					logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
-				case ModelStageUnstable:
-					logger.FromContext(ctx).Info("model is experimental or unstable", "model", model)
-				}
+			if opts.Stage == ModelStageDeprecated {
+				logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
 			}
 
 			if (opts.Supports.Constrained == "" ||
 				opts.Supports.Constrained == ConstrainedSupportNone ||
 				(opts.Supports.Constrained == ConstrainedSupportNoTools && len(input.Tools) > 0)) &&
 				input.Output != nil && input.Output.Constrained {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
-			}
-
-			if err := validateVersion(model, opts.Versions, input.Config); err != nil {
-				return nil, err
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
 			}
 
 			return next(ctx, input, cb)
@@ -280,6 +271,9 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 }
 
 // validateVersion validates that the requested model version is supported.
+// It runs against the raw, pre-conversion config (see [normalizeConfig])
+// because conversion into a Config type without a version field would
+// silently drop the key.
 func validateVersion(model string, versions []string, config any) error {
 	var configMap map[string]any
 
@@ -303,14 +297,14 @@ func validateVersion(model string, versions []string, config any) error {
 
 	version, ok := versionVal.(string)
 	if !ok {
-		return core.NewError(core.INVALID_ARGUMENT, "version must be a string, got %T", versionVal)
+		return status.Errorf(status.ErrInvalidArgument, "version must be a string, got %T", versionVal)
 	}
 
 	if slices.Contains(versions, version) {
 		return nil
 	}
 
-	return core.NewError(core.INVALID_ARGUMENT, "model %q does not support version %q, supported versions: %v", model, version, versions)
+	return status.Errorf(ErrUnsupportedByModel, "model %q does not support version %q, supported versions: %v", model, version, versions)
 }
 
 // ContextItemTemplate is the default item template for context augmentation.
@@ -429,13 +423,13 @@ func DownloadRequestMedia(opts *DownloadMediaOptions) ModelMiddleware {
 
 					resp, err := client.Get(mediaUrl)
 					if err != nil {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "HTTP error downloading media %q: %v", mediaUrl, err)
+						return nil, status.Errorf(status.ErrInvalidArgument, "HTTP error downloading media %q: %w", mediaUrl, err)
 					}
 					defer resp.Body.Close()
 
 					if resp.StatusCode != http.StatusOK {
 						body, _ := io.ReadAll(resp.Body)
-						return nil, core.NewError(core.UNKNOWN, "HTTP error downloading media %q: %s", mediaUrl, string(body))
+						return nil, status.Errorf(status.ErrUnknown, "HTTP error downloading media %q: %s", mediaUrl, string(body))
 					}
 
 					contentType := part.ContentType
@@ -451,7 +445,7 @@ func DownloadRequestMedia(opts *DownloadMediaOptions) ModelMiddleware {
 						data, err = io.ReadAll(resp.Body)
 					}
 					if err != nil {
-						return nil, core.NewError(core.UNKNOWN, "error reading media %q: %v", mediaUrl, err)
+						return nil, status.Errorf(status.ErrUnknown, "error reading media %q: %w", mediaUrl, err)
 					}
 
 					message.Content[j] = NewMediaPart(contentType, fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(data)))

@@ -41,7 +41,6 @@ import {
 } from './imagen.js';
 import { LyriaConfigSchemaType } from './lyria.js';
 import {
-  ClientOptions,
   LyriaInstance,
   LyriaParameters,
   LyriaPredictRequest,
@@ -431,27 +430,35 @@ export function toVeoMedia(media: MediaPart['media']): VeoMedia {
 }
 
 export function fromVeoOperation(
-  fromOp: VeoOperation,
-  clientOpt?: ClientOptions
+  fromOp: VeoOperation
 ): Operation<GenerateResponseData> {
   const toOp: Operation<GenerateResponseData> = { id: fromOp.name };
   if (fromOp.done !== undefined) {
     toOp.done = fromOp.done;
-  }
-  if (clientOpt) {
-    toOp.metadata = { clientOptions: clientOpt };
   }
   if (fromOp.error) {
     toOp.error = { message: fromOp.error.message };
   }
 
   if (fromOp.response) {
+    const videos = fromOp.response.videos ?? [];
+    // If the operation completed but every generated video was removed by
+    // the safety (RAI) filters, there are no videos to return. Surface the
+    // filter reasons as an error instead of returning empty content.
+    if (videos.length === 0 && fromOp.response.raiMediaFilteredCount) {
+      const reasons = fromOp.response.raiMediaFilteredReasons?.join('; ');
+      toOp.error = {
+        message:
+          reasons ||
+          'All generated videos were filtered out by safety filters.',
+      };
+    }
     toOp.output = {
-      finishReason: 'stop',
+      finishReason: toOp.error ? 'blocked' : 'stop',
       raw: fromOp.response,
       message: {
         role: 'model',
-        content: fromOp.response.videos.map((veoMedia) => {
+        content: videos.map((veoMedia) => {
           if (veoMedia.bytesBase64Encoded) {
             return {
               media: {
@@ -488,11 +495,4 @@ export function toVeoOperationRequest(
   return {
     operationName: op.id,
   };
-}
-
-export function toVeoClientOptions(
-  op: Operation<GenerateResponseData>,
-  clientOpt: ClientOptions
-): ClientOptions {
-  return op.metadata?.clientOptions ?? clientOpt;
 }

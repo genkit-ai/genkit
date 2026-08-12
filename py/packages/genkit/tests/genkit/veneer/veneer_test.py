@@ -41,6 +41,7 @@ from genkit._core._typing import (
     EvalResponse,
     FinishReason,
     ModelInfo,
+    Operation,
     Part,
     Role,
     Score,
@@ -1283,13 +1284,55 @@ async def test_generate_json_format_unconstrained_with_instructions(
 
 
 @pytest.mark.asyncio
+async def test_generate_output_instructions_true_injects_standard(
+    setup_test: SetupFixture,
+) -> None:
+    """``output_instructions=True`` injects the format's standard instructions.
+
+    ``json`` defaults to not injecting (it leans on native constrained output), so
+    passing ``True`` is how a caller opts back into the schema instructions -- e.g.
+    when running unconstrained against a model without native structured output.
+    """
+    ai, *_ = setup_test
+
+    class TestSchema(BaseModel):
+        foo: int | None = Field(None, description='foo field')
+
+    def output_parts(resp: Any) -> list[Part]:
+        msg = resp.request.messages[0]
+        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+
+    # True -> the standard schema preamble is injected.
+    on = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        output_schema=TestSchema,
+        output_constrained=False,
+        output_instructions=True,
+    )
+    injected = output_parts(on)
+    assert len(injected) == 1
+    injected_text = injected[0].root.text or ''
+    assert 'Output should be in JSON format and conform to the following schema' in injected_text
+
+    # Unset -> json's default (False) means nothing is injected.
+    off = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        output_schema=TestSchema,
+        output_constrained=False,
+    )
+    assert output_parts(off) == []
+
+
+@pytest.mark.asyncio
 async def test_generate_simulates_doc_grounding(
     setup_test: SetupFixture,
 ) -> None:
     """Test that generate simulates doc grounding."""
-    ai, *_ = setup_test
+    ai, echo, _pm = setup_test
 
-    want_msg = Message(
+    grounded_msg = Message(
         role=Role.USER,
         content=[
             Part(root=TextPart(text='hi')),
@@ -1301,35 +1344,33 @@ async def test_generate_simulates_doc_grounding(
             ),
         ],
     )
+    clean_msg = Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])
 
     response = await ai.generate(
-        messages=[
-            Message(
-                role=Role.USER,
-                content=[Part(root=TextPart(text='hi'))],
-            ),
-        ],
+        messages=[clean_msg],
         docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
     )
 
+    # the model receives the grounded prompt; the returned request reports the
+    # clean conversation we persist, with docs still attached as structured data.
+    assert echo.last_request is not None
+    assert echo.last_request.messages[0] == grounded_msg
     assert response.request is not None
     assert response.request.messages is not None
-    assert response.request.messages[0] == want_msg
+    assert response.request.messages[0] == clean_msg
+    assert response.request.docs is not None
 
     stream_result = ai.generate_stream(
-        messages=[
-            Message(
-                role=Role.USER,
-                content=[Part(root=TextPart(text='hi'))],
-            ),
-        ],
+        messages=[clean_msg],
         docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
     )
 
     resp = await stream_result.response
+    assert echo.last_request is not None
+    assert echo.last_request.messages[0] == grounded_msg
     assert resp.request is not None
     assert resp.request.messages is not None
-    assert resp.request.messages[0] == want_msg
+    assert resp.request.messages[0] == clean_msg
 
 
 class MockBananaFormat(FormatDef):
@@ -1530,13 +1571,18 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     action = ai.define_model(
         name='foo',
         fn=foo_model_fn,
-        info=ModelInfo(label='Foo Bar', supports=Supports(multiturn=True, tools=True)),
+        info=ModelInfo(
+            label='Foo Bar',
+            supports=Supports(multiturn=True, tools=True, system_role=True, long_running=True),
+        ),
     )
     assert action.metadata['model'] == {
         'label': 'Foo Bar',
         'supports': {
             'multiturn': True,
             'tools': True,
+            'systemRole': True,
+            'longRunning': True,
         },
     }
 
@@ -1727,3 +1773,54 @@ async def test_evaluate(setup_test: SetupFixture) -> None:
     assert response.root[1].test_case_id == 'case2'
     assert isinstance(response.root[1].evaluation, Score)
     assert response.root[1].evaluation.score is True
+
+
+def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
+    """Test that define_background_model correctly serializes info by alias and excludes None."""
+    ai, _, _, *_ = setup_test
+
+    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        return Operation(id='123', done=False)
+
+    async def check_fn(op: Operation) -> Operation:
+        return op
+
+    action = ai.define_background_model(
+        name='bg_model',
+        start=start_fn,
+        check=check_fn,
+        info=ModelInfo(
+            label='Background Model',
+            supports=Supports(multiturn=True, system_role=True),
+        ),
+    )
+    assert action.start_action.metadata['model'] == {
+        'label': 'Background Model',
+        'supports': {
+            'multiturn': True,
+            'systemRole': True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_model_info_long_running(
+    setup_test: SetupFixture,
+) -> None:
+    """Verify generate_operation succeeds for a model defined with ModelInfo(supports=Supports(long_running=True))."""
+    ai, _, _, *_ = setup_test
+
+    async def my_model(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role='model', content=[TextPart(text='done')]),
+            operation=Operation(id='op123', done=False),
+        )
+
+    ai.define_model(
+        name='lr_model',
+        fn=my_model,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    op = await ai.generate_operation(model='lr_model', prompt='test')
+    assert op is not None

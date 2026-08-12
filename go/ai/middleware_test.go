@@ -19,9 +19,13 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -452,6 +456,67 @@ func TestMiddlewareContributesTool(t *testing.T) {
 	assertNoError(t, err)
 }
 
+// Middleware-contributed tools are registered before their definitions are
+// captured, so schema names (WithInputSchemaName/WithOutputSchemaName) reach
+// the model resolved rather than as raw {"$ref": "genkit:..."} maps.
+func TestMiddlewareToolSchemaNamesResolve(t *testing.T) {
+	r := newTestRegistry(t)
+	r.RegisterSchema("Answer", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	})
+
+	var captured *ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/refModel",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			captured = req
+			return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+		},
+	})
+
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			Tools: []Tool{NewTool("mw/schemaTool", "named schemas",
+				func(tc *ToolContext, in any) (any, error) { return "ok", nil },
+				WithInputSchemaName("Answer"), WithOutputSchemaName("Answer"))},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/refModel"),
+		WithPrompt("hi"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+
+	if captured == nil {
+		t.Fatal("model was never called")
+	}
+	var def *ToolDefinition
+	for _, td := range captured.Tools {
+		if td.Name == "mw/schemaTool" {
+			def = td
+		}
+	}
+	if def == nil {
+		t.Fatalf("middleware tool not sent to the model: %v", captured.Tools)
+	}
+	for slot, schema := range map[string]map[string]any{
+		"InputSchema":  def.InputSchema,
+		"OutputSchema": def.OutputSchema,
+	} {
+		if _, ok := schema["$ref"]; ok {
+			t.Errorf("%s = %v, want the resolved Answer schema, not a $ref", slot, schema)
+		}
+		if props, ok := schema["properties"].(map[string]any); !ok || props["answer"] == nil {
+			t.Errorf("%s = %v, want the registered Answer schema", slot, schema)
+		}
+	}
+}
+
 // --- duplicate tool collision: two middleware with same tool name ---
 
 func TestDuplicateMiddlewareToolRejected(t *testing.T) {
@@ -520,6 +585,256 @@ func TestWrapToolInterrupts(t *testing.T) {
 	}
 	if len(resp.Interrupts()) == 0 {
 		t.Error("expected at least one interrupt part in response")
+	}
+}
+
+// --- WrapTool short-circuits are attributed to the tool in traces ---
+
+// defineCountingTool defines a tool that records how many times its function
+// body ran, so a test can tell a short-circuited call from a real one.
+func defineCountingTool(t *testing.T, r api.Registry, name string, calls *int32) Tool {
+	t.Helper()
+	return defineTool(r, name, "A test tool",
+		func(ctx *ToolContext, input struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			atomic.AddInt32(calls, 1)
+			return "tool result: " + input.Value, nil
+		})
+}
+
+// TestWrapToolShortCircuitEmitsToolSpan verifies that a WrapTool hook which
+// resolves a call without invoking next (cached response, interrupt) is still
+// attributed to the tool in traces, with the span core/action.go would have
+// emitted had the tool run. Middleware therefore does not hand-roll its own.
+func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
+	tests := []struct {
+		name      string
+		hook      func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error)
+		wantState string
+		// wantGenerateErr is true for the case that fails the whole call
+		// rather than resolving the turn; the span is recorded either way.
+		wantGenerateErr bool
+	}{
+		{
+			name: "cached response",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return &MultipartToolResponse{Output: "from cache"}, nil
+			},
+			wantState: "success",
+		},
+		{
+			name: "interrupt",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+			},
+			wantState: "error",
+		},
+		{
+			name: "injected error",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return nil, errors.New("denied")
+			},
+			wantState:       "error",
+			wantGenerateErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name:    "test/toolModel",
+				handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+			})
+			var toolCalls int32
+			tool := defineCountingTool(t, r, "myTool", &toolCalls)
+			spans := collectSpans(t)
+
+			shortCircuit := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+				return &Hooks{WrapTool: tt.hook}, nil
+			})
+
+			_, err := Generate(testCtx, r,
+				WithModelName("test/toolModel"),
+				WithPrompt("use it"),
+				WithTools(tool),
+				WithUse(shortCircuit),
+			)
+			if tt.wantGenerateErr {
+				if err == nil {
+					t.Fatal("expected the injected error to fail the call, got nil")
+				}
+			} else {
+				assertNoError(t, err)
+			}
+
+			if got := atomic.LoadInt32(&toolCalls); got != 0 {
+				t.Errorf("tool ran %d times, want 0 (hook short-circuited)", got)
+			}
+
+			toolSpans := spans.allByName(tool.Name())
+			if len(toolSpans) != 1 {
+				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
+			}
+			span := toolSpans[0]
+			assertSpanAttr(t, span, "genkit:type", "action")
+			assertSpanAttr(t, span, "genkit:metadata:subtype", "tool")
+			assertSpanAttr(t, span, "genkit:state", tt.wantState)
+			assertSpanAttr(t, span, "genkit:input", `{"value":"x"}`)
+		})
+	}
+}
+
+// TestWrapToolPassThroughEmitsSingleToolSpan verifies the engine does not
+// double-count a hook that runs the tool: the action's own span is the only
+// one recorded, however the hook chose to hand the call down. The rebuilt-params
+// case is why the ran flag rides the context and not ToolParams, which a hook
+// is free to replace.
+func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
+	rewritten := map[string]any{"value": "rewritten"}
+
+	tests := []struct {
+		name string
+		hook func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error)
+	}{
+		{
+			name: "mutates the params it was handed",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				p.Request = &ToolRequest{Name: p.Request.Name, Ref: p.Request.Ref, Input: rewritten}
+				return next(ctx, p)
+			},
+		},
+		{
+			name: "hands next a params struct of its own",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return next(ctx, &ToolParams{
+					Request: &ToolRequest{Name: p.Request.Name, Ref: p.Request.Ref, Input: rewritten},
+					Tool:    p.Tool,
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name:    "test/toolModel",
+				handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+			})
+			var toolCalls int32
+			tool := defineCountingTool(t, r, "myTool", &toolCalls)
+			spans := collectSpans(t)
+
+			rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+				return &Hooks{WrapTool: tt.hook}, nil
+			})
+
+			_, err := Generate(testCtx, r,
+				WithModelName("test/toolModel"),
+				WithPrompt("use it"),
+				WithTools(tool),
+				WithUse(rewriter),
+			)
+			assertNoError(t, err)
+
+			if got := atomic.LoadInt32(&toolCalls); got != 1 {
+				t.Errorf("tool ran %d times, want 1", got)
+			}
+			toolSpans := spans.allByName(tool.Name())
+			if len(toolSpans) != 1 {
+				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
+			}
+			assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
+		})
+	}
+}
+
+// --- WrapTool validation errors returned to model ---
+
+func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
+	r := newTestRegistry(t)
+
+	var callCount int32
+
+	modelHandler := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		c := atomic.AddInt32(&callCount, 1)
+
+		if c <= 2 {
+			var toolInput map[string]any
+			if c == 1 {
+				toolInput = map[string]any{"value": "not_a_number"}
+			} else {
+				toolInput = map[string]any{"value": 42}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{
+						Name:  "validateMe",
+						Input: toolInput,
+					})},
+				},
+			}, nil
+		}
+
+		return &ModelResponse{
+			Request:      req,
+			Message:      NewModelTextMessage("done"),
+			FinishReason: FinishReasonStop,
+		}, nil
+	}
+
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/model",
+		handler: modelHandler,
+	})
+
+	defineTool(r, "validateMe", "A tool that requires a numeric value",
+		func(ctx *ToolContext, input any) (string, error) {
+			m := input.(map[string]any)
+			return fmt.Sprintf("success: %v", m["value"]), nil
+		},
+		WithInputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"value": map[string]any{
+					"type": "number",
+				},
+			},
+			"required": []string{"value"},
+		}),
+	)
+
+	errorHandler := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				resp, err := next(ctx, params)
+				if errors.Is(err, status.ErrInvalidInput) {
+					return &MultipartToolResponse{
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", err))},
+						Output:  "tool call failed; see content for details",
+					}, nil
+				}
+				return resp, err
+			},
+		}, nil
+	})
+
+	resp, err := Generate(testCtx, r,
+		WithModelName("test/model"),
+		WithPrompt("use the tool"),
+		WithTools(ToolName("validateMe")),
+		WithUse(errorHandler),
+	)
+	assertNoError(t, err)
+	if resp.FinishReason != FinishReasonStop {
+		t.Errorf("expected FinishReason=stop, got %q", resp.FinishReason)
+	}
+	if c := atomic.LoadInt32(&callCount); c < 3 {
+		t.Errorf("expected >=3 model calls (invalid → retry → done), got %d", c)
 	}
 }
 
@@ -604,7 +919,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		Interrupt bool `json:"interrupt"`
 	}
 
-	tool := DefineTool(r, "restartable", "interrupts, then runs on resume",
+	tool := defineTool(r, "restartable", "interrupts, then runs on resume",
 		func(ctx *ToolContext, in restartInput) (string, error) {
 			if in.Interrupt {
 				return "", ctx.Interrupt(&InterruptOptions{})
@@ -615,7 +930,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 
 	// Requests the tool on the first turn, returns a final text response once a
 	// tool response is present in history.
-	model := DefineModel(r, "test/restartModel", &ModelOptions{
+	model := defineModel(r, "test/restartModel", &ModelOptions{
 		Supports: &ModelSupports{Multiturn: true, Tools: true},
 	}, func(ctx context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
 		for _, msg := range req.Messages {

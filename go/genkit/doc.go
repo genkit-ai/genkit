@@ -36,7 +36,7 @@ Initialize Genkit with a plugin to connect to an AI provider:
 Generate text with a simple prompt:
 
 	text, err := genkit.GenerateText(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("Tell me a joke"),
 	)
 	if err != nil {
@@ -51,7 +51,7 @@ models from providers like Google AI, Vertex AI, Anthropic, or Ollama. Models ar
 referenced by name and can include provider-specific configuration:
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("Explain quantum computing in simple terms"),
 	)
 
@@ -59,7 +59,7 @@ You can set a default model during initialization:
 
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 	)
 
 # Flows
@@ -114,7 +114,7 @@ They encapsulate model configuration, input schemas, and template logic for reus
 Define a prompt in code:
 
 	jokePrompt := genkit.DefinePrompt(g, "joke",
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInputType(JokeRequest{Topic: "default topic"}),
 		ai.WithPrompt("Share a joke about {{topic}}."),
 	)
@@ -154,6 +154,32 @@ For type-safe prompts with structured input and output, use [DefineDataPrompt]:
 		// result.Chunk is *Recipe, result.Output is final *Recipe
 	}
 
+When a template is not the right tool, any slot can be filled by a function of
+the prompt's input. The function declares its own input type, and what it
+returns is used as written, so text from a user or a database never has to be
+escaped:
+
+	supportPrompt := genkit.DefinePrompt(g, "support",
+		ai.WithInputType(Ticket{}),
+		ai.WithSystem("You are a support agent."),
+		ai.WithPromptPartsFn(func(ctx context.Context, t Ticket) ([]*ai.Part, error) {
+			parts := []*ai.Part{ai.NewTextPart(t.Question)}
+			if t.Screenshot != "" {
+				parts = append(parts, ai.NewMediaPart("image/png", t.Screenshot))
+			}
+			return parts, nil
+		}),
+	)
+
+[ai.WithSystemFn], [ai.WithPromptFn], [ai.WithMessagesFn], and [ai.WithDocsFn]
+fill the other slots the same way.
+
+A prompt that sets any of [ai.WithMessages], [ai.WithMessagesTemplate], or
+[ai.WithMessagesFn] owns the conversation handed to Execute, placing it with
+{{history}} in the template or [ai.HistoryFromContext] in the function. A prompt
+that sets none of them has that conversation used directly, between the system
+message and the user prompt.
+
 Load prompts from .prompt files by specifying a prompt directory:
 
 	g := genkit.Init(ctx,
@@ -169,7 +195,7 @@ Load prompts from .prompt files by specifying a prompt directory:
 
 When using .prompt files with custom output schemas, register the schema first:
 
-	genkit.DefineSchemaFor[Recipe](g)
+	genkit.DefineSchemasFor(g, Recipe{})
 
 # Tools
 
@@ -354,14 +380,16 @@ accept options from the [ai] package to control behavior. The most common option
 Model and Configuration:
 
   - [ai.WithModel]: Specify the model (accepts [ai.ModelRef] or plugin model refs)
-  - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
+  - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-flash-latest")
   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 
 Prompting:
 
   - [ai.WithPrompt]: Set the user prompt (supports format strings)
+  - [ai.WithPromptParts]: Set multi-part user content, such as text plus media
   - [ai.WithSystem]: Set system instructions
-  - [ai.WithMessages]: Provide conversation history
+  - [ai.WithSystemParts]: Set multi-part system content
+  - [ai.WithMessages]: Provide conversation history, used verbatim
 
 Tools and Output:
 
@@ -376,7 +404,7 @@ Streaming:
 Example combining multiple options:
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithSystem("You are a helpful coding assistant."),
 		ai.WithMessages(conversationHistory...),
 		ai.WithPrompt("Explain this code: %s", code),
@@ -391,9 +419,9 @@ components without registering them in Genkit. This is useful for plugins
 or when you need to pass components directly:
 
   - [ai.NewTool]: Create an unregistered tool
-  - [ai.NewModel]: Create an unregistered model
-  - [ai.NewRetriever]: Create an unregistered retriever
-  - [ai.NewEmbedder]: Create an unregistered embedder
+  - [ai.NewModelAction]: Create an unregistered model
+  - [ai.NewRetrieverAction]: Create an unregistered retriever
+  - [ai.NewEmbedderAction]: Create an unregistered embedder
 
 Use the corresponding Define* functions in this package to create and register
 components for use with Genkit's action system, tracing, and Dev UI.

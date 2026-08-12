@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { Runtime } from '../manager/types';
@@ -28,7 +29,9 @@ export interface DevToolsInfo {
 }
 
 /**
- * Finds the project root by looking for a `package.json` file.
+ * Finds the project root by walking up the directory tree looking for a file
+ * that marks the root of a supported runtime's project (for example
+ * `package.json` for JS or `pubspec.yaml` for Dart).
  */
 export async function findProjectRoot(): Promise<string> {
   const projectMarkers = [
@@ -38,27 +41,48 @@ export async function findProjectRoot(): Promise<string> {
     'requirements.txt',
     'pom.xml',
     'build.gradle',
+    'pubspec.yaml',
   ];
 
   let currentDir = process.cwd();
   while (currentDir !== path.parse(currentDir).root) {
-    try {
-      const checks = projectMarkers.map((file) =>
-        fs
-          .access(path.join(currentDir, file))
-          .then(() => true)
-          .catch(() => false)
-      );
-      const results = await Promise.all(checks);
-      if (results.some((found) => found)) {
-        return currentDir;
-      }
-    } catch {
-      // Continue searching if any errors occur
+    const results = await Promise.all(
+      projectMarkers.map((file) => markerExists(path.join(currentDir, file)))
+    );
+    if (results.some((found) => found)) {
+      return currentDir;
     }
     currentDir = path.dirname(currentDir);
   }
   return process.cwd();
+}
+
+/**
+ * Checks whether a marker file exists. Returns `true` if it exists, `false`
+ * if it definitively does not (ENOENT/ENOTDIR). Transient filesystem errors
+ * (for example EMFILE/ENFILE under heavy parallel load on CI) are retried a
+ * few times so we don't mistakenly conclude that a marker is missing and walk
+ * past the real project root.
+ */
+async function markerExists(filePath: string): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      // Definitive "not here" answers — no point retrying.
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') {
+        return false;
+      }
+      // Transient error (e.g. EMFILE/ENFILE/EAGAIN): retry a few times before
+      // giving up and treating the marker as absent.
+      if (attempt >= 5) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 /**
@@ -99,20 +123,52 @@ export function projectNameFromGenkitFilePath(filePath: string): string {
 }
 
 /**
+ * Maps a filename to a Genkit SDK runtime if it is a recognized marker file.
+ */
+function matchRuntimeMarker(file: string, isFile: boolean): Runtime {
+  if (!isFile) return undefined;
+  if (path.extname(file) === '.go' || file === 'go.mod') {
+    return 'go';
+  }
+  if (file === 'pyproject.toml' || file === 'requirements.txt') {
+    return 'python';
+  }
+  if (file === 'pubspec.yaml') {
+    return 'dart';
+  }
+  return undefined;
+}
+
+/**
  * Detects what runtime is used in the current directory.
  * @returns Runtime of the project directory.
  */
 export async function detectRuntime(directory: string): Promise<Runtime> {
-  const files = await fs.readdir(directory);
-  for (const file of files) {
-    const filePath = path.join(directory, file);
-    const stat = await fs.stat(filePath);
-    if (stat.isFile() && (path.extname(file) === '.go' || file === 'go.mod')) {
-      return 'go';
-    }
-  }
   try {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const runtime = matchRuntimeMarker(entry.name, entry.isFile());
+      if (runtime) return runtime;
+    }
     await fs.access(path.join(directory, 'package.json'));
+    return 'nodejs';
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Synchronously detects what runtime is used in the current directory.
+ * @returns Runtime of the project directory.
+ */
+export function detectRuntimeSync(directory: string): Runtime {
+  try {
+    const entries = fsSync.readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const runtime = matchRuntimeMarker(entry.name, entry.isFile());
+      if (runtime) return runtime;
+    }
+    fsSync.accessSync(path.join(directory, 'package.json'));
     return 'nodejs';
   } catch {
     return undefined;
@@ -248,4 +304,85 @@ export async function removeToolsInfoFile(
   } catch (error) {
     logger.debug(`Failed to delete toolsInfo file: ${error}`);
   }
+}
+
+/**
+ * Sanitizes base64 data URLs (e.g. `data:image/png;base64,...`) in strings or nested objects
+ * by replacing inline data with summary placeholders, unless `keepBase64` is true.
+ */
+export function sanitizeBase64DataUrls(
+  val: any,
+  keepBase64: boolean = false
+): any {
+  if (typeof val === 'string') {
+    if (!keepBase64) {
+      const result = val.replace(
+        /data:([a-zA-Z0-9-]+\/[a-zA-Z0-9-+.]+);base64,([A-Za-z0-9+/=]+)/g,
+        (match, mime, b64) => {
+          const approxBytes = Math.round((b64.length * 3) / 4);
+          const sizeStr =
+            approxBytes > 1024
+              ? `${(approxBytes / 1024).toFixed(1)} KB`
+              : `${approxBytes} B`;
+          return `data:${mime};base64,<... ${sizeStr} base64 data ...>`;
+        }
+      );
+
+      // Heuristic for generic base64 data.
+      if (result.length > 80 && /^[A-Za-z0-9+/=]+$/.test(result)) {
+        const approxBytes = Math.round((result.length * 3) / 4);
+        const sizeStr =
+          approxBytes > 1024
+            ? `${(approxBytes / 1024).toFixed(1)} KB`
+            : `${approxBytes} B`;
+        return `${result.substring(0, 15)}<... ${sizeStr} base64 data ...>`;
+      }
+      return result;
+    }
+    return val;
+  }
+  if (Array.isArray(val)) {
+    return val.map((item) => sanitizeBase64DataUrls(item, keepBase64));
+  }
+  if (val && typeof val === 'object') {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      res[k] = sanitizeBase64DataUrls(v, keepBase64);
+    }
+    return res;
+  }
+  return val;
+}
+
+/**
+ * Safely parses stringified JSON payloads if valid JSON, then sanitizes base64 data URLs.
+ */
+export function parseAndSanitizeJson(
+  val: any,
+  keepBase64: boolean = false
+): any {
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return sanitizeBase64DataUrls(parsed, keepBase64);
+      } catch {
+        // Not valid JSON
+      }
+    }
+  }
+  return sanitizeBase64DataUrls(val, keepBase64);
+}
+
+/** Formats a start and end timestamp into a human-readable duration string (e.g. "12ms" or "0.50ms"). */
+export function formatDuration(startTime?: number, endTime?: number): string {
+  if (startTime !== undefined && endTime !== undefined) {
+    const ms = Math.max(0, endTime - startTime);
+    return `${ms < 1 ? ms.toFixed(2) : Math.round(ms)}ms`;
+  }
+  return '';
 }

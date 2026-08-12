@@ -28,31 +28,11 @@ package core
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
 )
-
-// DefineSchema defines a named JSON schema and registers it in the registry.
-// The `schema` argument must be a JSON schema definition represented as a map.
-// It panics if a schema with the same name is already registered.
-func DefineSchema(r api.Registry, name string, schema map[string]any) {
-	r.RegisterSchema(name, schema)
-}
-
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry using the type's name.
-func DefineSchemaFor[T any](r api.Registry) {
-	var v T
-	t := reflect.TypeOf(v)
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	name := t.Name()
-	r.RegisterSchema(name, InferSchemaMap(v))
-}
 
 // SchemaRef returns a JSON schema reference map for the given name.
 func SchemaRef(name string) map[string]any {

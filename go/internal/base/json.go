@@ -17,6 +17,7 @@
 package base
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,13 @@ import (
 
 	"github.com/invopop/jsonschema"
 )
+
+// HasJSONValue reports whether raw carries an actual JSON value: it is
+// non-empty and not the JSON null literal, ignoring surrounding whitespace.
+func HasJSONValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
 
 // JSONString returns json.Marshal(x) as a string. If json.Marshal returns
 // an error, jsonString returns the error text as a JSON string beginning "ERROR:".
@@ -111,6 +119,25 @@ func InferJSONSchemaMap(x any) map[string]any {
 	return InlineAcyclicDefs(SchemaAsMap(InferJSONSchema(x)))
 }
 
+// InferJSONSchemaInlined is [InferJSONSchema] with its definitions inlined, so
+// the result stands on its own.
+//
+// Use it wherever the schema is spliced into a larger document, as a
+// JSONSchema() hook's result is: a "#/$defs/..." reference resolves against
+// the enclosing document's root, which holds no definition of that name, so
+// the referenced form would describe nothing there.
+func InferJSONSchemaInlined(x any) *jsonschema.Schema {
+	data, err := json.Marshal(InferJSONSchemaMap(x))
+	if err != nil {
+		return InferJSONSchema(x)
+	}
+	s := new(jsonschema.Schema)
+	if err := json.Unmarshal(data, s); err != nil {
+		return InferJSONSchema(x)
+	}
+	return s
+}
+
 // InlineAcyclicDefs rewrites a JSON schema document so that every non-recursive
 // definition in `$defs` is inlined into the sites that reference it, leaving
 // only definitions that participate in a reference cycle. Acyclic schemas come
@@ -178,10 +205,19 @@ func InlineAcyclicDefs(root map[string]any) map[string]any {
 }
 
 // refName extracts the definition name from a "#/$defs/Name" reference.
+//
+// The prefix is cut rather than the last "/" segment taken: an instantiated
+// generic type is named after its type arguments, so the definition name
+// itself contains the argument's import path (`Operation[*github.com/…]`).
 func refName(ref string) string {
-	tkns := strings.Split(ref, "/")
-	return tkns[len(tkns)-1]
+	if name, ok := strings.CutPrefix(ref, defsPrefix); ok {
+		return name
+	}
+	return ref[strings.LastIndex(ref, "/")+1:]
 }
+
+// defsPrefix is the reference prefix the reflector emits for a definition.
+const defsPrefix = "#/$defs/"
 
 // collectRefs records the name of every $ref found anywhere within node.
 func collectRefs(node any, out map[string]bool) {
@@ -245,6 +281,171 @@ func inlineRefs(node any, inlineable map[string]map[string]any) any {
 	}
 }
 
+// ErrTypeMismatch reports that a value's Go type cannot be reinterpreted as
+// the requested type in [ConvertToExact].
+//
+// This package cannot classify it, since core/status depends on this one. A
+// caller that surfaces the failure past the framework boundary must attach a
+// sentinel users can match, as ai.ErrInputTypeMismatch does.
+var ErrTypeMismatch = errors.New("type mismatch")
+
+// ConvertToExact converts a dynamically typed value to T.
+//
+// It accepts a value that is already a T, a *T (a nil pointer yields the zero
+// value), or a value in the JSON wire form the framework's transports produce
+// (map[string]any, []any, a scalar), which it decodes into T. A nil value
+// yields the zero value.
+//
+// Reinterpreting one struct as an unrelated struct is refused with an error
+// wrapping [ErrTypeMismatch]: a JSON round-trip between two unrelated structs
+// succeeds while leaving every field zero, so the caller would otherwise get a
+// blank value instead of a diagnosis.
+//
+// When T cannot carry JSON's types on its own, meaning T is an interface or a
+// map, slice or array whose elements are, the decoded value is normalized
+// against the schema inferred from v (see [NormalizeInput]) so that an integer
+// stays an int64 instead of widening to float64. That is what the reflection
+// API does to action input, so a value reaches T with the same Go types
+// whichever way it arrived. It also drops null-valued keys, as the wire does.
+func ConvertToExact[T any](v any) (T, error) {
+	var zero T
+	if v == nil {
+		return zero, nil
+	}
+	// Covers an exact match and T being an interface that v satisfies, in
+	// which case the value is handed over untouched.
+	if typed, ok := v.(T); ok {
+		return typed, nil
+	}
+	if p, ok := v.(*T); ok {
+		if p == nil {
+			return zero, nil
+		}
+		return *p, nil
+	}
+
+	dstType := reflect.TypeFor[T]()
+	if src, ok := structType(reflect.TypeOf(v)); ok {
+		if dst, ok := structType(dstType); ok && src != dst {
+			return zero, fmt.Errorf("%w: got %T, want %T", ErrTypeMismatch, v, zero)
+		}
+	}
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		return zero, fmt.Errorf("cannot convert %T to %T: %w", v, zero, err)
+	}
+
+	if !dynamicType(dstType) {
+		var result T
+		if err := json.Unmarshal(data, &result); err != nil {
+			return zero, fmt.Errorf("cannot convert %T to %T: %w", v, zero, err)
+		}
+		return result, nil
+	}
+
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return zero, fmt.Errorf("cannot convert %T to %T: %w", v, zero, err)
+	}
+	normalized, err := NormalizeInput(decoded, InferJSONSchemaMap(v))
+	if err != nil {
+		return zero, fmt.Errorf("cannot convert %T to %T: %w", v, zero, err)
+	}
+	if normalized == nil {
+		return zero, nil
+	}
+	result, ok := asTarget[T](normalized)
+	if !ok {
+		return zero, fmt.Errorf("%w: got %T, want %T", ErrTypeMismatch, v, zero)
+	}
+	return result, nil
+}
+
+// asTarget converts an already-normalized dynamic value into T.
+//
+// A type assertion alone only matches the value form, so a pointer target such
+// as *map[string]any would miss and lose the normalization. The pointer chain
+// is allocated around the value instead.
+func asTarget[T any](v any) (T, bool) {
+	var zero T
+	if typed, ok := v.(T); ok {
+		return typed, true
+	}
+
+	dst := reflect.TypeFor[T]()
+	if dst.Kind() != reflect.Pointer {
+		return zero, false
+	}
+	val := reflect.ValueOf(v)
+	if !val.IsValid() {
+		return zero, false
+	}
+
+	depth := 0
+	elem := dst
+	for elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
+		depth++
+	}
+	if !val.Type().AssignableTo(elem) {
+		return zero, false
+	}
+
+	// Build from the element type rather than the value's own type, so that a
+	// *any target holds an interface rather than the concrete value.
+	cur := reflect.New(elem)
+	cur.Elem().Set(val)
+	for range depth - 1 {
+		p := reflect.New(cur.Type())
+		p.Elem().Set(cur)
+		cur = p
+	}
+
+	typed, ok := cur.Interface().(T)
+	return typed, ok
+}
+
+// structType reports whether t is a struct, or a pointer chain ending in one,
+// and returns the struct type itself so that T and *T compare equal.
+func structType(t reflect.Type) (reflect.Type, bool) {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t != nil && t.Kind() == reflect.Struct {
+		return t, true
+	}
+	return nil, false
+}
+
+// dynamicType reports whether decoding JSON into t yields dynamically typed
+// values, so that t cannot on its own restore the Go types the source had.
+//
+// Pointers are followed, since a *map[string]any restores no more than the
+// map it points at.
+func dynamicType(t reflect.Type) bool {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil {
+		return false
+	}
+	switch t.Kind() {
+	case reflect.Interface:
+		return true
+	case reflect.Map, reflect.Slice, reflect.Array:
+		return t.Elem().Kind() == reflect.Interface
+	}
+	return false
+}
+
+// ConvertTo is [ConvertToExact] for callers that only need to know whether the
+// conversion was possible.
+func ConvertTo[T any](v any) (T, bool) {
+	result, err := ConvertToExact[T](v)
+	return result, err == nil
+}
+
 // MapToStruct converts a map[string]any to a struct of type T via JSON round-trip.
 func MapToStruct[T any](m map[string]any) (T, error) {
 	var result T
@@ -271,7 +472,25 @@ func StructToMap[T any](v T) (map[string]any, error) {
 	return m, nil
 }
 
-// SchemaAsMap converts json schema struct to a map (JSON representation).
+// SchemaMapFor returns the JSON schema inferred from type T as a map, or nil
+// for interface types (e.g. `any`), whose zero value carries no type
+// information to infer from. Like [SchemaAsMap], the returned map is freshly
+// built on every call and belongs to the caller.
+//
+// Definitions are inlined, so only a recursive T keeps `$ref`/`$defs`;
+// callers that walk the schema in place (stripping "required", say) would
+// otherwise miss everything sitting behind a reference.
+func SchemaMapFor[T any]() map[string]any {
+	var v T
+	if reflect.ValueOf(v).Kind() == reflect.Invalid {
+		return nil
+	}
+	return InferJSONSchemaMap(v)
+}
+
+// SchemaAsMap converts json schema struct to a map (JSON representation). The
+// map is rebuilt from JSON on every call, so the caller owns it and may mutate
+// it in place; memoizing the result here would break callers that do.
 func SchemaAsMap(s *jsonschema.Schema) map[string]any {
 	jsb, err := s.MarshalJSON()
 	if err != nil {

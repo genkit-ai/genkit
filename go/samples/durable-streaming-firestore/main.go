@@ -50,7 +50,7 @@ import (
 
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
-	firebasex "github.com/firebase/genkit/go/plugins/firebase/x"
+	firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 

@@ -602,10 +602,10 @@ ai.defineFlow('imagen-image-generation', async (_) => {
   return media;
 });
 
-// TTS sample
+// TTS sample with speech Config
 ai.defineFlow(
   {
-    name: 'tts',
+    name: 'tts-Algenib',
     inputSchema: z
       .string()
       .default(
@@ -624,6 +624,35 @@ ai.defineFlow(
           },
         },
       },
+      prompt,
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    const audioBuffer = Buffer.from(
+      media.url.substring(media.url.indexOf(',') + 1),
+      'base64'
+    );
+    return {
+      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
+    };
+  }
+);
+
+// TTS sample with default voice
+ai.defineFlow(
+  {
+    name: 'tts-default-voice',
+    inputSchema: z
+      .string()
+      .default(
+        'Gemini is amazing. Can say things like: glorg, blub-blub, and ayeeeeee!!!'
+      ),
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async (prompt) => {
+    const { media } = await ai.generate({
+      model: googleAI.model('gemini-2.5-flash-preview-tts'),
       prompt,
     });
     if (!media) {
@@ -672,13 +701,6 @@ two... let's go!`
   async (prompt: string) => {
     const { media } = await ai.generate({
       model: googleAI.model('gemini-3.1-flash-tts-preview'),
-      config: {
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Algenib' },
-          },
-        },
-      },
       prompt,
     });
     if (!media) {
@@ -755,6 +777,73 @@ ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
   while (!operation.done) {
     sendChunk('check status of operation ' + operation.id);
     operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  if (operation.error) {
+    sendChunk('Error: ' + operation.error.message);
+    throw new Error('failed to generate video: ' + operation.error.message);
+  }
+
+  // operation done, download generated video to disk
+  const video = operation.output?.message?.content.find((p) => !!p.media);
+  if (!video) {
+    sendChunk(operation);
+    throw new Error('Failed to find the generated video');
+  }
+  sendChunk('Writing results to photo.mp4');
+  await downloadVideo(video, 'photo.mp4');
+  sendChunk('Done!');
+
+  return operation;
+});
+
+// An example of overriding the apiKey used by a Veo background model at call
+// time via options.context.secrets.apiKey, rather than relying on the
+// plugin-configured apiKey (env var or plugin init option). This is useful
+// when per-request credentials (e.g. from an authenticated HTTP caller)
+// should be used instead of a single, plugin-wide key. Because Veo is a
+// background model, the same context must be supplied on both the initial
+// ai.generate() call and every subsequent ai.checkOperation() call.
+ai.defineFlow('photo-move-veo-apikey-override', async (_, { sendChunk }) => {
+  const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
+
+  let { operation } = await ai.generate({
+    model: googleAI.model('veo-3.1-lite-generate-preview'),
+    prompt: [
+      {
+        text: 'make the subject in the photo move',
+      },
+      {
+        media: {
+          contentType: 'image/png',
+          url: `data:image/png;base64,${startingImage}`,
+        },
+      },
+    ],
+    config: {
+      resolution: '1080p',
+      durationSeconds: 8,
+      aspectRatio: '9:16',
+      personGeneration: 'allow_adult',
+      seed: 42,
+    },
+    context: {
+      secrets: {
+        apiKey: process.env.CUSTOM_KEY,
+      },
+    },
+  });
+
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    operation = await ai.checkOperation(operation, {
+      context: { secrets: { apiKey: process.env.CUSTOM_KEY } },
+    });
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
 
@@ -1091,6 +1180,43 @@ ai.defineFlow('deep-research', async (_, { sendChunk }) => {
   while (!operation.done) {
     sendChunk('check status of operation ' + operation.id);
     operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+
+  if (operation.error) {
+    sendChunk('Error: ' + operation.error.message);
+    throw new Error('failed to deep research: ' + operation.error.message);
+  }
+
+  return operation.output?.message?.content.find((p) => !!p.text)?.text;
+});
+
+// An example of overriding the apiKey used by the Deep Research background
+// model at call time via options.context.secrets.apiKey, rather than
+// relying on the plugin-configured apiKey. Because Deep Research is also a
+// background model, the same context must be supplied on both the initial
+// ai.generate() call and every subsequent ai.checkOperation() call.
+ai.defineFlow('deep-research-apikey-override', async (_, { sendChunk }) => {
+  let { operation } = await ai.generate({
+    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    prompt:
+      'Compare the differences between TCP and UDP protocols. Provide the answer in a markdown table focusing on reliability, connection type, and speed.',
+    context: {
+      secrets: {
+        apiKey: process.env.CUSTOM_KEY,
+      },
+    },
+  });
+
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    operation = await ai.checkOperation(operation, {
+      context: { secrets: { apiKey: process.env.CUSTOM_KEY } },
+    });
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }
 

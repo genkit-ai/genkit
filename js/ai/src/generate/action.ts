@@ -37,7 +37,6 @@ import {
   GenerationResponseError,
   maybeRegisterDynamicMiddlewareTools,
   normalizeMiddleware,
-  tagAsPreamble,
 } from '../generate.js';
 import { GenerateResponseChunk } from '../generate/chunk.js';
 import {
@@ -228,31 +227,6 @@ export function shouldInjectFormatInstructions(
     formatConfig?.defaultInstructions !== false ||
     rawRequestConfig?.instructions
   );
-}
-
-function applyTransferPreamble(
-  rawRequest: GenerateActionOptions,
-  transferPreamble?: GenerateActionOptions
-): GenerateActionOptions {
-  if (!transferPreamble) {
-    return rawRequest;
-  }
-
-  // if the transfer preamble has a model, use it for the next request
-  if (transferPreamble?.model) {
-    rawRequest.model = transferPreamble.model;
-  }
-
-  return stripUndefinedProps({
-    ...rawRequest,
-    messages: [
-      ...tagAsPreamble(transferPreamble.messages!)!,
-      ...rawRequest.messages.filter((m) => !m.metadata?.preamble),
-    ],
-    toolChoice: transferPreamble.toolChoice || rawRequest.toolChoice,
-    tools: transferPreamble.tools || rawRequest.tools,
-    config: transferPreamble.config || rawRequest.config,
-  });
 }
 
 async function generateActionImpl(
@@ -547,13 +521,12 @@ async function generateActionTurn(
     );
   }
 
-  const { revisedModelMessage, toolMessage, transferPreamble } =
-    await resolveToolRequests(
-      rawRequest,
-      generatedMessage,
-      tools,
-      middleware || []
-    );
+  const { revisedModelMessage, toolMessage } = await resolveToolRequests(
+    rawRequest,
+    generatedMessage,
+    tools,
+    middleware || []
+  );
 
   // if an interrupt message is returned, stop the tool loop and return a response
   if (revisedModelMessage) {
@@ -584,8 +557,6 @@ async function generateActionTurn(
 
     messages,
   };
-
-  nextRequest = applyTransferPreamble(nextRequest, transferPreamble);
 
   // then recursively call for another loop
   return await generateHelper(registry, {

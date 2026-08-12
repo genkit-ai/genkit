@@ -787,10 +787,7 @@ describe('prompt', () => {
     it(test.name, async () => {
       let session: Session | undefined;
       if (test.state) {
-        session = new Session(registry, {
-          id: '123',
-          sessionData: { id: '123', state: test.state },
-        });
+        session = new Session({ custom: test.state } as any);
       }
       const p = definePrompt(registry, test.prompt);
 

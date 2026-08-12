@@ -18,10 +18,13 @@ package genkit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 )
 
 func TestStreamFlow(t *testing.T) {
@@ -48,6 +51,88 @@ func TestStreamFlow(t *testing.T) {
 	})
 }
 
+type csvTestFormatter struct{}
+
+func (csvTestFormatter) Name() string { return "csv" }
+
+func (csvTestFormatter) Handler(schema map[string]any) (ai.FormatHandler, error) {
+	return csvTestHandler{}, nil
+}
+
+// jsonNameFormatter collides with the built-in "json" format.
+type jsonNameFormatter struct{ csvTestFormatter }
+
+func (jsonNameFormatter) Name() string { return "json" }
+
+type csvTestHandler struct{}
+
+func (csvTestHandler) ParseMessage(m *ai.Message) (*ai.Message, error) { return m, nil }
+
+func (csvTestHandler) Instructions() string { return "Respond with CSV." }
+
+func (csvTestHandler) Config() ai.ModelOutputConfig {
+	return ai.ModelOutputConfig{Format: "csv", ContentType: "text/csv"}
+}
+
+func TestDefineFormats(t *testing.T) {
+	ctx := context.Background()
+	g := Init(ctx)
+
+	echo := DefineModel(g, "test/echo", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("a,b,c")}, nil
+	})
+
+	DefineFormats(g, csvTestFormatter{})
+
+	if !IsDefinedFormat(g, "csv") {
+		t.Fatal("IsDefinedFormat() = false, want true")
+	}
+
+	res, err := Generate(ctx, g,
+		ai.WithModel(echo),
+		ai.WithPrompt("list some letters"),
+		ai.WithOutputFormat("csv"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if res.Request.Output.Format != "csv" {
+		t.Errorf("output format = %q, want %q", res.Request.Output.Format, "csv")
+	}
+	if res.Request.Output.ContentType != "text/csv" {
+		t.Errorf("output content type = %q, want %q", res.Request.Output.ContentType, "text/csv")
+	}
+
+	t.Run("deprecated DefineFormat registers under the given name", func(t *testing.T) {
+		DefineFormat(g, "csv2", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv2") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
+	})
+
+	t.Run("deprecated DefineFormat tolerates a prefixed name", func(t *testing.T) {
+		DefineFormat(g, "/format/csv3", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv3") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
+		// IsDefinedFormat has to accept whatever DefineFormat accepted.
+		if !IsDefinedFormat(g, "/format/csv3") {
+			t.Error("IsDefinedFormat() = false for the prefixed name, want true")
+		}
+	})
+
+	t.Run("DefineFormats panics on a built-in name", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("DefineFormats() should panic when the name collides with a built-in")
+			}
+		}()
+		DefineFormats(g, jsonNameFormatter{})
+	})
+}
+
 // count streams the numbers from 0 to n-1, then returns n.
 func count(ctx context.Context, n int, cb func(context.Context, int) error) (int, error) {
 	if cb != nil {
@@ -68,7 +153,7 @@ func TestDefineSchemaWithType(t *testing.T) {
 		Age  int    `json:"age,omitempty"`
 	}
 
-	DefineSchemaFor[UserInfo](g)
+	DefineSchemasFor(g, UserInfo{})
 
 	schema := g.reg.LookupSchema("UserInfo")
 	if schema == nil {
@@ -122,7 +207,98 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 		Foo func() `json:"foo"`
 	}
 
-	DefineSchemaFor[Invalid](g)
+	DefineSchemasFor(g, Invalid{})
+}
+
+func TestDefineSchemasFor(t *testing.T) {
+	t.Run("registers multiple schemas at once", func(t *testing.T) {
+		g := Init(context.Background())
+
+		type User struct {
+			Name string `json:"name"`
+		}
+		type Order struct {
+			ID string `json:"id"`
+		}
+
+		DefineSchemasFor(g, User{}, &Order{})
+
+		for _, name := range []string{"User", "Order"} {
+			if g.reg.LookupSchema(name) == nil {
+				t.Errorf("Schema %s not found", name)
+			}
+		}
+	})
+
+	t.Run("panics on map value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for map value")
+			}
+		}()
+
+		DefineSchemasFor(g, map[string]any{"type": "object"})
+	})
+
+	t.Run("panics on unnamed type", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for unnamed type")
+			}
+		}()
+
+		DefineSchemasFor(g, struct{ Name string }{})
+	})
+
+	t.Run("panics on nil value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for nil value")
+			}
+		}()
+
+		DefineSchemasFor(g, nil)
+	})
+}
+
+func TestDefineSchemaFor(t *testing.T) {
+	g := Init(context.Background())
+
+	type Legacy struct {
+		Name string `json:"name"`
+	}
+	type LegacyPtr struct {
+		Name string `json:"name"`
+	}
+
+	DefineSchemaFor[Legacy](g)
+	DefineSchemaFor[*LegacyPtr](g)
+
+	for _, name := range []string{"Legacy", "LegacyPtr"} {
+		if g.reg.LookupSchema(name) == nil {
+			t.Errorf("Schema %s not found", name)
+		}
+	}
+
+	t.Run("guard panic names DefineSchemaFor", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic for map type")
+			}
+			if msg, ok := r.(string); !ok || !strings.HasPrefix(msg, "genkit.DefineSchemaFor:") {
+				t.Errorf("panic = %v, want it to name genkit.DefineSchemaFor", r)
+			}
+		}()
+
+		DefineSchemaFor[map[string]any](g)
+	})
 }
 
 func TestWithPromptFS(t *testing.T) {
@@ -182,5 +358,47 @@ input:
 				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
 			}
 		})
+	}
+}
+
+// pluginWithTool returns one of each primitive that a plugin is expected to be
+// able to ship, matching the plugin-authoring example in the core package
+// documentation.
+type pluginWithTool struct{}
+
+func (p *pluginWithTool) Name() string { return "toolplugin" }
+
+func (p *pluginWithTool) Init(ctx context.Context) []api.Action {
+	model := ai.NewModelAction("toolplugin/model", nil,
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
+		})
+	tool := ai.NewTool("toolplugin/tool", "a tool shipped by a plugin",
+		func(ctx *ai.ToolContext, in string) (string, error) {
+			return in + "!", nil
+		})
+	return []api.Action{model, tool}
+}
+
+// A plugin ships tools the same way it ships models: by returning them in its
+// action slice. This is the shape the core package documentation prescribes,
+// and it only compiles because *ai.ToolAction satisfies api.Action.
+func TestPluginCanReturnTools(t *testing.T) {
+	g := Init(context.Background(), WithPlugins(&pluginWithTool{}))
+
+	if m := LookupModel(g, "toolplugin/model"); m == nil {
+		t.Error("LookupModel() = nil, want the model the plugin returned")
+	}
+
+	tool := LookupTool(g, "toolplugin/tool")
+	if tool == nil {
+		t.Fatal("LookupTool() = nil, want the tool the plugin returned")
+	}
+	out, err := tool.RunRaw(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("RunRaw() error: %v", err)
+	}
+	if out != "hi!" {
+		t.Errorf("RunRaw() = %v, want %q", out, "hi!")
 	}
 }

@@ -654,14 +654,10 @@ export function fromInteractionSync(
   return response;
 }
 
-export function fromInteraction<T extends Object>(
-  interaction: GeminiInteraction,
-  clientOptions?: T
+export function fromInteraction(
+  interaction: GeminiInteraction
 ): Operation<GenerateResponseData> {
   const op = { id: interaction.id } as Operation<GenerateResponseData>;
-  if (clientOptions) {
-    op.metadata = { clientOptions };
-  }
   if (interaction.status === 'in_progress') {
     op.done = false;
   } else if (interaction.status === 'cancelled') {

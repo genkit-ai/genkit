@@ -43,7 +43,7 @@ func TestAnthropicLive(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&anthropicPlugin.Anthropic{}))
 	t.Run("model version ok", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -61,8 +61,10 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("not a pirate :( :%s", resp.Text())
 		}
 	})
+	// Every curated model gets a smoke request from
+	// TestSupportedModelsAreServableLive, which reads the catalog directly.
 	t.Run("model version not ok", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		_, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -79,7 +81,7 @@ func TestAnthropicLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
@@ -104,7 +106,7 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := ""
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
@@ -136,7 +138,7 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := ""
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithSystem(`You are a professional image detective that
 			talks like an evil pirate that loves animals, your task is to tell the name
@@ -177,7 +179,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("tools", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		myJokeTool := genkit.DefineTool(
 			g,
 			"myJoke",
@@ -203,7 +205,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("tools with schema", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 
 		type WeatherInput struct {
 			Location string `json:"location"`
@@ -234,8 +236,42 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal("expected a response but nothing was returned")
 		}
 	})
+	t.Run("multipart tool", func(t *testing.T) {
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
+		img64, err := fetchImgAsBase64()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tool := genkit.DefineMultipartTool(g, "getImage", "returns a mysterious image",
+			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+				return &ai.MultipartToolResponse{
+					Output: map[string]any{"status": "success"},
+					Content: []*ai.Part{
+						ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64),
+					},
+				}, nil
+			},
+		)
+
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithTools(tool),
+			ai.WithPrompt("get an image and tell me what is in it"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
+			t.Errorf("expected response to contain 'cat', got: %s", resp.Text())
+		}
+	})
 	t.Run("streaming", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		out := ""
 
 		final, err := genkit.Generate(ctx, g,
@@ -267,7 +303,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("streaming with thinking", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		out := ""
 		reasoningStream := ""
 
@@ -319,7 +355,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("tools streaming", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		out := ""
 
 		myStoryTool := genkit.DefineTool(
@@ -363,7 +399,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("constrained generation", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
@@ -384,7 +420,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("streaming constrained generation", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 
 		var streamedContent strings.Builder
 		resp, err := genkit.Generate(ctx, g,
@@ -415,7 +451,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("tools streaming with constrained gen", func(t *testing.T) {
-		m := anthropicPlugin.Model(g, "claude-opus-4-6")
+		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
 		answerOfEverythingTool := genkit.DefineTool(
 			g,
 			"answerOfEverythingTool",

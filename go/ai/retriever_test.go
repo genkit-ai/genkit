@@ -114,7 +114,7 @@ func TestDefineRetriever(t *testing.T) {
 			DocumentFromText("result 2", nil),
 		}
 
-		r := DefineRetriever(reg, "test/defineRetriever", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		r := defineRetriever(reg, "test/defineRetriever", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			called = true
 			return &RetrieverResponse{Documents: expectedDocs}, nil
 		})
@@ -146,7 +146,7 @@ func TestDefineRetriever(t *testing.T) {
 func TestLookupRetriever(t *testing.T) {
 	t.Run("returns retriever when found", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		DefineRetriever(reg, "test/lookupRetriever", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/lookupRetriever", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return &RetrieverResponse{}, nil
 		})
 
@@ -176,7 +176,7 @@ func TestRetrieverRetrieve(t *testing.T) {
 			DocumentFromText("relevant result 2", map[string]any{"score": 0.8}),
 		}
 
-		r := DefineRetriever(reg, "test/retrieveDocs", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		r := defineRetriever(reg, "test/retrieveDocs", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			capturedReq = req
 			return &RetrieverResponse{Documents: expectedDocs}, nil
 		})
@@ -194,18 +194,28 @@ func TestRetrieverRetrieve(t *testing.T) {
 	})
 
 	t.Run("returns error on nil retriever", func(t *testing.T) {
-		var r *retriever
+		var r *RetrieverAction
 		_, err := r.Retrieve(context.Background(), &RetrieverRequest{})
 		if err == nil {
 			t.Error("expected error for nil retriever")
 		}
 	})
 
+	t.Run("Retrieve errors instead of panicking when no document is given", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		r := defineRetriever(reg, "test/retrieveNoDocs", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+			return &RetrieverResponse{}, nil
+		})
+
+		_, err := Retrieve(context.Background(), reg, WithRetriever(r))
+		assertError(t, err, "a query document is required")
+	})
+
 	t.Run("propagates function errors", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		expectedErr := errors.New("retrieval failed")
 
-		r := DefineRetriever(reg, "test/retrieveError", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		r := defineRetriever(reg, "test/retrieveError", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return nil, expectedErr
 		})
 
@@ -221,7 +231,7 @@ func TestRetrieverRetrieve(t *testing.T) {
 		reg := newTestRegistry(t)
 		var capturedOpts any
 
-		r := DefineRetriever(reg, "test/retrieveOpts", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		r := defineRetriever(reg, "test/retrieveOpts", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			capturedOpts = req.Options
 			return &RetrieverResponse{Documents: []*Document{}}, nil
 		})
@@ -242,7 +252,7 @@ func TestRetrieverRetrieve(t *testing.T) {
 func TestRetrieveFunction(t *testing.T) {
 	t.Run("retrieves with retriever directly", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		r := DefineRetriever(reg, "test/retrieveFunc", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		r := defineRetriever(reg, "test/retrieveFunc", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return &RetrieverResponse{
 				Documents: []*Document{DocumentFromText("result", nil)},
 			}, nil
@@ -261,7 +271,7 @@ func TestRetrieveFunction(t *testing.T) {
 
 	t.Run("retrieves with retriever ref", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		DefineRetriever(reg, "test/retrieveFuncRef", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveFuncRef", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return &RetrieverResponse{
 				Documents: []*Document{DocumentFromText("result", nil)},
 			}, nil
@@ -281,7 +291,7 @@ func TestRetrieveFunction(t *testing.T) {
 
 	t.Run("retrieves with retriever name", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		DefineRetriever(reg, "test/retrieveFuncName", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveFuncName", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return &RetrieverResponse{
 				Documents: []*Document{DocumentFromText("result", nil)},
 			}, nil
@@ -302,7 +312,7 @@ func TestRetrieveFunction(t *testing.T) {
 		reg := newTestRegistry(t)
 		var capturedOpts any
 
-		DefineRetriever(reg, "test/retrieveRefConfig", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveRefConfig", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			capturedOpts = req.Options
 			return &RetrieverResponse{Documents: []*Document{}}, nil
 		})
@@ -325,7 +335,7 @@ func TestRetrieveFunction(t *testing.T) {
 		reg := newTestRegistry(t)
 		var capturedOpts any
 
-		DefineRetriever(reg, "test/retrieveOverrideConfig", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveOverrideConfig", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			capturedOpts = req.Options
 			return &RetrieverResponse{Documents: []*Document{}}, nil
 		})
@@ -367,7 +377,7 @@ func TestRetrieveFunction(t *testing.T) {
 
 	t.Run("returns error with multiple documents", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		DefineRetriever(reg, "test/retrieveMultiDoc", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveMultiDoc", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			return &RetrieverResponse{Documents: []*Document{}}, nil
 		})
 
@@ -385,7 +395,7 @@ func TestRetrieveFunction(t *testing.T) {
 		reg := newTestRegistry(t)
 		var capturedQuery *Document
 
-		DefineRetriever(reg, "test/retrieveDocOpts", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		defineRetriever(reg, "test/retrieveDocOpts", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 			capturedQuery = req.Query
 			return &RetrieverResponse{Documents: []*Document{}}, nil
 		})

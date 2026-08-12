@@ -37,10 +37,10 @@ describe('FirestoreStreamManager', () => {
 
   afterEach(async () => {
     const db = getFirestore(app);
-    const collections = await db.listCollections();
-    for (const collection of collections) {
-      await db.recursiveDelete(collection);
-    }
+    // Only delete this suite's own collection so it can run in parallel with
+    // the other Firestore emulator test files (jest runs files concurrently
+    // against the one shared emulator).
+    await db.recursiveDelete(db.collection('genkit-streams'));
     await deleteApp(app);
   });
 

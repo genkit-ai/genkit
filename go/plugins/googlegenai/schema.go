@@ -198,9 +198,17 @@ func toGeminiSchemaRec(originalSchema map[string]any, genkitSchema map[string]an
 }
 
 // refName returns the definition name from a "#/$defs/foo" reference.
+//
+// The prefix is cut rather than the last "/" segment taken: an instantiated
+// generic type is named after its type arguments, so the definition name
+// itself contains the argument's import path (`Operation[*github.com/…]`).
 func refName(ref string) string {
-	tkns := strings.Split(ref, "/")
-	return tkns[len(tkns)-1]
+	for _, prefix := range []string{"#/$defs/", "#/definitions/"} {
+		if name, ok := strings.CutPrefix(ref, prefix); ok {
+			return name
+		}
+	}
+	return ref[strings.LastIndex(ref, "/")+1:]
 }
 
 // resolveRef resolves a $ref reference in a JSON schema.

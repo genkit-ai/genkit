@@ -378,6 +378,82 @@ describe('RuntimeManagerV2', () => {
     expect(response.message).toBe('Action cancelled');
   });
 
+  it('should handle listActions with null action metadata', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-list-actions', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'listActions') {
+        // Some runtimes (e.g. Go) send actions with an explicit null metadata.
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            actions: {
+              '/util/generate': {
+                key: '/util/generate',
+                name: 'generate',
+                metadata: null,
+              },
+            },
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    const actions = await manager.listActions();
+    expect(actions['/util/generate']).toBeDefined();
+    expect(actions['/util/generate'].name).toBe('generate');
+  });
+
+  it('should reject the request (not hang) when a response fails validation', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-bad-response', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'listActions') {
+        // Missing the required `actions` field, so schema parsing will throw.
+        const response = {
+          jsonrpc: '2.0',
+          result: { notActions: {} },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    await expect(manager.listActions()).rejects.toThrow();
+  });
+
   it('should handle runActionState for early trace info', async () => {
     wsClient = new WebSocket(`ws://localhost:${port}`);
 

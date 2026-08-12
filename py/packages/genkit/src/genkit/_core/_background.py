@@ -221,7 +221,7 @@ def define_background_model(
         start: Function to start the background operation.
         check: Function to check operation status.
         cancel: Optional function to cancel operations.
-        label: Human-readable label (defaults to name).
+        label: Human-readable label (defaults to info.label, then model name).
         info: Model capability information.
         config_schema: Schema for model configuration options.
         metadata: Additional metadata for the model.
@@ -242,7 +242,6 @@ def define_background_model(
         ...     await asyncio.sleep(5)
         ...     op = await action.check(op)
     """
-    label = label or name
     action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
     # Build model metadata matching JS structure
@@ -250,9 +249,12 @@ def define_background_model(
     model_options: dict[str, Any] = {}
 
     if info:
-        model_options.update(info.model_dump())
+        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
+    # Precedence: explicit label argument > info.label > fallback to model name
+    label = label or model_options.get('label') or name
     model_options['label'] = label
+
     if config_schema:
         model_options['customOptions'] = to_json_schema(config_schema)
 

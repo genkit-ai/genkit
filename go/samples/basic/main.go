@@ -61,9 +61,9 @@ func main() {
 		}
 
 		return genkit.GenerateText(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingBudget: genai.Ptr[int32](0),
+					ThinkingLevel: genai.ThinkingLevelMinimal,
 				},
 			})),
 			ai.WithPrompt("Share a joke about %s.", input),
@@ -78,9 +78,9 @@ func main() {
 			}
 
 			resp, err := genkit.Generate(ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingBudget: genai.Ptr[int32](0),
+						ThinkingLevel: genai.ThinkingLevelMinimal,
 					},
 				})),
 				ai.WithPrompt("Share a joke about %s.", input),
