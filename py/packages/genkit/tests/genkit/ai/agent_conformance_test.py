@@ -84,9 +84,13 @@ KNOWN_DIVERGENCES: dict[str, str] = {
     'abort pending agent': 'abort returns resulting status instead of previous status',
     'abort already aborted agent': 'abort returns resulting status instead of previous status',
     'pure detach without payload': 'abort returns resulting status instead of previous status',
-    'snapshotId and matching sessionId together resume': 'snapshotId+sessionId pair rejected instead of ownership-guarded',
-    'snapshotId with mismatched sessionId rejected': 'snapshotId+sessionId pair rejected instead of ownership-guarded',
-    'detached run emits no customPatch chunks': 'detached runs leak stream chunks (race)',
+    'snapshotId and matching sessionId together resume': (
+        'snapshotId+sessionId pair rejected instead of ownership-guarded'
+    ),
+    'snapshotId with mismatched sessionId rejected': (
+        'snapshotId+sessionId pair rejected instead of ownership-guarded'
+    ),
+    'detached run emits no customPatch chunks': ('detached runs leak stream chunks (race)'),
 }
 
 
@@ -406,7 +410,9 @@ def assert_chunks(actual_chunks: list[Any], expected_chunks: list[Any]) -> None:
     """Strict ordered chunk comparison per the spec's expectChunks contract."""
     actual = [dump(c) for c in actual_chunks]
     assert len(actual) == len(expected_chunks), (
-        f'Expected {len(expected_chunks)} chunks, got {len(actual)}.\n  Actual: {actual!r}\n  Expected: {expected_chunks!r}'
+        f'Expected {len(expected_chunks)} chunks, got {len(actual)}.\n'
+        f'  Actual: {actual!r}\n'
+        f'  Expected: {expected_chunks!r}'
     )
     for i, expected in enumerate(expected_chunks):
         got = actual[i]
@@ -417,7 +423,7 @@ def assert_chunks(actual_chunks: list[Any], expected_chunks: list[Any]) -> None:
             want_fr = expected['turnEnd'].get('finishReason') if isinstance(expected['turnEnd'], dict) else None
             if want_fr is not None:
                 assert got['turnEnd'].get('finishReason') == want_fr, (
-                    f"Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got['turnEnd'].get('finishReason')!r}"
+                    f'Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got["turnEnd"].get("finishReason")!r}'
                 )
         elif 'modelChunk' in expected:
             assert_contains(got.get('modelChunk'), expected['modelChunk'], f'chunk[{i}].modelChunk')
@@ -565,9 +571,7 @@ async def execute_get_snapshot_data(agent: Agent, step: dict[str, Any], captures
     resolved = resolve_templates(step, captures)
     snapshot_id = resolved.get('snapshotId')
     session_id = resolved.get('sessionId')
-    assert bool(snapshot_id) != bool(session_id), (
-        'getSnapshotData step requires exactly one of snapshotId or sessionId'
-    )
+    assert bool(snapshot_id) != bool(session_id), 'getSnapshotData step requires exactly one of snapshotId or sessionId'
 
     if resolved.get('expectError'):
         with pytest.raises(Exception, match=re.escape(resolved['expectError'])):
