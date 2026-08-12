@@ -190,7 +190,7 @@ export const customModelFlow = ai.defineFlow(
 );
 ```
 
-> **Tip:** The same `baseURL` option works with any OpenAI-compatible multi-model gateway — for example [DaoXE](https://daoxe.com/?utm_source=github&utm_medium=organic&utm_campaign=genkit&utm_content=compat-oai) at `https://api.daoxe.com/v1`.
+> **Tip:** The same `baseURL` option works with any OpenAI-compatible multi-model gateway — for example [DaoXE](https://daoxe.com/) at `https://api.daoxe.com/v1`.
 
 ## Contributing
 
