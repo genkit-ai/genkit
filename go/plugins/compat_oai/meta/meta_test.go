@@ -187,16 +187,37 @@ func TestPluginRegistersMuseSparkAndGenerates(t *testing.T) {
 	}
 }
 
-func TestPluginRequiresAPIKey(t *testing.T) {
+func TestPluginInitializesWithoutAPIKey(t *testing.T) {
 	t.Setenv("META_API_KEY", "")
 	t.Setenv("MODEL_API_KEY", "")
+	// The OpenAI SDK reads this automatically. The Meta plugin must override
+	// that fallback rather than sending an unrelated credential to Meta.
+	t.Setenv("OPENAI_API_KEY", "openai-key-must-not-leak")
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-1","object":"chat.completion","created":1,
+			"model":"muse-spark-1.1",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
 
-	defer func() {
-		got := recover()
-		if got != "meta plugin initialization failed: apiKey is required" {
-			t.Fatalf("panic = %v, want missing API key error", got)
-		}
-	}()
-
-	(&meta.Meta{}).Init(context.Background())
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&meta.Meta{BaseURL: server.URL + "/v1"}))
+	if model := genkit.LookupModel(g, "meta/"+meta.ModelMuseSpark11); model == nil {
+		t.Fatal("Muse Spark model was not registered without an API key")
+	}
+	if _, err := genkit.Generate(ctx, g,
+		ai.WithModelName("meta/"+meta.ModelMuseSpark11),
+		ai.WithPrompt("hi"),
+	); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if strings.Contains(authorization, "openai-key-must-not-leak") {
+		t.Fatalf("Authorization leaked OPENAI_API_KEY: %q", authorization)
+	}
 }
