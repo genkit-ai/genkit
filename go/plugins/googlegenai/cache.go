@@ -173,18 +173,30 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 			continue
 		}
 
-		if t, ok := c["ttlSeconds"].(int); ok {
+		// ttlSeconds arrives as an int when set in Go code and as a float64 or
+		// json.Number after a JSON round-trip (dev UI, reflection server), so
+		// accept any numeric form. A non-positive TTL (including a fractional
+		// value that truncates to zero) would silently skip cache creation in
+		// handleCache, so reject it here instead.
+		if tv, ok := c["ttlSeconds"]; ok {
+			t, isNum := castToInt64(tv)
+			if !isNum {
+				return nil, fmt.Errorf("invalid type for cache ttlSeconds, expected a number, got %T", tv)
+			}
+			if t <= 0 {
+				return nil, fmt.Errorf("invalid cache ttlSeconds, expected a positive number of whole seconds, got %v", tv)
+			}
 			if m.Text() == "" {
 				return nil, fmt.Errorf("no content to cache, message is empty")
 			}
 			return &cacheSettings{
-				ttl:      t,
+				ttl:      int(t),
 				name:     cacheName,
 				endIndex: i,
 			}, nil
 		}
 
-		return nil, fmt.Errorf("invalid type for cache ttlSeconds, expected int, got %T", c["ttlSeconds"])
+		return nil, fmt.Errorf("invalid cache metadata, expected ttlSeconds or name, got: %v", c)
 	}
 	return nil, nil
 }
