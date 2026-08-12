@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -2750,6 +2751,106 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 			t.Errorf("Unexpected output: %+v", out)
 		}
 	})
+}
+
+// TestGenerateAbnormalFinishSkipsOutputParsing verifies that a response that
+// did not run to a normal completion (e.g. safety-blocked) is returned as-is
+// when structured output is requested, instead of failing output parsing and
+// masking the finish reason with a schema error.
+func TestGenerateAbnormalFinishSkipsOutputParsing(t *testing.T) {
+	r := childRegistry(t)
+
+	type OutputData struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	tests := []struct {
+		name     string
+		response *ModelResponse
+		opts     []GenerateOption
+		wantErr  error
+	}{
+		{
+			name: "blocked contentless message with output type",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "blocked nil message with output type",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "blocked contentless message with enum output",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			opts: []GenerateOption{WithOutputEnums("YES", "NO")},
+		},
+		{
+			name: "other finish reason keeps unparsed text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonOther,
+				FinishMessage: "malformed function call",
+				Message:       NewModelTextMessage("filter details, not JSON"),
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "stop with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			opts:    []GenerateOption{WithOutputType(OutputData{})},
+			wantErr: status.ErrInvalidOutput,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/abnormal-finish-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					resp := *tt.response
+					resp.Request = req
+					return &resp, nil
+				})
+			wantText := tt.response.Text()
+
+			resp, err := Generate(context.Background(), r, append([]GenerateOption{
+				WithModel(model),
+				WithPrompt("please respond"),
+			}, tt.opts...)...)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Generate() err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Generate() returned error for %q response: %v", tt.response.FinishReason, err)
+			}
+			if resp.FinishReason != tt.response.FinishReason {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tt.response.FinishReason)
+			}
+			if resp.FinishMessage != tt.response.FinishMessage {
+				t.Errorf("FinishMessage = %q, want %q", resp.FinishMessage, tt.response.FinishMessage)
+			}
+			if got := resp.Text(); got != wantText {
+				t.Errorf("Text() = %q, want %q", got, wantText)
+			}
+		})
+	}
 }
 
 func TestGenerateNoGoroutineLeak(t *testing.T) {

@@ -583,11 +583,19 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 			if formatHandler != nil {
 				resp.formatHandler = streamingHandler
-				// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
-				resp.Message, err = formatHandler.ParseMessage(resp.Message)
-				if err != nil {
-					logger.FromContext(ctx).Debug("model failed to generate output matching expected schema", "error", err.Error())
-					return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
+				// Only parse output when the model delivered it: a natural
+				// stop, a length-capped response, or a model that reports no
+				// finish reason. An abnormal termination (blocked, aborted,
+				// ...) carries no conforming output, and a schema error here
+				// would mask the FinishReason and FinishMessage the caller
+				// needs to handle it, so those responses pass through as-is.
+				if resp.FinishReason == FinishReasonStop || resp.FinishReason == FinishReasonLength || resp.FinishReason == "" {
+					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
+					resp.Message, err = formatHandler.ParseMessage(resp.Message)
+					if err != nil {
+						logger.FromContext(ctx).Debug("model failed to generate output matching expected schema", "error", err.Error())
+						return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
+					}
 				}
 			}
 
