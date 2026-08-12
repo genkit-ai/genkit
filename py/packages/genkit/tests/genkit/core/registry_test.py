@@ -12,10 +12,12 @@ functionality, ensuring proper registration and management of Genkit resources.
 import pytest
 
 from genkit import Genkit, Plugin
-from genkit._core._action import Action, ActionKind, create_action_key
+from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
+from genkit._core._background import define_background_model
 from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._model import ModelRequest
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata
+from genkit._core._typing import ActionMetadata, ModelInfo, Operation, Supports
 
 
 async def _identity(x: object) -> object:
@@ -449,11 +451,6 @@ async def test_resolve_model_falls_back_to_background_model() -> None:
     kind when no foreground MODEL action exists. This is what lets
     generate_operation() find them.
     """
-    from genkit._core._action import ActionRunContext
-    from genkit._core._background import define_background_model
-    from genkit._core._model import ModelRequest
-    from genkit._core._typing import ModelInfo, Operation, Supports
-
     registry = Registry()
 
     async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
