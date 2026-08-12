@@ -73,7 +73,7 @@ func generateImage(
 
 	resp, err := client.Models.GenerateImages(ctx, model, userPrompt, gic)
 	if err != nil {
-		return nil, err
+		return nil, wrapAPIError(err)
 	}
 
 	r := translateImagenResponse(resp)

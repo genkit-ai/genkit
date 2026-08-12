@@ -74,7 +74,7 @@ func newVeoModel(
 			&videoConfig,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("veo video generation failed: %w", err)
+			return nil, fmt.Errorf("veo video generation failed: %w", wrapAPIError(err))
 		}
 
 		op := fromVeoOperation(operation)
@@ -91,7 +91,7 @@ func newVeoModel(
 	checkFunc := func(ctx context.Context, op *ai.ModelOperation) (*ai.ModelOperation, error) {
 		veoOp, err := checkVeoOperation(ctx, client, op)
 		if err != nil {
-			return nil, fmt.Errorf("veo operation status check failed: %w", err)
+			return nil, fmt.Errorf("veo operation status check failed: %w", wrapAPIError(err))
 		}
 
 		updatedOp := fromVeoOperation(veoOp)
