@@ -85,16 +85,13 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel
+from pydantic import AliasChoices, ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
-
-warnings.filterwarnings('ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning)
 
 '''
 
@@ -284,15 +281,24 @@ def _emit_model(
         f'    model_config: ClassVar[ConfigDict] = {cfg}',
     ]
     for k, v in props.items():
-        # Use schema_ for OutputConfig.schema to avoid shadowing GenkitModel.schema
+        # OutputConfig.schema would shadow BaseModel.schema; use json_schema
+        # (same Python name as GenerateActionOutputConfig) and pin the wire
+        # alias so dump/validate still speak `schema`.
         snake = _camel_to_snake(k)
         force_field = False
         if name == 'OutputConfig' and snake == 'schema':
-            field_name = 'schema_'
-            alias_extra = ", alias='schema'"
+            # Field name for constructors/typecheckers; wire still uses `schema`.
+            # Split validation/serialization aliases so checkers agree on
+            # json_schema= rather than splitting on Field(alias=...).
+            field_name = 'json_schema'
+            alias_extra = (
+                ", validation_alias=AliasChoices('json_schema', 'schema')"
+                ", serialization_alias='schema'"
+            )
+            force_field = True
         elif snake in ('schema_', 'schema'):
-            field_name = 'schema' if name != 'OutputConfig' else 'schema_'
-            alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
+            field_name = 'schema'
+            alias_extra = ''
         elif keyword.iskeyword(snake):
             # Field name is a Python reserved word (e.g. JSON Patch's `from`),
             # which is a keyword only in Python. Suffix the Python attribute
@@ -308,14 +314,11 @@ def _emit_model(
             field_name = snake
             alias_extra = ''
         py_type_str = _py_type(v, schema, defs, name, k)
-        # OutputConfig.schema is free-form JSON schema object; use dict for direct use
+        # Free-form JSON schema object, not the Schema model type.
         if name == 'OutputConfig' and snake == 'schema':
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
-        # OutputConfig.schema is free-form JSON schema dict (not Schema model)
-        if name == 'OutputConfig' and snake == 'schema':
-            py_type_str = 'dict[str, Any]'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:
