@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"google.golang.org/genai"
@@ -133,5 +134,108 @@ func TestWrapAPIError_HandlesWrappedAPIError(t *testing.T) {
 	}
 	if ge.Status != core.UNAVAILABLE {
 		t.Fatalf("status = %q, want UNAVAILABLE", ge.Status)
+	}
+}
+
+func TestRetryDelay_FromRetryInfoString(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{"@type": "type.googleapis.com/google.rpc.QuotaFailure"},
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "58s",
+			},
+		},
+	}
+	d, ok := RetryDelay(api)
+	if !ok {
+		t.Fatal("RetryDelay = false, want true")
+	}
+	if want := 58 * time.Second; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_FromRetryInfoDurationFields(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type": "type.googleapis.com/google.rpc.RetryInfo",
+				// json.Unmarshal produces float64 for numbers.
+				"retryDelay": map[string]any{"seconds": float64(2), "nanos": float64(500000000)},
+			},
+		},
+	}
+	d, ok := RetryDelay(api)
+	if !ok {
+		t.Fatal("RetryDelay = false, want true")
+	}
+	if want := 2500 * time.Millisecond; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_ThroughWrappedError(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "1.5s",
+			},
+		},
+	}
+	wrapped := fmt.Errorf("generate: %w", wrapAPIError(api))
+	d, ok := RetryDelay(wrapped)
+	if !ok {
+		t.Fatal("RetryDelay through wrapped error = false, want true")
+	}
+	if want := 1500 * time.Millisecond; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_AbsentOrMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"non-API error", errors.New("plain")},
+		{"no details", genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED"}},
+		{"no retry info", genai.APIError{Code: 429, Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}}}},
+		{"bad delay value", genai.APIError{Code: 429, Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "soon"}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if d, ok := RetryDelay(tc.err); ok {
+				t.Fatalf("RetryDelay = (%v, true), want false", d)
+			}
+		})
+	}
+}
+
+func TestWrapAPIError_AttachesRetryAfterDetails(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "3s",
+			},
+		},
+	}
+	wrapped := wrapAPIError(api)
+	var ge *core.GenkitError
+	if !errors.As(wrapped, &ge) {
+		t.Fatalf("wrapAPIError did not produce a GenkitError; got %T", wrapped)
+	}
+	if got, want := ge.Details["retryAfterMs"], int64(3000); got != want {
+		t.Fatalf("Details[retryAfterMs] = %v (%T), want %v", got, got, want)
 	}
 }
