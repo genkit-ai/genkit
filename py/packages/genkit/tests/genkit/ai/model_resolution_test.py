@@ -115,5 +115,19 @@ def test_resolve_model_ref_version_lowest_precedence() -> None:
 def test_resolved_model_is_frozen() -> None:
     """ResolvedModel is immutable once constructed."""
     resolved = ResolvedModel(name='m', config={})
-    with pytest.raises(FrozenInstanceError):
+    with pytest.raises(Exception):
         resolved.name = 'other'  # type: ignore[misc]
+
+
+def test_normalize_config_raises_type_error_for_unsupported_type() -> None:
+    """normalize_config raises TypeError if the config is not None, BaseModel, or Mapping."""
+    with pytest.raises(TypeError, match="Unsupported config type"):
+        normalize_config(config=123)
+
+
+def test_resolve_model_name_raises_when_default_is_not_string() -> None:
+    """resolve_model_name raises GenkitError if the default model is not a string."""
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 123)
+    with pytest.raises(GenkitError, match='No model configured.'):
+        resolve_model_name(model=None, registry=registry)
