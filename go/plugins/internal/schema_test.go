@@ -94,9 +94,10 @@ func TestApplySchemaOverrides(t *testing.T) {
 		t.Errorf("required lost a property that is not hidden: %v", required)
 	}
 	// The same holds at depth: hiding a nested property prunes it from its own
-	// parent's required list, not just the root's.
-	if required := props["thinking"].(map[string]any)["required"].([]any); slices.Contains(required, any("budget")) {
-		t.Errorf("nested required still demands the hidden property: %v", required)
+	// parent's required list, not just the root's. "budget" was the only entry,
+	// so the key goes rather than being left empty.
+	if required, ok := props["thinking"].(map[string]any)["required"]; ok {
+		t.Errorf("nested required survived hiding its only entry: %v", required)
 	}
 }
 

@@ -162,6 +162,15 @@ func hideSchemaAt(schema map[string]any, steps []string) {
 	}
 	props[leaf] = true
 	if required, ok := parent["required"].([]any); ok {
-		parent["required"] = slices.DeleteFunc(required, func(r any) bool { return r == any(leaf) })
+		required = slices.DeleteFunc(required, func(r any) bool { return r == any(leaf) })
+		// Hiding the last required property drops the key rather than leaving
+		// an empty list: it constrains nothing either way, and draft-04
+		// validators reject the empty one (its meta-schema puts minItems 1 on
+		// required, a constraint draft-06 removed).
+		if len(required) == 0 {
+			delete(parent, "required")
+		} else {
+			parent["required"] = required
+		}
 	}
 }
