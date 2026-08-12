@@ -68,11 +68,89 @@ func main() {
 }
 ```
 
+**Using Vertex AI Express Mode (API key, no Google Cloud project):**
+
+```go
+g := genkit.Init(ctx,
+ genkit.WithPlugins(&googlegenai.VertexAI{
+  APIKey: "your-express-mode-api-key", // Optional: defaults to VERTEX_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENAI_API_KEY
+ }),
+)
+```
+
+Express Mode authenticates with an API key alone: no project, location, or
+Application Default Credentials are involved, which makes it the fastest way
+to try Vertex AI. Get a key from the
+[Express Mode overview](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview).
+
+The plugin picks a mode as follows. The precedence rule (explicit
+configuration first, and a project or location outranking an ambient API
+key) matches the underlying genai SDK; the environment variable names follow
+the JS plugin:
+
+1. An explicit `APIKey` selects Express Mode. It is mutually exclusive with
+   `ProjectID`, `Location`, and `Credentials`.
+2. An explicit `ProjectID`, `Location`, or `Credentials` selects credential
+   authentication, and any API key in the environment is ignored.
+3. Otherwise, if the environment names neither a project
+   (`GOOGLE_CLOUD_PROJECT`) nor a location (`GOOGLE_CLOUD_LOCATION`,
+   `GOOGLE_CLOUD_REGION`), an API key in `VERTEX_API_KEY`, `GOOGLE_API_KEY`,
+   or `GOOGLE_GENAI_API_KEY` selects Express Mode.
+4. A `BaseURL` with nothing else configured selects custom-endpoint mode:
+   requests go to that endpoint as-is and the endpoint owns authentication,
+   which suits API gateways and proxies.
+
+`GEMINI_API_KEY` is deliberately not consulted for Vertex AI: it names a
+Gemini Developer API key, which Vertex AI does not accept. A project or
+location in the environment always outranks an ambient API key, so a key
+exported for the Google AI plugin cannot move an existing Vertex AI
+deployment onto a different authentication path.
+
 ### Authentication
 
 **Google AI**: Requires a Gemini API Key, which you can get from [Google AI Studio](https://aistudio.google.com/apikey). Set the `GEMINI_API_KEY` environment variable or pass it to the plugin configuration.
 
-**Vertex AI**: Requires Google Cloud credentials. Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to your service account key file path, or use default credentials (e.g., `gcloud auth application-default login`).
+**Vertex AI**: Requires Google Cloud credentials. Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to your service account key file path, or use default credentials (e.g., `gcloud auth application-default login`). Alternatively use Express Mode (above), which needs only an API key, or supply custom credentials via the `Credentials` field.
+
+### Network and transport options
+
+Both plugins accept optional fields for nonstandard network setups:
+
+```go
+g := genkit.Init(ctx,
+ genkit.WithPlugins(&googlegenai.GoogleAI{
+  BaseURL: "https://my-gateway.example.com",       // route through a proxy or API gateway
+  Headers: http.Header{"X-Team": {"platform"}},    // extra headers on every request
+  HTTPClient: myClient,                            // custom *http.Client, used verbatim
+ }),
+)
+```
+
+`VertexAI` additionally accepts `Credentials` (a `*auth.Credentials` from
+`cloud.google.com/go/auth`) to override Application Default Credentials. When
+you supply `HTTPClient` to `VertexAI`, that client must handle authentication
+itself; use `Credentials` instead if you only need a different identity.
+
+### Accessing the underlying client
+
+The plugin's `Client` method returns the `*genai.Client` it uses, so you can
+reach SDK features Genkit does not wrap (Files, Caches, Batches, Tunings)
+without constructing and authenticating a second client:
+
+```go
+plugin := &googlegenai.GoogleAI{}
+g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+client, err := plugin.Client()
+if err != nil {
+ log.Fatal(err)
+}
+file, err := client.Files.UploadFromPath(ctx, "photo.jpg", &genai.UploadFileConfig{
+ MIMEType: "image/jpeg",
+})
+```
+
+See `go/samples/files-api-vision` for a complete example.
 
 ## Language Models
 
@@ -213,6 +291,33 @@ resp2, err := genkit.Generate(ctx, g,
  ai.WithMessages(resp1.History()...),
  ai.WithPrompt("Task 2..."),
 )
+```
+
+### Handling Errors and Blocked Content
+
+API errors carry the status the service reported, so status-aware code
+(retries, fallbacks) can classify them with `core/status`. Rate-limit errors
+include the delay the service asked you to wait:
+
+```go
+resp, err := genkit.Generate(ctx, g, /* ... */)
+if err != nil {
+ if delay, ok := googlegenai.RetryDelay(err); ok {
+  time.Sleep(delay) // or hand the delay to your retry policy
+ }
+ return err
+}
+```
+
+Content blocked by safety filters is not an error. A blocked response comes
+back with `FinishReason` set to `blocked`, an explanation in `FinishMessage`,
+and no content. The raw safety ratings and prompt feedback are available under
+`resp.Custom["candidates"]` and `resp.Custom["promptFeedback"]`.
+
+```go
+if resp.FinishReason == ai.FinishReasonBlocked {
+ log.Printf("response blocked: %s", resp.FinishMessage)
+}
 ```
 
 ### Safety Settings
@@ -387,6 +492,11 @@ if err != nil {
 
 fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 ```
+
+Requests with more inputs than the service accepts per call (100 on the
+Gemini API, 250 on Vertex AI's prediction service, 1 for Vertex AI Gemini
+embedding models) are split into sequential batches automatically; the
+response carries one embedding per input, in input order.
 
 ## Image Models
 

@@ -26,7 +26,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -38,15 +37,13 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize Genkit
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	plugin := &googlegenai.GoogleAI{}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
-	// Create Files API client
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  os.Getenv("GEMINI_API_KEY"),
-	})
+	// Reuse the plugin's client for the Files API
+	client, err := plugin.Client()
 	if err != nil {
-		log.Fatal("Failed to create client:", err)
+		log.Fatal("Failed to get client:", err)
 	}
 
 	// Upload image to Files API

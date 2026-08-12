@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
+	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/auth/httptransport"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -54,6 +57,20 @@ func rejectBackgroundModel(provider, id string) error {
 type GoogleAI struct {
 	APIKey string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 
+	// BaseURL overrides the default API endpoint
+	// (https://generativelanguage.googleapis.com), e.g. to point at a proxy
+	// or an API gateway. Optional.
+	BaseURL string
+	// Headers are additional HTTP headers to send with every request. They
+	// are merged over the plugin's default headers, so a header set here wins
+	// on collision. Optional.
+	Headers http.Header
+	// HTTPClient is the HTTP client used for API requests. When set, it is
+	// used verbatim: the plugin does not install its default OpenTelemetry
+	// instrumented transport, so wrap your own transport with otelhttp if you
+	// want tracing. Optional.
+	HTTPClient *http.Client
+
 	// Models overrides what the plugin knows about a model, keyed by model ID.
 	// Every model the backend serves already works without an entry here:
 	// known IDs carry curated capabilities and the rest take the defaults for
@@ -87,6 +104,30 @@ type VertexAI struct {
 	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
 	APIVersion string // API version to use ("v1" or "v1beta1"). If empty, the genai SDK default (v1beta1) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
+	// APIKey enables Vertex AI Express Mode: API key authentication with no
+	// Google Cloud project, location, or Application Default Credentials
+	// involved. See
+	// https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview.
+	// Mutually exclusive with ProjectID, Location, and Credentials. Optional.
+	APIKey string
+	// Credentials overrides the Google Cloud credentials used to authenticate.
+	// If nil, Application Default Credentials are detected. Mutually exclusive
+	// with APIKey and HTTPClient. Optional.
+	Credentials *auth.Credentials
+	// BaseURL overrides the default location-derived API endpoint, e.g. to
+	// point at a proxy or an API gateway. Optional.
+	BaseURL string
+	// Headers are additional HTTP headers to send with every request. They
+	// are merged over the plugin's default headers, so a header set here wins
+	// on collision. Optional.
+	Headers http.Header
+	// HTTPClient is the HTTP client used for API requests. When set, it is
+	// used verbatim and must handle authentication itself (unless APIKey is
+	// set, which rides on a request header): the plugin does not install its
+	// default credential-carrying, OpenTelemetry instrumented transport.
+	// Optional.
+	HTTPClient *http.Client
+
 	// Models overrides what the plugin knows about a model, keyed by model ID;
 	// see [GoogleAI.Models]. Tuned Gemini endpoints are keyed in either the
 	// short form `endpoints/ID` or the full resource path
@@ -103,6 +144,58 @@ type VertexAI struct {
 	initted bool          // Whether the plugin has been initialized.
 }
 
+// firstEnv returns the value of the first environment variable in names that
+// is set to a non-empty value.
+func firstEnv(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// vertexLocationFromEnv returns the Vertex AI location named by the
+// environment, or "".
+func vertexLocationFromEnv() string {
+	return firstEnv("GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_REGION")
+}
+
+// vertexAPIKeyFromEnv returns the Vertex AI Express Mode API key named by
+// the environment and the variable it came from, or two empty strings.
+// GEMINI_API_KEY is deliberately not consulted, matching the JS plugin: it
+// names a Gemini Developer API key, which Vertex AI does not accept, and a
+// process that also uses the Google AI plugin commonly has one set.
+func vertexAPIKeyFromEnv() (key, source string) {
+	for _, name := range []string{"VERTEX_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"} {
+		if k := os.Getenv(name); k != "" {
+			return k, name
+		}
+	}
+	return "", ""
+}
+
+// mergedHeaders returns the plugin's default headers merged with extra.
+// Extra values win on key collisions.
+func mergedHeaders(extra http.Header) http.Header {
+	h := genkitClientHeader.Clone()
+	for k, vs := range extra {
+		h[http.CanonicalHeaderKey(k)] = slices.Clone(vs)
+	}
+	return h
+}
+
+// httpClientOrDefault returns c, or the plugin's default OpenTelemetry
+// instrumented client when c is nil.
+func httpClientOrDefault(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return &http.Client{
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
+}
+
 // Name returns the name of the plugin.
 func (ga *GoogleAI) Name() string {
 	return googleAIProvider
@@ -111,6 +204,44 @@ func (ga *GoogleAI) Name() string {
 // Name returns the name of the plugin.
 func (v *VertexAI) Name() string {
 	return vertexAIProvider
+}
+
+// expressAPIKey returns the API key that selects Express Mode, or "".
+// An explicit APIKey always selects Express Mode, and combining it with
+// project, location, or credentials panics. Explicit project, location, or
+// credentials always select credential authentication instead. With nothing
+// configured, an environment key applies only when the environment names
+// neither a project nor a location, the same precedence rule the genai SDK
+// applies to its variables (the key names follow the JS plugin; see
+// vertexAPIKeyFromEnv). For a key from the environment, source names the
+// variable it came from; for an explicit key, source is "".
+func (v *VertexAI) expressAPIKey() (key, source string) {
+	if v.APIKey != "" {
+		if v.ProjectID != "" || v.Location != "" {
+			panic("Vertex AI: APIKey (Express Mode) is mutually exclusive with ProjectID and Location")
+		}
+		if v.Credentials != nil {
+			panic("Vertex AI: APIKey (Express Mode) is mutually exclusive with Credentials")
+		}
+		return v.APIKey, ""
+	}
+	if v.ProjectID != "" || v.Location != "" || v.Credentials != nil {
+		return "", ""
+	}
+	if os.Getenv("GOOGLE_CLOUD_PROJECT") != "" || vertexLocationFromEnv() != "" {
+		return "", ""
+	}
+	return vertexAPIKeyFromEnv()
+}
+
+// customEndpointOnly reports whether the only configuration present, here or
+// in the environment, is a custom base URL. The SDK treats that as a valid
+// standalone setup (the endpoint owns authentication), so the plugin must
+// not demand a project for it. Call after expressAPIKey has returned "".
+func (v *VertexAI) customEndpointOnly() bool {
+	return v.BaseURL != "" &&
+		v.ProjectID == "" && v.Location == "" && v.Credentials == nil &&
+		os.Getenv("GOOGLE_CLOUD_PROJECT") == "" && vertexLocationFromEnv() == ""
 }
 
 // Init initializes the Google AI plugin and all known models and embedders.
@@ -128,23 +259,19 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 
 	apiKey := ga.APIKey
 	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
-		if apiKey == "" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
-		}
+		apiKey = firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY")
 		if apiKey == "" {
 			panic("Google AI requires setting GEMINI_API_KEY or GOOGLE_API_KEY in the environment. You can get an API key at https://ai.google.dev")
 		}
 	}
 
 	gc := genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  apiKey,
-		HTTPClient: &http.Client{
-			Transport: otelhttp.NewTransport(http.DefaultTransport),
-		},
+		Backend:    genai.BackendGeminiAPI,
+		APIKey:     apiKey,
+		HTTPClient: httpClientOrDefault(ga.HTTPClient),
 		HTTPOptions: genai.HTTPOptions{
-			Headers: genkitClientHeader,
+			BaseURL: ga.BaseURL,
+			Headers: mergedHeaders(ga.Headers),
 		},
 	}
 
@@ -171,62 +298,98 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 		panic("plugin already initialized")
 	}
 
-	projectID := v.ProjectID
-	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
-		if projectID == "" {
-			panic("Vertex AI requires setting GOOGLE_CLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
-		}
-	}
-
-	location := v.Location
-	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
-		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
-		}
-		if location == "" {
-			panic("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
-		}
-	}
-
 	switch v.APIVersion {
 	case "", "v1", "v1beta1":
 	default:
 		panic(fmt.Sprintf("Vertex AI APIVersion must be %q or %q, got %q", "v1", "v1beta1", v.APIVersion))
 	}
 
-	cred, err := credentials.DetectDefault(&credentials.DetectOptions{
-		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
-	})
-	if err != nil {
-		panic(fmt.Errorf("failed to find default credentials: %w", err))
-	}
-	quotaProjectID, err := cred.QuotaProjectID(ctx)
-	if err != nil {
-		panic(fmt.Errorf("failed to get quota project ID: %v", quotaProjectID))
-	}
-	httpClient, err := httptransport.NewClient(&httptransport.Options{
-		Credentials:      cred,
-		BaseRoundTripper: otelhttp.NewTransport(http.DefaultTransport),
-		Headers: http.Header{
-			"X-Goog-User-Project": []string{quotaProjectID},
-		},
-	})
-	if err != nil {
-		panic(fmt.Errorf("failed to create http client: %w", err))
-	}
-
-	// Project and Region values gets validated by genai SDK upon client creation
 	gc := genai.ClientConfig{
-		Backend:    genai.BackendVertexAI,
-		Project:    projectID,
-		Location:   location,
-		HTTPClient: httpClient,
+		Backend: genai.BackendVertexAI,
 		HTTPOptions: genai.HTTPOptions{
-			Headers:    genkitClientHeader,
+			BaseURL:    v.BaseURL,
+			Headers:    mergedHeaders(v.Headers),
 			APIVersion: v.APIVersion,
 		},
+	}
+
+	apiKey, keySource := v.expressAPIKey()
+	switch {
+	case apiKey != "":
+		// Express Mode: the API key alone authenticates; no project,
+		// location, or credentials are involved.
+		if keySource != "" {
+			// Breadcrumb for the ambient-key case: a Gemini Developer API
+			// key in these variables is not valid for Vertex AI and fails
+			// each request with PERMISSION_DENIED, so name where the key
+			// came from.
+			logger.FromContext(ctx).Info("Vertex AI: using Express Mode API key from environment", "variable", keySource)
+		}
+		gc.APIKey = apiKey
+		gc.HTTPClient = httpClientOrDefault(v.HTTPClient)
+	case v.customEndpointOnly():
+		// A base URL with no project, location, key, or credentials routes
+		// everything to the endpoint as-is; the endpoint owns
+		// authentication. Mirrors the SDK, which accepts a custom base URL
+		// as sufficient configuration on its own.
+		gc.HTTPClient = httpClientOrDefault(v.HTTPClient)
+	default:
+		projectID := v.ProjectID
+		if projectID == "" {
+			projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+			if projectID == "" {
+				panic("Vertex AI requires setting GOOGLE_CLOUD_PROJECT in the environment, or an Express Mode API key in VERTEX_API_KEY or GOOGLE_API_KEY. You can get a project ID at https://console.cloud.google.com/home/dashboard")
+			}
+		}
+
+		location := v.Location
+		if location == "" {
+			location = vertexLocationFromEnv()
+			if location == "" {
+				panic("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
+			}
+		}
+
+		// Project and Region values gets validated by genai SDK upon client creation
+		gc.Project = projectID
+		gc.Location = location
+
+		if v.HTTPClient != nil {
+			if v.Credentials != nil {
+				panic("Vertex AI: HTTPClient and Credentials are mutually exclusive; a custom HTTP client must handle authentication itself")
+			}
+			gc.HTTPClient = v.HTTPClient
+		} else {
+			cred := v.Credentials
+			if cred == nil {
+				var err error
+				cred, err = credentials.DetectDefault(&credentials.DetectOptions{
+					Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+				})
+				if err != nil {
+					panic(fmt.Errorf("failed to find default credentials: %w", err))
+				}
+			}
+			quotaProjectID, err := cred.QuotaProjectID(ctx)
+			if err != nil {
+				panic(fmt.Errorf("failed to get quota project ID: %w", err))
+			}
+			var headers http.Header
+			if quotaProjectID != "" {
+				headers = http.Header{
+					"X-Goog-User-Project": []string{quotaProjectID},
+				}
+			}
+			httpClient, err := httptransport.NewClient(&httptransport.Options{
+				Credentials:      cred,
+				BaseRoundTripper: otelhttp.NewTransport(http.DefaultTransport),
+				Headers:          headers,
+			})
+			if err != nil {
+				panic(fmt.Errorf("failed to create http client: %w", err))
+			}
+			gc.HTTPClient = httpClient
+		}
 	}
 
 	client, err := genai.NewClient(ctx, &gc)
@@ -237,6 +400,30 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	v.initted = true
 
 	return []api.Action{}
+}
+
+// Client returns the underlying Google GenAI SDK client used by the plugin.
+// It gives access to service features that Genkit does not wrap, such as the
+// Files, Caches, Batches, and Tunings APIs. It returns an error if the plugin
+// has not been initialized.
+func (ga *GoogleAI) Client() (*genai.Client, error) {
+	ga.mu.Lock()
+	defer ga.mu.Unlock()
+	if !ga.initted {
+		return nil, errors.New("GoogleAI plugin not initialized")
+	}
+	return ga.gclient, nil
+}
+
+// Client returns the underlying Google GenAI SDK client used by the plugin;
+// see [GoogleAI.Client].
+func (v *VertexAI) Client() (*genai.Client, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.initted {
+		return nil, errors.New("VertexAI plugin not initialized")
+	}
+	return v.gclient, nil
 }
 
 // DefineModel defines an unknown model with the given ID.
