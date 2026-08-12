@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -36,27 +38,15 @@ type ModelGenerator struct {
 	request   *openai.ChatCompletionNewParams
 	messages  []openai.ChatCompletionMessageParamUnion
 	tools     []openai.ChatCompletionToolParam
+	// outputFormats is what the model declares it serves natively on the
+	// wire; empty declares nothing and keeps every format eligible.
+	outputFormats []string
 	// Store any errors that occur during building
 	err error
 }
 
-// chatCompletionParamFields contains every field serialized by the OpenAI SDK.
-// Provider-specific config is passed through as an extra field only when the
-// SDK does not already model it.
-var chatCompletionParamFields = func() map[string]struct{} {
-	paramsType := reflect.TypeOf(openai.ChatCompletionNewParams{})
-	fields := make(map[string]struct{}, paramsType.NumField())
-	for i := 0; i < paramsType.NumField(); i++ {
-		name, _, _ := strings.Cut(paramsType.Field(i).Tag.Get("json"), ",")
-		if name != "" && name != "-" {
-			fields[name] = struct{}{}
-		}
-	}
-	return fields
-}()
-
-// GetRequest returns the request built so far, for tests and for plugins that
-// need to inspect what will be sent.
+// GetRequest returns the request built so far, for tests and for plugins
+// that need to inspect what will be sent.
 func (g *ModelGenerator) GetRequest() *openai.ChatCompletionNewParams {
 	return g.request
 }
@@ -165,9 +155,29 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	return g
 }
 
+// chatCompletionParamFields is the set of wire names the SDK's request params
+// model, used by the deprecated [ModelGenerator.WithConfig] to tell a
+// provider-specific key apart from one the SDK already carries.
+var chatCompletionParamFields = func() map[string]struct{} {
+	paramsType := reflect.TypeOf(openai.ChatCompletionNewParams{})
+	fields := make(map[string]struct{}, paramsType.NumField())
+	for i := range paramsType.NumField() {
+		name, _, _ := strings.Cut(paramsType.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			fields[name] = struct{}{}
+		}
+	}
+	return fields
+}()
+
 // WithConfig adds configuration parameters from the model request
 // see https://platform.openai.com/docs/api-reference/responses/create
 // for more details on openai's request fields
+//
+// Deprecated: use [ModelGenerator.WithParams], which takes the SDK request
+// params directly. A plugin with a config type of its own converts it once, in
+// its ApplyToChatCompletion, instead of leaving every request to a runtime
+// type switch that silently drops the keys it does not recognize.
 func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 	// Return early if we already have an error
 	if g.err != nil {
@@ -189,9 +199,7 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 		openaiConfig = *cfg
 	case map[string]any:
 		normalizedConfig := make(map[string]any, len(cfg))
-		for key, value := range cfg {
-			normalizedConfig[key] = value
-		}
+		maps.Copy(normalizedConfig, cfg)
 		for source, target := range map[string]string{
 			"frequencyPenalty": "frequency_penalty",
 			"logProbs":         "logprobs",
@@ -238,7 +246,70 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 
 	// keep the original model in the updated config structure
 	openaiConfig.Model = g.request.Model
+	clearManagedFields(&openaiConfig)
 	g.request = &openaiConfig
+	return g
+}
+
+// WithParams uses params as the base the request is built on, carrying the
+// request's config onto the wire. A model the params carry wins over the
+// generator's: that is how a config pins the exact version the request is
+// served by, matching the JS plugin's version handling. The generator's model
+// fills in otherwise.
+//
+// The fields Genkit manages are cleared out of params and refilled from the
+// Genkit request by the other builders (see [clearManagedFields]). Clearing
+// them is what keeps a config from smuggling in a tool: the builders only
+// assign when the Genkit request carries something, so a tool set here and
+// nowhere else would otherwise survive onto the wire and the model could
+// answer with a call the framework has no handler for.
+func (g *ModelGenerator) WithParams(params openai.ChatCompletionNewParams) *ModelGenerator {
+	if g.err != nil {
+		return g
+	}
+
+	if params.Model == "" {
+		params.Model = g.request.Model
+	}
+	clearManagedFields(&params)
+	g.request = &params
+	return g
+}
+
+// clearManagedFields zeroes the request fields Genkit owns, so that whatever
+// the caller's config carried in them cannot reach the provider. Messages,
+// tools, and the tool choice are rebuilt from the Genkit request; functions
+// and function_call are the same surface under the names OpenAI used before
+// tools, and have no Genkit counterpart to rebuild them from. The params'
+// extra fields are swept for the same names, since the SDK marshals an extra
+// field over the struct field it collides with, which would resurrect what
+// the zeroing removed.
+func clearManagedFields(params *openai.ChatCompletionNewParams) {
+	params.Messages = nil
+	params.Tools = nil
+	params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{}
+	params.Functions = nil
+	params.FunctionCall = openai.ChatCompletionNewParamsFunctionCallUnion{}
+	if extras := params.ExtraFields(); len(extras) > 0 {
+		kept := maps.Clone(extras)
+		for _, field := range managedRequestFields {
+			delete(kept, field)
+		}
+		if len(kept) != len(extras) {
+			params.SetExtraFields(kept)
+		}
+	}
+}
+
+// WithOutputFormats declares the output formats the model serves natively on
+// the wire. When the declaration leaves "json" out, a schema-less JSON
+// request sends no response_format and rides on the injected format
+// instructions instead. Nil declares nothing and keeps every format eligible.
+func (g *ModelGenerator) WithOutputFormats(formats []string) *ModelGenerator {
+	if g.err != nil {
+		return g
+	}
+	g.outputFormats = formats
 	return g
 }
 
@@ -328,13 +399,27 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 	}
 
 	if req.Output != nil {
-		g.request.ResponseFormat = getResponseFormat(req.Output)
+		g.applyResponseFormat(req.Output)
 	}
 
 	if handleChunk != nil {
 		return g.generateStream(ctx, req, handleChunk)
 	}
 	return g.generateComplete(ctx, req)
+}
+
+// applyResponseFormat sets the request's response format from the output
+// configuration. A model that declares its native output formats and leaves
+// "json" out has no schema-less JSON mode on the wire (Anthropic's compatible
+// endpoint rejects the json_object type), so such a request sends no
+// response_format and the format instructions the framework injects carry it
+// instead.
+func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
+	format := getResponseFormat(output)
+	if format.OfJSONObject != nil && len(g.outputFormats) > 0 && !slices.Contains(g.outputFormats, "json") {
+		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
+	}
+	g.request.ResponseFormat = format
 }
 
 // getResponseFormat determines the appropriate response format based on the output configuration
@@ -360,10 +445,10 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
 			format.OfJSONObject = &jsonObjectParam
 		}
-	case "text":
-		textParam := shared.NewResponseFormatTextParam()
-		format.OfText = &textParam
 	}
+	// The text format sends nothing: an explicit response_format of type
+	// text only restates the default, and some compatible endpoints
+	// (Anthropic's among them) reject the parameter outright.
 
 	return format
 }
@@ -396,6 +481,11 @@ func concatenateReasoningContent(parts []*ai.Part) string {
 
 // generateStream generates a streaming model response
 func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelRequest, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+	// A streamed request carries no token usage at all unless it asks for it,
+	// so it is requested here rather than left to each plugin: a response
+	// without usage would otherwise report zero tokens for every stream.
+	g.request.StreamOptions.IncludeUsage = openai.Bool(true)
+
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer func() {
 		_ = stream.Close()
@@ -404,10 +494,27 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// Use openai-go's accumulator to collect the complete response
 	acc := &openai.ChatCompletionAccumulator{}
 	var reasoning strings.Builder
+	// The accumulator adds up the three top-level token counts and drops
+	// everything else the usage carries, including the reasoning and cache
+	// breakdowns, so the usage chunk is kept whole and used in its place.
+	var usage openai.CompletionUsage
+	var usageSeen bool
+	// The accumulator knows nothing of the citations xAI answers a live search
+	// with either, so they are carried out of the chunk that has them.
+	var citations any
 
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
+
+		// Usage rides on a final chunk of its own and is null on the rest.
+		if chunk.JSON.Usage.Valid() {
+			usage = chunk.Usage
+			usageSeen = true
+		}
+		if value := extractJSONValue(chunk.JSON.ExtraFields["citations"].Raw()); value != nil {
+			citations = value
+		}
 
 		if len(chunk.Choices) == 0 {
 			continue
@@ -454,6 +561,10 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		return nil, fmt.Errorf("stream error: %w", err)
 	}
 
+	if usageSeen {
+		acc.Usage = usage
+	}
+
 	// Convert accumulated ChatCompletion to ai.ModelResponse.
 	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion)
 	if err != nil {
@@ -465,8 +576,45 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 			resp.Message.Content...,
 		)
 	}
+	if citations != nil {
+		custom, ok := resp.Custom.(map[string]any)
+		if !ok {
+			custom = map[string]any{}
+		}
+		custom["citations"] = citations
+		resp.Custom = custom
+		resp.Raw = custom
+	}
 	resp.Request = req
 	return resp, nil
+}
+
+// extractTokenCount reads a token count a provider reports as a usage field the
+// SDK does not model, returning 0 when it is absent or is not a number.
+func extractTokenCount(raw string) int {
+	if raw == "" || raw == "null" {
+		return 0
+	}
+	var count int
+	if err := json.Unmarshal([]byte(raw), &count); err != nil {
+		return 0
+	}
+	return count
+}
+
+// extractJSONValue decodes a response field a provider returns that the SDK
+// does not model, returning nil when it is absent or does not parse. The value
+// is kept in whatever shape it arrived in, so a provider adding detail to it
+// does not turn into a decode that silently drops the field.
+func extractJSONValue(raw string) any {
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil
+	}
+	return value
 }
 
 func extractReasoningContent(raw string) string {
@@ -500,32 +648,27 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 		usage.ThoughtsTokens = int(completion.Usage.CompletionTokensDetails.ReasoningTokens)
 	}
 
-	// Add cached tokens if available
+	// Add cached tokens if available. DeepSeek reports its cache hits as a
+	// usage field of its own and returns no prompt_tokens_details at all, so
+	// that field stands in when OpenAI's breakdown is absent.
 	if completion.Usage.PromptTokensDetails.CachedTokens > 0 {
 		usage.CachedContentTokens = int(completion.Usage.PromptTokensDetails.CachedTokens)
+	} else if cached := extractTokenCount(
+		completion.Usage.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw(),
+	); cached > 0 {
+		usage.CachedContentTokens = cached
 	}
 
-	// Add audio tokens to custom field if available
-	if completion.Usage.CompletionTokensDetails.AudioTokens > 0 {
-		if usage.Custom == nil {
-			usage.Custom = make(map[string]float64)
-		}
-		usage.Custom["audioTokens"] = float64(completion.Usage.CompletionTokensDetails.AudioTokens)
-	}
-
-	// Add prediction tokens to custom field if available
-	if completion.Usage.CompletionTokensDetails.AcceptedPredictionTokens > 0 {
-		if usage.Custom == nil {
-			usage.Custom = make(map[string]float64)
-		}
-		usage.Custom["acceptedPredictionTokens"] = float64(completion.Usage.CompletionTokensDetails.AcceptedPredictionTokens)
-	}
-	if completion.Usage.CompletionTokensDetails.RejectedPredictionTokens > 0 {
-		if usage.Custom == nil {
-			usage.Custom = make(map[string]float64)
-		}
-		usage.Custom["rejectedPredictionTokens"] = float64(completion.Usage.CompletionTokensDetails.RejectedPredictionTokens)
-	}
+	// Add the token counts Genkit has no field of its own for.
+	addCustomTokens(usage, "audioTokens", int(completion.Usage.CompletionTokensDetails.AudioTokens))
+	addCustomTokens(usage, "acceptedPredictionTokens", int(completion.Usage.CompletionTokensDetails.AcceptedPredictionTokens))
+	addCustomTokens(usage, "rejectedPredictionTokens", int(completion.Usage.CompletionTokensDetails.RejectedPredictionTokens))
+	// xAI counts the live-search sources it consulted and breaks image tokens
+	// out of the prompt, neither of which is in OpenAI's usage shape.
+	addCustomTokens(usage, "numSourcesUsed", extractTokenCount(
+		completion.Usage.JSON.ExtraFields["num_sources_used"].Raw()))
+	addCustomTokens(usage, "imageTokens", extractTokenCount(
+		completion.Usage.PromptTokensDetails.JSON.ExtraFields["image_tokens"].Raw()))
 
 	resp := &ai.ModelResponse{
 		Usage: usage,
@@ -535,15 +678,17 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 		},
 	}
 
-	// Map finish reason
+	// Map finish reason. end_turn is xAI's name for an answer the model chose
+	// to end, one of the three reasons it documents, so leaving it out reports
+	// an ordinary completion as unknown.
 	switch choice.FinishReason {
-	case "stop", "tool_calls":
+	case "stop", "tool_calls", "end_turn":
 		resp.FinishReason = ai.FinishReasonStop
 	case "length", "model_context_window_exceeded":
 		resp.FinishReason = ai.FinishReasonLength
 	case "content_filter", "sensitive":
 		resp.FinishReason = ai.FinishReasonBlocked
-	case "function_call", "network_error":
+	case "function_call", "network_error", "insufficient_system_resource":
 		resp.FinishReason = ai.FinishReasonOther
 	default:
 		resp.FinishReason = ai.FinishReasonUnknown
@@ -581,16 +726,44 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 		}))
 	}
 
-	// Store additional metadata in custom field if needed
+	// Collect the response metadata that is not part of the generated message.
+	custom := map[string]any{}
 	if completion.SystemFingerprint != "" {
-		resp.Custom = map[string]any{
-			"systemFingerprint": completion.SystemFingerprint,
-			"model":             completion.Model,
-			"id":                completion.ID,
-		}
+		custom["systemFingerprint"] = completion.SystemFingerprint
+		custom["model"] = completion.Model
+		custom["id"] = completion.ID
+	}
+	// xAI answers a live search with the sources behind it, in a citations
+	// field the SDK does not model. It is the only way a caller that asked for
+	// citations gets them, so it rides on the response's custom metadata. The
+	// entries pass through as xAI returns them, like the search sources the
+	// request carries.
+	if citations := extractJSONValue(completion.JSON.ExtraFields["citations"].Raw()); citations != nil {
+		custom["citations"] = citations
+	}
+	// Raw carries the same metadata as Custom, which is deprecated in favor of
+	// it: new fields are documented against Raw, and the readers of the older
+	// one keep working.
+	if len(custom) > 0 {
+		resp.Custom = custom
+		resp.Raw = custom
 	}
 
 	return resp, nil
+}
+
+// addCustomTokens records a token count Genkit has no [ai.GenerationUsage]
+// field of its own for, allocating the map on first use. A count of zero is
+// dropped: every caller reads it from a usage field that is absent, and
+// reporting a zero would not tell that apart from a genuine zero.
+func addCustomTokens(usage *ai.GenerationUsage, name string, count int) {
+	if count <= 0 {
+		return
+	}
+	if usage.Custom == nil {
+		usage.Custom = make(map[string]float64)
+	}
+	usage.Custom[name] = float64(count)
 }
 
 // generateComplete generates a complete model response

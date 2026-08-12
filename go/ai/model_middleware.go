@@ -275,8 +275,14 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 // validateVersion validates that the requested model version is supported.
 // It runs against the raw, pre-conversion config (see [normalizeConfig])
 // because conversion into a Config type without a version field would
-// silently drop the key.
+// silently drop the key. A model that declares no versions is unconstrained:
+// the declared list curates the known versions, it does not exist to forbid
+// pinning on models that never enumerated any.
 func validateVersion(model string, versions []string, config any) error {
+	if len(versions) == 0 {
+		return nil
+	}
+
 	var configMap map[string]any
 
 	switch c := config.(type) {
