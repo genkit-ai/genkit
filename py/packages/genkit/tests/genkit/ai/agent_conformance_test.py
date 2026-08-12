@@ -80,11 +80,7 @@ SPEC_TESTS = load_spec()
 # Each entry marks the affected spec tests xfail(strict=True); the PR that
 # fixes a divergence deletes its entries, turning those tests green in the
 # same diff. Do not add entries: new divergences should be fixed, not listed.
-KNOWN_DIVERGENCES: dict[str, str] = {
-    'detached run emits no customPatch chunks': (
-        'detached runs leak stream chunks (race)'
-    ),
-}
+KNOWN_DIVERGENCES: dict[str, str] = {}
 
 
 def _params() -> list[Any]:

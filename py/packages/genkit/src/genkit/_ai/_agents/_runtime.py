@@ -789,6 +789,13 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if item.detach:
                         is_detached = True
+                        # Stop chunk emission immediately: a detached run streams
+                        # no chunks to the connection (tests/specs/agent.yaml:
+                        # 'detached run emits no customPatch chunks'). Setting the
+                        # flag here — before the payload is queued — closes the
+                        # race where the background turn starts streaming before
+                        # the detach branch of run() marks the runtime detached.
+                        self.detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
                         # this order means the turn is deterministically queued for
