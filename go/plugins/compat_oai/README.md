@@ -189,8 +189,8 @@ providers and `max_completion_tokens` on others. Use the same camelCase name
 other plugins use for the same setting; `conformance_test.go` enforces that
 across the package.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, and `zai`
-directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `xai`, and
+`zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -201,6 +201,7 @@ export ANTHROPIC_API_KEY=<your-anthropic-key>
 export DASHSCOPE_API_KEY=<your-dashscope-key>
 export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
+export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
 ```
 
@@ -225,6 +226,9 @@ go test -v ./zai
 
 # Kimi tests
 go test -v ./kimi
+
+# xAI tests
+go test -v ./xai
 
 # DeepSeek tests
 go test -v ./deepseek
