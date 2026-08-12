@@ -38,14 +38,14 @@ OutputT = TypeVar('OutputT')
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
-    """Create an action key in format: /{actionType}/{name}.
+    """Create an action key in format: /{action_type}/{name}.
 
     Args:
         action_type: The action type (e.g., 'background-model').
         name: The action name.
 
     Returns:
-        Action key in format /{actionType}/{name}.
+        Action key in format /{action_type}/{name}.
     """
     return f'/{action_type}/{name}'
 
@@ -251,7 +251,7 @@ def define_background_model(
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         start_time = time.perf_counter()
         op = await start(request, ctx)
-        # Set action key in format: /{actionType}/{name}
+        # Set action key in format: /{action_type}/{name}
         op.action = action_key
         latency_ms = (time.perf_counter() - start_time) * 1000
         if op.metadata is None:
