@@ -189,8 +189,8 @@ providers and `max_completion_tokens` on others. Use the same camelCase name
 other plugins use for the same setting; `conformance_test.go` enforces that
 across the package.
 
-See the `openai`, `anthropic`, `dashscope`, and `kimi` directories for
-complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `kimi`, and `zai` directories
+for complete implementations.
 
 ## Running Tests
 
