@@ -33,6 +33,7 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from genkit._core._base import GenkitModel
+from genkit._core._error import GenkitError
 from genkit._core._extract_json import extract_json
 from genkit._core._typing import (
     Candidate,
@@ -90,8 +91,10 @@ class ModelRef(Generic[ModelRefConfigT]):
         # Catch dicts / wrong types at construction so plugins don't discover
         # the mismatch later when they touch typed config fields.
         if self.config is not None and not isinstance(self.config, self.config_schema):
-            raise TypeError(
-                f'config must be an instance of {self.config_schema.__name__}, got {type(self.config).__name__}'
+            config_type = type(self.config).__name__
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'config must be an instance of {self.config_schema.__name__}, got {config_type}',
             )
 
 
