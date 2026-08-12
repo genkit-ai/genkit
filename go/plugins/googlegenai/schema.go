@@ -143,13 +143,19 @@ func toGeminiSchemaRec(originalSchema map[string]any, genkitSchema map[string]an
 		schema.PropertyOrdering = castToStringArray(v)
 	}
 	if v, ok := genkitSchema["description"]; ok {
-		schema.Description = v.(string)
+		if s, ok := v.(string); ok {
+			schema.Description = s
+		}
 	}
 	if v, ok := genkitSchema["format"]; ok {
-		schema.Format = v.(string)
+		if s, ok := v.(string); ok {
+			schema.Format = s
+		}
 	}
 	if v, ok := genkitSchema["title"]; ok {
-		schema.Title = v.(string)
+		if s, ok := v.(string); ok {
+			schema.Title = s
+		}
 	}
 	if v, ok := genkitSchema["minItems"]; ok {
 		if i64, ok := castToInt64(v); ok {
@@ -175,16 +181,30 @@ func toGeminiSchemaRec(originalSchema map[string]any, genkitSchema map[string]an
 		schema.Enum = castToStringArray(v)
 	}
 	if v, ok := genkitSchema["items"]; ok {
-		items, err := toGeminiSchemaRec(originalSchema, v.(map[string]any), visited)
+		// "items" is a boolean schema in 2020-12 and a tuple in draft-07, so a
+		// caller-supplied schema can legitimately put a non-object here.
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("schema 'items' field is not an object schema, but %T", v)
+		}
+		items, err := toGeminiSchemaRec(originalSchema, m, visited)
 		if err != nil {
 			return nil, err
 		}
 		schema.Items = items
 	}
 	if val, ok := genkitSchema["properties"]; ok {
+		propsMap, ok := val.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("schema 'properties' field is not an object, but %T", val)
+		}
 		props := map[string]*genai.Schema{}
-		for k, v := range val.(map[string]any) {
-			p, err := toGeminiSchemaRec(originalSchema, v.(map[string]any), visited)
+		for k, v := range propsMap {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("schema property %q is not an object schema, but %T", k, v)
+			}
+			p, err := toGeminiSchemaRec(originalSchema, m, visited)
 			if err != nil {
 				return nil, err
 			}
