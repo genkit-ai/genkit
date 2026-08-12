@@ -73,17 +73,33 @@ def parse_snapshot_lookup_kw(
     snapshot_id: str | None = None,
     session_id: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Require exactly one of ``snapshot_id`` or ``session_id``.
+    """Require exactly one non-blank ``snapshot_id`` or ``session_id``.
 
-    A bad selector is a caller mistake, so it raises ``INVALID_ARGUMENT`` — over a
-    transport that surfaces as a 400, not a 500 the way a bare ``ValueError`` would.
+    Whitespace-only ids are rejected so they can't become unusable document keys.
+    A bad selector raises ``INVALID_ARGUMENT`` (400 over HTTP), not a bare
+    ``ValueError``.
     """
-    if bool(snapshot_id) == bool(session_id):
+    if snapshot_id and not snapshot_id.strip():
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'get_snapshot rejected whitespace-only snapshot_id={snapshot_id!r}.',
+        )
+    if session_id and not session_id.strip():
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'get_snapshot rejected whitespace-only session_id={session_id!r}.',
+        )
+    if not snapshot_id and not session_id:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=("get_snapshot requires exactly one of 'snapshot_id' or 'session_id' (got neither)."),
+        )
+    if snapshot_id and session_id:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
                 "get_snapshot requires exactly one of 'snapshot_id' or 'session_id' "
-                f'(got snapshot_id={snapshot_id!r}, session_id={session_id!r}).'
+                f'(got both snapshot_id={snapshot_id!r} and session_id={session_id!r}).'
             ),
         )
     return snapshot_id, session_id
@@ -137,6 +153,12 @@ async def resolve_snapshot(
     state_transform: StateTransform | None = None,
     context: dict[str, Any] | None = None,
 ) -> SessionSnapshot | None:
+    """Load a snapshot for clients, applying read-time liveness overlays.
+
+    A pending snapshot whose heartbeat has gone stale is returned as
+    ``expired`` here. That overlay is not persisted and does not appear on
+    ``on_snapshot_status_change`` streams.
+    """
     snapshot_id, session_id = parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
     if snapshot_id is not None:
         snapshot = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
@@ -172,10 +194,10 @@ async def abort_snapshot_in_store(
     There's no dedicated store abort call: aborting is an ordinary atomic
     snapshot write whose mutator flips a still-pending turn to aborted and leaves
     an already-finished one untouched, so a late abort never rewrites a
-    completed/failed result. The write also notifies any status subscribers,
-    which is how a detached turn learns it was aborted. Returns the snapshot's
-    resulting status (aborted when this call did the flip), or None if it doesn't
-    exist.
+    completed/failed result. Detached workers notice the flip through their
+    store's status subscription (in-memory notify, or a durable watch after
+    commit). Returns the snapshot's resulting status (aborted when this call did
+    the flip), or None if it doesn't exist.
     """
     saved = await store.save_snapshot(snapshot_id, abort_if_pending, context=context)
     if saved is not None:
