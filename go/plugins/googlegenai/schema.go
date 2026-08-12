@@ -6,9 +6,9 @@ package googlegenai
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 
 	"github.com/firebase/genkit/go/core/status"
+	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"google.golang.org/genai"
 )
 
@@ -25,9 +25,9 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		if !ok {
 			return nil, status.Errorf(status.ErrInvalidSchema, "invalid $ref value: not a string")
 		}
-		s, err := resolveRef(originalSchema, ref)
+		s, err := pluginjsonschema.ResolveRef(originalSchema, ref)
 		if err != nil {
-			return nil, err
+			return nil, status.Errorf(status.ErrInvalidSchema, "%v", err)
 		}
 		return toGeminiSchema(originalSchema, s)
 	}
@@ -180,25 +180,6 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	// Nullable -- not supported in jsonschema.Schema
 
 	return schema, nil
-}
-
-// resolveRef resolves a $ref reference in a JSON schema.
-func resolveRef(originalSchema map[string]any, ref string) (map[string]any, error) {
-	tkns := strings.Split(ref, "/")
-	// refs look like: $/ref/foo -- we need the foo part
-	name := tkns[len(tkns)-1]
-	if defs, ok := originalSchema["$defs"].(map[string]any); ok {
-		if def, ok := defs[name].(map[string]any); ok {
-			return def, nil
-		}
-	}
-	// definitions (legacy)
-	if defs, ok := originalSchema["definitions"].(map[string]any); ok {
-		if def, ok := defs[name].(map[string]any); ok {
-			return def, nil
-		}
-	}
-	return nil, status.Errorf(status.ErrInvalidSchema, "unable to resolve schema reference %q", ref)
 }
 
 // castToStringArray converts either []any or []string to []string, filtering non-strings.

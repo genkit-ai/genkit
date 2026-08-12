@@ -269,7 +269,7 @@ func TestLiveDynamicDiscovery(t *testing.T) {
 	// Generate a response from the dynamically resolved model
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModel(m),
-		ai.WithConfig(&ai.GenerationCommonConfig{Temperature: 1}),
+		ai.WithConfig(&ollamaPlugin.GenerateContentConfig{Temperature: ollamaPlugin.Ptr(1.0)}),
 		ai.WithPrompt("Say hello in one sentence."),
 	)
 	if err != nil {

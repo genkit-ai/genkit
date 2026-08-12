@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/ai"
+	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 )
 
 func TestOllamaChatRequest_MarshalJSON(t *testing.T) {
@@ -107,7 +107,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"name": map[string]any{"type": "string"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if got["type"] != "object" {
 			t.Errorf("expected type=object, got %v", got["type"])
 		}
@@ -131,7 +131,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"addr": map[string]any{"$ref": "#/$defs/Address"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["$defs"]; has {
 			t.Error("expected $defs to be removed")
 		}
@@ -162,7 +162,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"outer": map[string]any{"$ref": "#/$defs/Outer"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["$defs"]; has {
 			t.Error("expected $defs to be removed")
 		}
@@ -186,7 +186,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				map[string]any{"$ref": "#/$defs/Num"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["$defs"]; has {
 			t.Error("expected $defs to be removed")
 		}
@@ -212,7 +212,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				{"$ref": "#/$defs/Bar"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		anyOf, _ := got["anyOf"].([]any)
 		if len(anyOf) != 2 {
 			t.Fatalf("expected 2 anyOf entries after []map[string]any walk, got %d", len(anyOf))
@@ -235,7 +235,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		addr, _ := props["addr"].(map[string]any)
 		if addr["type"] != "object" {
@@ -257,7 +257,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 			},
 		}
 		// Must not panic or infinitely recurse.
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if got == nil {
 			t.Error("expected non-nil result for circular schema")
 		}
@@ -275,7 +275,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"x": map[string]any{"$ref": "#/$defs/Never"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		x, _ := props["x"].(map[string]any)
 		if x["$ref"] != "#/$defs/Never" {
@@ -298,7 +298,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"tag": map[string]any{"$ref": "#/$defs/Tag"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		tag, _ := props["tag"].(map[string]any)
 		if tag["type"] != "integer" {
@@ -318,7 +318,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"tag": map[string]any{"$ref": "#/definitions/Tag"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		tag, _ := props["tag"].(map[string]any)
 		if tag["type"] != "string" {
@@ -336,7 +336,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"b": map[string]any{"type": "integer"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		a, _ := props["a"].(map[string]any)
 		if a["$ref"] != "#/properties/b" {
@@ -359,7 +359,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"addr": map[string]any{"$ref": "#/$defs/Addr", "type": "string"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		addr, _ := props["addr"].(map[string]any)
 		if addr["$ref"] != "#/$defs/Addr" || addr["type"] != "string" {
@@ -376,7 +376,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"x": map[string]any{"$ref": "#/$defs/Unknown"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		x, _ := props["x"].(map[string]any)
 		if x["$ref"] != "#/$defs/Unknown" {
@@ -393,7 +393,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"x": map[string]any{"$ref": "#/$defs/Unknown"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		props, _ := got["properties"].(map[string]any)
 		x, _ := props["x"].(map[string]any)
 		if x["$ref"] != "#/$defs/Unknown" {
@@ -413,7 +413,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"tag": map[string]any{"$ref": "#/definitions/Tag"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["definitions"]; has {
 			t.Error("expected definitions key to be removed")
 		}
@@ -435,7 +435,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"tilde": map[string]any{"$ref": "#/$defs/Tilde~0Name"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["$defs"]; has {
 			t.Error("expected $defs to be removed after escaped refs are inlined")
 		}
@@ -457,7 +457,7 @@ func TestResolveSchemaRefs(t *testing.T) {
 				"Unused": map[string]any{"type": "string"},
 			},
 		}
-		got := resolveSchemaRefs(schema)
+		got := pluginjsonschema.ResolveRefs(schema)
 		if _, has := got["$defs"]; has {
 			t.Error("expected returned schema to omit unused $defs")
 		}
@@ -469,20 +469,21 @@ func TestResolveSchemaRefs(t *testing.T) {
 
 func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 	tests := []struct {
-		name    string
-		cfg     any
-		want    *ollamaChatRequest
-		wantErr bool
+		name string
+		cfg  GenerateContentConfig
+		want *ollamaChatRequest
 	}{
 		{
-			name: "GenerateContentConfig pointer",
-			cfg: &GenerateContentConfig{
+			name: "configured values",
+			cfg: GenerateContentConfig{
 				Seed:        Ptr(42),
 				Temperature: Ptr(0.7),
 				Think:       ThinkEnabled(true),
+				KeepAlive:   "10m",
 			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
+				Think:     ThinkEnabled(true),
+				KeepAlive: "10m",
 				Options: map[string]any{
 					"seed":        42,
 					"temperature": 0.7,
@@ -490,14 +491,12 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig with zero values",
-			cfg: &GenerateContentConfig{
+			name: "explicit zero values",
+			cfg: GenerateContentConfig{
 				Seed:        Ptr(0),
 				Temperature: Ptr(0.0),
-				Think:       ThinkEnabled(true),
 			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
 				Options: map[string]any{
 					"seed":        0,
 					"temperature": 0.0,
@@ -505,21 +504,8 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig value",
+			name: "thinking effort",
 			cfg: GenerateContentConfig{
-				Seed:  Ptr(42),
-				Think: ThinkEnabled(true),
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
-				Options: map[string]any{
-					"seed": 42,
-				},
-			},
-		},
-		{
-			name: "GenerateContentConfig with ThinkEffort",
-			cfg: &GenerateContentConfig{
 				Think: ThinkEffort("high"),
 			},
 			want: &ollamaChatRequest{
@@ -527,69 +513,8 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "map[string]any with opts only",
-			cfg: map[string]any{
-				"temperature": 0.5,
-				"top_k":       40,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.5,
-					"top_k":       40,
-				},
-			},
-		},
-		{
-			name: "map[string]any with top level fields",
-			cfg: map[string]any{
-				"think":      true,
-				"keep_alive": "10m",
-			},
-			want: &ollamaChatRequest{
-				Think:     ThinkEnabled(true),
-				KeepAlive: "10m",
-			},
-		},
-		{
-			name: "map[string]any mixed main and opts",
-			cfg: map[string]any{
-				"temperature": 0.9,
-				"think":       true,
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
-				Options: map[string]any{
-					"temperature": 0.9,
-				},
-			},
-		},
-		{
-			name: "map[string]any with string think (GPT-OSS)",
-			cfg: map[string]any{
-				"think": "medium",
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEffort("medium"),
-			},
-		},
-		{
-			name: "GenerationCommonConfig pointer",
-			cfg: &ai.GenerationCommonConfig{
-				Temperature: 0.7,
-				TopK:        1,
-				TopP:        2.0,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.7,
-					"top_k":       1,
-					"top_p":       2.0,
-				},
-			},
-		},
-		{
-			name: "nil config",
-			cfg:  nil,
+			name: "zero config",
+			cfg:  GenerateContentConfig{},
 			want: &ollamaChatRequest{},
 		},
 	}
@@ -597,19 +522,7 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &ollamaChatRequest{}
-
-			err := req.ApplyOptions(tt.cfg)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			req.ApplyOptions(tt.cfg)
 
 			if !reflect.DeepEqual(req, tt.want) {
 				t.Errorf(

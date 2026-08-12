@@ -32,11 +32,11 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
+	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -224,13 +224,12 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 	}
 
 	meta := &ai.ModelOptions{
-		Label:        internal.ProviderLabel("Ollama", model.Name),
-		Supports:     modelOpts.Supports,
-		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		Label:    internal.ProviderLabel("Ollama", model.Name),
+		Supports: modelOpts.Supports,
+		Versions: []string{},
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
-	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+	return genkit.DefineModelAction(g, api.NewName(provider, model.Name), meta, gen.generate)
 }
 
 // IsDefinedModel reports whether a model is defined.
@@ -506,17 +505,16 @@ func normalizeModelName(name string) string {
 // It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
 func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
 	meta := &ai.ModelOptions{
-		Label:        internal.ProviderLabel("Ollama", name),
-		Supports:     opts.Supports,
-		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		Label:    internal.ProviderLabel("Ollama", name),
+		Supports: opts.Supports,
+		Versions: []string{},
 	}
 	gen := &generator{
 		model:         ModelDefinition{Name: name, Type: "chat"},
 		serverAddress: o.ServerAddress,
 		timeout:       o.Timeout,
 	}
-	return ai.NewModel(api.NewName(provider, name), meta, gen.generate)
+	return ai.NewModelAction(api.NewName(provider, name), meta, gen.generate)
 }
 
 // ListActions calls /api/tags to discover locally installed Ollama models.
@@ -610,7 +608,7 @@ func Ptr[T any](v T) *T {
 }
 
 // Generate makes a request to the Ollama API and processes the response.
-func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config GenerateContentConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	stream := cb != nil
 	var payload any
 	var thinkingEnabled bool
@@ -630,8 +628,8 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			System: concatMessages(input, []ai.Role{ai.RoleSystem}),
 			Images: images,
 			Stream: stream,
+			Format: ollamaFormatValue(input.Output),
 		}
-		modelReq.Format = ollamaFormatValue(input.Output)
 		payload = modelReq
 	} else {
 		var messages []*ollamaMessage
@@ -649,10 +647,9 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Model:    g.model.Name,
 			Stream:   stream,
 			Images:   images,
+			Format:   ollamaFormatValue(input.Output),
 		}
-		if err := chatReq.ApplyOptions(input.Config); err != nil {
-			return nil, fmt.Errorf("failed to apply options: %v", err)
-		}
+		chatReq.ApplyOptions(config)
 		thinkingEnabled = chatReq.Think.IsEnabled()
 
 		if len(input.Tools) > 0 {
@@ -662,7 +659,6 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 			chatReq.Tools = tools
 		}
-		chatReq.Format = ollamaFormatValue(input.Output)
 		payload = chatReq
 	}
 
@@ -767,173 +763,11 @@ func ollamaFormatValue(output *ai.ModelOutputConfig) any {
 		return nil
 	}
 	if len(output.Schema) > 0 {
-		return resolveSchemaRefs(output.Schema)
+		// Ollama's constrained-output engine does not resolve JSON Schema
+		// references, so flatten schemas supplied explicitly by callers.
+		return pluginjsonschema.ResolveRefs(output.Schema)
 	}
 	return ai.OutputFormatJSON
-}
-
-// resolveSchemaRefs returns a copy of schema with $ref pointers inlined from
-// the top-level $defs / definitions map where possible. Ollama's constrained
-// output engine does not resolve JSON Schema references itself, so schemas
-// supplied through WithOutputSchema or a registered schema can therefore be
-// flattened before forwarding. Schemas inferred from Go types are already
-// emitted without references.
-func resolveSchemaRefs(schema map[string]any) map[string]any {
-	defs, _ := schema["$defs"].(map[string]any)
-	definitions, _ := schema["definitions"].(map[string]any)
-	if len(defs) == 0 && len(definitions) == 0 {
-		return schema
-	}
-	visited := make(map[string]bool)
-	result, _ := inlineSchemaRefs(schema, defs, definitions, visited).(map[string]any)
-	if result == nil {
-		return schema
-	}
-	if !hasLocalRefsOutsideDefs(result) {
-		cloned := make(map[string]any, len(result))
-		for k, v := range result {
-			cloned[k] = v
-		}
-		result = cloned
-		delete(result, "$defs")
-		delete(result, "definitions")
-	}
-	return result
-}
-
-// inlineSchemaRefs recursively replaces $ref nodes with the definition they
-// reference. Annotation siblings are copied onto the resolved definition.
-// Structural siblings cannot be represented by a simple merge because modern
-// JSON Schema applies them together with the referenced schema, so those refs
-// are left intact. Non-map definitions, unknown refs, and cycles are also left
-// in place. visited tracks refs on the current DFS stack to terminate cycles.
-func inlineSchemaRefs(v any, defs, definitions map[string]any, visited map[string]bool) any {
-	switch node := v.(type) {
-	case map[string]any:
-		if ref, ok := node["$ref"].(string); ok {
-			def, found := schemaRefTarget(ref, defs, definitions)
-			defMap, isMap := def.(map[string]any)
-			if found && isMap && !visited[ref] && hasOnlyAnnotationSiblings(node) {
-				visited[ref] = true
-				resolved, _ := inlineSchemaRefs(defMap, defs, definitions, visited).(map[string]any)
-				delete(visited, ref)
-				if resolved == nil {
-					return node
-				}
-				// Annotation siblings describe the reference site and can safely
-				// be overlaid on the resolved definition.
-				if len(node) > 1 {
-					merged := make(map[string]any, len(resolved)+len(node))
-					for k, val := range resolved {
-						merged[k] = val
-					}
-					for k, val := range node {
-						if k != "$ref" {
-							merged[k] = inlineSchemaRefs(val, defs, definitions, visited)
-						}
-					}
-					return merged
-				}
-				return resolved
-			}
-			// Non-map def (boolean schema), unknown $ref, or cycle: leave in place.
-			return node
-		}
-		result := make(map[string]any, len(node))
-		for k, val := range node {
-			result[k] = inlineSchemaRefs(val, defs, definitions, visited)
-		}
-		return result
-	case []any:
-		result := make([]any, len(node))
-		for i, item := range node {
-			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
-		}
-		return result
-	case []map[string]any:
-		result := make([]any, len(node))
-		for i, item := range node {
-			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
-		}
-		return result
-	default:
-		return v
-	}
-}
-
-func schemaRefTarget(ref string, defs, definitions map[string]any) (any, bool) {
-	var encodedName string
-	var pool map[string]any
-	switch {
-	case strings.HasPrefix(ref, "#/$defs/"):
-		encodedName = strings.TrimPrefix(ref, "#/$defs/")
-		pool = defs
-	case strings.HasPrefix(ref, "#/definitions/"):
-		encodedName = strings.TrimPrefix(ref, "#/definitions/")
-		pool = definitions
-	default:
-		return nil, false
-	}
-	// Only direct entries in the definition maps are supported. A raw slash
-	// denotes a deeper JSON Pointer path; escaped slashes remain valid names.
-	if encodedName == "" || strings.Contains(encodedName, "/") {
-		return nil, false
-	}
-	name := strings.ReplaceAll(encodedName, "~1", "/")
-	name = strings.ReplaceAll(name, "~0", "~")
-	def, ok := pool[name]
-	return def, ok
-}
-
-func hasOnlyAnnotationSiblings(node map[string]any) bool {
-	for key := range node {
-		if key != "$ref" && key != "$defs" && key != "definitions" && !isSchemaAnnotation(key) {
-			return false
-		}
-	}
-	return true
-}
-
-func isSchemaAnnotation(key string) bool {
-	switch key {
-	case "description", "title", "default", "examples", "deprecated", "readOnly", "writeOnly":
-		return true
-	default:
-		return false
-	}
-}
-
-// hasLocalRefsOutsideDefs reports whether v still contains a local JSON Schema
-// reference outside the definition blocks. If any remain after inlining, keep
-// $defs / definitions attached so the schema does not contain dangling refs.
-func hasLocalRefsOutsideDefs(v any) bool {
-	switch node := v.(type) {
-	case map[string]any:
-		if ref, ok := node["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
-			return true
-		}
-		for key, val := range node {
-			if key == "$defs" || key == "definitions" {
-				continue
-			}
-			if hasLocalRefsOutsideDefs(val) {
-				return true
-			}
-		}
-	case []any:
-		for _, item := range node {
-			if hasLocalRefsOutsideDefs(item) {
-				return true
-			}
-		}
-	case []map[string]any:
-		for _, item := range node {
-			if hasLocalRefsOutsideDefs(item) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // convertTools converts Genkit tool definitions to Ollama tool format

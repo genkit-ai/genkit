@@ -733,6 +733,52 @@ func TestDefineModelSupports(t *testing.T) {
 	})
 }
 
+func TestDefineModelUsesTypedConfig(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"llama3.1","message":{"role":"assistant","content":"ok"},"done":true}`))
+	}))
+	defer server.Close()
+
+	o := &Ollama{ServerAddress: server.URL}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(o))
+	model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, nil)
+	if _, ok := model.(*ai.ModelAction); !ok {
+		t.Fatalf("DefineModel() returned %T, want *ai.ModelAction", model)
+	}
+
+	_, err := genkit.Generate(t.Context(), g,
+		ai.WithModel(model),
+		ai.WithPrompt("hello"),
+		ai.WithConfig(map[string]any{
+			"temperature": 0.25,
+			"think":       true,
+			"keep_alive":  "1m",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	options, ok := capturedBody["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("request options = %#v, want object", capturedBody["options"])
+	}
+	if options["temperature"] != 0.25 {
+		t.Errorf("temperature = %#v, want 0.25", options["temperature"])
+	}
+	if capturedBody["think"] != true {
+		t.Errorf("think = %#v, want true", capturedBody["think"])
+	}
+	if capturedBody["keep_alive"] != "1m" {
+		t.Errorf("keep_alive = %#v, want 1m", capturedBody["keep_alive"])
+	}
+}
+
 func modelSupportsFromAction(t *testing.T, action api.Action) ai.ModelSupports {
 	t.Helper()
 	modelMeta, ok := action.Desc().Metadata["model"].(map[string]any)
@@ -884,7 +930,7 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 				Tools:  tt.tools,
 			}
 
-			_, err := gen.generate(context.Background(), req, nil)
+			_, err := gen.generate(context.Background(), req, GenerateContentConfig{}, nil)
 			if err != nil {
 				t.Fatalf("generate() error: %v", err)
 			}
