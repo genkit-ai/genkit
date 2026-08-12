@@ -316,7 +316,10 @@ def assert_init_matches_state_management(
 ) -> None:
     """Raise ``AgentInitError`` when init does not match the agent's store mode."""
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        # Wire-facing errors use the wire (camelCase) field names — the
+        # conformance spec (tests/specs/agent.yaml) pins this wording across
+        # implementations.
+        field = 'snapshotId' if init.snapshot_id else 'sessionId'
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -325,12 +328,11 @@ def assert_init_matches_state_management(
             ),
         )
     if init.state is not None and store is not None:
-        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
             ),
         )
 

@@ -84,8 +84,6 @@ KNOWN_DIVERGENCES: dict[str, str] = {
     'abort pending agent': 'abort returns resulting status instead of previous status',
     'abort already aborted agent': 'abort returns resulting status instead of previous status',
     'pure detach without payload': 'abort returns resulting status instead of previous status',
-    'server-managed agent rejects init state': 'wire error wording diverges from spec',
-    'client-managed agent rejects sessionId': 'wire error uses snake_case field names',
     'snapshotId and matching sessionId together resume': 'snapshotId+sessionId pair rejected instead of ownership-guarded',
     'snapshotId with mismatched sessionId rejected': 'snapshotId+sessionId pair rejected instead of ownership-guarded',
     'detached run emits no customPatch chunks': 'detached runs leak stream chunks (race)',
