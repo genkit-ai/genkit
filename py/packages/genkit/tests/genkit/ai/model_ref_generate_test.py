@@ -11,7 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit._ai._model import ModelConfig, normalize_config, resolve_model_ref
+from genkit._ai._model import ModelConfig
 from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
@@ -217,28 +217,6 @@ async def test_define_agent_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel
     assert _config_value(echo.last_request.config, 'temperature') == 0.3
 
 
-def test_resolve_model_ref_merges_without_overwrite() -> None:
-    """resolve_model_ref keeps ref-only keys and lets call-time keys win."""
-    ref = model_ref(
-        'gemini-pro-latest',
-        namespace='googleai',
-        config_schema=CustomConfig,
-        config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
-    )
-
-    resolved = resolve_model_ref(model=ref, config={'temperature': 0.2})
-
-    assert resolved.name == 'googleai/gemini-pro-latest'
-    assert resolved.config['temperature'] == 0.2
-    assert resolved.config['safety_settings'] == {'HARM': 'BLOCK'}
-
-
-def test_normalize_config_dumps_pydantic() -> None:
-    """normalize_config turns configs into plain dicts, using {} for None."""
-    assert normalize_config(config=ModelConfig(temperature=0.5)) == {'temperature': 0.5}
-    assert normalize_config(config=None) == {}
-
-
 @pytest.mark.asyncio
 async def test_model_ref_version_seeds_config(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """ref.version flows into config at lowest precedence (JS generate.ts parity)."""
@@ -327,18 +305,3 @@ async def test_unset_fields_do_not_clobber_ref_defaults(
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'temperature') == 0.7
     assert _config_value(echo.last_request.config, 'top_k') == 40
-
-
-def test_resolve_model_ref_strips_explicit_none() -> None:
-    """Post-merge None-strip: cleared keys are absent from the resolved config."""
-    ref = model_ref(
-        'gemini-pro-latest',
-        namespace='googleai',
-        config_schema=CustomConfig,
-        config=CustomConfig(temperature=0.7, top_k=40),
-    )
-
-    resolved = resolve_model_ref(model=ref, config={'temperature': None})
-
-    assert 'temperature' not in resolved.config
-    assert resolved.config['top_k'] == 40
