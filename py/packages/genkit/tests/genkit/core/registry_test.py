@@ -438,3 +438,41 @@ def test_registry_satisfies_registry_like() -> None:
     from genkit._core._registry import Registry
 
     assert isinstance(Registry(None), RegistryLike)
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_falls_back_to_background_model() -> None:
+    """resolve_model finds models registered only under BACKGROUND_MODEL.
+
+    Background-only models (e.g. Veo, Deep Research) register under
+    ActionKind.BACKGROUND_MODEL, so resolve_model must fall back to that
+    kind when no foreground MODEL action exists. This is what lets
+    generate_operation() find them.
+    """
+    from genkit._core._action import ActionRunContext
+    from genkit._core._background import define_background_model
+    from genkit._core._model import ModelRequest
+    from genkit._core._typing import ModelInfo, Operation, Supports
+
+    registry = Registry()
+
+    async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
+        return Operation(id='bg-start', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    define_background_model(
+        registry=registry,
+        name='veo-model',
+        start=start,
+        check=check,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    assert await registry.resolve_action(ActionKind.MODEL, 'veo-model') is None
+
+    resolved = await registry.resolve_model('veo-model')
+    assert resolved is not None
+    assert resolved.kind == ActionKind.BACKGROUND_MODEL
+    assert resolved.name == 'veo-model'
