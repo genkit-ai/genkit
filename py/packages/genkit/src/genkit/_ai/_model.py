@@ -70,7 +70,9 @@ def normalize_config(*, config: object) -> dict[str, Any]:
         return {}
     if isinstance(config, BaseModel):
         return config.model_dump(exclude_unset=True)
-    return dict(cast(Mapping[str, Any], config))
+    if isinstance(config, Mapping):
+        return dict(config)
+    raise TypeError(f"Unsupported config type: {type(config).__name__}")
 
 
 def resolve_model_name(
