@@ -377,9 +377,7 @@ async def load_session(
             if snap_session_id != init.session_id:
                 raise AgentInitError(
                     status='INVALID_ARGUMENT',
-                    message=(
-                        f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.'
-                    ),
+                    message=(f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.'),
                 )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
