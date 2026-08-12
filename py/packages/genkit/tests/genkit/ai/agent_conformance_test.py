@@ -81,12 +81,6 @@ SPEC_TESTS = load_spec()
 # fixes a divergence deletes its entries, turning those tests green in the
 # same diff. Do not add entries: new divergences should be fixed, not listed.
 KNOWN_DIVERGENCES: dict[str, str] = {
-    'snapshotId and matching sessionId together resume': (
-        'snapshotId+sessionId pair rejected instead of ownership-guarded'
-    ),
-    'snapshotId with mismatched sessionId rejected': (
-        'snapshotId+sessionId pair rejected instead of ownership-guarded'
-    ),
     'detached run emits no customPatch chunks': (
         'detached runs leak stream chunks (race)'
     ),

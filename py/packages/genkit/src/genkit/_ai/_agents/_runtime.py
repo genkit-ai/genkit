@@ -358,11 +358,6 @@ async def load_session(
     """
     name = agent_name or 'agent'
 
-    if init.snapshot_id and init.session_id:
-        raise AgentInitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
-        )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     ctx = get_current_context()
@@ -374,6 +369,18 @@ async def load_session(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
+        # When init carries both ids, snapshotId selects the snapshot and
+        # sessionId acts as an ownership guard: the snapshot must belong to that
+        # session (see tests/specs/agent.yaml). API misuse -> thrown error.
+        if init.session_id:
+            snap_session_id = snap.session_id or (snap.state.session_id if snap.state else None)
+            if snap_session_id != init.session_id:
+                raise AgentInitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.'
+                    ),
+                )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
