@@ -54,6 +54,7 @@ from genkit._core._typing import (
     EmbedResponse,
     EvalRequest,
     EvalResponse,
+    Operation,
 )
 
 logger = get_logger(__name__)
@@ -756,7 +757,9 @@ class Registry:
             return None
         return cast(Action[EmbedRequest, EmbedResponse, Never], action)
 
-    async def resolve_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+    async def resolve_model(
+        self, name: str
+    ) -> Action[ModelRequest, ModelResponse | Operation, ModelResponseChunk] | None:
         """Resolve a model action by name with full type information.
 
         Args:
@@ -772,7 +775,7 @@ class Registry:
         if action is None:
             return None
         return cast(
-            Action[ModelRequest, ModelResponse, ModelResponseChunk],
+            Action[ModelRequest, ModelResponse | Operation, ModelResponseChunk],
             action,
         )
 
