@@ -28,4 +28,4 @@ print(res.text)
 
 Set `OPENAI_API_KEY` in the environment, or pass `api_key=` to `OpenAI()`.
 
-> **Tip:** Point the same plugin at any OpenAI-compatible multi-model gateway via `base_url` when you are not using the official OpenAI endpoint — for example [DaoXE](https://daoxe.com/?utm_source=github&utm_medium=organic&utm_campaign=genkit&utm_content=openai) at `https://api.daoxe.com/v1` (`OpenAI(api_key=..., base_url="https://api.daoxe.com/v1")`).
+> **Tip:** Point the same plugin at any OpenAI-compatible multi-model gateway via `base_url` when you are not using the official OpenAI endpoint — for example [DaoXE](https://daoxe.com/) at `https://api.daoxe.com/v1` (`OpenAI(api_key=..., base_url="https://api.daoxe.com/v1")`).
