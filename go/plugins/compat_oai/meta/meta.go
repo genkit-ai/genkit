@@ -86,11 +86,12 @@ func (m *Meta) Init(ctx context.Context) []api.Action {
 	if apiKey == "" {
 		apiKey = os.Getenv("META_API_KEY")
 	}
-	if apiKey == "" {
-		panic("meta plugin initialization failed: apiKey is required")
-	}
 
 	opts := []option.RequestOption{
+		// Apply this even when apiKey is empty. The OpenAI client otherwise
+		// falls back to OPENAI_API_KEY, which must never be sent to Meta.
+		// A missing Meta key is reported by the service when a request is made,
+		// rather than preventing the plugin from initializing.
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
 	}
@@ -101,7 +102,9 @@ func (m *Meta) Init(ctx context.Context) []api.Action {
 	actions := m.openAICompatible.Init(ctx)
 
 	for model, modelOpts := range supportedModels {
-		actions = append(actions, m.DefineModel(model, modelOpts).(api.Action))
+		if action, ok := m.DefineModel(model, modelOpts).(api.Action); ok {
+			actions = append(actions, action)
+		}
 	}
 	return actions
 }
