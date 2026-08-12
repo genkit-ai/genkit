@@ -9,6 +9,8 @@ Covers normalize_config, resolve_model_name, and resolve_model_ref as pure
 functions, independent of generate()/prompt wiring.
 """
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 from pydantic import BaseModel
 
@@ -113,5 +115,5 @@ def test_resolve_model_ref_version_lowest_precedence() -> None:
 def test_resolved_model_is_frozen() -> None:
     """ResolvedModel is immutable once constructed."""
     resolved = ResolvedModel(name='m', config={})
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         resolved.name = 'other'  # type: ignore[misc]

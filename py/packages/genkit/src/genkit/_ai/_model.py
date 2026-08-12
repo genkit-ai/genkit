@@ -33,7 +33,7 @@ from genkit._core._action import (
 from genkit._core._error import GenkitError
 from genkit._core._model import (
     Message,
-    ModelConfig,
+    ModelConfig as ModelConfig,
     ModelRef,
     ModelRefConfigT,
     ModelRequest,
