@@ -1128,7 +1128,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Vertex AI** | `vertexai.VertexAI` | Gemini 3.5 Flash, Gemini 3.1 Pro via Google Cloud |
 | **Anthropic** | `anthropic.Anthropic` | Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5 |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
-| **OpenAI Compatible** | `compat_oai` | GPT-5.6, Qwen, Kimi, GLM, and any OpenAI-compatible API |
+| **OpenAI Compatible** | `compat_oai` | GPT-5.6, DeepSeek, Qwen, Kimi, GLM, and any OpenAI-compatible API |
 
 ```go
 // Google AI

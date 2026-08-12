@@ -25,6 +25,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
 )
@@ -55,12 +56,14 @@ var canonicalTypes = map[string]string{
 func TestConfigSchemaConformance(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
 
 	g := genkit.Init(context.Background(), genkit.WithPlugins(
 		&anthropic.Anthropic{},
 		&dashscope.DashScope{},
+		&deepseek.DeepSeek{},
 		&kimi.Kimi{},
 		&zai.ZAI{},
 	))
@@ -68,6 +71,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 	models := []string{
 		"anthropic/claude-sonnet-4-5-20250929",
 		"dashscope/qwen-plus",
+		"deepseek/deepseek-v4-pro",
 		"kimi/kimi-k3",
 		"zai/glm-5.1",
 	}
@@ -150,6 +154,7 @@ func requireDescriptions(t *testing.T, path string, props map[string]any) {
 func TestModelsOverrideConformance(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
 
@@ -161,6 +166,8 @@ func TestModelsOverrideConformance(t *testing.T) {
 		&anthropic.Anthropic{Models: map[string]ai.ModelOptions{
 			"anthropic/claude-sonnet-4-5-20250929": pinned}},
 		&dashscope.DashScope{Models: map[string]ai.ModelOptions{"qwen-plus": pinned}},
+		&deepseek.DeepSeek{Models: map[string]ai.ModelOptions{
+			"deepseek/deepseek-v4-pro": pinned}},
 		&kimi.Kimi{Models: map[string]ai.ModelOptions{"kimi-k3": pinned}},
 		&zai.ZAI{Models: map[string]ai.ModelOptions{"glm-5.1": pinned}},
 	))
@@ -168,6 +175,7 @@ func TestModelsOverrideConformance(t *testing.T) {
 	for _, name := range []string{
 		"anthropic/claude-sonnet-4-5-20250929",
 		"dashscope/qwen-plus",
+		"deepseek/deepseek-v4-pro",
 		"kimi/kimi-k3",
 		"zai/glm-5.1",
 	} {
