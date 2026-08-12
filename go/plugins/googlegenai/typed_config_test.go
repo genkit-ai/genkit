@@ -4,7 +4,6 @@
 package googlegenai
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -63,14 +62,7 @@ func TestConfigSchemaMatchesDefaultConfig(t *testing.T) {
 // actions below only reads the backend off the client config.
 func testClient(t *testing.T) *genai.Client {
 	t.Helper()
-	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  "test-api-key",
-	})
-	if err != nil {
-		t.Fatalf("genai.NewClient() error = %v", err)
-	}
-	return client
+	return newTestClient(t, "")
 }
 
 // validateConfig runs the request's config through the same check the action
