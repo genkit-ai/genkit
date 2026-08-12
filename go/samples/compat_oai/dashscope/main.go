@@ -18,6 +18,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 	"github.com/firebase/genkit/go/plugins/server"
+	"github.com/openai/openai-go"
 )
 
 func main() {
@@ -27,7 +28,10 @@ func main() {
 	g := genkit.Init(ctx, genkit.WithPlugins(ds))
 
 	genkit.DefineFlow(g, "dashscope", func(ctx context.Context, subject string) (string, error) {
-		model := ds.Model(g, "qwen-plus")
+		model := dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+			Temperature:    openai.Ptr(0.7),
+			EnableThinking: openai.Ptr(false),
+		})
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		foo, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt(prompt))
@@ -65,7 +69,7 @@ func main() {
 		if modelID == "" {
 			modelID = "qwen-plus"
 		}
-		model := ds.Model(g, modelID)
+		model := dashscope.ModelRef(modelID, nil)
 
 		prompt := fmt.Sprintf("What's the current temperature in %s? Use the tool to check, don't guess.", input.City)
 		resp, err := genkit.Generate(ctx, g,
@@ -92,7 +96,7 @@ func main() {
 		if modelID == "" {
 			modelID = "qwen3-vl-plus"
 		}
-		model := ds.Model(g, modelID)
+		model := dashscope.ModelRef(modelID, nil)
 
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(model),

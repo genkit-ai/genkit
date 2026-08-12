@@ -20,14 +20,18 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 func TestPluginRequiresAPIKey(t *testing.T) {
@@ -47,12 +51,15 @@ func TestPluginRequiresAPIKey(t *testing.T) {
 }
 
 func TestPluginConfigPrecedence(t *testing.T) {
+	var mu sync.Mutex
 	var rightHit, wrongHit bool
 	var gotAuth string
 
 	right := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		rightHit = true
 		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"id":"c1","object":"chat.completion","created":1,"model":"qwen-plus",
@@ -63,27 +70,33 @@ func TestPluginConfigPrecedence(t *testing.T) {
 	defer right.Close()
 
 	wrong := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		wrongHit = true
+		mu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer wrong.Close()
 
-	// Struct fields must win over env vars for both APIKey and BaseURL.
+	// Explicit configuration must win over env vars: the struct field for the
+	// key, and an Opts [option.WithBaseURL] for the endpoint, which the
+	// plugin applies after its own defaults.
 	t.Setenv("DASHSCOPE_API_KEY", "env-key")
 	t.Setenv("DASHSCOPE_BASE_URL", wrong.URL+"/compatible-mode/v1")
 
 	ctx := context.Background()
 	plugin := &dashscope.DashScope{
-		APIKey:  "struct-key",
-		BaseURL: right.URL + "/compatible-mode/v1",
+		APIKey: "struct-key",
+		Opts:   []option.RequestOption{option.WithBaseURL(right.URL + "/compatible-mode/v1")},
 	}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
 	if _, err := genkit.Generate(ctx, g, ai.WithPrompt("hi")); err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if !rightHit || wrongHit {
-		t.Fatalf("rightHit = %v, wrongHit = %v, want struct fields to take precedence over env vars", rightHit, wrongHit)
+		t.Fatalf("rightHit = %v, wrongHit = %v, want explicit configuration to take precedence over env vars", rightHit, wrongHit)
 	}
 	if gotAuth != "Bearer struct-key" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer struct-key")
@@ -91,9 +104,12 @@ func TestPluginConfigPrecedence(t *testing.T) {
 }
 
 func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
+	var mu sync.Mutex
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requests++
+		mu.Unlock()
 		if r.URL.Path != "/compatible-mode/v1/chat/completions" {
 			t.Errorf("path = %q, want %q", r.URL.Path, "/compatible-mode/v1/chat/completions")
 		}
@@ -139,7 +155,7 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 	}))
 	defer server.Close()
 
-	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+	plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
@@ -158,9 +174,9 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		{models: mediaModels, wantMedia: true},
 	} {
 		for _, modelID := range group.models {
-			model := plugin.Model(g, modelID)
+			model := genkit.LookupModel(g, "dashscope/"+modelID)
 			if model == nil {
-				t.Errorf("Model(%q) = nil", modelID)
+				t.Errorf("LookupModel(%q) = nil", modelID)
 				continue
 			}
 			desc := model.(api.Action).Desc()
@@ -185,7 +201,9 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		}
 	}
 
-	config := map[string]any{"enable_thinking": true}
+	// The Genkit config speaks the plugin's camelCase contract; the handler
+	// above asserts it reaches the wire as enable_thinking.
+	config := map[string]any{"enableThinking": true}
 	t.Run("complete", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Say hi."), ai.WithConfig(config))
 		if err != nil {
@@ -227,15 +245,21 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		}
 	})
 
+	mu.Lock()
+	defer mu.Unlock()
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
 	}
 }
 
 func TestPluginHandlesToolCalls(t *testing.T) {
+	var mu sync.Mutex
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requests++
+		reqNum := requests
+		mu.Unlock()
 		var body struct {
 			Messages []map[string]any `json:"messages"`
 			Tools    []map[string]any `json:"tools"`
@@ -244,7 +268,7 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 
-		if requests == 1 {
+		if reqNum == 1 {
 			if len(body.Tools) != 1 {
 				t.Fatalf("tools = %#v, want one tool", body.Tools)
 			}
@@ -294,7 +318,7 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+	plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
 	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
@@ -312,6 +336,8 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 	if got := resp.Text(); got != "Tool loop complete" {
 		t.Errorf("Text() = %q, want %q", got, "Tool loop complete")
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if requests != 2 {
 		t.Errorf("requests = %d, want 2", requests)
 	}
@@ -384,13 +410,40 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 			},
 			response: "A test image.",
 		},
+		{
+			name:  "extra passthrough",
+			model: "qwen-plus",
+			options: []ai.GenerateOption{
+				ai.WithPrompt("hi"),
+				ai.WithConfig(map[string]any{
+					"enableSearch": false,
+					"extra": map[string]any{
+						"enable_search":  true,
+						"search_options": map[string]any{"forced_search": true},
+					},
+				}),
+			},
+			checkBody: func(t *testing.T, body map[string]any) {
+				if got := body["enable_search"]; got != true {
+					t.Errorf("enable_search = %v, want the extra winning over the extra the config wrote", got)
+				}
+				searchOptions, _ := body["search_options"].(map[string]any)
+				if got := searchOptions["forced_search"]; got != true {
+					t.Errorf("search_options = %#v, want the undeclared field on the wire", body["search_options"])
+				}
+			},
+			response: "Extra fields ride.",
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			var mu sync.Mutex
 			var requests int
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
 				requests++
+				mu.Unlock()
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Fatalf("decode request: %v", err)
@@ -413,7 +466,7 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 			defer server.Close()
 
 			ctx := context.Background()
-			plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+			plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
 			g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 			options := append([]ai.GenerateOption{ai.WithModelName("dashscope/" + test.model)}, test.options...)
 
@@ -424,6 +477,8 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 			if got := resp.Text(); got != test.response {
 				t.Errorf("Text() = %q, want %q", got, test.response)
 			}
+			mu.Lock()
+			defer mu.Unlock()
 			if requests != 1 {
 				t.Errorf("requests = %d, want 1", requests)
 			}
@@ -439,7 +494,7 @@ func TestPluginRejectsUnsupportedToolChoice(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+	plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
 	_, err := genkit.Generate(ctx, g, ai.WithPrompt("Use a tool."), ai.WithToolChoice(ai.ToolChoiceRequired))
@@ -459,9 +514,12 @@ func TestPluginRejectsUnsupportedToolChoice(t *testing.T) {
 // dashscope), so pinning that behavior here would be asserting a bug rather
 // than a contract.
 func TestPluginValidatesModelVersions(t *testing.T) {
+	var mu sync.Mutex
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requests++
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"id":"c-version","object":"chat.completion","created":1,"model":"qwen-plus",
@@ -471,10 +529,10 @@ func TestPluginValidatesModelVersions(t *testing.T) {
 	defer server.Close()
 
 	ctx := context.Background()
-	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+	plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
-	model := plugin.Model(g, "qwen-plus")
+	model := genkit.LookupModel(g, "dashscope/qwen-plus")
 	desc := model.(api.Action).Desc()
 	modelMetadata := desc.Metadata["model"].(map[string]any)
 	versions, _ := modelMetadata["versions"].([]string)
@@ -494,7 +552,9 @@ func TestPluginValidatesModelVersions(t *testing.T) {
 	})
 
 	t.Run("unsupported version is rejected", func(t *testing.T) {
+		mu.Lock()
 		before := requests
+		mu.Unlock()
 		_, err := genkit.Generate(ctx, g,
 			ai.WithPrompt("hi"),
 			ai.WithConfig(map[string]any{"version": "qwen-plus-9999-01-01"}),
@@ -502,8 +562,120 @@ func TestPluginValidatesModelVersions(t *testing.T) {
 		if err == nil {
 			t.Fatal("Generate() error = nil, want unsupported version error")
 		}
+		mu.Lock()
+		defer mu.Unlock()
 		if requests != before {
 			t.Errorf("requests = %d, want no additional request for rejected version", requests)
 		}
 	})
+}
+
+// TestModelRefAndConfigSchema pins the call-site surface: the ref carries the
+// prefixed name and the typed config, and the registered models advertise the
+// camelCase config contract including the DashScope-specific fields.
+func TestModelRefAndConfigSchema(t *testing.T) {
+	cfg := &dashscope.ChatConfig{EnableThinking: openai.Ptr(true)}
+	for _, name := range []string{"qwen-plus", "dashscope/qwen-plus"} {
+		ref := dashscope.ModelRef(name, cfg)
+		if want := "dashscope/qwen-plus"; ref.Name() != want {
+			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
+		}
+		if ref.Config() != cfg {
+			t.Errorf("ModelRef(%q).Config() = %v, want the config it was built with", name, ref.Config())
+		}
+	}
+
+	plugin := &dashscope.DashScope{APIKey: "test-key"}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
+
+	m := genkit.LookupModel(g, "dashscope/qwen-plus")
+	if m == nil {
+		t.Fatal("qwen-plus not registered by Init")
+	}
+	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions missing, got %v", model["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions has no properties: %v", schema)
+	}
+	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "seed", "enableThinking", "thinkingBudget", "enableSearch", "version", "extra"} {
+		if props[key] == nil {
+			t.Errorf("config schema is missing the %q property", key)
+		}
+	}
+
+	// The constraints DashScope documents ride on the schema, where the
+	// framework enforces them, exclusive ends included: temperature is [0, 2)
+	// and topP is (0, 1].
+	for field, want := range map[string]map[string]any{
+		"temperature":     {"minimum": 0.0, "exclusiveMaximum": 2.0},
+		"topP":            {"exclusiveMinimum": 0.0, "maximum": 1.0},
+		"presencePenalty": {"minimum": -2.0, "maximum": 2.0},
+		"seed":            {"minimum": 0.0, "maximum": 2147483647.0},
+		"maxOutputTokens": {"minimum": 1.0},
+	} {
+		prop, _ := props[field].(map[string]any)
+		for key, value := range want {
+			if got := prop[key]; !reflect.DeepEqual(got, value) {
+				t.Errorf("%s %s = %#v, want %#v", field, key, got, value)
+			}
+		}
+	}
+}
+
+// TestDynamicListingAndResolution pins the on-demand surface: models the
+// endpoint reports are listed with the plugin's config schema, and generating
+// with an uncurated name resolves it instead of failing with model-not-found.
+func TestDynamicListingAndResolution(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/compatible-mode/v1/models" {
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"qwen-brand-new","object":"model"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"qwen-brand-new",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"resolved"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &dashscope.DashScope{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/compatible-mode/v1")}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	var listed *api.ActionDesc
+	for _, desc := range plugin.ListActions(ctx) {
+		if desc.Name == "dashscope/qwen-brand-new" {
+			listed = &desc
+			break
+		}
+	}
+	if listed == nil {
+		t.Fatal("ListActions() does not include the endpoint's model")
+	}
+	model := listed.Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("listed model has no customOptions: %v", model)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if props["enableThinking"] == nil {
+		t.Error("listed model schema is missing the plugin's enableThinking property")
+	}
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("dashscope/qwen-brand-new"),
+		ai.WithPrompt("hi"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() with an uncurated model error = %v", err)
+	}
+	if got := resp.Text(); got != "resolved" {
+		t.Fatalf("Text() = %q, want %q", got, "resolved")
+	}
 }
