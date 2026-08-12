@@ -657,17 +657,26 @@ class AgentRuntime:
             out.snapshot_id = await self.ensure_recovery_snapshot()
         return out
 
-    async def watch_snapshot_abort(self, *, snapshot_id: str, abort_signal: asyncio.Event) -> None:
+    async def watch_snapshot_abort(
+        self,
+        *,
+        snapshot_id: str,
+        abort_signal: asyncio.Event,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
             return
-        q = await self.store.on_snapshot_status_change(snapshot_id)
-        while True:
-            status = await q.get()
-            if status is None:
-                return
+        # Prefer the detach-time context from the caller so the subscription
+        # stays on the request's tenant even if this task starts after ambient
+        # context has moved on.
+        statuses = await self.store.on_snapshot_status_change(
+            snapshot_id, context=context if context is not None else get_current_context()
+        )
+        # Aborted is terminal, so the stream ends right after that yield and
+        # unsubscribes. Returning early would skip that teardown.
+        async for status in statuses:
             if status == SnapshotStatus.ABORTED:
                 abort_signal.set()
-                return
 
     async def refresh_heartbeat(self, snapshot_id: str) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
@@ -708,8 +717,14 @@ class AgentRuntime:
         err_holder: list[Exception],
         result_holder: list[AgentResult],
         heartbeat_task: asyncio.Task,
+        context: dict[str, Any] | None = None,
     ) -> None:
-        """Background task: wait for fn, then rewrite pending snapshot with final state."""
+        """Background task: wait for fn, then rewrite pending snapshot with final state.
+
+        ``context`` should be captured at detach time (same as heartbeats) so a
+        multi-tenant store still writes the terminal status under the request's
+        tenant after the original call has returned.
+        """
         await fn_task
         await forward_task
 
@@ -748,7 +763,7 @@ class AgentRuntime:
             await self.store.save_snapshot(  # type: ignore[union-attr]
                 pending_snap.snapshot_id,
                 finalize,
-                context=get_current_context(),
+                context=context,
             )
         except Exception:  # noqa: BLE001
             # Best-effort: the snapshot stays pending, but its heartbeat stopped
@@ -884,8 +899,15 @@ class AgentRuntime:
             # emitting chunks to it. The turn keeps running; a background task
             # finalizes the snapshot when fn finishes.
             self.detached = True
+            # Pin tenant context for background abort-watch / heartbeat / finalize
+            # — ambient context may be gone by the time those tasks run or settle.
+            detach_context = get_current_context()
             t1 = asyncio.create_task(
-                self.watch_snapshot_abort(snapshot_id=pending_snap.snapshot_id, abort_signal=abort_signal)
+                self.watch_snapshot_abort(
+                    snapshot_id=pending_snap.snapshot_id,
+                    abort_signal=abort_signal,
+                    context=detach_context,
+                )
             )
             heartbeat_task = asyncio.create_task(self.refresh_heartbeat(pending_snap.snapshot_id))
             t2 = asyncio.create_task(
@@ -896,6 +918,7 @@ class AgentRuntime:
                     err_holder=err_holder,
                     result_holder=result_holder,
                     heartbeat_task=heartbeat_task,
+                    context=detach_context,
                 )
             )
             self.background_tasks.add(t1)

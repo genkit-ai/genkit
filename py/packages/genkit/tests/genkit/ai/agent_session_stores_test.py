@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,6 +34,7 @@ from genkit.agent import (
     FileSessionStore,
     InMemorySessionStore,
     SessionStore,
+    SnapshotStatusStream,
 )
 
 
@@ -123,6 +125,19 @@ async def test_get_snapshot_requires_exactly_one_selector() -> None:
         await store.get_snapshot(snapshot_id='a', session_id='b')
 
 
+@pytest.mark.asyncio
+async def test_get_snapshot_rejects_whitespace_only_selector() -> None:
+    """Whitespace-only ids are rejected (unusable as document keys)."""
+    store = InMemorySessionStore()
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='   ')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(session_id='\t')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
 # --- Abort lifecycle ---
 
 
@@ -155,11 +170,64 @@ async def test_status_subscription_observes_abort() -> None:
     pending = await store.save_snapshot(pending_snap.snapshot_id, lambda _: pending_snap)
     assert pending is not None
 
-    queue = await store.on_snapshot_status_change(pending.snapshot_id)
-    assert await queue.get() == SnapshotStatus.PENDING  # current status on subscribe
+    seen: list[SnapshotStatus] = []
 
+    async def consume() -> None:
+        statuses = await store.on_snapshot_status_change(pending.snapshot_id)
+        async for status in statuses:
+            seen.append(status)
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0)  # let the consumer take the seeded PENDING
     await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id)
-    assert await queue.get() == SnapshotStatus.ABORTED
+    await asyncio.wait_for(task, 2)
+    assert seen == [SnapshotStatus.PENDING, SnapshotStatus.ABORTED]
+    assert pending.snapshot_id not in store.subs
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_waits_for_missing_snapshot() -> None:
+    """Subscribing before the snapshot exists stays open until the first save."""
+    store = InMemorySessionStore()
+    snapshot_id = 'not-yet'
+    statuses = await store.on_snapshot_status_change(snapshot_id)
+    assert store.subs[snapshot_id][0].empty()  # nothing yet; stream stays open
+
+    pending_snap = make_snapshot('sess-wait', 'hello', SnapshotStatus.PENDING).model_copy(
+        update={'snapshot_id': snapshot_id}
+    )
+    await store.save_snapshot(snapshot_id, lambda _: pending_snap)
+    assert await asyncio.wait_for(anext(statuses), 2) == SnapshotStatus.PENDING
+    await statuses.aclose()
+    assert snapshot_id not in store.subs
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_already_terminal_ends() -> None:
+    """Subscribe on a finished snapshot yields the status then ends (no hang)."""
+    store = InMemorySessionStore()
+    done = make_snapshot('sess-done', 'ok', SnapshotStatus.COMPLETED)
+    await store.save_snapshot(done.snapshot_id, lambda _: done)
+
+    seen: list[SnapshotStatus] = []
+    statuses = await store.on_snapshot_status_change(done.snapshot_id)
+    async for status in statuses:
+        seen.append(status)
+    assert seen == [SnapshotStatus.COMPLETED]
+    assert done.snapshot_id not in store.subs
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_aclose_unsubscribes() -> None:
+    """Explicit ``aclose`` stops the subscription (JS-style unsubscribe)."""
+    store = InMemorySessionStore()
+    pending = make_snapshot('sess-aclose', 'work', SnapshotStatus.PENDING)
+    await store.save_snapshot(pending.snapshot_id, lambda _: pending)
+
+    statuses = await store.on_snapshot_status_change(pending.snapshot_id)
+    assert await anext(statuses) == SnapshotStatus.PENDING
+    await statuses.aclose()
+    assert pending.snapshot_id not in store.subs
 
 
 # --- Branching leaf resolution ---
@@ -290,3 +358,14 @@ async def test_file_store_accepts_plain_basename_snapshot_id(tmp_path: Path) -> 
     assert got is not None
     missing_id = str(uuid4())
     assert await store.get_snapshot(snapshot_id=missing_id) is None  # missing but safe id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_status_stream_is_public_and_runtime_checkable() -> None:
+    """Wrapper authors can import and isinstance-check SnapshotStatusStream."""
+    store = InMemorySessionStore()
+    snap = make_snapshot('sess', 'hi', status=SnapshotStatus.PENDING)
+    assert snap.snapshot_id is not None
+    await store.save_snapshot(snap.snapshot_id, lambda _: snap)
+    stream = await store.on_snapshot_status_change(snap.snapshot_id)
+    assert isinstance(stream, SnapshotStatusStream)

@@ -19,11 +19,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from typing import Any, Generic
 
 from genkit._ai._agents._session import (
     SessionStore,
+    SessionStoreLock,
+    SnapshotStatusStream,
     SnapshotSubscriber,
     StateT,
 )
@@ -32,16 +35,17 @@ from genkit._ai._agents._session_stores._util import (
     Subs,
     apply_save,
     assert_safe_snapshot_id,
+    iterate_statuses,
     notify,
     require_one_selector,
     select_leaf,
     session_id_of,
     subscribe,
 )
-from genkit._core._typing import SessionSnapshot, SnapshotStatus
+from genkit._core._typing import SessionSnapshot
 
 
-class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):
+class FileSessionStore(SessionStoreLock, SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):
     """File-backed snapshot store: one ``<snapshot_id>.json`` per snapshot."""
 
     def __init__(
@@ -173,8 +177,26 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
             notify(subs=self.subs, snapshot_id=next_snapshot.snapshot_id, status=next_snapshot.status)
             return next_snapshot
 
-    async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
-        """Return a queue that receives this snapshot's status changes."""
+    async def on_snapshot_status_change(
+        self, snapshot_id: str, *, context: dict[str, Any] | None = None
+    ) -> SnapshotStatusStream:
+        """Return an iterator that yields this snapshot's status changes.
+
+        Call ``aclose()`` (or ``contextlib.aclosing``) to unsubscribe early;
+        natural end after a terminal status also unsubscribes.
+        """
         async with self.lock:
             current = await asyncio.to_thread(self.read_sync, snapshot_id)
-            return await subscribe(subs=self.subs, snapshot_id=snapshot_id, current=current)
+            q = await subscribe(subs=self.subs, snapshot_id=snapshot_id, current=current)
+
+            async def on_close() -> None:
+                async with self.lock:
+                    qs = self.subs.get(snapshot_id)
+                    if qs is None:
+                        return
+                    with contextlib.suppress(ValueError):
+                        qs.remove(q)
+                    if not qs:
+                        self.subs.pop(snapshot_id, None)
+
+            return iterate_statuses(q, on_close=on_close)
