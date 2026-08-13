@@ -239,15 +239,29 @@ func (o *OpenAICompatible) NewModel(id string, opts ai.ModelOptions) *ai.ModelAc
 	return newSDKModel(o.client, o.Provider, id, opts)
 }
 
-// DefineModel creates an unregistered model that takes the OpenAI SDK's
-// request params as its config.
+// DefineModel creates an unregistered model that takes its config untyped:
+// the OpenAI SDK's request params, or a map of them whose unknown keys ride
+// to the wire as JSON extras. Nothing is validated before the model function
+// runs; a config the [ModelGenerator.WithConfig] type switch does not
+// recognize fails the request instead.
 //
-// Deprecated: use [OpenAICompatible.NewModel], which names what it does and
-// takes the provider from the plugin. Define is the verb for a caller
-// supplying the implementation, which this is not.
+// Deprecated: use [OpenAICompatible.NewModel], which names what it does,
+// takes the provider from the plugin, and has the framework validate the
+// config against the SDK schema before the model function runs.
 func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions) ai.Model {
 	o.checkInitted()
-	return newSDKModel(o.client, provider, id, opts)
+	return ai.NewModel(api.NewName(provider, id), &opts, func(
+		ctx context.Context,
+		input *ai.ModelRequest,
+		cb ai.ModelStreamCallback,
+	) (*ai.ModelResponse, error) {
+		return NewModelGenerator(o.client, id).
+			WithMessages(input.Messages).
+			WithConfig(input.Config).
+			WithTools(input.Tools).
+			WithToolChoice(input.ToolChoice).
+			Generate(ctx, input, cb)
+	})
 }
 
 // newSDKModel creates an unregistered model whose config is the OpenAI SDK's

@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/openai/openai-go"
@@ -601,6 +602,72 @@ func TestExtraFieldsReachTheWire(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "messages") {
 		t.Fatalf("Generate() error = %v, want the managed field named in a rejection", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Errorf("requests = %d, want the rejected config to fail before anything is sent", requests)
+	}
+}
+
+// TestDefineModelKeepsConfigUntyped pins the deprecated
+// [OpenAICompatible.DefineModel] contract the not-yet-migrated plugins ride:
+// config is not validated at the action boundary, so a map key the SDK does
+// not model reaches the wire as a JSON extra. The same request against a
+// model built by [OpenAICompatible.NewModel] fails the schema before
+// anything is sent.
+func TestDefineModelKeepsConfigUntyped(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"legacy-model",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	o := &OpenAICompatible{Provider: "testprovider", APIKey: "test-key", BaseURL: server.URL}
+	o.Init(ctx)
+	g := genkit.Init(ctx)
+	genkit.RegisterAction(g, o.DefineModel("testprovider", "legacy-model", ai.ModelOptions{}).(api.Action))
+	genkit.RegisterAction(g, o.NewModel("sdk-model", ai.ModelOptions{}))
+
+	config := map[string]any{"enable_thinking": true, "topP": 0.3}
+	if _, err := genkit.Generate(ctx, g,
+		ai.WithModelName("testprovider/legacy-model"),
+		ai.WithPrompt("hi"),
+		ai.WithConfig(config),
+	); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	mu.Lock()
+	if got := body["enable_thinking"]; got != true {
+		t.Errorf("enable_thinking = %v, want the unmodeled key on the wire", got)
+	}
+	if got := body["top_p"]; got != 0.3 {
+		t.Errorf("top_p = %v, want the camelCase key rewritten to the wire name", got)
+	}
+	mu.Unlock()
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModelName("testprovider/sdk-model"),
+		ai.WithPrompt("hi"),
+		ai.WithConfig(config),
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not match expected schema") {
+		t.Fatalf("Generate() error = %v, want the SDK-typed model to reject the unmodeled key", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
