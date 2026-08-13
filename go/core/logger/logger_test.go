@@ -209,6 +209,83 @@ func TestCustomDefaultInstalledBeforeAddHandlerIsKept(t *testing.T) {
 	}
 }
 
+func TestAddHandlerKeepsCustomDefaultAfterSetLevel(t *testing.T) {
+	resetGlobalState(t)
+
+	// SetLevel creates the managed console; a custom default installed
+	// afterwards must still be the base AddHandler tees onto, not the stale
+	// managed console.
+	SetLevel(slog.LevelInfo)
+	custom := newRecordHandler(slog.LevelInfo)
+	slog.SetDefault(slog.New(custom))
+	AddHandler(newRecordHandler(slog.LevelDebug))
+
+	slog.Info("kept")
+
+	if got := custom.messages(); !slices.Equal(got, []string{"kept"}) {
+		t.Errorf("custom handler messages = %v, want [kept]", got)
+	}
+}
+
+func TestSetDefaultHandlerPreservesSinks(t *testing.T) {
+	resetGlobalState(t)
+
+	sink := newRecordHandler(slog.LevelDebug)
+	AddHandler(sink)
+	replacement := newRecordHandler(slog.LevelInfo)
+	SetDefaultHandler(replacement)
+
+	slog.Info("to both")
+
+	if got := replacement.messages(); !slices.Equal(got, []string{"to both"}) {
+		t.Errorf("replacement messages = %v, want [to both]", got)
+	}
+	if got := sink.messages(); !slices.Equal(got, []string{"to both"}) {
+		t.Errorf("sink messages = %v, want [to both]", got)
+	}
+}
+
+func TestHasCustomDefault(t *testing.T) {
+	resetGlobalState(t)
+
+	if HasCustomDefault() {
+		t.Error("HasCustomDefault = true with the stdlib default handler")
+	}
+	SetLevel(slog.LevelInfo)
+	if HasCustomDefault() {
+		t.Error("HasCustomDefault = true with the managed console installed")
+	}
+	AddHandler(newRecordHandler(slog.LevelDebug))
+	if HasCustomDefault() {
+		t.Error("HasCustomDefault = true with the managed console teed with a sink")
+	}
+	slog.SetDefault(slog.New(newRecordHandler(slog.LevelInfo)))
+	if !HasCustomDefault() {
+		t.Error("HasCustomDefault = false after the application installed its own handler")
+	}
+	// A component-supplied base handler also counts as custom: console
+	// configuration such as GENKIT_LOG_LEVEL must not clobber it.
+	SetDefaultHandler(newRecordHandler(slog.LevelInfo))
+	if !HasCustomDefault() {
+		t.Error("HasCustomDefault = false after SetDefaultHandler installed a component handler")
+	}
+}
+
+func TestStdlibLogLoggerLevelCarriesOver(t *testing.T) {
+	resetGlobalState(t)
+
+	// Verbosity raised on the stdlib default handler via SetLogLoggerLevel
+	// must survive its substitution with the managed console.
+	prev := slog.SetLogLoggerLevel(slog.LevelDebug)
+	t.Cleanup(func() { slog.SetLogLoggerLevel(prev) })
+
+	AddHandler(newRecordHandler(slog.LevelDebug))
+
+	if got := GetLevel(); got != slog.LevelDebug {
+		t.Errorf("GetLevel = %v, want %v (seeded from SetLogLoggerLevel)", got, slog.LevelDebug)
+	}
+}
+
 func TestAddHandlerTwiceDoesNotNest(t *testing.T) {
 	resetGlobalState(t)
 

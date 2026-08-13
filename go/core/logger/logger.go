@@ -51,11 +51,16 @@ var (
 // the log package's mutex. It is detected by type rather than by capturing
 // slog.Default() at package initialization, since another package's init can
 // legitimately install a custom default before this package initializes, and
-// that handler must not be mistaken for the stdlib one. A test pins the type
-// name against stdlib renames.
+// that handler must not be mistaken for the stdlib one. The type is matched
+// by package path and name, which are exact where Type.String's short-name
+// form could collide with a third-party package also called slog. A test
+// pins the identification against stdlib renames.
 func isStdlibDefaultHandler(h slog.Handler) bool {
 	t := reflect.TypeOf(h)
-	return t != nil && t.String() == "*slog.defaultHandler"
+	if t == nil || t.Kind() != reflect.Pointer {
+		return false
+	}
+	return t.Elem().PkgPath() == "log/slog" && t.Elem().Name() == "defaultHandler"
 }
 
 // SetLevel sets the minimum level of Genkit's console log handler and installs
@@ -81,10 +86,9 @@ func ensureConsole() {
 }
 
 // GetLevel returns the level most recently passed to [SetLevel], or
-// slog.LevelInfo if SetLevel has not been called.
+// slog.LevelInfo if SetLevel has not been called. slog.LevelVar is safe for
+// concurrent use, so no lock is needed.
 func GetLevel() slog.Level {
-	mu.Lock()
-	defer mu.Unlock()
 	return level.Level()
 }
 
@@ -100,28 +104,73 @@ func AddHandler(h slog.Handler) {
 	mu.Lock()
 	defer mu.Unlock()
 	sinks = append(sinks, h)
-	base := console
-	if base == nil {
-		base = currentBase()
+	install(currentBase())
+}
+
+// SetDefaultHandler installs h as the base handler of the process-wide
+// default logger, replacing the current base while keeping every sink
+// registered with [AddHandler]. Components that bring their own destination
+// handler (for example a plugin that ships logs to a cloud service) should
+// use this instead of [slog.SetDefault], which would silently disconnect the
+// registered sinks, including dev-mode streaming to the Dev UI.
+func SetDefaultHandler(h slog.Handler) {
+	mu.Lock()
+	defer mu.Unlock()
+	install(h)
+}
+
+// HasCustomDefault reports whether the process-wide default logger is built
+// on a handler the application installed itself, rather than the stdlib
+// default handler or the managed console handler this package installs.
+// Genkit uses it to decide whether console logging configuration (such as the
+// GENKIT_LOG_LEVEL environment variable) is Genkit's to apply.
+func HasCustomDefault() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	h := slog.Default().Handler()
+	if t, ok := h.(*teeHandler); ok {
+		h = t.handlers[0]
 	}
-	install(base)
+	return !isStdlibDefaultHandler(h) && h != console
 }
 
 // currentBase returns the handler that console output should continue to flow
 // through: the current default handler, unwrapped if it is a tee this package
 // installed earlier (so re-installation never nests tees). The stdlib default
 // handler is substituted with the managed console handler, since teeing it
-// would deadlock (see [isStdlibDefaultHandler]). Callers must hold mu.
+// would deadlock (see [isStdlibDefaultHandler]); its effective level is
+// carried over so the substitution does not change verbosity. Callers must
+// hold mu.
 func currentBase() slog.Handler {
 	h := slog.Default().Handler()
 	if t, ok := h.(*teeHandler); ok {
 		h = t.handlers[0]
 	}
 	if isStdlibDefaultHandler(h) {
+		if console == nil {
+			seedLevelFromStdlib(h)
+		}
 		ensureConsole()
 		return console
 	}
 	return h
+}
+
+// seedLevelFromStdlib copies the stdlib default handler's effective minimum
+// level into the managed level, so substituting the managed console for that
+// handler preserves verbosity raised with [slog.SetLogLoggerLevel] (which has
+// no getter; the handler is probed through Enabled instead). It runs only
+// before the console handler exists, so an explicit [SetLevel] always wins.
+// Callers must hold mu.
+func seedLevelFromStdlib(h slog.Handler) {
+	ctx := context.Background()
+	for _, l := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		if h.Enabled(ctx, l) {
+			level.Set(l)
+			return
+		}
+	}
+	level.Set(slog.LevelError + 1)
 }
 
 // install makes base, teed with any registered sinks, the default slog

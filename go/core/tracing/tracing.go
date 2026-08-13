@@ -20,6 +20,7 @@ package tracing
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -295,17 +296,26 @@ func RunInNewSpan[I, O any](
 
 	// These logs run under the new span's context, so they land on this span
 	// in the Dev UI. The deferred one is registered after the span.End defer,
-	// so it fires first, while the span is still recording.
+	// so it fires first, while the span is still recording. This is the
+	// hottest path in the framework, so the log arguments are only built when
+	// some handler accepts debug records (the console at GENKIT_LOG_LEVEL=
+	// debug, or the Dev UI export sink).
 	start := time.Now()
-	startArgs := []any{"name", metadata.Name}
-	if metadata.Type != "" {
-		startArgs = append(startArgs, "type", metadata.Type)
+	logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
+	if logDebug {
+		startArgs := []any{"name", metadata.Name}
+		if metadata.Type != "" {
+			startArgs = append(startArgs, "type", metadata.Type)
+		}
+		if metadata.Subtype != "" {
+			startArgs = append(startArgs, "subtype", metadata.Subtype)
+		}
+		logger.Debug(ctx, "span started", startArgs...)
 	}
-	if metadata.Subtype != "" {
-		startArgs = append(startArgs, "subtype", metadata.Subtype)
-	}
-	logger.Debug(ctx, "span started", startArgs...)
 	defer func() {
+		if !logDebug {
+			return
+		}
 		endArgs := []any{"name", metadata.Name, "state", string(sm.State), "duration", time.Since(start).Round(time.Millisecond)}
 		if sm.Error != "" {
 			endArgs = append(endArgs, "error", sm.Error)

@@ -21,7 +21,6 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/googleapis/gax-go/v2/apierror"
 )
 
 // GetFirestoreDocumentRetriever creates a Firestore Document Retriever.
@@ -81,13 +80,9 @@ func GetFirestoreDocumentIndexer(db *firestore.Client, collectionName string) Do
 			ids = append(ids, docRef.ID)
 		}
 
-		// Commit the batch operation.
+		// Commit the batch operation. APIError's Error() includes its
+		// details, so the wrapped error carries the full diagnostics.
 		if _, err := batch.Commit(ctx); err != nil {
-			// The wrapped error carries the message; the API error details
-			// are only available here, so log them before returning.
-			if apiErr, ok := err.(*apierror.APIError); ok {
-				logger.Debug(ctx, "vectorsearch: Firestore batch commit failed", "details", fmt.Sprintf("%v", apiErr.Details()))
-			}
 			return nil, fmt.Errorf("failed to commit Firestore batch: %w", err)
 		}
 

@@ -32,6 +32,7 @@ import (
 	"cloud.google.com/go/logging"
 	mexporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric"
 	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
+	corelogger "github.com/firebase/genkit/go/core/logger"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 
@@ -246,9 +247,11 @@ func setupGCPLogger(projectID string, level slog.Leveler, credentials *google.Cr
 	if err != nil {
 		return fmt.Errorf("failed to create logging client: %w", err)
 	}
-	// Set up error handling for async logging failures with recursive recovery
+	// Set up error handling for async logging failures with recursive recovery.
+	// SetDefaultHandler (rather than slog.SetDefault) keeps sinks registered
+	// with logger.AddHandler attached, such as dev-mode Dev UI log streaming.
 	c.OnError = func(err error) {
-		slog.SetDefault(stderrLogger)
+		corelogger.SetDefaultHandler(stderrLogger.Handler())
 		stderrLogger.Warn("Unable to send logs to Google Cloud", "error", err)
 		if loggingDenied(err) {
 			showLoggingInstructionsOnce.Do(func() {
@@ -269,7 +272,7 @@ func setupGCPLogger(projectID string, level slog.Leveler, credentials *google.Cr
 		*/
 	}
 	logger := c.Logger("genkit_log")
-	slog.SetDefault(slog.New(newHandler(level, logger.Log, projectID)))
+	corelogger.SetDefaultHandler(newHandler(level, logger.Log, projectID))
 	return nil
 }
 

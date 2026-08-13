@@ -87,7 +87,7 @@ func (h *MCPHost) Connect(ctx context.Context, g *genkit.Genkit, serverName stri
 		}
 	}
 
-	logger.Debug(ctx, "connecting to MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "connecting to MCP server", "server", serverName, "host", h.name)
 
 	// Set the server name in the config
 	if config.Name == "" {
@@ -112,7 +112,7 @@ func (h *MCPHost) Disconnect(ctx context.Context, serverName string) error {
 		return fmt.Errorf("no client found with name '%s'", serverName)
 	}
 
-	logger.Debug(ctx, "disconnecting MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "disconnecting MCP server", "server", serverName, "host", h.name)
 
 	err := client.Disconnect()
 	delete(h.clients, serverName)
@@ -126,7 +126,7 @@ func (h *MCPHost) Reconnect(ctx context.Context, serverName string) error {
 		return fmt.Errorf("no client found with name '%s'", serverName)
 	}
 
-	logger.Debug(ctx, "reconnecting MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "reconnecting MCP server", "server", serverName, "host", h.name)
 	return client.Restart(ctx)
 }
 

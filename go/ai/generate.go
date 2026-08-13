@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -562,11 +563,15 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				return nil, err
 			}
 
-			modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
-			if resp.Usage != nil {
-				modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
+			// ToolRequests allocates a scan of the message, so only build the
+			// log arguments when a handler accepts debug records.
+			if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+				modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
+				if resp.Usage != nil {
+					modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
+				}
+				logger.Debug(ctx, "model responded", modelArgs...)
 			}
-			logger.Debug(ctx, "model responded", modelArgs...)
 
 			// Ensure all tool requests have unique refs for matching during resume.
 			ensureToolRequestRefs(resp.Message)
@@ -1169,18 +1174,20 @@ type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*M
 // either a new request to continue the conversation or nil if no tool requests
 // need handling.
 func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, resp *ModelResponse, cb ModelStreamCallback, messageIndex int, runTool toolRunnerFunc) (*ModelRequest, *Message, error) {
-	toolCount := len(resp.ToolRequests())
-	if toolCount == 0 {
+	toolRequests := resp.ToolRequests()
+	if len(toolRequests) == 0 {
 		return nil, nil, nil
 	}
 
-	toolNames := make([]string, 0, toolCount)
-	for _, p := range resp.ToolRequests() {
-		toolNames = append(toolNames, p.ToolRequest.Name)
+	if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+		toolNames := make([]string, 0, len(toolRequests))
+		for _, p := range toolRequests {
+			toolNames = append(toolNames, p.ToolRequest.Name)
+		}
+		logger.Debug(ctx, "executing tool requests", "tools", toolNames)
 	}
-	logger.Debug(ctx, "executing tool requests", "tools", toolNames)
 
-	resultChan := make(chan result[*MultipartToolResponse], toolCount)
+	resultChan := make(chan result[*MultipartToolResponse], len(toolRequests))
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
 
@@ -1279,9 +1286,9 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	// Tools run concurrently, so resultChan delivers responses in completion
 	// order. Collect them keyed by the request's position in the model message
 	// so they can be re-emitted in request order below.
-	toolRespByIndex := make(map[int]*Part, toolCount)
+	toolRespByIndex := make(map[int]*Part, len(toolRequests))
 	hasInterrupts := false
-	for range toolCount {
+	for range len(toolRequests) {
 		res := <-resultChan
 		if res.err != nil {
 			var tie *toolInterruptError

@@ -210,6 +210,31 @@ func TestLogExportHandlerDisabledWithoutClient(t *testing.T) {
 	}
 }
 
+func TestLogExportDisabledByEnv(t *testing.T) {
+	// The opt-out is read when export is enabled, not at package init, so a
+	// value set with t.Setenv (or os.Setenv before genkit.Init) takes effect.
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"true", false},
+		{"1", false},
+		{"false", true},
+		{"0", true},
+		{"FALSE", true},
+		{"off", false}, // not a strconv.ParseBool value; export stays enabled
+	}
+	for _, c := range cases {
+		t.Run("value="+c.value, func(t *testing.T) {
+			t.Setenv("GENKIT_OTEL_ENABLE_LOGS", c.value)
+			if got := logExportDisabled(); got != c.want {
+				t.Errorf("logExportDisabled() with %q = %v, want %v", c.value, got, c.want)
+			}
+		})
+	}
+}
+
 func TestLogExportOverflowDoesNotDeadlock(t *testing.T) {
 	// A full queue with no worker draining it: enqueue must drop, and the
 	// drop warning must not travel back through the export handler. Before

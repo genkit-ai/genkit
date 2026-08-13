@@ -26,17 +26,25 @@ import (
 	"sync"
 )
 
-// warnTraceExportOnce gates a single warning when trace export to the
-// telemetry server fails, so a dev session with a dead server hears about it
-// once instead of on every span.
-var warnTraceExportOnce sync.Once
+// warnTelemetryUnreachableOnce gates a single unreachable-server warning
+// shared by the trace and log export paths, so a dev session with a dead
+// telemetry server hears about it once instead of once per pipeline (or per
+// span).
+var warnTelemetryUnreachableOnce sync.Once
+
+// warnTelemetryUnreachable warns once that the telemetry server cannot be
+// reached. It writes through diag: export-pipeline diagnostics must stay off
+// the export path itself (see [diag]).
+func warnTelemetryUnreachable(err error) {
+	warnTelemetryUnreachableOnce.Do(func() {
+		diag.Warn("cannot reach telemetry server; traces and logs will not appear in the Dev UI", "error", err)
+	})
+}
 
 // reportTraceSaveError logs a trace-export failure: the first one loudly,
 // the rest at debug level.
 func reportTraceSaveError(err error) {
-	warnTraceExportOnce.Do(func() {
-		slog.Warn("cannot reach telemetry server; traces will not appear in the Dev UI", "error", err)
-	})
+	warnTelemetryUnreachable(err)
 	slog.Debug("failed to save trace to telemetry server", "error", err)
 }
 

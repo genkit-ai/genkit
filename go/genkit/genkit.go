@@ -45,12 +45,6 @@ import (
 // genkitCtxKey is the context key for the Genkit instance.
 var genkitCtxKey = base.NewContextKey[*Genkit]()
 
-// initialSlogDefault is the process's default logger as of package
-// initialization. Comparing against it tells whether the application (or a
-// plugin) installed its own handler, in which case Genkit leaves the console
-// logging configuration alone.
-var initialSlogDefault = slog.Default()
-
 // configureLoggingOnce guards configureLogging: Init may run more than once
 // (commonly in tests), but log handlers must only be installed once.
 var configureLoggingOnce sync.Once
@@ -63,12 +57,13 @@ func configureLogging() {
 		var lvl slog.Level
 		if err := lvl.UnmarshalText([]byte(v)); err != nil {
 			slog.Warn("ignoring invalid GENKIT_LOG_LEVEL", "value", v, "error", err)
-		} else if slog.Default() == initialSlogDefault {
-			logger.SetLevel(lvl)
-		} else {
+		} else if logger.HasCustomDefault() {
 			// The application brought its own handler; its level is not ours
-			// to manage.
-			slog.Debug("ignoring GENKIT_LOG_LEVEL because a custom default logger is installed", "value", v)
+			// to manage. Warn rather than stay silent, since the user set the
+			// variable expecting an effect.
+			slog.Warn("ignoring GENKIT_LOG_LEVEL because the application installed its own default logger", "value", v)
+		} else {
+			logger.SetLevel(lvl)
 		}
 	}
 	if api.CurrentEnvironment() == api.EnvironmentDev {
@@ -336,33 +331,55 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	if api.CurrentEnvironment() == api.EnvironmentDev {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
+		// startupErrCh carries the startup outcome to the select below. The
+		// supervisor goroutine is the sole reader of errCh, so a post-startup
+		// serve error can never be mistaken for a startup failure here, and a
+		// startup failure never strands the supervisor waiting on a start
+		// signal that will not come.
+		startupErrCh := make(chan error, 1)
 
 		if v2URL := os.Getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
 			// V2: connect to the CLI's WebSocket server.
 			go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: v2URL}, errCh, serverStartCh)
 		} else {
-			// V1: start an HTTP reflection server.
-			go func() {
-				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
-					return
-				}
-				// Wait for startup to succeed before draining errCh for
-				// runtime serve errors. Receiving from errCh right away would
-				// race the select below for a startup failure; if this
-				// goroutine won, the error would be logged instead of
-				// panicking and Init would block forever on channels nobody
-				// closes.
-				<-serverStartCh
-				if err := <-errCh; err != nil {
-					logger.Error(ctx, "reflection server error", "error", err)
-				}
-			}()
+			// V1: start an HTTP reflection server. Startup errors arrive on
+			// errCh; success closes serverStartCh.
+			go startReflectionServer(ctx, g, errCh, serverStartCh)
 		}
 
+		go func() {
+			select {
+			case <-serverStartCh:
+				startupErrCh <- nil
+				select {
+				case err := <-errCh:
+					if err != nil {
+						logger.Error(ctx, "reflection server error", "error", err)
+					}
+				case <-ctx.Done():
+				}
+			case err := <-errCh:
+				// Both channels can be ready when the server fails right
+				// after starting; started-then-failed is a runtime error,
+				// not a startup failure.
+				select {
+				case <-serverStartCh:
+					startupErrCh <- nil
+					if err != nil {
+						logger.Error(ctx, "reflection server error", "error", err)
+					}
+				default:
+					startupErrCh <- err
+				}
+			case <-ctx.Done():
+			}
+		}()
+
 		select {
-		case err := <-errCh:
-			panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
-		case <-serverStartCh:
+		case err := <-startupErrCh:
+			if err != nil {
+				panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
+			}
 		case <-ctx.Done():
 			panic(ctx.Err())
 		}

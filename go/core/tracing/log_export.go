@@ -54,10 +54,16 @@ const (
 )
 
 // logExportDisabled reports whether the user explicitly opted out of log
-// export. The same variable gates the JS runtime's log export, but with an
-// opt-in default; Go exports whenever a telemetry server is configured, which
-// only the dev tooling does, so "false" is the only meaningful setting.
-var logExportDisabled = os.Getenv("GENKIT_OTEL_ENABLE_LOGS") == "false"
+// export via GENKIT_OTEL_ENABLE_LOGS. The same variable gates the JS
+// runtime's log export, but with an opt-in default; Go exports whenever a
+// telemetry server is configured, which only the dev tooling does, so a false
+// value is the only meaningful setting. It is read when export is enabled,
+// not at package initialization, so a value set programmatically before
+// genkit.Init (os.Setenv in main, t.Setenv in tests) is honored.
+func logExportDisabled() bool {
+	v, err := strconv.ParseBool(os.Getenv("GENKIT_OTEL_ENABLE_LOGS"))
+	return err == nil && !v
+}
 
 // logExporter converts slog records to OTLP-JSON log records and ships them
 // to the telemetry server from a single background worker.
@@ -67,12 +73,10 @@ type logExporter struct {
 	start   sync.Once
 	dropped atomic.Int64
 
-	// warnUnreachable and warnDropped each fire once so a dead telemetry
-	// server or a full queue is reported without flooding the console. The
-	// warnings themselves pass back through the export handler, but a second
-	// failure no longer logs, so there is no feedback loop.
-	warnUnreachable sync.Once
-	warnDropped     sync.Once
+	// warnDropped fires once so a full queue is reported without flooding the
+	// console. An unreachable server is reported through the package-wide
+	// [warnTelemetryUnreachable], shared with the trace export path.
+	warnDropped sync.Once
 }
 
 // exporter is the process-wide dev log exporter. Its handler is installed by
@@ -98,7 +102,7 @@ var diag = slog.New(slog.NewTextHandler(os.Stderr, nil))
 // Records reach the telemetry server only if a handler created by
 // [LogExportHandler] is registered, which genkit.Init does in dev mode.
 func EnableLogExport(url string) {
-	if url == "" || logExportDisabled {
+	if url == "" || logExportDisabled() {
 		return
 	}
 	exporter.client.Store(NewHTTPTelemetryClient(url))
@@ -150,9 +154,7 @@ func (e *logExporter) send(batch []otlpLogRecord) {
 			}},
 		}},
 	}); err != nil {
-		e.warnUnreachable.Do(func() {
-			diag.Warn("cannot reach telemetry server; logs will not appear in the Dev UI", "error", err)
-		})
+		warnTelemetryUnreachable(err)
 	}
 }
 
@@ -188,7 +190,7 @@ func (h *logExportHandler) Handle(ctx context.Context, r slog.Record) error {
 		SeverityNumber: severityNumber(r.Level),
 		SeverityText:   severityText(r.Level),
 		Body:           otlpStringValue(r.Message),
-		Attributes:     append([]otlpKeyValue{}, h.attrs...),
+		Attributes:     append(make([]otlpKeyValue, 0, len(h.attrs)+r.NumAttrs()), h.attrs...),
 	}
 	r.Attrs(func(a slog.Attr) bool {
 		rec.Attributes = appendOtlpAttr(rec.Attributes, h.prefix, a)

@@ -43,7 +43,9 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 )
 
-// Set pineconeDebug to true to dump data sent to and received from the server.
+// Set pineconeDebug to true to dump data sent to and received from the
+// server. The dumps are logged at debug level, so also run with
+// GENKIT_LOG_LEVEL=debug (or a debug-level handler) to see them.
 const pineconeDebug = false
 
 // apiServer is the Pinecone API server.
