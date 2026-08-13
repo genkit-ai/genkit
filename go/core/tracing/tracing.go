@@ -71,7 +71,7 @@ func isErrorAlreadyMarked(err error) bool {
 // unwrapMarkedError removes the internal marker when it is the outermost
 // wrapper, preserving the application error's type and identity.
 func unwrapMarkedError(err error) error {
-	if me, ok := err.(*markedError); ok {
+	if me, ok := err.(*markedError); ok && me != nil {
 		return me.error
 	}
 	return err
@@ -320,7 +320,7 @@ func RunInNewSpan[I, O any](
 		sm.State = spanStateSuccess
 		sm.Output = output
 	}
-	if parentSM == nil {
+	if parentSM == nil && err != nil {
 		err = unwrapMarkedError(err)
 	}
 	return output, err

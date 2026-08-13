@@ -561,6 +561,10 @@ func TestUnwrapMarkedError(t *testing.T) {
 	if got := unwrapMarkedError(wrapped); got != wrapped {
 		t.Errorf("unwrapMarkedError(contextual wrapper) = %T %v, want wrapper preserved", got, got)
 	}
+	var typedNil *markedError
+	if got := unwrapMarkedError(typedNil); got != typedNil {
+		t.Errorf("unwrapMarkedError(typed nil) = %T %v, want typed nil preserved", got, got)
+	}
 }
 
 // TestRootSpanAutoDetection tests that spans are automatically marked as root when no parent exists
