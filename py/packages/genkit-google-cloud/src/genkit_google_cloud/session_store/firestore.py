@@ -68,7 +68,6 @@ from genkit._ai._agents._session_stores._util import (
     session_id_of,
 )
 from genkit._ai._json_patch import apply_json_patch, diff_json
-from genkit._core._action import get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._loop_cache import _loop_local_client
 from genkit._core._typing import (
@@ -853,8 +852,6 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         matters.
         """
         require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
-        if context is None:
-            context = get_current_context()
         if snapshot_id is not None:
             _validate_doc_id(snapshot_id, 'snapshot_id')
         if session_id is not None:
@@ -956,8 +953,6 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         delete the session's documents and re-create what should remain.
         """
         _validate_doc_id(snapshot_id, 'snapshot_id')
-        if context is None:
-            context = get_current_context()
         # Resolve the tenant prefix before the transaction: a failing prefix
         # function must fail BEFORE anything commits, and the post-commit
         # notification must use the same prefix the write used.
@@ -1179,9 +1174,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
         Exiting an ``async for`` with ``break`` does not end the subscription;
         close the stream (``async with`` or ``aclose()``) or it stays open
-        until a terminal status or ``close()``. When ``context`` is omitted, the
-        ambient call context is used — the same default as ``get_snapshot`` and
-        ``save_snapshot``.
+        until a terminal status or ``close()``. Omitting ``context`` leaves the
+        prefix function with ``None`` (typically the default ``global`` prefix);
+        callers that want ambient action context must pass it in.
         """
         _validate_doc_id(snapshot_id, 'snapshot_id')
         if self._closed:
@@ -1189,8 +1184,6 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 status='FAILED_PRECONDITION',
                 message='FirestoreSessionStore: store is closed.',
             )
-        if context is None:
-            context = get_current_context()
         # Tenant prefix is captured once so two tenants watching the same
         # snapshot id get independent listeners.
         prefix = self._prefix(context)

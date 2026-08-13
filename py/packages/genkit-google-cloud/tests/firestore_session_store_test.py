@@ -2666,8 +2666,8 @@ async def test_firestore_session_store_no_context_defaults_to_global_prefix() ->
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_ambient_context_shared_across_ops() -> None:
-    """get/save with no context= honor the ambient action context for path prefix."""
+async def test_firestore_session_store_omitted_context_ignores_ambient_action_context() -> None:
+    """Omitting context= does not read ambient action context (callers must pass it)."""
     from genkit._core._action import _action_context
 
     h = FakeStoreHarness()
@@ -2689,8 +2689,8 @@ async def test_firestore_session_store_ambient_context_shared_across_ops() -> No
         _action_context.reset(token)
 
     assert loaded is not None and loaded.snapshot_id == 'snap-1'
-    assert _snap_path('snap-1', prefix='ambient-t') in h.docs
-    assert _snap_path('snap-1', prefix='global') not in h.docs
+    assert _snap_path('snap-1', prefix='global') in h.docs
+    assert _snap_path('snap-1', prefix='ambient-t') not in h.docs
 
 
 @pytest.mark.asyncio
