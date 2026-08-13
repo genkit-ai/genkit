@@ -65,11 +65,27 @@ class ResolvedModel:
 
 
 def normalize_config(*, config: object) -> dict[str, Any]:
-    """Turn a Pydantic config, mapping, or None into a plain dict."""
+    """Convert a config object or dict into a mergeable dict.
+
+    ``generate()`` runs both a ModelRef's default config and the per-call
+    ``config=`` through this, then overlays them. Call-time keys win;
+    ``None`` means don't send that field. Keys stay snake_case so
+    ``ModelConfig(max_output_tokens=100)`` and
+    ``config={'max_output_tokens': 200}`` hit the same key.
+    """
     if config is None:
         return {}
     if isinstance(config, BaseModel):
-        return config.model_dump(exclude_unset=True)
+        # Overlay needs the keys the caller wrote, including explicit None.
+        # Skip fields they never set. Don't camelCase — maxOutputTokens
+        # would miss a dict override on max_output_tokens.
+        dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        # api_key is left out of JSON on purpose; copy it back so a
+        # per-request key still reaches the plugin.
+        for name in config.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(config, name)
+        return dumped
     if isinstance(config, Mapping):
         return dict(config)
     raise TypeError(f"Unsupported config type: {type(config).__name__}")
@@ -83,7 +99,7 @@ def resolve_model_name(
 ) -> str:
     """Return an explicit model name or the registry default; error if neither exists."""
     name = model if model is not None else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    if not name:
+    if not name or not isinstance(name, str):
         raise GenkitError(status='INVALID_ARGUMENT', message=message)
     return name
 
