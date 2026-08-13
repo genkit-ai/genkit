@@ -154,7 +154,7 @@ async def test_empty_input_is_rejected() -> None:
         ('cohere.embed-v4:0', True),
         ('amazon.nova-2-multimodal-embeddings-v1:0', True),
         ('us.amazon.titan-embed-text-v2:0', True),
-        # Bare 'cohere' routing in the Go plugin would swallow these two.
+        # Bare 'cohere' routing would swallow these two.
         ('cohere.rerank-v3-5:0', False),
         ('cohere.command-r-v1:0', False),
         ('anthropic.claude-sonnet-4-5-20250929-v1:0', False),
@@ -199,8 +199,8 @@ async def test_empty_document_fails_before_any_call(model_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_mixed_validity_names_the_first_bad_document_and_calls_nothing() -> None:
-    # Upfront validation, unlike Go's per-goroutine checks: a bad batch costs
-    # nothing rather than paying for every document that happens to be fine.
+    # Upfront validation: a bad batch costs nothing rather than paying for
+    # every document that happens to be fine.
     transport = FakeInvokeTransport()
     with pytest.raises(GenkitError, match='document 2 has no text content'):
         await embed(TITAN_TEXT, transport, [text_doc('a'), text_doc('b'), text_doc(''), text_doc('')])
@@ -334,8 +334,8 @@ async def test_titan_multimodal_requires_some_content() -> None:
 
 @pytest.mark.asyncio
 async def test_titan_multimodal_raises_the_in_band_message() -> None:
-    # Titan multimodal reports input problems on an HTTP 200; the Go plugin
-    # drops this field and returns "empty embedding vector" instead.
+    # Titan multimodal reports input problems on an HTTP 200, so dropping this
+    # field surfaces "empty embedding vector" instead.
     transport = FakeInvokeTransport([{'message': 'image too large'}])
     with pytest.raises(GenkitError, match='image too large') as excinfo:
         await embed(TITAN_MM, transport, [text_doc('hi')])
@@ -475,8 +475,7 @@ async def test_nova_sends_the_single_embedding_body() -> None:
 
 @pytest.mark.asyncio
 async def test_nova_reads_the_vector_off_the_embeddings_list() -> None:
-    # A list of objects, not the bare vector Titan returns; the Go plugin's
-    # test asserts a fabricated Titan-shaped response here.
+    # A list of objects, not the bare vector Titan returns.
     transport = FakeInvokeTransport([nova_response([0.5, 0.6])])
     assert await embed(NOVA, transport, [text_doc('hi')]) == [[0.5, 0.6]]
 
@@ -600,8 +599,8 @@ async def test_a_failing_batch_cancels_the_calls_that_have_not_started() -> None
     with pytest.raises(GenkitError, match='document 0'):
         await embed(TITAN_TEXT, transport, documents)
 
-    # Go cancels its context on the first error. Without that the semaphore
-    # drains and every remaining document still bills a call.
+    # Without cancellation the semaphore drains and every remaining document
+    # still bills a call.
     assert len(transport.calls) < len(documents)
 
 
@@ -636,8 +635,8 @@ async def test_results_keep_input_order_when_calls_finish_out_of_order() -> None
 
 @pytest.mark.asyncio
 async def test_the_first_failure_to_land_wins_and_the_slower_one_is_cancelled() -> None:
-    # Go returns the first error off its results channel and cancels the rest,
-    # so the earlier document's slower failure never gets reported.
+    # The first error cancels the rest, so the earlier document's slower
+    # failure never gets reported.
     class RacingTransport:
         async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:
             text = json.loads(kwargs['body'])['inputText']

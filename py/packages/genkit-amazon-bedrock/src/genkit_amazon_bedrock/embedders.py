@@ -20,18 +20,17 @@ Embedding models predate Converse and have no unified request shape: each
 family takes its own raw JSON body and returns its own response shape, so
 routing by model ID is unavoidable.
 
-Ported from the Go plugin's ``embed.go``, with four corrections verified
-against the AWS docs and API: Nova targets the real
-``amazon.nova-2-multimodal-embeddings-v1:0`` schema rather than Go's
-unreachable Titan-shaped path, Cohere embedding is text-only, routing is on
-``cohere.embed`` so rerank model IDs are not swallowed, and Titan multimodal's
-in-band ``message`` field is raised instead of ignored.
+Bedrock behaviours that are easy to get wrong: Nova uses the
+``amazon.nova-2-multimodal-embeddings-v1:0`` schema rather than a Titan-shaped
+body; Cohere Embed v3 is text-only; Cohere text is chunked at Bedrock's
+96-document per-request limit; routing matches ``cohere.embed`` rather than
+bare ``cohere``, so rerank model IDs are not swallowed; and Titan multimodal
+reports input errors in-band, in a ``message`` field on an HTTP 200.
 
 On Cohere: the AWS parameters page documents an ``images`` field and an
 ``image`` input type for Embed v3, but ``get-foundation-model`` reports
 ``inputModalities: [TEXT]`` for both v3 model IDs and a live image request is
-rejected with ``Invalid parameter combination``. Go's image path cannot work
-for that reason, not because of how it encodes the image. Image embedding needs
+rejected with ``Invalid parameter combination``. Image embedding needs
 ``amazon.titan-embed-image-v1``, or Cohere Embed v4 once that lands.
 """
 
@@ -171,7 +170,7 @@ def get_embedder_options(model_id: str) -> EmbedderOptions:
 
 
 def document_text(document: DocumentData) -> str:
-    """Joins a document's text parts, mirroring the Go plugin's ``documentText``.
+    """Joins a document's text parts.
 
     Whitespace-only parts are skipped, surviving parts are joined untrimmed,
     and only the result is stripped. Text is never flattened across documents:
@@ -381,7 +380,7 @@ class BedrockEmbedder:
 
     async def _embed_titan_text(self, documents: list[DocumentData]) -> list[list[float]]:
         # Every document is validated before the first call goes out, so a bad
-        # batch costs nothing. Go checks each one inside its own goroutine.
+        # batch costs nothing.
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
         return await self._run_bounded([(index, self._titan_text_vector(text)) for index, text in enumerate(texts)])
 
