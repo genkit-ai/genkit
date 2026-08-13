@@ -29,6 +29,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 // TestChatConfigApply pins the wire contract of the Claude compat config: the
@@ -129,6 +130,39 @@ func TestModelConfigSchema(t *testing.T) {
 	thinkingType, _ := thinkingProps["type"].(map[string]any)
 	if got, has := thinkingType["enum"]; has {
 		t.Errorf("thinking.type enum = %v, want none since the set is Anthropic's to grow", got)
+	}
+	// The API rejects thinking budgets under 1,024 tokens, so the schema
+	// carries the floor.
+	budget, _ := thinkingProps["budgetTokens"].(map[string]any)
+	if got := budget["minimum"]; got != 1024.0 {
+		t.Errorf("thinking.budgetTokens minimum = %#v, want Anthropic's 1024 floor", got)
+	}
+}
+
+// TestThinkingBudgetFloorRejected pins the floor end to end: the API rejects
+// budgets under 1,024 ("Input should be greater than or equal to 1024"), so
+// boundary validation catches one before the wire.
+func TestThinkingBudgetFloorRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request reached the server, want boundary validation to reject the config")
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &Anthropic{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModel(ModelRef("claude-3-5-haiku-20241022", &ChatConfig{
+			Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 512},
+		})),
+		ai.WithPrompt("hi"),
+	)
+	if err == nil {
+		t.Fatal("Generate() error = nil, want the 512-token budget rejected")
+	}
+	if !strings.Contains(err.Error(), "budgetTokens") {
+		t.Errorf("error = %v, want it to name budgetTokens", err)
 	}
 }
 

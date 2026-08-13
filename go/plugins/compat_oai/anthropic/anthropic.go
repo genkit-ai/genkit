@@ -72,8 +72,9 @@ type ThinkingConfig struct {
 	// reject a value Anthropic accepts.
 	Type string `json:"type,omitempty" jsonschema_description:"Turns thinking enabled or disabled."`
 	// BudgetTokens is the maximum number of tokens Claude may think with,
-	// sent as the API's budget_tokens.
-	BudgetTokens int `json:"budgetTokens,omitempty" jsonschema:"minimum=1" jsonschema_description:"Maximum number of tokens Claude may think with, sent as the API's budget_tokens."`
+	// sent as the API's budget_tokens. Anthropic rejects budgets under 1,024
+	// tokens, and the budget must stay below the request's max_tokens.
+	BudgetTokens int `json:"budgetTokens,omitempty" jsonschema:"minimum=1024" jsonschema_description:"Maximum number of tokens Claude may think with, sent as the API's budget_tokens; at least 1,024, and less than maxOutputTokens."`
 }
 
 // ApplyToChatCompletion implements [compat_oai.ChatConfig]: the endpoint's
