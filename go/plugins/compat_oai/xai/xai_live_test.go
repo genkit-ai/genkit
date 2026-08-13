@@ -17,8 +17,10 @@ package xai_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
@@ -49,4 +51,29 @@ func TestPluginLive(t *testing.T) {
 			"extra": map[string]any{"user": "genkit-livetest"},
 		},
 	})
+}
+
+// TestReasoningEffortXHighLive pins [xai.ReasoningEffortXHigh] end to end on
+// grok-4.6, the one model xAI documents the level for.
+func TestReasoningEffortXHighLive(t *testing.T) {
+	if os.Getenv("XAI_API_KEY") == "" {
+		t.Skip("XAI_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&xai.XAI{}))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(xai.ModelRef("grok-4.6", &xai.ChatConfig{
+			MaxOutputTokens: 2048,
+			ReasoningEffort: xai.ReasoningEffortXHigh,
+		})),
+		ai.WithPrompt("What is 27 * 43? Answer with just the number."),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if !strings.Contains(resp.Text(), "1161") {
+		t.Errorf("Text() = %q, want it to contain 1161", resp.Text())
+	}
 }
