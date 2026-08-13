@@ -115,6 +115,7 @@ func clearVertexEnv(t *testing.T) {
 	for _, name := range []string{
 		"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_REGION",
 		"VERTEX_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY", "GEMINI_API_KEY",
+		"GOOGLE_VERTEX_BASE_URL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -172,6 +173,29 @@ func TestVertexAIInit_CustomEndpointOnly(t *testing.T) {
 	cc := client.ClientConfig()
 	if cc.HTTPOptions.BaseURL != "https://my-gateway.example.com" {
 		t.Errorf("BaseURL = %q, want the configured gateway", cc.HTTPOptions.BaseURL)
+	}
+	if cc.Project != "" || cc.APIKey != "" {
+		t.Errorf("Project = %q, APIKey = %q, want both empty in custom-endpoint mode", cc.Project, cc.APIKey)
+	}
+}
+
+// TestVertexAIInit_CustomEndpointFromEnv covers the same mode selected by
+// GOOGLE_VERTEX_BASE_URL, which the SDK reads on its own: the plugin must
+// recognize it as sufficient configuration rather than demand a project.
+func TestVertexAIInit_CustomEndpointFromEnv(t *testing.T) {
+	clearVertexEnv(t)
+	t.Setenv("GOOGLE_VERTEX_BASE_URL", "https://my-gateway.example.com")
+
+	v := &googlegenai.VertexAI{}
+	v.Init(context.Background())
+
+	client, err := v.Client()
+	if err != nil {
+		t.Fatalf("Client: %v", err)
+	}
+	cc := client.ClientConfig()
+	if cc.HTTPOptions.BaseURL != "https://my-gateway.example.com" {
+		t.Errorf("BaseURL = %q, want the env gateway resolved by the SDK", cc.HTTPOptions.BaseURL)
 	}
 	if cc.Project != "" || cc.APIKey != "" {
 		t.Errorf("Project = %q, APIKey = %q, want both empty in custom-endpoint mode", cc.Project, cc.APIKey)

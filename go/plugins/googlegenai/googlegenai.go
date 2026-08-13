@@ -236,11 +236,13 @@ func (v *VertexAI) expressAPIKey() (key, source string) {
 }
 
 // customEndpointOnly reports whether the only configuration present, here or
-// in the environment, is a custom base URL. The SDK treats that as a valid
-// standalone setup (the endpoint owns authentication), so the plugin must
-// not demand a project for it. Call after expressAPIKey has returned "".
+// in the environment, is a custom base URL: the BaseURL field, or
+// GOOGLE_VERTEX_BASE_URL, which the SDK reads on its own. The SDK treats
+// that as a valid standalone setup (the endpoint owns authentication), so
+// the plugin must not demand a project for it. Call after expressAPIKey has
+// returned "".
 func (v *VertexAI) customEndpointOnly() bool {
-	return v.BaseURL != "" &&
+	return (v.BaseURL != "" || os.Getenv("GOOGLE_VERTEX_BASE_URL") != "") &&
 		v.ProjectID == "" && v.Location == "" && v.Credentials == nil &&
 		os.Getenv("GOOGLE_CLOUD_PROJECT") == "" && vertexLocationFromEnv() == ""
 }
