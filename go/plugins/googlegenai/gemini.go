@@ -632,6 +632,10 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 
 // promptBlocked reports whether the service refused the prompt outright: no
 // candidates come back and the reason is reported through PromptFeedback.
+// Serving this as a blocked response is a deliberate divergence from the JS
+// plugin, which throws FAILED_PRECONDITION on every zero-candidate response:
+// the finish reason and message carry why the prompt was refused, where the
+// error names only the absence of candidates.
 func promptBlocked(resp *genai.GenerateContentResponse) bool {
 	fb := resp.PromptFeedback
 	return fb != nil && fb.BlockReason != "" && fb.BlockReason != genai.BlockedReasonUnspecified
