@@ -153,10 +153,14 @@ already work, while the models most likely to need correcting are exactly the
 ones `Init` has already registered and nothing can register twice.
 
 Fields Genkit owns are not part of a model's config. `messages`, `tools`,
-`tool_choice`, and the deprecated `functions`/`function_call` pair are built
-from the Genkit request, so they are stripped from the advertised schema and
-cleared from any config that carries them. A curated config type simply omits
-them.
+`tool_choice`, `response_format`, and the deprecated
+`functions`/`function_call` pair are built from the Genkit request, so the
+SDK-typed models hide them from the advertised schema and reject a config
+that sets one, naming the Genkit option to use instead (`ai.WithTools()`,
+`ai.WithOutputType()`, and so on); `n` is rejected the same way because the
+response carries the first candidate only. A curated config type simply omits
+them. The rest of the SDK schema carries descriptions from OpenAI's API
+reference, so the Dev UI's config sidebar documents each field.
 
 `Constrained` is the one capability worth checking against the provider's docs
 rather than copying. Genkit sends `response_format` as `json_schema` whenever

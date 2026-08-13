@@ -32,6 +32,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/shared"
 )
 
 // marshalParams round-trips params through the SDK marshaler so tests assert
@@ -153,20 +154,69 @@ func TestSDKConfigSchema(t *testing.T) {
 		t.Errorf("stop schema = %v, want anyOf of string and string array", stop)
 	}
 
-	// The fields Genkit builds from the request are not offered as config.
-	// The schema is what the framework validates against, so advertising them
-	// would accept a tool the framework has no handler for. Spelled out rather
-	// than read from managedRequestFields, which would make emptying that list
-	// pass this test.
-	for _, field := range []string{"messages", "tools", "tool_choice", "functions", "function_call"} {
-		if _, ok := props[field]; ok {
-			t.Errorf("property %q is advertised, want the Genkit-managed fields stripped", field)
+	// The fields a Genkit option owns are hidden: replaced by the permissive
+	// `true` schema so the dev UI does not render them, while a value still
+	// passes boundary validation and reaches rejectManagedConfig, which names
+	// the option to use. Spelled out rather than read from
+	// sdkSchemaOverrides, which would make emptying that list pass this test.
+	for _, field := range []string{"messages", "tools", "tool_choice", "functions", "function_call", "response_format", "n"} {
+		if got, ok := props[field]; !ok || got != true {
+			t.Errorf("property %q = %v, want the hidden field advertised as the permissive true schema", field, got)
 		}
 	}
 
-	// The model stays: it is how a config pins the version it is served by.
-	if _, ok := props["model"]; !ok {
-		t.Error("property \"model\" missing, want the version pin advertised")
+	// The model stays visible and described: it is how a config pins the
+	// version it is served by.
+	model, ok := props["model"].(map[string]any)
+	if !ok {
+		t.Fatal("property \"model\" missing, want the version pin advertised")
+	}
+	if desc, _ := model["description"].(string); desc == "" {
+		t.Error("property \"model\" has no description, want the SDK schema curated with help text")
+	}
+}
+
+// TestSDKSchemaOverridePathsResolve pins the overrides against the linked
+// SDK: an entry whose path no longer resolves stopped describing or hiding
+// anything when the SDK renamed the field, and applying it is a silent no-op.
+func TestSDKSchemaOverridePathsResolve(t *testing.T) {
+	if stale := sdkSchemaOverrides.UnresolvedPaths(sdkConfigSchema()); len(stale) > 0 {
+		t.Errorf("override paths do not resolve against the reflected SDK schema: %v", stale)
+	}
+}
+
+// TestRejectManagedSDKConfig pins the curated rejection for each field a
+// Genkit primitive owns: the message names the option to use, and a config
+// carrying none of them passes.
+func TestRejectManagedSDKConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		config openai.ChatCompletionNewParams
+		want   string
+	}{
+		{"messages", openai.ChatCompletionNewParams{Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")}}, "ai.WithMessages()"},
+		{"tools", openai.ChatCompletionNewParams{Tools: []openai.ChatCompletionToolParam{{Function: shared.FunctionDefinitionParam{Name: "t"}}}}, "ai.WithTools()"},
+		{"functions", openai.ChatCompletionNewParams{Functions: []openai.ChatCompletionNewParamsFunction{{Name: "f"}}}, "ai.WithTools()"},
+		{"tool_choice", openai.ChatCompletionNewParams{ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String("auto")}}, "ai.WithToolChoice()"},
+		{"function_call", openai.ChatCompletionNewParams{FunctionCall: openai.ChatCompletionNewParamsFunctionCallUnion{OfFunctionCallMode: openai.String("none")}}, "ai.WithToolChoice()"},
+		{"response_format", openai.ChatCompletionNewParams{ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{OfJSONObject: &shared.ResponseFormatJSONObjectParam{}}}, "ai.WithOutputType()"},
+		{"n", openai.ChatCompletionNewParams{N: openai.Int(2)}, "first candidate only"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectManagedConfig(&tc.config)
+			if err == nil {
+				t.Fatalf("rejectManagedConfig(%s) = nil, want the managed field refused", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to point at %q", err, tc.want)
+			}
+		})
+	}
+
+	plain := openai.ChatCompletionNewParams{Temperature: openai.Float(0.5), Seed: openai.Int(7)}
+	if err := rejectManagedConfig(&plain); err != nil {
+		t.Errorf("rejectManagedConfig(plain) = %v, want the rest of the SDK surface untouched", err)
 	}
 }
 

@@ -392,8 +392,8 @@ func TestManagedConfigFieldsRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("Generate() error = nil, want the config rejected for naming a Genkit-managed field")
 	}
-	if !strings.Contains(err.Error(), "tools") {
-		t.Errorf("error = %v, want it to name the offending field", err)
+	if !strings.Contains(err.Error(), "ai.WithTools()") {
+		t.Errorf("error = %v, want the rejection to name the Genkit option to use", err)
 	}
 
 	// The rest of the SDK config is untouched by the pruning.

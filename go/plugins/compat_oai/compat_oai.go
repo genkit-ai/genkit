@@ -26,9 +26,10 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/invopop/jsonschema"
@@ -67,6 +68,59 @@ var (
 // of these is rejected rather than silently dropped.
 var managedRequestFields = []string{
 	"messages", "tools", "tool_choice", "functions", "function_call",
+	// Built from the request's output config by applyResponseFormat; an extra
+	// naming it would marshal over what Genkit computed.
+	"response_format",
+}
+
+// sdkSchemaOverrides is the presentation layered onto the reflected
+// [openai.ChatCompletionNewParams] schema before it is advertised: the SDK
+// structs carry no schema descriptions, and the fields a Genkit option owns
+// are hidden from the dev UI, with [rejectManagedConfig] telling a caller who
+// sets one anyway which option to use. See [internal.SchemaOverrides] for the
+// path notation; a stale entry is a no-op, which
+// TestSDKSchemaOverridePathsResolve catches.
+var sdkSchemaOverrides = internal.SchemaOverrides{
+	Descriptions: map[string]string{
+		"audio":                        "Audio output settings, required when modalities includes \"audio\": the voice to answer with and the format the audio comes back in.",
+		"audio.format":                 "Output audio format, e.g. wav, mp3, flac, opus, or pcm16.",
+		"audio.voice":                  "Voice the model answers with, e.g. alloy, ash, echo.",
+		"frequency_penalty":            "Number between -2.0 and 2.0. Positive values penalize tokens by how often they have appeared so far, lowering the chance of repeating the same line verbatim.",
+		"logit_bias":                   "Maps token IDs to a bias from -100 to 100 added before sampling. Values near the extremes effectively ban or force the token.",
+		"logprobs":                     "Whether to return log probabilities of the output tokens.",
+		"max_completion_tokens":        "Upper bound on tokens generated for this request, visible output and reasoning tokens both.",
+		"max_tokens":                   "Legacy cap on generated tokens, not compatible with reasoning models. Prefer max_completion_tokens.",
+		"metadata":                     "Up to 16 key-value string pairs attached to the request, readable when the completion is stored via the store field.",
+		"modalities":                   "Output types the model should generate. Most models produce [\"text\"]; audio-capable models also accept [\"text\", \"audio\"].",
+		"model":                        "Pins the exact model version the request is served by. When unset, the request is served by the model named in the action.",
+		"parallel_tool_calls":          "Whether the model may call several tools in parallel during a single turn. Defaults to true.",
+		"prediction":                   "Predicted output content, which can cut latency when much of the response is known ahead of time, such as when editing a file.",
+		"presence_penalty":             "Number between -2.0 and 2.0. Positive values penalize tokens that have appeared at all, nudging the model toward new topics.",
+		"reasoning_effort":             "How much reasoning a reasoning model spends before answering, e.g. minimal, low, medium, or high. Lower effort answers faster and spends fewer tokens.",
+		"seed":                         "Best-effort determinism: repeated requests with the same seed and parameters should return the same result.",
+		"service_tier":                 "Processing tier the request runs on, e.g. auto, default, flex, or priority, subject to the project's settings.",
+		"stop":                         "Up to 4 sequences that stop generation when emitted; the response does not include the stop text. Not supported by reasoning models.",
+		"store":                        "Whether to store the completion for later retrieval, for the model distillation and evals products.",
+		"stream_options":               "Streaming options. Genkit always asks for usage on the final chunk; the rest pass through.",
+		"stream_options.include_usage": "Send token usage on a final chunk before [DONE]. Genkit sets this on every streaming call so streamed responses report usage.",
+		"temperature":                  "Sampling temperature from 0 to 2. Higher values increase randomness; lower values make output more focused. Tune this or top_p, not both.",
+		"top_logprobs":                 "Number of most likely tokens, 0 to 20, to return log probabilities for at each position. Requires logprobs.",
+		"top_p":                        "Nucleus sampling: consider only the tokens making up this cumulative probability mass. Tune this or temperature, not both.",
+		"user":                         "Stable identifier for the end user, which OpenAI uses to detect abuse. Use a UUID or hash, never identifying information.",
+		"web_search_options":           "Enables and configures web search for the request on search-capable models.",
+	},
+	Hidden: []string{
+		// Owned by Genkit primitives; rejectManagedConfig names the option.
+		"messages",        // ai.WithMessages / ai.WithPrompt
+		"tools",           // ai.WithTools
+		"tool_choice",     // ai.WithToolChoice
+		"functions",       // the deprecated form of tools
+		"function_call",   // the deprecated form of tool_choice
+		"response_format", // ai.WithOutputType / ai.WithOutputFormat
+		// The response path serves the first choice only, so extra candidates
+		// would be billed and dropped.
+		"n",
+	},
 }
 
 // sdkConfigSchema is the schema advertised by models that take the OpenAI
@@ -74,12 +128,8 @@ var managedRequestFields = []string{
 // params struct is expensive and the result is read-only, so it is built on
 // first use and shared by every such model. Stop inlines a union that
 // marshals as a string or a string array, which the shared reflector cannot
-// know, so it is mapped here.
-//
-// The reflected schema is pruned before it is shared: the fields Genkit
-// manages come out, and so does "any", which is not a request field at all
-// but the SDK's embedded param plumbing (param.APIObject wraps an anonymous
-// any), reflected at every level of the struct.
+// know, so it is mapped here; the result is then curated by
+// [sdkSchemaOverrides].
 var sdkConfigSchema = sync.OnceValue(func() map[string]any {
 	schema := pluginjsonschema.ReflectConfigSchema(openai.ChatCompletionNewParams{}, map[string]*jsonschema.Schema{
 		"ChatCompletionNewParamsStopUnion": {AnyOf: []*jsonschema.Schema{
@@ -87,41 +137,25 @@ var sdkConfigSchema = sync.OnceValue(func() map[string]any {
 			{Type: "array", Items: &jsonschema.Schema{Type: "string"}},
 		}},
 	})
-	if props, ok := schema["properties"].(map[string]any); ok {
-		for _, field := range managedRequestFields {
-			delete(props, field)
-		}
-	}
-	deleteParamPlumbing(schema)
+	stripParamObjArtifact(schema)
+	internal.ApplySchemaOverrides(schema, sdkSchemaOverrides)
 	return schema
 })
 
-// deleteParamPlumbing removes the "any" property the SDK's embedded
-// param.APIObject reflects into every object in the schema.
-func deleteParamPlumbing(schema map[string]any) {
-	if schema == nil {
-		return
-	}
-	if props, ok := schema["properties"].(map[string]any); ok {
-		delete(props, "any")
-		for _, sub := range props {
-			if m, ok := sub.(map[string]any); ok {
-				deleteParamPlumbing(m)
-			}
+// stripParamObjArtifact removes the "any" property the SDK's embedded
+// param.APIObject (an anonymous any carrying the raw decoded message)
+// reflects into every object in the schema. It is machinery rather than a
+// request field, and it appears at every depth, so the dev UI would render a
+// junk field on each object.
+func stripParamObjArtifact(schema map[string]any) {
+	drop := func(s map[string]any) map[string]any {
+		if props, ok := s["properties"].(map[string]any); ok {
+			delete(props, "any")
 		}
+		return s
 	}
-	if items, ok := schema["items"].(map[string]any); ok {
-		deleteParamPlumbing(items)
-	}
-	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
-		if branches, ok := schema[key].([]any); ok {
-			for _, branch := range branches {
-				if m, ok := branch.(map[string]any); ok {
-					deleteParamPlumbing(m)
-				}
-			}
-		}
-	}
+	drop(schema)
+	base.WalkSubschemas(schema, drop)
 }
 
 // OpenAICompatible is a plugin that provides compatibility with OpenAI's Compatible APIs.
@@ -280,6 +314,9 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 		config openai.ChatCompletionNewParams,
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
+		if err := rejectManagedConfig(&config); err != nil {
+			return nil, err
+		}
 		return NewModelGenerator(client, id).
 			WithParams(config).
 			WithMessages(input.Messages).
@@ -287,6 +324,39 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 			WithToolChoice(input.ToolChoice).
 			Generate(ctx, input, cb)
 	})
+}
+
+// rejectManagedConfig reports a config field that a Genkit primitive owns.
+//
+// Each one is overwritten while the request is built, so accepting it would
+// drop the caller's value on the floor. Failing with the option to use
+// instead beats a request that silently ignores half of what it was given. n
+// is refused for a different reason: the response path serves the first
+// choice only, so extra candidates would be billed and never surfaced.
+//
+// These fields are hidden from the advertised schema (see
+// [sdkSchemaOverrides]) by being replaced with a permissive schema rather
+// than deleted, so a value passes boundary validation and reaches here rather
+// than failing as an unknown property.
+//
+// Classified ErrInvalidArgument rather than ErrInvalidInput: the value passed
+// the action's input schema and is refused on what it means, and the request
+// is the caller's to fix.
+func rejectManagedConfig(config *openai.ChatCompletionNewParams) error {
+	switch {
+	case len(config.Messages) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
+	case len(config.Tools) > 0 || len(config.Functions) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "tools must be set using Genkit feature: ai.WithTools()")
+	case config.ToolChoice.OfAuto.Valid() || config.ToolChoice.OfChatCompletionNamedToolChoice != nil ||
+		config.FunctionCall.OfFunctionCallMode.Valid() || config.FunctionCall.OfFunctionCallOption != nil:
+		return status.Errorf(status.ErrInvalidArgument, "tool choice must be set using Genkit feature: ai.WithToolChoice()")
+	case config.ResponseFormat.OfText != nil || config.ResponseFormat.OfJSONSchema != nil || config.ResponseFormat.OfJSONObject != nil:
+		return status.Errorf(status.ErrInvalidArgument, "output format must be set using Genkit feature: ai.WithOutputType(), ai.WithOutputFormat(), or ai.WithOutputInstructions()")
+	case config.N.Valid():
+		return status.Errorf(status.ErrInvalidArgument, "n is not supported: the response carries the first candidate only, so extra candidates would be billed and dropped")
+	}
+	return nil
 }
 
 // NewChatModel creates an unregistered model whose config is the provider's
@@ -350,7 +420,7 @@ func forwardRequestExtra(params *openai.ChatCompletionNewParams, extra map[strin
 	}
 	for _, field := range managedRequestFields {
 		if _, ok := extra[field]; ok {
-			return core.NewError(core.INVALID_ARGUMENT, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", field)
+			return status.Errorf(status.ErrInvalidArgument, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", field)
 		}
 	}
 	AddExtraFields(params, extra)
@@ -365,7 +435,7 @@ func forwardEmbeddingExtra(params *openai.EmbeddingNewParams, extra map[string]a
 		return nil
 	}
 	if _, ok := extra["input"]; ok {
-		return core.NewError(core.INVALID_ARGUMENT, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", "input")
+		return status.Errorf(status.ErrInvalidArgument, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", "input")
 	}
 	params.SetExtraFields(maps.Clone(extra))
 	return nil
