@@ -120,6 +120,13 @@ def test_model_ref_invalid_config_schema_does_not_leak_isinstance() -> None:
         )
 
 
+def test_model_ref_invalid_info_type_raises() -> None:
+    """ModelRef raises GenkitError when info is a dict instead of ModelInfo."""
+    expected = f'm1: info must be an instance of {ModelInfo.__module__}.ModelInfo, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
+        model_ref('m1', config_schema=CustomConfig, info={'not': 'a ModelInfo'})  # type: ignore[arg-type]
+
+
 def test_model_ref_preserves_version_and_info_metadata() -> None:
     """model_ref() stamps version and ModelInfo metadata on the ModelRef instance."""
     info = ModelInfo(supports=Supports(multiturn=True, media=True))

@@ -88,9 +88,7 @@ class ModelRef(Generic[ModelRefConfigT]):
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        # Schema first: isinstance(config, schema) raises TypeError if schema
-        # isn't a class — the JSON-schema dict a plugin would paste in from
-        # action metadata.
+        # If config_schema is not a BaseModel subclass, raise an error.
         schema = self.config_schema
         if not isinstance(schema, type) or not issubclass(schema, BaseModel):
             got = (
@@ -108,6 +106,13 @@ class ModelRef(Generic[ModelRefConfigT]):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{self.name}: config must be an instance of {expected}, got {actual}',
+            )
+        # If info is present, validate that it is a ModelInfo and raise an error if not.
+        if self.info is not None and not isinstance(self.info, ModelInfo):
+            actual = f'{type(self.info).__module__}.{type(self.info).__name__}'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
             )
 
 
