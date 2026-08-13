@@ -65,7 +65,7 @@ from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)
-IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_0_FLASH_EXP]
+IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_5_FLASH]
 
 
 @pytest.mark.asyncio
@@ -381,7 +381,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     response_text = 'request answer'
     request_text = 'response question'
     system_instruction = 'system instruction text'
-    version = GoogleAIGeminiVersion.GEMINI_2_0_FLASH
+    version = GoogleAIGeminiVersion.GEMINI_2_5_FLASH
 
     request = ModelRequest(
         messages=[

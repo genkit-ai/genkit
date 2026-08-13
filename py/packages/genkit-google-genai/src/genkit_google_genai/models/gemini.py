@@ -51,7 +51,6 @@ from genkit import (
     ModelUsage,
     Part,
     Role,
-    Stage,
     Supports,
     TextPart,
     ToolDefinition,
@@ -315,9 +314,7 @@ class GeminiConfigSchema(ModelConfig):
 
     response_modalities: list[str] | None = Field(
         None,
-        description=(
-            "The modalities to be used in response. Only supported for 'gemini-2.0-flash-exp' model at present."
-        ),
+        description='The modalities to be used in the response.',
         alias='responseModalities',
     )
 
@@ -493,123 +490,6 @@ GEMINI_TEXT_SUPPORTS = Supports(
     system_role=True,
     constrained=Constrained.ALL,
     output=['text', 'json'],
-)
-
-GEMINI_1_5_PRO = ModelInfo(
-    label='Google AI - Gemini 1.5 Pro',
-    stage=Stage.DEPRECATED,
-    versions=[
-        'gemini-1.5-pro-latest',
-        'gemini-1.5-pro-001',
-        'gemini-1.5-pro-002',
-    ],
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.NO_TOOLS,
-    ),
-)
-
-GEMINI_1_5_FLASH = ModelInfo(
-    label='Google AI - Gemini 1.5 Flash',
-    stage=Stage.DEPRECATED,
-    versions=[
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash-001',
-        'gemini-1.5-flash-002',
-    ],
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.NO_TOOLS,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_1_5_FLASH_8B = ModelInfo(
-    label='Google AI - Gemini 1.5 Flash',
-    stage=Stage.DEPRECATED,
-    versions=['gemini-1.5-flash-8b-latest', 'gemini-1.5-flash-8b-001'],
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.NO_TOOLS,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_2_0_FLASH = ModelInfo(
-    label='Google AI - Gemini 2.0 Flash',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_2_0_FLASH_LITE = ModelInfo(
-    label='Google AI - Gemini 2.0 Flash Lite',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_2_0_PRO_EXP_02_05 = ModelInfo(
-    label='Google AI - Gemini 2.0 Pro Exp 02-05',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_2_0_FLASH_EXP_IMAGEN = ModelInfo(
-    label='Google AI - Gemini 2.0 Flash Experimental',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
-)
-
-GEMINI_2_0_FLASH_THINKING_EXP_01_21 = ModelInfo(
-    label='Google AI - Gemini 2.0 Flash Thinking Exp 01-21',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
 )
 
 GEMINI_2_5_PRO_EXP_03_25 = ModelInfo(
@@ -876,11 +756,6 @@ Deprecations = deprecated_enum_metafactory({})
 class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
     """Vertex AI Gemini model IDs."""
 
-    GEMINI_2_0_FLASH = 'gemini-2.0-flash'
-    GEMINI_2_0_FLASH_EXP = 'gemini-2.0-flash-exp'
-    GEMINI_2_0_FLASH_LITE = 'gemini-2.0-flash-lite'
-    GEMINI_2_0_FLASH_THINKING_EXP_01_21 = 'gemini-2.0-flash-thinking-exp-01-21'
-    GEMINI_2_0_PRO_EXP_02_05 = 'gemini-2.0-pro-exp-02-05'
     GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
@@ -910,11 +785,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
     """Google AI Gemini model IDs."""
 
-    GEMINI_2_0_FLASH = 'gemini-2.0-flash'
-    GEMINI_2_0_FLASH_EXP = 'gemini-2.0-flash-exp'
-    GEMINI_2_0_FLASH_LITE = 'gemini-2.0-flash-lite'
-    GEMINI_2_0_FLASH_THINKING_EXP_01_21 = 'gemini-2.0-flash-thinking-exp-01-21'
-    GEMINI_2_0_PRO_EXP_02_05 = 'gemini-2.0-pro-exp-02-05'
     GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
@@ -953,14 +823,6 @@ def _add_model(model_info: ModelInfo, names: list[str]) -> None:
             SUPPORTED_MODELS[version] = model_info
 
 
-_add_model(GEMINI_1_5_PRO, ['gemini-1.5-pro'])
-_add_model(GEMINI_1_5_FLASH, ['gemini-1.5-flash'])
-_add_model(GEMINI_1_5_FLASH_8B, ['gemini-1.5-flash-8b'])
-_add_model(GEMINI_2_0_FLASH, ['gemini-2.0-flash'])
-_add_model(GEMINI_2_0_FLASH_LITE, ['gemini-2.0-flash-lite'])
-_add_model(GEMINI_2_0_PRO_EXP_02_05, ['gemini-2.0-pro-exp-02-05'])
-_add_model(GEMINI_2_0_FLASH_EXP_IMAGEN, ['gemini-2.0-flash-exp'])
-_add_model(GEMINI_2_0_FLASH_THINKING_EXP_01_21, ['gemini-2.0-flash-thinking-exp-01-21'])
 _add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
 _add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
 _add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
