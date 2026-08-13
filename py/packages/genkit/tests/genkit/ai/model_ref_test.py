@@ -103,6 +103,23 @@ def test_model_ref_invalid_config_type_raises() -> None:
         model_ref('m1', config_schema=CustomConfig, config={'temperature': 0.7})  # type: ignore[arg-type]
 
 
+def test_model_ref_invalid_config_schema_raises() -> None:
+    """ModelRef raises GenkitError when config_schema is not a BaseModel subclass."""
+    expected = 'm1: config_schema must be a BaseModel subclass, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
+        model_ref('m1', config_schema={'type': 'object'})  # type: ignore[arg-type]
+
+
+def test_model_ref_invalid_config_schema_does_not_leak_isinstance() -> None:
+    """A dict schema fails as config_schema, not as isinstance() arg 2."""
+    with pytest.raises(GenkitError, match='config_schema must be a BaseModel subclass'):
+        model_ref(
+            'm1',
+            config_schema={'type': 'object'},  # type: ignore[arg-type]
+            config=CustomConfig(temperature=0.7),
+        )
+
+
 def test_model_ref_preserves_version_and_info_metadata() -> None:
     """model_ref() stamps version and ModelInfo metadata on the ModelRef instance."""
     info = ModelInfo(supports=Supports(multiturn=True, media=True))

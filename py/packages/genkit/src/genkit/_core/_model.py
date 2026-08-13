@@ -88,10 +88,22 @@ class ModelRef(Generic[ModelRefConfigT]):
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        # Catch dicts / wrong types at construction so plugins don't discover
-        # the mismatch later when they touch typed config fields.
-        if self.config is not None and not isinstance(self.config, self.config_schema):
-            expected = f'{self.config_schema.__module__}.{self.config_schema.__name__}'
+        # Schema first: isinstance(config, schema) raises TypeError if schema
+        # isn't a class — the JSON-schema dict a plugin would paste in from
+        # action metadata.
+        schema = self.config_schema
+        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if self.config is not None and not isinstance(self.config, schema):
+            expected = f'{schema.__module__}.{schema.__name__}'
             actual = f'{type(self.config).__module__}.{type(self.config).__name__}'
             raise GenkitError(
                 status='INVALID_ARGUMENT',
