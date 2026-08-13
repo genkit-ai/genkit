@@ -27,8 +27,7 @@ import (
 
 ctx := context.Background()
 plugin := &kimi.Kimi{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("kimi/kimi-k3"),
 )
@@ -67,7 +66,7 @@ thinking can be disabled per request:
 ```go
 response, err := genkit.Generate(ctx, g,
     ai.WithModel(kimi.ModelRef("kimi-k2.6", &kimi.ChatConfig{
-        Thinking: &kimi.ThinkingConfig{Type: "disabled"},
+        Thinking: &kimi.ThinkingConfig{Type: kimi.ThinkingTypeDisabled},
     })),
     ai.WithPrompt("Answer concisely."),
 )
