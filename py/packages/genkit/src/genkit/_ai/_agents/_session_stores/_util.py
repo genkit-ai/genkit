@@ -38,13 +38,13 @@ SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]
 OnClose = Callable[[], Awaitable[None]]
 
-# Statuses that end a snapshot's lifecycle. Mirrors the per-store constants;
-# apply_save treats these as absorbing.
+# Persisted statuses that end a snapshot's store lifecycle. apply_save treats
+# these as absorbing; status streams end after one. ``expired`` is a read-time
+# overlay and is never written, so it is not included here.
 TERMINAL_STATUSES = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,
-    SnapshotStatus.EXPIRED,
 })
 
 

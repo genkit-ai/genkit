@@ -77,7 +77,14 @@ def parse_snapshot_lookup_kw(
 
     A bad selector is a caller mistake, so it raises ``INVALID_ARGUMENT`` — over a
     transport that surfaces as a 400, not a 500 the way a bare ``ValueError`` would.
+    Whitespace-only ids count as empty: they are not usable as document keys.
     """
+    for name, value in (('snapshot_id', snapshot_id), ('session_id', session_id)):
+        if value is not None and not value.strip():
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name} must not be empty or whitespace-only.',
+            )
     if bool(snapshot_id) == bool(session_id):
         raise GenkitError(
             status='INVALID_ARGUMENT',

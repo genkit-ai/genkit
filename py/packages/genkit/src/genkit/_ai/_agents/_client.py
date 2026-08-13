@@ -1350,6 +1350,9 @@ class AgentChat(Generic[StateT]):
             self._merge_artifacts(raw.artifacts)
 
 
+# Settled statuses for client poll/wait loops. Includes ``expired`` because
+# resolve/get overlays a stale pending heartbeat as expired even though stores
+# never persist that status.
 TERMINAL_SNAPSHOT_STATUSES = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
