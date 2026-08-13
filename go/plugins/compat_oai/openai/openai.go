@@ -369,11 +369,8 @@ func (o *OpenAI) modelOptions(id string) ai.ModelOptions {
 // curated entry and takes the caller's alone.
 func (o *OpenAI) embedderOptions(id string) ai.EmbedderOptions {
 	opts := supportedEmbeddingModels[id]
-	if override, ok := o.Embedders[id]; ok {
-		return internal.OverlayEmbedderOptions(opts, override)
-	}
-	if override, ok := o.Embedders[compat_oai.ActionName(provider, id)]; ok {
-		return internal.OverlayEmbedderOptions(opts, override)
+	if override, ok := internal.LookupOverride(o.Embedders, provider, id); ok {
+		return opts.Overlay(override)
 	}
 	return opts
 }

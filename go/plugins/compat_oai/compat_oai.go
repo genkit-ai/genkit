@@ -23,7 +23,6 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -272,7 +271,7 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 		opts.ConfigSchema = sdkConfigSchema()
 	}
 	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", provider, id)
+		opts.Label = internal.ProviderLabel(provider, id)
 	}
 
 	return ai.NewModelAction(api.NewName(provider, id), &opts, func(
@@ -306,7 +305,7 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.ModelAction {
 	o.checkInitted()
 	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", o.Provider, id)
+		opts.Label = internal.ProviderLabel(o.Provider, id)
 	}
 
 	return ai.NewModelAction(api.NewName(o.Provider, id), &opts, func(
@@ -529,7 +528,7 @@ func (o *OpenAICompatible) ResolveAction(atype api.ActionType, id string) api.Ac
 // constructors would otherwise derive.
 func sdkModelOptions(provider, id string) ai.ModelOptions {
 	opts := DefaultModelOptions()
-	opts.Label = fmt.Sprintf("%s - %s", provider, id)
+	opts.Label = internal.ProviderLabel(provider, id)
 	return opts
 }
 
@@ -549,7 +548,7 @@ func DefaultModelOptions() ai.ModelOptions {
 // already-prefixed name would double up and name an action that resolves
 // nowhere.
 func ActionName(provider, id string) string {
-	return api.NewName(provider, strings.TrimPrefix(id, provider+"/"))
+	return api.NewName(provider, internal.TrimProvider(provider, id))
 }
 
 // ModelOptionsFor resolves the options a plugin describes a model with:
@@ -563,17 +562,15 @@ func ActionName(provider, id string) string {
 // whether Init, ListActions or ResolveAction gets there first, and it applies
 // to the models Init registers, which nothing can re-register afterwards.
 //
-// id is the bare model ID; models is keyed either bare or provider-prefixed.
+// id is the bare model ID; models is keyed either bare or provider-prefixed
+// (see [internal.LookupOverride]).
 func ModelOptionsFor(provider, id string, curated map[string]ai.ModelOptions, dynamic ai.ModelOptions, models map[string]ai.ModelOptions) ai.ModelOptions {
 	opts, ok := curated[id]
 	if !ok {
 		opts = dynamic
 	}
-	if override, ok := models[id]; ok {
-		return internal.OverlayModelOptions(opts, override)
-	}
-	if override, ok := models[api.NewName(provider, id)]; ok {
-		return internal.OverlayModelOptions(opts, override)
+	if override, ok := internal.LookupOverride(models, provider, id); ok {
+		return opts.Overlay(override)
 	}
 	return opts
 }
