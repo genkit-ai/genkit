@@ -35,7 +35,8 @@ def test_model_ref_with_custom_pydantic_schema() -> None:
     assert isinstance(ref, ModelRef)
     assert ref.name == 'googleai/gemini-pro-latest'
     assert ref.config_schema is CustomConfig
-    assert ref.config is config
+    assert ref.config is not config
+    assert ref.config == config
     assert ref.config is not None
     assert ref.config.temperature == 0.7
     assert ref.config.top_p == 0.9
@@ -140,7 +141,30 @@ def test_model_ref_preserves_version_and_info_metadata() -> None:
 
     assert ref.name == 'googleai/veo-2'
     assert ref.version == '001'
-    assert ref.info is info
+    assert ref.info is not info
+    assert ref.info == info
     assert ref.info is not None
+    assert ref.info.supports is not None
+    assert ref.info.supports.multiturn is True
+
+
+def test_model_ref_isolates_caller_config_and_info() -> None:
+    """Mutating the caller's config or info after construction does not change the ref."""
+    config = CustomConfig(temperature=0.5, safety_settings={'HARM': 'BLOCK_NONE'})
+    info = ModelInfo(label='before', supports=Supports(multiturn=True))
+    ref = model_ref('m1', config_schema=CustomConfig, config=config, info=info)
+
+    config.temperature = 0.9
+    assert config.safety_settings is not None
+    config.safety_settings['HARM'] = 'BLOCK_ALL'
+    info.label = 'after'
+    assert info.supports is not None
+    info.supports.multiturn = False
+
+    assert ref.config is not None
+    assert ref.config.temperature == 0.5
+    assert ref.config.safety_settings == {'HARM': 'BLOCK_NONE'}
+    assert ref.info is not None
+    assert ref.info.label == 'before'
     assert ref.info.supports is not None
     assert ref.info.supports.multiturn is True

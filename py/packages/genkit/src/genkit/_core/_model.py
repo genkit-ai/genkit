@@ -75,7 +75,12 @@ ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
-    """Frozen reference to a model tied to a config schema."""
+    """Handle for a model tied to a config schema.
+
+    Fields cannot be rebound. config and info are copied at construction so later
+    mutations of the caller's objects don't change the ref; the copies themselves
+    stay ordinary mutable Pydantic models.
+    """
 
     name: str
     config_schema: type[ModelRefConfigT]
@@ -114,6 +119,12 @@ class ModelRef(Generic[ModelRefConfigT]):
                 status='INVALID_ARGUMENT',
                 message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
             )
+        # Callers often keep the config/info they passed in. Copy so later
+        # mutations of those objects don't change the ref's defaults.
+        if self.config is not None:
+            object.__setattr__(self, 'config', self.config.model_copy(deep=True))
+        if self.info is not None:
+            object.__setattr__(self, 'info', self.info.model_copy(deep=True))
 
 
 class Message(MessageData):
