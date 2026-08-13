@@ -25,8 +25,7 @@ import (
 
 ctx := context.Background()
 plugin := &xai.XAI{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("xai/grok-4.5"),
 )
@@ -60,9 +59,7 @@ its own controls (`reasoningEffort`, `searchParameters`). `xai.ModelRef`
 carries the config with the model ID:
 
 ```go
-response, err := genkit.Generate(
-    ctx,
-    g,
+response, err := genkit.Generate(ctx, g,
     ai.WithModel(xai.ModelRef("grok-4.6", &xai.ChatConfig{
         ReasoningEffort: xai.ReasoningEffortHigh,
     })),
