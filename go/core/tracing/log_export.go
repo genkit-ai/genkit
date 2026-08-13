@@ -80,6 +80,13 @@ type logExporter struct {
 // telemetry server to talk to.
 var exporter = &logExporter{queue: make(chan otlpLogRecord, logQueueSize)}
 
+// diag reports the exporter's own problems. It writes straight to stderr
+// rather than through the default logger: the default handler includes the
+// export handler itself, so an exporter warning routed through it would
+// re-enter the exporter. On the overflow path that re-entry is a deadlock
+// (enqueue's sync.Once would be entered recursively on the same goroutine).
+var diag = slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 // EnableLogExport starts forwarding log records to the telemetry server at
 // url, correlating each record with the active span at the time of logging.
 // It is called during dev-mode initialization, either with the value of
@@ -144,7 +151,7 @@ func (e *logExporter) send(batch []otlpLogRecord) {
 		}},
 	}); err != nil {
 		e.warnUnreachable.Do(func() {
-			slog.Warn("cannot reach telemetry server; logs will not appear in the Dev UI", "error", err)
+			diag.Warn("cannot reach telemetry server; logs will not appear in the Dev UI", "error", err)
 		})
 	}
 }
@@ -157,7 +164,7 @@ func (e *logExporter) enqueue(rec otlpLogRecord) {
 	default:
 		e.dropped.Add(1)
 		e.warnDropped.Do(func() {
-			slog.Warn("log export queue is full; dropping records from the Dev UI log view")
+			diag.Warn("log export queue is full; dropping records from the Dev UI log view")
 		})
 	}
 }

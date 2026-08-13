@@ -163,10 +163,17 @@ func TestSetLevelPreservesSinks(t *testing.T) {
 func TestAddHandlerOverStdlibDefault(t *testing.T) {
 	resetGlobalState(t)
 
-	// The process default is the stdlib handler here (resetGlobalState
-	// restored it). Teeing that handler back in would re-enter the tee
-	// through the log package on every record and deadlock, so AddHandler
-	// must substitute the managed console handler.
+	// Canary for the type-name detection: the process default here is the
+	// stdlib handler (resetGlobalState restored it). If this fails on a Go
+	// upgrade, the stdlib renamed its default handler type and
+	// isStdlibDefaultHandler must learn the new name.
+	if !isStdlibDefaultHandler(slog.Default().Handler()) {
+		t.Fatalf("isStdlibDefaultHandler does not recognize the process default handler (%T)", slog.Default().Handler())
+	}
+
+	// Teeing the stdlib handler back in would re-enter the tee through the
+	// log package on every record and deadlock, so AddHandler must
+	// substitute the managed console handler.
 	sink := newRecordHandler(slog.LevelDebug)
 	AddHandler(sink)
 
@@ -181,8 +188,24 @@ func TestAddHandlerOverStdlibDefault(t *testing.T) {
 	if !ok {
 		t.Fatalf("default handler is %T, want *teeHandler", slog.Default().Handler())
 	}
-	if tee.handlers[0] == initialDefaultHandler {
+	if isStdlibDefaultHandler(tee.handlers[0]) {
 		t.Error("tee kept the stdlib default handler as its console member")
+	}
+}
+
+func TestCustomDefaultInstalledBeforeAddHandlerIsKept(t *testing.T) {
+	resetGlobalState(t)
+
+	// A custom default handler must never be mistaken for the stdlib one and
+	// substituted away, no matter when it was installed.
+	custom := newRecordHandler(slog.LevelInfo)
+	slog.SetDefault(slog.New(custom))
+	AddHandler(newRecordHandler(slog.LevelDebug))
+
+	slog.Info("kept")
+
+	if got := custom.messages(); !slices.Equal(got, []string{"kept"}) {
+		t.Errorf("custom handler messages = %v, want [kept]", got)
 	}
 }
 

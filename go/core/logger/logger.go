@@ -21,6 +21,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"reflect"
 	"sync"
 
 	"github.com/firebase/genkit/go/internal/base"
@@ -40,14 +41,22 @@ var (
 	// accepts them, alongside the console handler.
 	sinks     []slog.Handler
 	loggerKey = base.NewContextKey[*slog.Logger]()
-	// initialDefaultHandler is the stdlib default handler that is in place
-	// before anyone calls slog.SetDefault. It is not a real sink: it writes
-	// through the log package, whose output slog.SetDefault redirects back to
-	// the current default slog handler. Making it a member of an installed
-	// tee would therefore re-enter the tee on every record and deadlock on
-	// the log package's mutex, so it is detected and substituted instead.
-	initialDefaultHandler = slog.Default().Handler()
 )
+
+// isStdlibDefaultHandler reports whether h is the standard library's default
+// slog handler, detected by its (unexported) type. That handler is not a real
+// sink: it writes through the log package, whose output slog.SetDefault
+// redirects back to the current default slog handler, so making it a member
+// of an installed tee would re-enter the tee on every record and deadlock on
+// the log package's mutex. It is detected by type rather than by capturing
+// slog.Default() at package initialization, since another package's init can
+// legitimately install a custom default before this package initializes, and
+// that handler must not be mistaken for the stdlib one. A test pins the type
+// name against stdlib renames.
+func isStdlibDefaultHandler(h slog.Handler) bool {
+	t := reflect.TypeOf(h)
+	return t != nil && t.String() == "*slog.defaultHandler"
+}
 
 // SetLevel sets the minimum level of Genkit's console log handler and installs
 // it as the process-wide default logger, replacing the current one. Handlers
@@ -102,13 +111,13 @@ func AddHandler(h slog.Handler) {
 // through: the current default handler, unwrapped if it is a tee this package
 // installed earlier (so re-installation never nests tees). The stdlib default
 // handler is substituted with the managed console handler, since teeing it
-// would deadlock (see initialDefaultHandler). Callers must hold mu.
+// would deadlock (see [isStdlibDefaultHandler]). Callers must hold mu.
 func currentBase() slog.Handler {
 	h := slog.Default().Handler()
 	if t, ok := h.(*teeHandler); ok {
 		h = t.handlers[0]
 	}
-	if h == initialDefaultHandler {
+	if isStdlibDefaultHandler(h) {
 		ensureConsole()
 		return console
 	}

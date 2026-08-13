@@ -210,6 +210,37 @@ func TestLogExportHandlerDisabledWithoutClient(t *testing.T) {
 	}
 }
 
+func TestLogExportOverflowDoesNotDeadlock(t *testing.T) {
+	// A full queue with no worker draining it: enqueue must drop, and the
+	// drop warning must not travel back through the export handler. Before
+	// diag existed, slog.Warn inside warnDropped.Do re-entered enqueue on
+	// the same goroutine and recursed into the sync.Once, deadlocking.
+	e := &logExporter{queue: make(chan otlpLogRecord, 1)}
+	e.client.Store(NewHTTPTelemetryClient("http://127.0.0.1:1"))
+	l := slog.New(&logExportHandler{exporter: e})
+	// The re-entry only happens when the warning's logger routes back into
+	// the export handler, i.e. when it is part of the process default.
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(l)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 3 {
+			l.Info("overflow", "i", i)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("logging deadlocked on queue overflow")
+	}
+	if got := e.dropped.Load(); got != 2 {
+		t.Errorf("dropped = %d, want 2", got)
+	}
+}
+
 func TestLogExportBatching(t *testing.T) {
 	e, collect := startLogCollector(t)
 	l := slog.New(&logExportHandler{exporter: e})
