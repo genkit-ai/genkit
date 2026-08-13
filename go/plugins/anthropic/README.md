@@ -72,6 +72,8 @@ so alias one of them:
 import (
     sdk "github.com/anthropics/anthropic-sdk-go"
 
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/anthropic"
 )
 
