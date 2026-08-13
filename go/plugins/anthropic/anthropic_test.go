@@ -382,6 +382,56 @@ func TestInitOptsWinOverFields(t *testing.T) {
 	}
 }
 
+// TestInitAPIKeyRidesAlongsideOptsAuth pins the limit of "wins over those
+// fields": the API key and an auth token are distinct settings riding
+// distinct headers, so an auth token in Opts displaces nothing and a
+// configured key still goes out beside it.
+func TestInitAPIKeyRidesAlongsideOptsAuth(t *testing.T) {
+	url, lastHeader := recordingModelsServer(t)
+	a := &Anthropic{
+		APIKey: "field-key",
+		Opts: []option.RequestOption{
+			option.WithBaseURL(url),
+			option.WithAuthToken("opts-token"),
+		},
+	}
+	a.Init(context.Background())
+
+	if actions := a.ListActions(context.Background()); len(actions) == 0 {
+		t.Fatal("ListActions() = empty, want the served model list")
+	}
+	header := lastHeader()
+	if got := header.Get("Authorization"); got != "Bearer opts-token" {
+		t.Errorf("authorization = %q, want the Opts token", got)
+	}
+	if got := header.Get("X-Api-Key"); got != "field-key" {
+		t.Errorf("x-api-key = %q, want the configured key still sent beside the token", got)
+	}
+}
+
+// TestInitHeaderDelStripsAPIKey pins the documented escape hatch for setups
+// that cannot keep a key out of the environment: a WithHeaderDel in Opts
+// applies after the options derived from APIKey, so it removes the key
+// header before the request goes out.
+func TestInitHeaderDelStripsAPIKey(t *testing.T) {
+	url, lastHeader := recordingModelsServer(t)
+	a := &Anthropic{
+		APIKey: "field-key",
+		Opts: []option.RequestOption{
+			option.WithBaseURL(url),
+			option.WithHeaderDel("X-Api-Key"),
+		},
+	}
+	a.Init(context.Background())
+
+	if actions := a.ListActions(context.Background()); len(actions) == 0 {
+		t.Fatal("ListActions() = empty, want the served model list")
+	}
+	if got := lastHeader().Get("X-Api-Key"); got != "" {
+		t.Errorf("x-api-key = %q, want it stripped by WithHeaderDel", got)
+	}
+}
+
 // TestModelsOverrideReachesResolution is the reason capabilities live in plugin
 // config. Nothing registers the model up front: the first lookup drives the
 // plugin's ResolveAction, and the caller's entry is what describes what comes

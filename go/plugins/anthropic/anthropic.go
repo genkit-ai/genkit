@@ -74,9 +74,17 @@ type Anthropic struct {
 	//
 	// They are applied after the options derived from APIKey and BaseURL, and
 	// the SDK applies options in order, so an option here wins over those
-	// fields on conflict. Options are opaque, so a non-empty Opts is trusted
-	// to carry authentication when no API key is configured; that is what
-	// makes key-less setups such as Bedrock or Vertex routing work.
+	// fields when it sets the same setting. Distinct settings do not displace
+	// each other: the API key rides an X-Api-Key header and an auth token an
+	// authorization header, so a configured key (here, in APIKey, or in
+	// ANTHROPIC_API_KEY, which the SDK reads on its own) is still sent
+	// alongside whatever Opts configure. A key-less setup such as Bedrock or
+	// Vertex routing therefore needs the key unset everywhere, or an
+	// [option.WithHeaderDel] for X-Api-Key here, which applies after the key
+	// options and so strips the header.
+	//
+	// Options are opaque, so a non-empty Opts is trusted to carry
+	// authentication when no API key is configured.
 	Opts []option.RequestOption
 
 	// Models overrides what the plugin knows about a Claude model, keyed by
