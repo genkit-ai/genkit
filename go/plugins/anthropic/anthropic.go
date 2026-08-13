@@ -57,13 +57,27 @@ var dateSuffix = regexp.MustCompile(`-\d{8}$`)
 type Anthropic struct {
 	// APIKey is the key requests are authenticated with. When empty, the
 	// ANTHROPIC_API_KEY environment variable is used, and [Anthropic.Init]
-	// panics if that is empty too.
+	// panics unless authentication arrives another way: an auth token in
+	// ANTHROPIC_AUTH_TOKEN, or a non-empty Opts.
 	APIKey string
 
 	// BaseURL overrides the API endpoint requests are sent to. When empty, the
 	// ANTHROPIC_BASE_URL environment variable is used, and failing that the
 	// SDK's own default.
 	BaseURL string
+
+	// Opts are anthropic-sdk-go request options applied to every request the
+	// client sends. They open the SDK's full client configuration to the
+	// plugin: [option.WithMiddleware], [option.WithMaxRetries],
+	// [option.WithRequestTimeout], extra headers, and the SDK's bedrock and
+	// vertex packages, whose routing helpers are request options too.
+	//
+	// They are applied after the options derived from APIKey and BaseURL, and
+	// the SDK applies options in order, so an option here wins over those
+	// fields on conflict. Options are opaque, so a non-empty Opts is trusted
+	// to carry authentication when no API key is configured; that is what
+	// makes key-less setups such as Bedrock or Vertex routing work.
+	Opts []option.RequestOption
 
 	// Models overrides what the plugin knows about a Claude model, keyed by
 	// model ID, bare or provider-prefixed. Every Claude model already works
@@ -99,7 +113,9 @@ func (a *Anthropic) Name() string {
 // Init prepares the plugin to serve models and registers none: every Claude
 // model arrives through [Anthropic.ResolveAction] on first use.
 //
-// It panics when no API key is configured and when called twice, both being
+// It panics when no authentication is configured (an API key in APIKey or
+// ANTHROPIC_API_KEY, an auth token in ANTHROPIC_AUTH_TOKEN, or a non-empty
+// Opts, which is trusted to carry its own) and when called twice, both being
 // setup mistakes rather than conditions an application can recover from.
 func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	if a == nil {
@@ -116,11 +132,14 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	if apiKey == "" {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
 	}
-	if apiKey == "" {
-		panic("Anthropic requires setting ANTHROPIC_API_KEY in the environment")
+	if apiKey == "" && os.Getenv("ANTHROPIC_AUTH_TOKEN") == "" && len(a.Opts) == 0 {
+		panic("Anthropic requires authentication: set APIKey, set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in the environment, or carry it in Opts")
 	}
 
-	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	var opts []option.RequestOption
+	if apiKey != "" {
+		opts = append(opts, option.WithAPIKey(apiKey))
+	}
 
 	baseURL := a.BaseURL
 	if baseURL == "" {
@@ -129,6 +148,9 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
+
+	// The caller's options come last so they win over the fields above.
+	opts = append(opts, a.Opts...)
 
 	a.client = anthropic.NewClient(opts...)
 	a.initted = true

@@ -23,9 +23,11 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
@@ -272,6 +274,112 @@ func modelsListServer(t *testing.T) string {
 	}))
 	t.Cleanup(server.Close)
 	return server.URL
+}
+
+// recordingModelsServer is [modelsListServer] with the headers of the most
+// recent request captured, so a test can observe what the client sent.
+func recordingModelsServer(t *testing.T) (url string, lastHeader func() http.Header) {
+	t.Helper()
+	var mu sync.Mutex
+	var header http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		header = r.Header.Clone()
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"claude-opus-4-5-20251101","type":"model"}],"has_more":false}`)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, func() http.Header {
+		mu.Lock()
+		defer mu.Unlock()
+		return header
+	}
+}
+
+// TestInitRequiresAuth pins the panic when no authentication is configured
+// anywhere: no APIKey, no key or token in the environment, and no Opts.
+func TestInitRequiresAuth(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Init did not panic with no authentication configured")
+		}
+	}()
+	(&Anthropic{}).Init(context.Background())
+}
+
+// TestInitAuthTokenSuffices covers the bearer-token setups the SDK serves
+// from ANTHROPIC_AUTH_TOKEN on its own: the plugin must not demand an API
+// key on top of one.
+func TestInitAuthTokenSuffices(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+	(&Anthropic{}).Init(context.Background())
+}
+
+// TestInitOptsCarryAuth covers the key-less setups Opts exists for (the SDK's
+// Bedrock and Vertex routing options sign requests themselves): a non-empty
+// Opts waives the API-key requirement, and its options reach every request
+// the client sends.
+func TestInitOptsCarryAuth(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+
+	url, lastHeader := recordingModelsServer(t)
+	a := &Anthropic{Opts: []option.RequestOption{
+		option.WithBaseURL(url),
+		option.WithHeader("X-Test-Opt", "carried"),
+	}}
+	a.Init(context.Background())
+
+	if actions := a.ListActions(context.Background()); len(actions) == 0 {
+		t.Fatal("ListActions() = empty, want the served model list")
+	}
+	header := lastHeader()
+	if header == nil {
+		t.Fatal("the server saw no request")
+	}
+	if got := header.Get("X-Test-Opt"); got != "carried" {
+		t.Errorf("X-Test-Opt = %q, want %q", got, "carried")
+	}
+	if got := header.Get("X-Api-Key"); got != "" {
+		t.Errorf("x-api-key = %q, want none with no key configured", got)
+	}
+}
+
+// TestInitOptsWinOverFields pins the precedence contract: the options derived
+// from APIKey and BaseURL are applied first and the SDK applies options in
+// order, so an explicit option in Opts overrides both fields.
+func TestInitOptsWinOverFields(t *testing.T) {
+	fieldURL, fieldHeader := recordingModelsServer(t)
+	optsURL, optsHeader := recordingModelsServer(t)
+
+	a := &Anthropic{
+		APIKey:  "field-key",
+		BaseURL: fieldURL,
+		Opts: []option.RequestOption{
+			option.WithBaseURL(optsURL),
+			option.WithAPIKey("opts-key"),
+		},
+	}
+	a.Init(context.Background())
+
+	if actions := a.ListActions(context.Background()); len(actions) == 0 {
+		t.Fatal("ListActions() = empty, want the served model list")
+	}
+	if fieldHeader() != nil {
+		t.Error("the BaseURL field's server saw a request, want the Opts base URL to win")
+	}
+	header := optsHeader()
+	if header == nil {
+		t.Fatal("the Opts base URL's server saw no request")
+	}
+	if got := header.Get("X-Api-Key"); got != "opts-key" {
+		t.Errorf("x-api-key = %q, want the Opts key %q", got, "opts-key")
+	}
 }
 
 // TestModelsOverrideReachesResolution is the reason capabilities live in plugin
