@@ -18,9 +18,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
 import random
+from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
@@ -82,7 +82,7 @@ class Retry(BaseMiddleware[RetryConfig]):
                 # The provider delay is a floor within max_delay_ms, never an override of it.
                 delay_ms = min(delay_ms, self.config.max_delay_ms)
 
-                await asyncio.sleep(delay_ms / 1000.0)
+                await sleep(delay_ms / 1000.0)
                 current_delay_ms = min(current_delay_ms * self.config.backoff_factor, self.config.max_delay_ms)
 
         raise AssertionError('Retry loop exited without returning or raising')  # noqa: EM101

@@ -140,7 +140,7 @@ async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> Non
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -166,7 +166,7 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -192,7 +192,7 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -220,7 +220,7 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
@@ -247,7 +247,7 @@ async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -279,7 +279,7 @@ async def test_small_retry_after_preserves_local_delay_cap(
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
@@ -305,7 +305,7 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
         )
 
     with (
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
         pytest.raises(GenkitError),
     ):
         await retry.wrap_model(_make_params(), ctx, next_fn)
