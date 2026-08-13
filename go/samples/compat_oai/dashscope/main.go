@@ -1,16 +1,35 @@
-// Copyright 2024 Google LLC
-// SPDX-License-Identifier: Apache-2.0
-
-// This program can be manually tested like so:
-// Start the server listening on port 3100:
+// Copyright 2026 Google LLC
 //
-//	genkit start -o -- go run .
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+// This sample demonstrates the DashScope plugin for Alibaba Cloud's Qwen
+// models: a flow that generates a joke with a model pinned through
+// dashscope.ModelRef and its typed config.
+//
+// To run:
+//
+//	export DASHSCOPE_API_KEY=...
+//	go run .
+//
+// In another terminal:
+//
+//	curl -X POST http://localhost:8080/jokesFlow \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": "bananas"}'
 package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -24,95 +43,26 @@ import (
 func main() {
 	ctx := context.Background()
 
-	ds := &dashscope.DashScope{}
-	g := genkit.Init(ctx, genkit.WithPlugins(ds))
+	// The plugin reads the API key from the DASHSCOPE_API_KEY environment variable.
+	g := genkit.Init(ctx, genkit.WithPlugins(&dashscope.DashScope{}))
 
-	genkit.DefineFlow(g, "dashscope", func(ctx context.Context, subject string) (string, error) {
-		model := dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
-			Temperature:    openai.Ptr(0.7),
-			EnableThinking: openai.Ptr(false),
-		})
-
-		prompt := fmt.Sprintf("tell me a joke about %s", subject)
-		foo, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt(prompt))
-		if err != nil {
-			return "", err
+	// Define a flow that generates a joke about a given topic. The config
+	// turns on DashScope's thinking mode with a budget on its length.
+	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
+		if topic == "" {
+			topic = "airplane food"
 		}
-		return fmt.Sprintf("foo: %s", foo.Text()), nil
-	})
 
-	// getWeather returns a deliberately made-up temperature. If the model's
-	// final answer mentions it, that proves the model actually called the
-	// tool rather than answering from its own knowledge - confirming that
-	// Tools: true is correct for this model.
-	getWeather := genkit.DefineTool(g, "getWeather", "Get the current temperature for a city",
-		func(ctx *ai.ToolContext, input struct {
-			City string `json:"city"`
-		}) (struct {
-			TempC int `json:"tempC"`
-		}, error) {
-			return struct {
-				TempC int `json:"tempC"`
-			}{TempC: 22}, nil
-		},
-	)
-
-	type ToolTestInput struct {
-		City string `json:"city"`
-		// Model is a dashscope model id, e.g. "qwen-plus" or "qwen3-coder-plus".
-		// Defaults to "qwen-plus" if left blank.
-		Model string `json:"model,omitempty"`
-	}
-
-	genkit.DefineFlow(g, "dashscope-tool-test", func(ctx context.Context, input ToolTestInput) (string, error) {
-		modelID := input.Model
-		if modelID == "" {
-			modelID = "qwen-plus"
-		}
-		model := dashscope.ModelRef(modelID, nil)
-
-		prompt := fmt.Sprintf("What's the current temperature in %s? Use the tool to check, don't guess.", input.City)
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(model),
-			ai.WithPrompt(prompt),
-			ai.WithTools(getWeather),
+		return genkit.GenerateText(ctx, g,
+			ai.WithModel(dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+				EnableThinking: openai.Ptr(true),
+				ThinkingBudget: openai.Ptr(2048),
+			})),
+			ai.WithPrompt("Share a joke about %s.", topic),
 		)
-		if err != nil {
-			return "", err
-		}
-		return resp.Text(), nil
 	})
 
-	type VisionTestInput struct {
-		// ImageURL is a publicly reachable image URL to describe.
-		ImageURL string `json:"imageUrl"`
-		// Model is a dashscope model id, e.g. "qwen3-vl-plus".
-		// Defaults to "qwen3-vl-plus" if left blank.
-		Model string `json:"model,omitempty"`
-	}
-
-	genkit.DefineFlow(g, "dashscope-vision-test", func(ctx context.Context, input VisionTestInput) (string, error) {
-		modelID := input.Model
-		if modelID == "" {
-			modelID = "qwen3-vl-plus"
-		}
-		model := dashscope.ModelRef(modelID, nil)
-
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(model),
-			ai.WithMessages(
-				ai.NewUserMessage(
-					ai.NewTextPart("Describe exactly what is in this image, in one sentence."),
-					ai.NewMediaPart("", input.ImageURL),
-				),
-			),
-		)
-		if err != nil {
-			return "", err
-		}
-		return resp.Text(), nil
-	})
-
+	// Optionally, start a web server to make the flow callable via HTTP.
 	mux := http.NewServeMux()
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
