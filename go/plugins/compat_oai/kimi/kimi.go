@@ -32,6 +32,30 @@ const (
 	defaultBaseURL = "https://api.moonshot.ai/v1"
 )
 
+// ReasoningEffort is how hard the Kimi K3 generation thinks before it
+// answers. Moonshot documents three levels, with [ReasoningEffortMax] the
+// default.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortLow is the fastest, shallowest reasoning.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortHigh is deeper reasoning, below the default.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortMax is the deepest reasoning, and the default.
+	ReasoningEffortMax ReasoningEffort = "max"
+)
+
+// ThinkingType turns the reasoning of thinking-capable Kimi models on or off.
+type ThinkingType string
+
+const (
+	// ThinkingTypeEnabled turns thinking on.
+	ThinkingTypeEnabled ThinkingType = "enabled"
+	// ThinkingTypeDisabled turns thinking off.
+	ThinkingTypeDisabled ThinkingType = "disabled"
+)
+
 // ChatConfig is the per-request config for Kimi models: the generation fields
 // the K-series accepts plus the Moonshot-specific controls. See
 // https://platform.kimi.ai/docs/api/chat.
@@ -57,15 +81,15 @@ type ChatConfig struct {
 	// Thinking controls the reasoning mode of thinking-capable Kimi models,
 	// sent as the API's thinking field.
 	Thinking *ThinkingConfig `json:"thinking,omitempty" jsonschema_description:"Reasoning mode controls for thinking-capable Kimi models, sent as the API's thinking field."`
-	// ReasoningEffort adjusts how hard the Kimi K3 generation thinks: "low",
-	// "high", or "max", the default.
-	ReasoningEffort string `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the Kimi K3 generation thinks: low, high, or max (the default)."`
+	// ReasoningEffort adjusts how hard the Kimi K3 generation thinks, from
+	// [ReasoningEffortLow] to [ReasoningEffortMax], the default.
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the Kimi K3 generation thinks: low, high, or max (the default)."`
 }
 
 // ThinkingConfig configures the reasoning of thinking-capable Kimi models.
 type ThinkingConfig struct {
-	// Type turns thinking "enabled" or "disabled".
-	Type string `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled or disabled."`
+	// Type turns thinking [ThinkingTypeEnabled] or [ThinkingTypeDisabled].
+	Type ThinkingType `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled or disabled."`
 	// Keep controls how much reasoning is preserved across turns, "all" or
 	// unset. It is not an enum in the schema: Moonshot documents one value
 	// today, and a list of one would reject whatever it adds next.
@@ -97,7 +121,7 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	if c.Thinking != nil {
 		thinking := map[string]any{}
 		if c.Thinking.Type != "" {
-			thinking["type"] = c.Thinking.Type
+			thinking["type"] = string(c.Thinking.Type)
 		}
 		if c.Thinking.Keep != "" {
 			thinking["keep"] = c.Thinking.Keep

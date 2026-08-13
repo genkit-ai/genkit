@@ -452,7 +452,9 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 		"maxOutputTokens": {"minimum": 1.0},
 		"stopSequences":   {"maxItems": 5.0},
 		"topLogProbs":     {"minimum": 0.0, "maximum": 20.0},
-		"reasoningEffort": {"enum": []any{"low", "high", "max"}},
+		"reasoningEffort": {"enum": []any{
+			string(kimi.ReasoningEffortLow), string(kimi.ReasoningEffortHigh),
+			string(kimi.ReasoningEffortMax)}},
 	} {
 		prop, _ := props[field].(map[string]any)
 		for key, value := range want {
@@ -464,7 +466,8 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	thinking, _ := props["thinking"].(map[string]any)
 	thinkingProps, _ := thinking["properties"].(map[string]any)
 	thinkingType, _ := thinkingProps["type"].(map[string]any)
-	if got, want := thinkingType["enum"], []any{"enabled", "disabled"}; !reflect.DeepEqual(got, want) {
+	if got, want := thinkingType["enum"], []any{
+		string(kimi.ThinkingTypeEnabled), string(kimi.ThinkingTypeDisabled)}; !reflect.DeepEqual(got, want) {
 		t.Errorf("thinking.type enum = %#v, want %#v", got, want)
 	}
 	// keep carries no enum: Moonshot documents a single value today, and a
