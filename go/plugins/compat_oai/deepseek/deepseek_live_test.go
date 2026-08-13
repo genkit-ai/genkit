@@ -39,10 +39,11 @@ func TestPluginLive(t *testing.T) {
 	// reasoning checks turn it back on.
 	livetest.Run(t, g, livetest.Suite{
 		Model: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
-			Thinking: &deepseek.ThinkingConfig{Type: "disabled"},
+			Thinking: &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled},
 		}),
 		ReasoningModel: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
-			Thinking: &deepseek.ThinkingConfig{Type: "enabled", ReasoningEffort: "low"},
+			ReasoningEffort: deepseek.ReasoningEffortLow,
+			Thinking:        &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeEnabled},
 		}),
 		ReasoningContent: true,
 		ToolChoice:       true,

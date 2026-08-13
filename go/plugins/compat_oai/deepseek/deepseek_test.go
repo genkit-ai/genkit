@@ -131,13 +131,13 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want %q", got, "enabled")
 		}
-		// DeepSeek nests the effort inside thinking rather than taking the
-		// OpenAI top-level field.
-		if got := body.Thinking["reasoning_effort"]; got != "max" {
-			t.Errorf("thinking.reasoning_effort = %v, want %q", got, "max")
+		// DeepSeek reads the effort only as the top-level OpenAI field;
+		// nested inside thinking the service silently ignores it.
+		if body.ReasoningEffort != "max" {
+			t.Errorf("reasoning_effort = %q, want %q", body.ReasoningEffort, "max")
 		}
-		if body.ReasoningEffort != "" {
-			t.Errorf("reasoning_effort = %q, want it nested inside thinking", body.ReasoningEffort)
+		if got, ok := body.Thinking["reasoning_effort"]; ok {
+			t.Errorf("thinking.reasoning_effort = %v, want the top-level field only", got)
 		}
 
 		if body.Stream {
@@ -198,8 +198,9 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 	}
 
 	// The Genkit config speaks the plugin's camelCase contract; the handler
-	// above asserts it reaches the wire as thinking.reasoning_effort.
-	config := map[string]any{"thinking": map[string]any{"type": "enabled", "reasoningEffort": "max"}}
+	// above asserts the effort reaches the wire as the top-level
+	// reasoning_effort DeepSeek reads.
+	config := map[string]any{"reasoningEffort": "max", "thinking": map[string]any{"type": "enabled"}}
 	t.Run("complete", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Say hi."), ai.WithConfig(config))
 		if err != nil {
@@ -368,7 +369,7 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("customOptions has no properties: %v", schema)
 	}
-	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "thinking", "userId", "version", "extra"} {
+	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "reasoningEffort", "thinking", "userId", "version", "extra"} {
 		if props[key] == nil {
 			t.Errorf("config schema is missing the %q property", key)
 		}
@@ -396,17 +397,17 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	if got, has := topP["minimum"]; has {
 		t.Errorf("topP minimum = %v, want none since DeepSeek documents only the upper bound", got)
 	}
+	effort, _ := props["reasoningEffort"].(map[string]any)
+	if got, want := effort["enum"], []any{string(deepseek.ReasoningEffortLow),
+		string(deepseek.ReasoningEffortHigh), string(deepseek.ReasoningEffortMax)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("reasoningEffort enum = %#v, want %#v", got, want)
+	}
 	thinking, _ := props["thinking"].(map[string]any)
 	thinkingProps, _ := thinking["properties"].(map[string]any)
-	for field, want := range map[string][]any{
-		"type": {string(deepseek.ThinkingTypeEnabled), string(deepseek.ThinkingTypeDisabled)},
-		"reasoningEffort": {string(deepseek.ReasoningEffortLow),
-			string(deepseek.ReasoningEffortHigh), string(deepseek.ReasoningEffortMax)},
-	} {
-		prop, _ := thinkingProps[field].(map[string]any)
-		if got := prop["enum"]; !reflect.DeepEqual(got, want) {
-			t.Errorf("thinking.%s enum = %#v, want %#v", field, got, want)
-		}
+	thinkingType, _ := thinkingProps["type"].(map[string]any)
+	if got, want := thinkingType["enum"], []any{string(deepseek.ThinkingTypeEnabled),
+		string(deepseek.ThinkingTypeDisabled)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("thinking.type enum = %#v, want %#v", got, want)
 	}
 }
 

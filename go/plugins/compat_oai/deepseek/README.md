@@ -49,8 +49,8 @@ at https://api-docs.deepseek.com.
 ## Config
 
 Models take a typed `deepseek.ChatConfig`: the generation fields DeepSeek
-accepts plus `thinking`, which carries both the mode and the effort DeepSeek
-nests inside it (`reasoningEffort`: `low`, `high`, or `max`).
+accepts plus its thinking controls, `thinking` for the mode and
+`reasoningEffort` (`low`, `high`, or `max`) for the depth.
 `deepseek.ModelRef` carries the config with the model ID. Thinking is on by
 default, so turning it off is the common case:
 

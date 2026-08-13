@@ -24,6 +24,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 const (
@@ -82,6 +83,13 @@ type ChatConfig struct {
 	// this ID, so end users neither read nor evict each other's cached
 	// prefixes; sent as the API's user_id, not OpenAI's user.
 	UserID string `json:"userId,omitempty" jsonschema:"maxLength=512,pattern=^[a-zA-Z0-9_-]*$" jsonschema_description:"Identifies the end user a request is made on behalf of, up to 512 characters of letters, digits, hyphen and underscore. DeepSeek partitions its context cache by this ID; sent as the API's user_id."`
+	// ReasoningEffort adjusts how hard the model thinks, [ReasoningEffortLow]
+	// to [ReasoningEffortMax]; DeepSeek's default is high. Sent as the API's
+	// top-level reasoning_effort: the create-chat-completion reference also
+	// documents it nested inside thinking, but the service silently ignores it
+	// there and reads only the top-level field the thinking-mode guide's
+	// examples use.
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the model thinks: low, high, or max. DeepSeek's default is high."`
 	// Thinking controls the thinking mode of DeepSeek models, which is on by
 	// default; sent as the API's thinking field.
 	Thinking *ThinkingConfig `json:"thinking,omitempty" jsonschema_description:"Thinking mode controls, on by default; sent as the API's thinking field."`
@@ -91,16 +99,13 @@ type ChatConfig struct {
 type ThinkingConfig struct {
 	// Type turns thinking [ThinkingTypeEnabled] or [ThinkingTypeDisabled].
 	Type ThinkingType `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled or disabled."`
-	// ReasoningEffort adjusts how hard the model thinks, [ReasoningEffortLow]
-	// to [ReasoningEffortMax]; sent as the API's reasoning_effort inside the
-	// thinking object, not as a top-level field.
-	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the model thinks: low, high, or max. Sent as the API's reasoning_effort inside the thinking object."`
 }
 
 // ApplyToChatCompletion implements [compat_oai.ChatConfig]: the generation
 // fields land on their chat completion counterparts, MaxOutputTokens on the
-// max_tokens DeepSeek reads, and the fields DeepSeek names differently than
-// OpenAI, thinking and user_id, ride as extra request fields.
+// max_tokens DeepSeek reads, ReasoningEffort on the SDK's reasoning_effort,
+// and the fields DeepSeek names differently than OpenAI, thinking and
+// user_id, ride as extra request fields.
 func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams) {
 	c.ApplyVersion(params)
 
@@ -122,23 +127,16 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	if c.TopLogProbs != nil {
 		params.TopLogprobs = openai.Int(int64(*c.TopLogProbs))
 	}
+	if c.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(c.ReasoningEffort)
+	}
 	if c.UserID != "" {
 		compat_oai.AddExtraFields(params, map[string]any{"user_id": c.UserID})
 	}
-
-	if c.Thinking != nil {
-		thinking := map[string]any{}
-		if c.Thinking.Type != "" {
-			thinking["type"] = string(c.Thinking.Type)
-		}
-		if c.Thinking.ReasoningEffort != "" {
-			thinking["reasoning_effort"] = string(c.Thinking.ReasoningEffort)
-		}
-		// An all-zero ThinkingConfig adds nothing rather than sending an
-		// empty thinking object the API could reject.
-		if len(thinking) > 0 {
-			compat_oai.AddExtraFields(params, map[string]any{"thinking": thinking})
-		}
+	if c.Thinking != nil && c.Thinking.Type != "" {
+		compat_oai.AddExtraFields(params, map[string]any{
+			"thinking": map[string]any{"type": string(c.Thinking.Type)},
+		})
 	}
 }
 
