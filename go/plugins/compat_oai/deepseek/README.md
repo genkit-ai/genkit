@@ -26,8 +26,7 @@ import (
 
 ctx := context.Background()
 plugin := &deepseek.DeepSeek{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("deepseek/deepseek-v4-flash"),
 )
@@ -56,11 +55,9 @@ nests inside it (`reasoningEffort`: `low`, `high`, or `max`).
 default, so turning it off is the common case:
 
 ```go
-response, err := genkit.Generate(
-    ctx,
-    g,
+response, err := genkit.Generate(ctx, g,
     ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
-        Thinking: &deepseek.ThinkingConfig{Type: "disabled"},
+        Thinking: &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled},
     })),
     ai.WithPrompt("Answer concisely."),
 )
@@ -84,9 +81,7 @@ to partition that cache per end user, so users neither read nor evict each
 other's cached prefixes:
 
 ```go
-response, err := genkit.Generate(
-    ctx,
-    g,
+response, err := genkit.Generate(ctx, g,
     ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
         UserID: "tenant-42",
     })),
