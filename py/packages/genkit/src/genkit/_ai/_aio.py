@@ -1439,7 +1439,7 @@ class Genkit:
                 config=normalized_config,
             )
 
-        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved.name)
+        model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',
