@@ -318,6 +318,14 @@ async def test_titan_multimodal_rejects_unsupported_mime_before_calling() -> Non
 
 
 @pytest.mark.asyncio
+async def test_titan_multimodal_names_the_document_holding_a_remote_url() -> None:
+    documents = [media_doc(PNG_DATA_URL), media_doc('https://example.com/i.png', 'image/png')]
+    with pytest.raises(GenkitError, match='document 1: remote URLs are not supported') as excinfo:
+        await embed(TITAN_MM, ForbiddenTransport(), documents)
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
 async def test_titan_multimodal_requires_some_content() -> None:
     with pytest.raises(GenkitError, match='no text or image content') as excinfo:
         await embed(TITAN_MM, ForbiddenTransport(), [text_doc('')])
@@ -507,16 +515,41 @@ def test_document_text_ignores_media_parts() -> None:
         (media_doc(PNG_DATA_URL, 'image/jpeg'), ('image/jpeg', PNG_B64)),
         # Parameters are stripped and the type is lower-cased.
         (media_doc(PNG_DATA_URL, 'IMAGE/PNG; charset=binary'), ('image/png', PNG_B64)),
-        # No comma: not a data URL, so the part is skipped rather than sent whole.
+        # Bare base64, the other shape converters accepts.
+        (media_doc(PNG_B64, 'image/png'), ('image/png', PNG_B64)),
+        # A data URL with no payload to send is skipped, comma or not.
         (media_doc('data:image/png;base64'), ('', '')),
+        (media_doc('data:image/png;base64,'), ('', '')),
+        (media_doc('', 'image/png'), ('', '')),
         (media_doc(f'data:application/pdf;base64,{PNG_B64}'), ('', '')),
+        # No content type and no data-URL header, so the type is unknown.
         (media_doc(PNG_B64), ('', '')),
+        # Remote URLs only raise once the part is known to be an image.
+        (media_doc('https://example.com/notes.pdf', 'application/pdf'), ('', '')),
         (text_doc('no media here'), ('', '')),
         (DocumentData(content=[]), ('', '')),
     ],
 )
 def test_image_from_document(document: DocumentData, expected: tuple[str, str]) -> None:
     assert image_from_document(document) == expected
+
+
+@pytest.mark.parametrize(
+    'url',
+    [
+        'https://example.com/i.png',
+        'http://example.com/i.png',
+        's3://bucket/i.png',
+        # A comma in a remote URL used to pass for a data-URL separator, which
+        # sent the fragment after it as the image payload.
+        'https://cdn.example.com/i.png?tags=a,b',
+        's3://bucket/a,b/i.png',
+    ],
+)
+def test_image_from_document_rejects_remote_urls(url: str) -> None:
+    with pytest.raises(GenkitError, match='remote URLs are not supported') as excinfo:
+        image_from_document(media_doc(url, 'image/png'))
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
 
 
 def test_image_from_document_returns_the_first_image() -> None:

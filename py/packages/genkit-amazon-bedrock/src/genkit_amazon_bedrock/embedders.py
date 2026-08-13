@@ -57,14 +57,16 @@ from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
 
-# Caps simultaneous InvokeModel calls; large batches otherwise earn a
-# ThrottlingException. Ported from the Go plugin.
+# Caps simultaneous InvokeModel calls; large batches otherwise earn a ThrottlingException.
 EMBED_CONCURRENCY_LIMIT = 10
 
 # Bedrock's per-request document limit for Cohere text embeddings.
 COHERE_TEXT_BATCH_SIZE = 96
 
 TITAN_SUPPORTED_IMAGE_MIME = frozenset({'image/jpeg', 'image/jpg', 'image/png'})
+
+# InvokeModel carries the image inline, so it cannot fetch any of these.
+REMOTE_URL_SCHEMES = ('http://', 'https://', 's3://')
 
 EmbeddingFamily = Literal['titan_text', 'titan_multimodal', 'cohere_v3', 'cohere_v4', 'nova']
 
@@ -194,6 +196,9 @@ def image_from_document(document: DocumentData) -> tuple[str, str]:
 
     Returns:
         ``(mime, base64)``, or two empty strings when there is no image.
+
+    Raises:
+        GenkitError: INVALID_ARGUMENT when an image part holds a remote URL.
     """
     for part in document.content:
         if not isinstance(part.root, MediaPart):
@@ -207,10 +212,18 @@ def image_from_document(document: DocumentData) -> tuple[str, str]:
                 mime = header.split(';', 1)[0].removeprefix('data:').strip().lower()
         if not mime.startswith('image/'):
             continue
-        # No comma means it is not a data URL; skipping beats sending the whole
-        # string to the API as base64.
-        _, found, payload = data_url.partition(',')
-        if found:
+        if data_url.startswith(REMOTE_URL_SCHEMES):
+            raise GenkitError(
+                message='bedrock embed: remote URLs are not supported; use a data URL or base64-encoded data',
+                status='INVALID_ARGUMENT',
+            )
+        if data_url.startswith('data:'):
+            # No comma means the data URL carries no payload to send.
+            _, _, payload = data_url.partition(',')
+        else:
+            # Bare base64, the other shape converters accepts.
+            payload = data_url
+        if payload:
             return mime, payload
     return '', ''
 
@@ -376,7 +389,13 @@ class BedrockEmbedder:
         bodies: list[dict[str, Any]] = []
         for index, document in enumerate(documents):
             text = document_text(document)
-            mime, image = image_from_document(document)
+            try:
+                mime, image = image_from_document(document)
+            except GenkitError as error:
+                raise GenkitError(
+                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
+                    status=error.status,
+                ) from error
             if not text and not image:
                 raise GenkitError(
                     message=f'bedrock embed: document {index} has no text or image content',
