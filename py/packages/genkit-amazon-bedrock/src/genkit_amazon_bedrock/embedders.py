@@ -38,7 +38,7 @@ for that reason, not because of how it encodes the image. Image embedding needs
 import asyncio
 import json
 from collections.abc import Coroutine
-from typing import Any, Literal, NamedTuple, Protocol, cast
+from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -56,6 +56,9 @@ from genkit.embedder import (
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+
+# One call's result: a single vector per document, or a chunk of them for Cohere.
+_T = TypeVar('_T')
 
 # Caps simultaneous InvokeModel calls; large batches otherwise earn a ThrottlingException.
 EMBED_CONCURRENCY_LIMIT = 10
@@ -432,24 +435,27 @@ class BedrockEmbedder:
         # Any media part is ignored: these models take text only.
         texts = [_require_cohere_text(document, index) for index, document in enumerate(documents)]
         # The one family with a batch API, so chunks replace the per-document
-        # fan-out. Sequential slices, hence extend rather than index assignment.
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), COHERE_TEXT_BATCH_SIZE):
-            chunk = texts[start : start + COHERE_TEXT_BATCH_SIZE]
-            payload = await self._invoke({
-                'texts': chunk,
-                'input_type': 'search_document',
-                'truncate': 'END',
-                'embedding_types': ['float'],
-            })
-            batch = decode_cohere_embeddings(payload)
-            if len(batch) != len(chunk):
-                raise GenkitError(
-                    message=f'bedrock embed: cohere returned {len(batch)} text embeddings for {len(chunk)} inputs',
-                    status='INTERNAL',
-                )
-            vectors.extend(batch)
-        return vectors
+        # fan-out. Each index is its chunk's first document, so a failure names it.
+        batches = await self._run_bounded([
+            (start, self._cohere_chunk_vectors(texts[start : start + COHERE_TEXT_BATCH_SIZE]))
+            for start in range(0, len(texts), COHERE_TEXT_BATCH_SIZE)
+        ])
+        return [vector for batch in batches for vector in batch]
+
+    async def _cohere_chunk_vectors(self, chunk: list[str]) -> list[list[float]]:
+        payload = await self._invoke({
+            'texts': chunk,
+            'input_type': 'search_document',
+            'truncate': 'END',
+            'embedding_types': ['float'],
+        })
+        batch = decode_cohere_embeddings(payload)
+        if len(batch) != len(chunk):
+            raise GenkitError(
+                message=f'bedrock embed: cohere returned {len(batch)} text embeddings for {len(chunk)} inputs',
+                status='INTERNAL',
+            )
+        return batch
 
     async def _embed_nova(self, documents: list[DocumentData]) -> list[list[float]]:
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
@@ -465,15 +471,15 @@ class BedrockEmbedder:
         })
         return _require_vector(_nova_embedding(payload))
 
-    async def _run_bounded(self, calls: list[tuple[int, Coroutine[Any, Any, list[float]]]]) -> list[list[float]]:
-        """Runs per-document calls concurrently, cancelling the rest on the first failure.
+    async def _run_bounded(self, calls: list[tuple[int, Coroutine[Any, Any, _T]]]) -> list[_T]:
+        """Runs the calls concurrently, cancelling the rest on the first failure.
 
         The semaphore is built per call rather than once per module: it binds
         to the running loop, and the Dev UI reflection server runs a second one.
         """
         semaphore = asyncio.Semaphore(EMBED_CONCURRENCY_LIMIT)
 
-        async def _bounded(index: int, call: Coroutine[Any, Any, list[float]]) -> list[float]:
+        async def _bounded(index: int, call: Coroutine[Any, Any, _T]) -> _T:
             try:
                 async with semaphore:
                     try:
@@ -503,7 +509,7 @@ class BedrockEmbedder:
             # deterministic across the calls that were left to run.
             if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 raise result
-        return cast(list[list[float]], results)
+        return cast(list[_T], results)
 
     async def _invoke(self, body: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -373,9 +373,11 @@ async def test_cohere_chunks_above_the_batch_limit() -> None:
     transport = FakeInvokeTransport(dispatch=lambda body: cohere_response(len(body['texts'])))
     vectors = await embed(COHERE, transport, documents)
 
-    bodies = transport.bodies()
-    assert [len(body['texts']) for body in bodies] == [COHERE_TEXT_BATCH_SIZE, 4]
-    assert bodies[1]['texts'] == ['doc 96', 'doc 97', 'doc 98', 'doc 99']
+    # Chunks go out concurrently, so sort rather than depend on call order.
+    chunks = sorted((body['texts'] for body in transport.bodies()), key=len, reverse=True)
+    assert [len(chunk) for chunk in chunks] == [COHERE_TEXT_BATCH_SIZE, 4]
+    assert chunks[1] == ['doc 96', 'doc 97', 'doc 98', 'doc 99']
+    assert transport.max_in_flight == 2
     # Reassembled by original index, so the second chunk restarts at 0.0.
     assert vectors[96] == [0.0, 0.5]
     assert len(vectors) == 100
@@ -387,6 +389,17 @@ async def test_cohere_arity_mismatch_is_internal() -> None:
     with pytest.raises(GenkitError, match='returned 1 text embeddings for 2 inputs') as excinfo:
         await embed(COHERE, transport, [text_doc('a'), text_doc('b')])
     assert excinfo.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_a_failing_cohere_chunk_names_its_first_document() -> None:
+    documents = [text_doc(f'doc {i}') for i in range(100)]
+    # The second chunk holds documents 96-99 and comes back one embedding short.
+    transport = FakeInvokeTransport(
+        dispatch=lambda body: cohere_response(1 if len(body['texts']) == 4 else len(body['texts']))
+    )
+    with pytest.raises(GenkitError, match='document 96: cohere returned 1 text embeddings for 4 inputs'):
+        await embed(COHERE, transport, documents)
 
 
 @pytest.mark.asyncio
