@@ -153,6 +153,11 @@ def media(response: ModelResponse) -> list[Media]:
         ('stability.stable-image-ultra-v1:1', True),
         ('us.amazon.nova-canvas-v1:0', True),
         ('us.stability.sd3-5-large-v1:0', True),
+        # Bedrock's own IDs are lowercase, but a custom-model ARN carries a
+        # caller-chosen resource name, so matching is case-insensitive.
+        ('AMAZON.NOVA-CANVAS-V1:0', True),
+        ('US.stability.SD3-5-large-v1:0', True),
+        ('arn:aws:bedrock:us-east-1:123456789012:custom-model/amazon.nova-canvas-v1:0/Nova-Canvas-Tuned', True),
         # An embedder: 'titan-embed-image' is not 'titan-image'.
         ('amazon.titan-embed-image-v1', False),
         # Legacy SDXL (text_prompts/artifacts) is deliberately not ported.

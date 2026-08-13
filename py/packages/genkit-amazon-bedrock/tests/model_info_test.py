@@ -67,6 +67,16 @@ def test_application_inference_profile_arn_falls_back_to_unstable() -> None:
     assert info.supports.tools is True
 
 
+def test_strip_lowercases_for_lookup() -> None:
+    assert strip_inference_profile_prefix('US.Amazon.Nova-Lite-V1:0') == 'amazon.nova-lite-v1:0'
+
+
+def test_a_mixed_case_id_still_finds_its_capabilities() -> None:
+    info = get_model_info('US.Amazon.Nova-Lite-V1:0')
+    assert info.stage == Stage.STABLE
+    assert info.label == 'US.Amazon.Nova-Lite-V1:0'
+
+
 def test_us_gov_wins_over_us() -> None:
     assert strip_inference_profile_prefix('us-gov.anthropic.claude-3-opus-20240229-v1:0') == (
         'anthropic.claude-3-opus-20240229-v1:0'
