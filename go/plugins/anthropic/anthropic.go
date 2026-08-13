@@ -19,7 +19,6 @@ package anthropic
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"regexp"
 	"sync"
@@ -29,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
@@ -167,7 +167,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	models, err := a.discoveredModels(ctx)
 	if err != nil {
-		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
+		logger.Error(ctx, "unable to list anthropic models from Anthropic API", "error", err)
 		return nil
 	}
 

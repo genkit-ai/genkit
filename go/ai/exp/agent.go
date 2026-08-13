@@ -425,9 +425,9 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 			}, nil
 		})
 	if err != nil {
-		logger.FromContext(ctx).Error("agent: failed to save snapshot",
+		logger.Error(ctx, "agent failed to save snapshot",
 			"parentId", parentID,
-			"err", err)
+			"error", err)
 		return ""
 	}
 
@@ -1016,7 +1016,7 @@ func (rt *agentRuntime[State]) takeFatal() error {
 // stream transform, both of which contain a panic in user code rather than let
 // it crash the process.
 func panicError(ctx context.Context, what string, rec any) error {
-	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
+	logger.Error(ctx, what+" panicked", "panic", rec, "stack", string(debug.Stack()))
 	return status.Errorf(status.ErrPanic, "%s panicked: %v", what, rec)
 }
 

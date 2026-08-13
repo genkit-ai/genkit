@@ -326,7 +326,7 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 			// key in these variables is not valid for Vertex AI and fails
 			// each request with PERMISSION_DENIED, so name where the key
 			// came from.
-			logger.FromContext(ctx).Info("Vertex AI: using Express Mode API key from environment", "variable", keySource)
+			logger.Info(ctx, "Vertex AI: using Express Mode API key from environment", "variable", keySource)
 		}
 		gc.APIKey = apiKey
 		gc.HTTPClient = httpClientOrDefault(v.HTTPClient)

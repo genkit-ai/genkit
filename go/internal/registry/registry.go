@@ -108,7 +108,7 @@ func (r *Registry) RegisterPlugin(name string, p api.Plugin) {
 		panic(fmt.Sprintf("plugin %q is already registered", name))
 	}
 	r.plugins[name] = p
-	slog.Debug("RegisterPlugin", "name", name)
+	slog.Debug("registered plugin", "plugin", name)
 }
 
 // RegisterAction records the action in the registry.
@@ -121,7 +121,7 @@ func (r *Registry) RegisterAction(key string, action api.Action) {
 		panic(fmt.Sprintf("action %q is already registered", key))
 	}
 	r.actions[key] = action
-	slog.Debug("RegisterAction", "key", key)
+	slog.Debug("registered action", "key", key)
 }
 
 // RegisterSchema records a JSON schema (as a map[string]any) in the registry.
@@ -133,7 +133,7 @@ func (r *Registry) RegisterSchema(name string, schema map[string]any) {
 		panic(fmt.Sprintf("schema %q is already registered", name))
 	}
 	r.schemas[name] = schema
-	slog.Debug("RegisterSchema", "name", name)
+	slog.Debug("registered schema", "schema", name)
 }
 
 // LookupSchema returns a JSON schema (as a map[string]any) for the given name.
@@ -181,7 +181,7 @@ func (r *Registry) RegisterValue(name string, value any) {
 		panic(fmt.Sprintf("value %q is already registered", name))
 	}
 	r.values[name] = value
-	slog.Debug("RegisterValue", "name", name)
+	slog.Debug("registered value", "name", name)
 }
 
 // LookupValue returns the value for the given name.
@@ -241,7 +241,7 @@ func (r *Registry) ResolveAction(key string) api.Action {
 
 	typ, provider, name := api.ParseKey(key)
 	if typ == "" || name == "" {
-		slog.Debug("ResolveAction: failed to parse action key", "key", key)
+		slog.Debug("cannot resolve action with malformed key", "key", key)
 		return nil
 	}
 

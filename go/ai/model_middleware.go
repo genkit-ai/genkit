@@ -257,7 +257,7 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 			}
 
 			if opts.Stage == ModelStageDeprecated {
-				logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
+				logger.Warn(ctx, "model is deprecated and may be removed in a future release", "model", model)
 			}
 
 			if (opts.Supports.Constrained == "" ||

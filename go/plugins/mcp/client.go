@@ -112,7 +112,7 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	if c.server != nil {
 		if err := c.server.Client.Close(); err != nil {
 			ctx := context.Background()
-			logger.FromContext(ctx).Warn("Error closing previous MCP transport", "client", c.options.Name, "error", err)
+			logger.Warn(ctx, "error closing previous MCP transport", "client", c.options.Name, "error", err)
 		}
 	}
 
@@ -237,7 +237,7 @@ func (c *GenkitMCPClient) Reenable() {
 // Restart restarts the transport connection
 func (c *GenkitMCPClient) Restart(ctx context.Context) error {
 	if err := c.Disconnect(); err != nil {
-		logger.FromContext(ctx).Warn("Error closing MCP transport during restart", "client", c.options.Name, "error", err)
+		logger.Warn(ctx, "error closing MCP transport during restart", "client", c.options.Name, "error", err)
 	}
 	return c.connect(c.options)
 }

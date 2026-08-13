@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
@@ -244,13 +243,6 @@ func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCa
 // inject a per-call one-shot adapter; spanInit, when non-nil, is recorded as
 // the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream], fn StreamingFunc[In, Out, Stream], spanInit any) (output api.ActionRunResult[Out], err error) {
-	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
-	defer func() {
-		logger.FromContext(ctx).Debug("Action.Run",
-			"name", a.Name(),
-			"err", err)
-	}()
-
 	var traceID string
 	var spanID string
 	o, err := tracing.RunInNewSpan(ctx, a.spanMetadata(ctx, spanInit), input,

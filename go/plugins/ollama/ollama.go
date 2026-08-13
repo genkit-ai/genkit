@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -35,6 +34,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
@@ -520,7 +520,7 @@ func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
 func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 	models, err := o.listLocalModels(ctx)
 	if err != nil {
-		slog.Error("unable to list ollama models", "error", err)
+		logger.Error(ctx, "unable to list ollama models", "error", err)
 		return nil
 	}
 
@@ -558,7 +558,7 @@ scheduleQueries:
 			modelSupports := &defaultOllamaSupports
 			if err != nil {
 				if ctx.Err() == nil {
-					slog.Warn("unable to detect ollama model capabilities", "model", m.Name, "error", err)
+					logger.Warn(ctx, "unable to detect ollama model capabilities", "model", m.Name, "error", err)
 				}
 			} else {
 				modelSupports = modelSupportsFromCapabilities(caps)
@@ -571,7 +571,7 @@ scheduleQueries:
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
-		slog.Warn("ollama model discovery canceled", "error", err)
+		logger.Warn(ctx, "ollama model discovery canceled", "error", err)
 		return nil
 	}
 

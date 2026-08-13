@@ -193,16 +193,8 @@ type ModelOptions struct {
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
-			actionOptsBytes, _ := json.Marshal(actionOpts)
-			logger.FromContext(ctx).Debug("GenerateAction",
-				"input", actionOptsBytes)
-			defer func() {
-				respBytes, _ := json.Marshal(resp)
-				logger.FromContext(ctx).Debug("GenerateAction",
-					"output", respBytes,
-					"err", err)
-			}()
-
+			// The request and response are recorded on the action's trace span;
+			// no need to duplicate them here.
 			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
 		})
 	a.Register(r)
@@ -328,6 +320,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
 			opts.Model = defaultModel
+			logger.Debug(ctx, "no model specified, using default model", "model", opts.Model)
 		}
 		if opts.Model == "" {
 			return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: model is required")
@@ -449,7 +442,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	var fn ModelFunc
 	if bm != nil {
 		if cb != nil {
-			logger.FromContext(ctx).Warn("background model does not support streaming", "model", bm.Name())
+			logger.Warn(ctx, "background model does not support streaming, ignoring stream callback", "model", bm.Name())
 		}
 		fn = backgroundModelToModelFn(bm.Start)
 	} else {
@@ -563,10 +556,17 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				return generate(ctx, resumeReq, currentTurn+1, currentIndex)
 			}
 
+			logger.Debug(ctx, "calling model", "model", opts.Model, "turn", currentTurn, "messages", len(req.Messages))
 			resp, err := fn(ctx, req, wrappedCb)
 			if err != nil {
 				return nil, err
 			}
+
+			modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
+			if resp.Usage != nil {
+				modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
+			}
+			logger.Debug(ctx, "model responded", modelArgs...)
 
 			// Ensure all tool requests have unique refs for matching during resume.
 			ensureToolRequestRefs(resp.Message)
@@ -590,11 +590,15 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 					// enforced, so skipping it on an unclassified reason would
 					// silently drop validation for output the model may well
 					// have completed.
+					logger.Warn(ctx, "model finished abnormally, skipping output parsing",
+						"model", opts.Model,
+						"finishReason", resp.FinishReason,
+						"finishMessage", resp.FinishMessage)
 				default:
 					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
 					resp.Message, err = formatHandler.ParseMessage(resp.Message)
 					if err != nil {
-						logger.FromContext(ctx).Debug("model failed to generate output matching expected schema", "error", err.Error())
+						logger.Debug(ctx, "model output does not match the expected schema", "model", opts.Model, "error", err)
 						return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
 					}
 				}
@@ -613,6 +617,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				return nil, err
 			}
 			if interruptMsg != nil {
+				logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
 				resp.FinishReason = "interrupted"
 				resp.FinishMessage = "One or more tool calls resulted in interrupts."
 				resp.Message = interruptMsg
@@ -639,6 +644,15 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			Callback:     middlewareCb,
 		})
 	}
+
+	logger.Debug(ctx, "generate request resolved",
+		"model", opts.Model,
+		"messages", len(req.Messages),
+		"tools", len(toolDefs),
+		"maxTurns", maxTurns,
+		"format", outputCfg.Format,
+		"constrained", outputCfg.Constrained,
+		"streaming", cb != nil)
 
 	return generate(ctx, req, 0, 0)
 }
@@ -1160,6 +1174,12 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		return nil, nil, nil
 	}
 
+	toolNames := make([]string, 0, toolCount)
+	for _, p := range resp.ToolRequests() {
+		toolNames = append(toolNames, p.ToolRequest.Name)
+	}
+	logger.Debug(ctx, "executing tool requests", "tools", toolNames)
+
 	resultChan := make(chan result[*MultipartToolResponse], toolCount)
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
@@ -1179,7 +1199,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		streamMu.Lock()
 		defer streamMu.Unlock()
 		if err := cb(sendCtx, chunk); err != nil {
-			logger.FromContext(sendCtx).Debug("tool stream callback failed", "error", err)
+			logger.Debug(sendCtx, "tool stream callback failed, dropping chunk", "error", err)
 		}
 	}
 
@@ -1223,7 +1243,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			if err != nil {
 				var tie *toolInterruptError
 				if errors.As(err, &tie) {
-					logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", toolReq.Name, tie.Metadata)
+					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
 
 					newPart := clone(p)
 					if newPart.Metadata == nil {
@@ -1765,7 +1785,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				if err != nil {
 					var tie *toolInterruptError
 					if errors.As(err, &tie) {
-						logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", restartPart.ToolRequest.Name, tie.Metadata)
+						logger.Debug(ctx, "restarted tool triggered an interrupt", "tool", restartPart.ToolRequest.Name)
 
 						interruptPart := clone(p)
 						if interruptPart.Metadata == nil {

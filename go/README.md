@@ -822,6 +822,29 @@ genkit.DefineFlow(g, "processDocument",
 
 [See full example](samples/basic)
 
+### Logging
+
+Log through the context-aware logger (package `github.com/firebase/genkit/go/core/logger`) and records reach the terminal and, during development, the Dev UI attached to the trace span that emitted them:
+
+```go
+genkit.DefineFlow(g, "importDocuments",
+    func(ctx context.Context, source string) (int, error) {
+        logger.Info(ctx, "starting import", "source", source)
+
+        count, err := importAll(ctx, source)
+        if err != nil {
+            logger.Error(ctx, "import failed", "source", source, "error", err)
+            return 0, err
+        }
+
+        logger.Debug(ctx, "import finished", "documents", count)
+        return count, nil
+    },
+)
+```
+
+The terminal shows info and above by default; run with `GENKIT_LOG_LEVEL=debug` to also see Genkit's per-request detail (model calls, tool runs, span timings) there. The Dev UI always receives debug and above, so an interactive app can keep a quiet terminal while the full narrative lands in the trace viewer.
+
 ### Define Prompts
 
 Create reusable prompts with Handlebars templating:

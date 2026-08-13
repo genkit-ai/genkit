@@ -29,17 +29,56 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
 // genkitCtxKey is the context key for the Genkit instance.
 var genkitCtxKey = base.NewContextKey[*Genkit]()
+
+// initialSlogDefault is the process's default logger as of package
+// initialization. Comparing against it tells whether the application (or a
+// plugin) installed its own handler, in which case Genkit leaves the console
+// logging configuration alone.
+var initialSlogDefault = slog.Default()
+
+// configureLoggingOnce guards configureLogging: Init may run more than once
+// (commonly in tests), but log handlers must only be installed once.
+var configureLoggingOnce sync.Once
+
+// configureLogging applies GENKIT_LOG_LEVEL to the console handler and, in the
+// dev environment, installs the handler that streams logs to the Dev UI's
+// telemetry server, correlated with the active trace span.
+func configureLogging() {
+	if v := os.Getenv("GENKIT_LOG_LEVEL"); v != "" {
+		var lvl slog.Level
+		if err := lvl.UnmarshalText([]byte(v)); err != nil {
+			slog.Warn("ignoring invalid GENKIT_LOG_LEVEL", "value", v, "error", err)
+		} else if slog.Default() == initialSlogDefault {
+			logger.SetLevel(lvl)
+		} else {
+			// The application brought its own handler; its level is not ours
+			// to manage.
+			slog.Debug("ignoring GENKIT_LOG_LEVEL because a custom default logger is installed", "value", v)
+		}
+	}
+	if api.CurrentEnvironment() == api.EnvironmentDev {
+		logger.AddHandler(tracing.LogExportHandler())
+		// The CLI normally provides the telemetry server URL in the
+		// environment; when it arrives later via the reflection API instead,
+		// configureTelemetry enables export at that point.
+		tracing.EnableLogExport(os.Getenv("GENKIT_TELEMETRY_SERVER"))
+	}
+}
 
 // FromContext returns the [*Genkit] instance stored in the context.
 // This is set automatically by [Generate] and related functions, and seeded
@@ -241,6 +280,9 @@ func WithExperimental() GenkitOption {
 func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	ctx, _ = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 
+	configureLoggingOnce.Do(configureLogging)
+	start := time.Now()
+
 	gOpts := &genkitOptions{}
 	for _, opt := range opts {
 		if err := opt.apply(gOpts); err != nil {
@@ -252,6 +294,8 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	g := &Genkit{reg: r}
 
 	for _, plugin := range gOpts.Plugins {
+		logger.Debug(ctx, "initializing plugin", "plugin", plugin.Name())
+		pluginStart := time.Now()
 		actions := plugin.Init(ctx)
 		for _, action := range actions {
 			action.Register(r)
@@ -267,6 +311,10 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 				d.Register(r)
 			}
 		}
+		logger.Debug(ctx, "initialized plugin",
+			"plugin", plugin.Name(),
+			"actions", len(actions),
+			"duration", time.Since(pluginStart).Round(time.Millisecond))
 	}
 
 	ai.ConfigureFormats(r)
@@ -298,8 +346,15 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
 					return
 				}
+				// Wait for startup to succeed before draining errCh for
+				// runtime serve errors. Receiving from errCh right away would
+				// race the select below for a startup failure; if this
+				// goroutine won, the error would be logged instead of
+				// panicking and Init would block forever on channels nobody
+				// closes.
+				<-serverStartCh
 				if err := <-errCh; err != nil {
-					slog.Error("reflection server error", "err", err)
+					logger.Error(ctx, "reflection server error", "error", err)
 				}
 			}()
 		}
@@ -308,13 +363,26 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		case err := <-errCh:
 			panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
 		case <-serverStartCh:
-			slog.Debug("reflection server started successfully")
 		case <-ctx.Done():
 			panic(ctx.Err())
 		}
 	}
 
+	logger.Info(ctx, "Genkit initialized",
+		"env", api.CurrentEnvironment(),
+		"plugins", pluginNames(gOpts.Plugins),
+		"duration", time.Since(start).Round(time.Millisecond))
+
 	return g
+}
+
+// pluginNames returns the names of the given plugins for the init log line.
+func pluginNames(plugins []api.Plugin) []string {
+	names := make([]string, len(plugins))
+	for i, p := range plugins {
+		names[i] = p.Name()
+	}
+	return names
 }
 
 // RegisterAction registers a [api.Action] that was previously created by calling
@@ -1684,7 +1752,7 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 		if !useDefaultDir {
 			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
 		}
-		slog.Debug("default prompt directory not found, skipping loading .prompt files", "dir", dir)
+		slog.Debug("default prompt directory not found, skipping prompt loading", "dir", dir)
 		return
 	}
 
@@ -1692,7 +1760,7 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 		if !useDefaultDir {
 			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
 		}
-		slog.Debug("Default prompt directory not found, skipping loading .prompt files", "dir", dir)
+		slog.Debug("default prompt directory not found, skipping prompt loading", "dir", dir)
 		return
 	}
 

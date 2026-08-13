@@ -100,7 +100,7 @@ import (
 // pirate, coder, and orchestrator agents reference it directly; the chef and
 // banker agents set the same model in their .prompt frontmatter.
 var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-	ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMinimal},
+	ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMedium},
 })
 
 func main() {

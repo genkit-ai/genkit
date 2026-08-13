@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,6 +41,7 @@ func Start(ctx context.Context, addr string, mux *http.ServeMux) error {
 	errChan := make(chan error, 1)
 
 	go func() {
+		slog.Info("server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- fmt.Errorf("server error: %w", err)
 		}
@@ -50,6 +52,7 @@ func Start(ctx context.Context, addr string, mux *http.ServeMux) error {
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
+		slog.Info("server shutting down", "addr", addr)
 		if err := srv.Shutdown(ctx); err != nil {
 			return fmt.Errorf("failed to shutdown server: %w", err)
 		}

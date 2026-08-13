@@ -172,6 +172,7 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 			return
 		}
 
+		slog.Info("reflection server listening", "addr", s.Addr)
 		close(serverStartCh)
 
 		if err := s.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -321,14 +322,14 @@ func serveMux(g *Genkit, s *reflectionServer) *http.ServeMux {
 func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		logger.FromContext(ctx).Debug("request start", "method", r.Method, "path", r.URL.Path)
+		logger.Debug(ctx, "reflection request started", "method", r.Method, "path", r.URL.Path)
 
 		var err error
 		defer func() {
 			if err != nil {
-				logger.FromContext(ctx).Error("request end", "err", err)
+				logger.Error(ctx, "reflection request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 			} else {
-				logger.FromContext(ctx).Debug("request end")
+				logger.Debug(ctx, "reflection request finished", "method", r.Method, "path", r.URL.Path)
 			}
 		}()
 
@@ -432,7 +433,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			return err
 		}
 
-		logger.FromContext(ctx).Debug("running action", "key", body.Key, "stream", stream)
+		logger.Debug(ctx, "running action from the Dev UI", "key", body.Key, "stream", stream)
 
 		// Create cancellable context for this action
 		actionCtx, cancel := context.WithCancel(ctx)
@@ -548,7 +549,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 				reflectErr, err := json.Marshal(refErr)
 				if err != nil {
-					logger.FromContext(ctx).Error("writing output", "err", err)
+					logger.Error(ctx, "failed to write reflection response", "error", err)
 					return nil
 				}
 				_, err = fmt.Fprintf(w, "{\"error\": %s }", reflectErr)
@@ -566,7 +567,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 			reflectErr, err := json.Marshal(errorResponse)
 			if err != nil {
-				logger.FromContext(ctx).Error("writing output", "err", err)
+				logger.Error(ctx, "failed to write reflection response", "error", err)
 				return nil
 			}
 
@@ -587,7 +588,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 			data, err := json.Marshal(finalResponse)
 			if err != nil {
-				logger.FromContext(ctx).Error("writing output", "err", err)
+				logger.Error(ctx, "failed to write reflection response", "error", err)
 				return nil
 			}
 
@@ -650,6 +651,7 @@ func configureTelemetry(url string) {
 		} else {
 			tracing.WriteTelemetryImmediate(client)
 		}
+		tracing.EnableLogExport(url)
 		slog.Debug("connected to telemetry server", "url", url, "realtime", realtime)
 	}
 }
@@ -670,7 +672,9 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 		configureTelemetry(body.TelemetryServerURL)
 
 		if body.ReflectionApiSpecVersion != internal.GENKIT_REFLECTION_API_SPEC_VERSION {
-			slog.Error("Genkit CLI version is not compatible with runtime library. Please use `genkit-cli` version compatible with runtime library version.")
+			slog.Warn("Genkit CLI version is not compatible with the runtime library, update genkit-cli to a compatible version",
+				"expectedSpecVersion", internal.GENKIT_REFLECTION_API_SPEC_VERSION,
+				"gotSpecVersion", body.ReflectionApiSpecVersion)
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -869,7 +873,7 @@ func writeJSON(ctx context.Context, w http.ResponseWriter, value any) error {
 	}
 	_, err = w.Write(data)
 	if err != nil {
-		logger.FromContext(ctx).Error("writing output", "err", err)
+		logger.Error(ctx, "failed to write reflection response", "error", err)
 	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()

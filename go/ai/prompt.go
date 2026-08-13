@@ -341,7 +341,7 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 	}
 
 	if len(p.Middleware) > 0 {
-		logger.FromContext(ctx).Warn(fmt.Sprintf("middleware set on prompt %q will be ignored during Prompt.Render", p.Name()))
+		logger.Warn(ctx, "middleware set on prompt is ignored during Prompt.Render, use Prompt.Execute to apply it", "prompt", p.Name())
 	}
 
 	// TODO: This is hacky; we should have a helper that fetches the metadata.
@@ -842,11 +842,11 @@ func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 				partialName := strings.TrimSuffix(filename[1:], ".prompt")
 				source, err := fs.ReadFile(fsys, filePath)
 				if err != nil {
-					slog.Error("Failed to read partial file", "error", err)
+					slog.Error("failed to read prompt partial file, skipping it", "file", filePath, "error", err)
 					continue
 				}
 				r.RegisterPartial(partialName, string(source))
-				slog.Debug("Registered Dotprompt partial", "name", partialName, "file", filePath)
+				slog.Debug("registered dotprompt partial", "partial", partialName, "file", filePath)
 			} else {
 				LoadPromptFromFS(r, fsys, dir, filename, namespace)
 			}
@@ -863,17 +863,17 @@ func LoadPromptFromFS(r api.Registry, fsys fs.FS, dir, filename, namespace strin
 	sourceFile := path.Join(dir, filename)
 	source, err := fs.ReadFile(fsys, sourceFile)
 	if err != nil {
-		slog.Error("Failed to read prompt file", "file", sourceFile, "error", err)
+		slog.Error("failed to read prompt file, skipping it", "file", sourceFile, "error", err)
 		return nil
 	}
 
 	p, err := LoadPromptFromSource(r, string(source), name, namespace)
 	if err != nil {
-		slog.Error("Failed to load prompt", "file", sourceFile, "error", err)
+		slog.Error("failed to load prompt file, skipping it", "file", sourceFile, "error", err)
 		return nil
 	}
 
-	slog.Debug("Registered Dotprompt", "name", p.Name(), "file", sourceFile)
+	slog.Debug("registered dotprompt", "prompt", p.Name(), "file", sourceFile)
 	return p
 }
 

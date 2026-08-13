@@ -323,7 +323,8 @@ func NewEvaluatorAction[Config any](
 						return result, nil
 					})
 				if err != nil {
-					logger.FromContext(ctx).Debug("EvaluatorAction", "err", err)
+					logger.Warn(ctx, "evaluation of test case failed, continuing with the rest",
+						"testCaseId", datapoint.TestCaseId, "error", err)
 					continue
 				}
 			}

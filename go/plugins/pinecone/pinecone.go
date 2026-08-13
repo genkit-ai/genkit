@@ -39,6 +39,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/firebase/genkit/go/core/logger"
 )
 
 // Set pineconeDebug to true to dump data sent to and received from the server.
@@ -388,7 +390,7 @@ func (c *client) postData(ctx context.Context, url string, post, result any) err
 				return err
 			}
 			b := buf.Bytes()
-			fmt.Printf("pinecone: post to %s: %s\n", url, b)
+			logger.Debug(ctx, "pinecone: request", "url", url, "body", string(b))
 			if _, err := httpWriter.Write(b); err != nil {
 				return err
 			}
@@ -434,7 +436,7 @@ func (c *client) postData(ctx context.Context, url string, post, result any) err
 		if err != nil {
 			return err
 		}
-		fmt.Printf("pinecone: reply from %s: %s\n", url, data)
+		logger.Debug(ctx, "pinecone: response", "url", url, "body", string(data))
 		r = bytes.NewReader(data)
 	}
 
