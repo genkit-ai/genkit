@@ -214,6 +214,7 @@ func TestClosedEnumsUseNamedTypes(t *testing.T) {
 	configs := map[string]any{
 		"anthropic": anthropic.ChatConfig{},
 		"dashscope": dashscope.ChatConfig{},
+		"deepseek":  deepseek.ChatConfig{},
 		"kimi":      kimi.ChatConfig{},
 		"zai":       zai.ChatConfig{},
 	}

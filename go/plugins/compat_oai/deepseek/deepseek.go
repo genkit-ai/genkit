@@ -31,6 +31,28 @@ const (
 	defaultBaseURL = "https://api.deepseek.com"
 )
 
+// ThinkingType turns the thinking mode of DeepSeek models on or off.
+type ThinkingType string
+
+const (
+	// ThinkingTypeEnabled turns thinking on, which is DeepSeek's default.
+	ThinkingTypeEnabled ThinkingType = "enabled"
+	// ThinkingTypeDisabled turns thinking off.
+	ThinkingTypeDisabled ThinkingType = "disabled"
+)
+
+// ReasoningEffort is how hard a DeepSeek model thinks before it answers.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortLow is the fastest, shallowest reasoning.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortHigh is deeper reasoning.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortMax is the deepest reasoning.
+	ReasoningEffortMax ReasoningEffort = "max"
+)
+
 // ChatConfig is the per-request config for DeepSeek models: the generation
 // fields DeepSeek accepts plus its thinking controls. See
 // https://api-docs.deepseek.com/api/create-chat-completion.
@@ -67,12 +89,12 @@ type ChatConfig struct {
 
 // ThinkingConfig configures the thinking mode of DeepSeek models.
 type ThinkingConfig struct {
-	// Type turns thinking "enabled" or "disabled".
-	Type string `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled or disabled."`
-	// ReasoningEffort adjusts how hard the model thinks: "low", "high", or
-	// "max"; sent as the API's reasoning_effort inside the thinking object,
-	// not as a top-level field.
-	ReasoningEffort string `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the model thinks: low, high, or max. Sent as the API's reasoning_effort inside the thinking object."`
+	// Type turns thinking [ThinkingTypeEnabled] or [ThinkingTypeDisabled].
+	Type ThinkingType `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled or disabled."`
+	// ReasoningEffort adjusts how hard the model thinks, [ReasoningEffortLow]
+	// to [ReasoningEffortMax]; sent as the API's reasoning_effort inside the
+	// thinking object, not as a top-level field.
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=low,enum=high,enum=max" jsonschema_description:"How hard the model thinks: low, high, or max. Sent as the API's reasoning_effort inside the thinking object."`
 }
 
 // ApplyToChatCompletion implements [compat_oai.ChatConfig]: the generation
@@ -107,10 +129,10 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	if c.Thinking != nil {
 		thinking := map[string]any{}
 		if c.Thinking.Type != "" {
-			thinking["type"] = c.Thinking.Type
+			thinking["type"] = string(c.Thinking.Type)
 		}
 		if c.Thinking.ReasoningEffort != "" {
-			thinking["reasoning_effort"] = c.Thinking.ReasoningEffort
+			thinking["reasoning_effort"] = string(c.Thinking.ReasoningEffort)
 		}
 		// An all-zero ThinkingConfig adds nothing rather than sending an
 		// empty thinking object the API could reject.

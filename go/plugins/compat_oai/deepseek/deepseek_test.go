@@ -399,8 +399,9 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	thinking, _ := props["thinking"].(map[string]any)
 	thinkingProps, _ := thinking["properties"].(map[string]any)
 	for field, want := range map[string][]any{
-		"type":            {"enabled", "disabled"},
-		"reasoningEffort": {"low", "high", "max"},
+		"type": {string(deepseek.ThinkingTypeEnabled), string(deepseek.ThinkingTypeDisabled)},
+		"reasoningEffort": {string(deepseek.ReasoningEffortLow),
+			string(deepseek.ReasoningEffortHigh), string(deepseek.ReasoningEffortMax)},
 	} {
 		prop, _ := thinkingProps[field].(map[string]any)
 		if got := prop["enum"]; !reflect.DeepEqual(got, want) {
