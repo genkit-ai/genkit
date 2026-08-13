@@ -26,21 +26,21 @@ You can use either the Google AI (Gemini API) or Vertex AI backend.
 
 ```go
 import (
- "context"
- "log"
+    "context"
+    "log"
 
- "github.com/firebase/genkit/go/genkit"
- "github.com/firebase/genkit/go/plugins/googlegenai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
 func main() {
- ctx := context.Background()
+    ctx := context.Background()
 
- g := genkit.Init(ctx,
-  genkit.WithPlugins(&googlegenai.GoogleAI{
-   APIKey: "your-api-key", // Optional: defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var
-  }),
- )
+    g := genkit.Init(ctx,
+        genkit.WithPlugins(&googlegenai.GoogleAI{
+            APIKey: "your-api-key", // Optional: defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var
+        }),
+    )
 }
 ```
 
@@ -48,23 +48,23 @@ func main() {
 
 ```go
 import (
- "context"
- "log"
+    "context"
+    "log"
 
- "github.com/firebase/genkit/go/genkit"
- "github.com/firebase/genkit/go/plugins/googlegenai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
 func main() {
- ctx := context.Background()
+    ctx := context.Background()
 
- g := genkit.Init(ctx,
-  genkit.WithPlugins(&googlegenai.VertexAI{
-   ProjectID:  "your-project-id", // Optional: defaults to GOOGLE_CLOUD_PROJECT
-   Location:   "us-central1",     // Optional: defaults to GOOGLE_CLOUD_LOCATION. Also accepts multi-region ("us", "eu") or "global".
-   APIVersion: "v1",              // Optional: defaults to v1beta1. Can be overridden per-request via config.HTTPOptions.APIVersion.
-  }),
- )
+    g := genkit.Init(ctx,
+        genkit.WithPlugins(&googlegenai.VertexAI{
+            ProjectID:  "your-project-id", // Optional: defaults to GOOGLE_CLOUD_PROJECT
+            Location:   "us-central1",     // Optional: defaults to GOOGLE_CLOUD_LOCATION. Also accepts multi-region ("us", "eu") or "global".
+            APIVersion: "v1",              // Optional: defaults to v1beta1. Can be overridden per-request via config.HTTPOptions.APIVersion.
+        }),
+    )
 }
 ```
 
@@ -88,33 +88,60 @@ Commonly used models include:
 - **Imagen Series**: `imagen-4.0-generate-001`
 - **Veo Series**: `veo-3.1-generate-preview`
 
-> **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models).
+> **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models). On Vertex AI, see the [Vertex AI model documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models).
+
+The `Models` field on either backend describes or corrects any model, most
+often one released after the SDK version your build links:
+
+```go
+g := genkit.Init(ctx,
+    genkit.WithPlugins(&googlegenai.GoogleAI{
+        Models: map[string]ai.ModelOptions{
+            "gemini-4.0-flash": {Label: "Gemini 4.0 Flash"},
+        },
+    }),
+)
+```
 
 ### Basic Usage
 
 ```go
 import (
- "context"
- "fmt"
- "log"
+    "context"
+    "fmt"
+    "log"
 
- "github.com/firebase/genkit/go/ai"
- "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
 )
 
 func main() {
- // ... Init genkit with googlegenai plugin ...
+    // ... Init genkit with googlegenai plugin ...
 
- resp, err := genkit.Generate(ctx, g,
-  ai.WithModelName("googleai/gemini-flash-latest"),
-  ai.WithPrompt("Explain how neural networks learn in simple terms."),
- )
- if err != nil {
-  log.Fatal(err)
- }
+    resp, err := genkit.Generate(ctx, g,
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithPrompt("Explain how neural networks learn in simple terms."),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
 
- fmt.Println(resp.Text())
+    fmt.Println(resp.Text())
 }
+```
+
+`googlegenai.ModelRef` binds a typed config to a model name so `ai.WithModel`
+carries both:
+
+```go
+import "google.golang.org/genai"
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+        Temperature: genai.Ptr[float32](0.2),
+    })),
+    ai.WithPrompt("Explain how neural networks learn in simple terms."),
+)
 ```
 
 ### Structured Output
@@ -125,18 +152,18 @@ Gemini models support structured output generation, which guarantees that the mo
 
 ```go
 type Character struct {
- Name string `json:"name"`
- Bio  string `json:"bio"`
- Age  int    `json:"age"`
+    Name string `json:"name"`
+    Bio  string `json:"bio"`
+    Age  int    `json:"age"`
 }
 
 // Automatically infers schema from the struct and unmarshals the result
 char, resp, err := genkit.GenerateData[Character](ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("Generate a profile for a fictional character"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Generate a profile for a fictional character"),
 )
 if err != nil {
- log.Fatal(err)
+    log.Fatal(err)
 }
 
 fmt.Printf("Name: %s, Age: %d\n", char.Name, char.Age)
@@ -148,17 +175,17 @@ You can also use the standard `Generate` function and unmarshal manually:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("Generate a profile for a fictional character"),
- ai.WithOutputType(Character{}),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Generate a profile for a fictional character"),
+    ai.WithOutputType(Character{}),
 )
 if err != nil {
- log.Fatal(err)
+    log.Fatal(err)
 }
 
 var char Character
 if err := resp.Output(&char); err != nil {
- log.Fatal(err)
+    log.Fatal(err)
 }
 ```
 
@@ -180,14 +207,14 @@ Gemini 2.5 and newer models use an internal thinking process that improves reaso
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("what is heavier, one kilo of steel or one kilo of feathers"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  ThinkingConfig: &genai.ThinkingConfig{
-   ThinkingBudget: genai.Ptr[int32](1024), // Number of thinking tokens
-   IncludeThoughts: true,                  // Include thought summaries
-  },
- }),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("what is heavier, one kilo of steel or one kilo of feathers"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        ThinkingConfig: &genai.ThinkingConfig{
+            ThinkingBudget: genai.Ptr[int32](1024), // Number of thinking tokens
+            IncludeThoughts: true,                  // Include thought summaries
+        },
+    }),
 )
 ```
 
@@ -201,17 +228,17 @@ cachedMsg := ai.NewUserTextMessage(largeContent).WithCacheTTL(300)
 
 // First request - content will be cached
 resp1, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithMessages(cachedMsg),
- ai.WithPrompt("Task 1..."),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithMessages(cachedMsg),
+    ai.WithPrompt("Task 1..."),
 )
 
 // Second request with same prefix - eligible for cache hit
 resp2, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- // Reuse the history from previous response or construct messages with same prefix
- ai.WithMessages(resp1.History()...),
- ai.WithPrompt("Task 2..."),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    // Reuse the history from previous response or construct messages with same prefix
+    ai.WithMessages(resp1.History()...),
+    ai.WithPrompt("Task 2..."),
 )
 ```
 
@@ -223,20 +250,20 @@ You can configure safety settings to control content filtering:
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("Your prompt here"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  SafetySettings: []*genai.SafetySetting{
-   {
-    Category:  genai.HarmCategoryHateSpeech,
-    Threshold: genai.HarmBlockThresholdBlockLowAndAbove,
-   },
-   {
-    Category:  genai.HarmCategoryDangerousContent,
-    Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
-   },
-  },
- }),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Your prompt here"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        SafetySettings: []*genai.SafetySetting{
+            {
+                Category:  genai.HarmCategoryHateSpeech,
+                Threshold: genai.HarmBlockThresholdBlockLowAndAbove,
+            },
+            {
+                Category:  genai.HarmCategoryDangerousContent,
+                Threshold: genai.HarmBlockThresholdBlockMediumAndAbove,
+            },
+        },
+    }),
 )
 ```
 
@@ -248,15 +275,15 @@ Enable Google Search to provide answers with current information and verifiable 
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("What are the top tech news stories this week?"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  Tools: []*genai.Tool{
-   {
-    GoogleSearch: &genai.GoogleSearch{},
-   },
-  },
- }),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("What are the top tech news stories this week?"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        Tools: []*genai.Tool{
+            {
+                GoogleSearch: &genai.GoogleSearch{},
+            },
+        },
+    }),
 )
 ```
 
@@ -268,34 +295,34 @@ Enable Google Maps to provide location-aware responses.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("Find coffee shops near Times Square"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  Tools: []*genai.Tool{
-   {
-    GoogleMaps: &genai.GoogleMaps{
-     EnableWidget: genai.Ptr(true),
-    },
-   },
-  },
-  ToolConfig: &genai.ToolConfig{
-   RetrievalConfig: &genai.RetrievalConfig{
-    LatLng: &genai.LatLng{
-     Latitude:  genai.Ptr(37.7749),
-     Longitude: genai.Ptr(-122.4194),
-    },
-   },
-  },
- }),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Find coffee shops near Times Square"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        Tools: []*genai.Tool{
+            {
+                GoogleMaps: &genai.GoogleMaps{
+                    EnableWidget: genai.Ptr(true),
+                },
+            },
+        },
+        ToolConfig: &genai.ToolConfig{
+            RetrievalConfig: &genai.RetrievalConfig{
+                LatLng: &genai.LatLng{
+                    Latitude:  genai.Ptr(37.7749),
+                    Longitude: genai.Ptr(-122.4194),
+                },
+            },
+        },
+    }),
 )
 
 // Access grounding metadata (e.g., for map widget)
 if custom, ok := resp.Custom["candidates"].([]*genai.Candidate); ok {
- for _, cand := range custom {
-  if cand.GroundingMetadata != nil && cand.GroundingMetadata.GoogleMapsWidgetContextToken != "" {
-   fmt.Printf("Map Widget Token: %s\n", cand.GroundingMetadata.GoogleMapsWidgetContextToken)
-  }
- }
+    for _, cand := range custom {
+        if cand.GroundingMetadata != nil && cand.GroundingMetadata.GoogleMapsWidgetContextToken != "" {
+            fmt.Printf("Map Widget Token: %s\n", cand.GroundingMetadata.GoogleMapsWidgetContextToken)
+        }
+    }
 }
 ```
 
@@ -307,15 +334,15 @@ Enable the model to write and execute Python code for calculations and logic.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithPrompt("Calculate the 20th Fibonacci number"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  Tools: []*genai.Tool{
-   {
-    CodeExecution: &genai.ToolCodeExecution{},
-   },
-  },
- }),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Calculate the 20th Fibonacci number"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        Tools: []*genai.Tool{
+            {
+                CodeExecution: &genai.ToolCodeExecution{},
+            },
+        },
+    }),
 )
 ```
 
@@ -327,18 +354,18 @@ Some Gemini models (like `gemini-3.1-flash-image`) can output images natively al
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-3.1-flash-image"),
- ai.WithPrompt("Create a picture of a futuristic city and describe it"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  ResponseModalities: []string{"IMAGE", "TEXT"},
- }),
+    ai.WithModelName("googleai/gemini-3.1-flash-image"),
+    ai.WithPrompt("Create a picture of a futuristic city and describe it"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        ResponseModalities: []string{"IMAGE", "TEXT"},
+    }),
 )
 
 for _, part := range resp.Message.Content {
- if part.IsMedia() {
-  fmt.Printf("Generated image: %s\n", part.ContentType)
-  // Access data via part.Text (data URI) or helper functions
- }
+    if part.IsMedia() {
+        fmt.Printf("Generated image: %s\n", part.ContentType)
+        // Access data via part.Text (data URI) or helper functions
+    }
 }
 ```
 
@@ -356,13 +383,13 @@ videoPart := ai.NewMediaPart("video/mp4", "https://example.com/video.mp4")
 imagePart := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,...")
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-flash-latest"),
- ai.WithMessages(
-  ai.NewUserMessage(
-   ai.NewTextPart("Describe this content"),
-   videoPart,
-  ),
- ),
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithMessages(
+        ai.NewUserMessage(
+            ai.NewTextPart("Describe this content"),
+            videoPart,
+        ),
+    ),
 )
 ```
 
@@ -378,11 +405,11 @@ resp, err := genkit.Generate(ctx, g,
 
 ```go
 res, err := genkit.Embed(ctx, g,
- ai.WithEmbedderName("googleai/gemini-embedding-001"),
- ai.WithTextDocs("Machine learning models process data to make predictions."),
+    ai.WithEmbedderName("googleai/gemini-embedding-001"),
+    ai.WithTextDocs("Machine learning models process data to make predictions."),
 )
 if err != nil {
- log.Fatal(err)
+    log.Fatal(err)
 }
 
 fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
@@ -404,13 +431,13 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/imagen-4.0-generate-001"),
- ai.WithPrompt("A serene Japanese garden with cherry blossoms"),
- ai.WithConfig(&genai.GenerateImagesConfig{
-  NumberOfImages: 4,
-  AspectRatio:    "16:9",
-  PersonGeneration: "allow_adult",
- }),
+    ai.WithModelName("googleai/imagen-4.0-generate-001"),
+    ai.WithPrompt("A serene Japanese garden with cherry blossoms"),
+    ai.WithConfig(&genai.GenerateImagesConfig{
+        NumberOfImages: 4,
+        AspectRatio:    "16:9",
+        PersonGeneration: "allow_adult",
+    }),
 )
 
 // Access generated images in resp.Message.Content
@@ -452,18 +479,18 @@ Your application should be prepared to handle both formats. For example, to save
 
 ```go
 for _, part := range op.Output.Message.Content {
- if part.IsMedia() {
-  if strings.HasPrefix(part.Text, "data:video/mp4;base64,") {
-   // Handle base64 encoded bytes (Common for Vertex AI default)
-   data := strings.TrimPrefix(part.Text, "data:video/mp4;base64,")
-   b, _ := base64.StdEncoding.DecodeString(data)
-   os.WriteFile("video.mp4", b, 0644)
-  } else {
-   // Handle remote URI (Common for Google AI or Vertex AI with GCS)
-   // You would typically use an HTTP client or Google Cloud Storage client here
-   fmt.Printf("Video available at URI: %s\n", part.Text)
-  }
- }
+    if part.IsMedia() {
+        if strings.HasPrefix(part.Text, "data:video/mp4;base64,") {
+            // Handle base64 encoded bytes (Common for Vertex AI default)
+            data := strings.TrimPrefix(part.Text, "data:video/mp4;base64,")
+            b, _ := base64.StdEncoding.DecodeString(data)
+            os.WriteFile("video.mp4", b, 0644)
+        } else {
+            // Handle remote URI (Common for Google AI or Vertex AI with GCS)
+            // You would typically use an HTTP client or Google Cloud Storage client here
+            fmt.Printf("Video available at URI: %s\n", part.Text)
+        }
+    }
 }
 ```
 
@@ -481,16 +508,16 @@ Generate a video from a text description.
 
 ```go
 op, err := genkit.GenerateOperation(ctx, g,
- ai.WithModelName("googleai/veo-3.1-generate-preview"),
- ai.WithMessages(ai.NewUserTextMessage("A majestic dragon soaring over a mystical forest at dawn.")),
- ai.WithConfig(&genai.GenerateVideosConfig{
-  AspectRatio:     "16:9",
-  DurationSeconds: genai.Ptr(int32(8)),
-  Resolution:      "720p",
- }),
+    ai.WithModelName("googleai/veo-3.1-generate-preview"),
+    ai.WithMessages(ai.NewUserTextMessage("A majestic dragon soaring over a mystical forest at dawn.")),
+    ai.WithConfig(&genai.GenerateVideosConfig{
+        AspectRatio:     "16:9",
+        DurationSeconds: genai.Ptr(int32(8)),
+        Resolution:      "720p",
+    }),
 )
 if err != nil {
- log.Fatal(err)
+    log.Fatal(err)
 }
 
 // Poll for completion
@@ -506,14 +533,14 @@ Animate a static image using a text prompt.
 imagePart := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,...")
 
 op, err := genkit.GenerateOperation(ctx, g,
- ai.WithModelName("googleai/veo-3.1-generate-preview"),
- ai.WithMessages(ai.NewUserMessage(
-  ai.NewTextPart("The cat wakes up and starts accelerating the go-kart."),
-  imagePart,
- )),
- ai.WithConfig(&genai.GenerateVideosConfig{
-  AspectRatio: "16:9",
- }),
+    ai.WithModelName("googleai/veo-3.1-generate-preview"),
+    ai.WithMessages(ai.NewUserMessage(
+        ai.NewTextPart("The cat wakes up and starts accelerating the go-kart."),
+        imagePart,
+    )),
+    ai.WithConfig(&genai.GenerateVideosConfig{
+        AspectRatio: "16:9",
+    }),
 )
 ```
 
@@ -528,14 +555,14 @@ Edit or transform an existing video.
 videoPart := ai.NewMediaPart("video/mp4", "https://generativelanguage.googleapis.com/...")
 
 op, err := genkit.GenerateOperation(ctx, g,
- ai.WithModelName("googleai/veo-3.1-generate-preview"),
- ai.WithMessages(ai.NewUserMessage(
-  ai.NewTextPart("Change the video style to be a cartoon from 1950."),
-  videoPart,
- )),
- ai.WithConfig(&genai.GenerateVideosConfig{
-  AspectRatio: "16:9",
- }),
+    ai.WithModelName("googleai/veo-3.1-generate-preview"),
+    ai.WithMessages(ai.NewUserMessage(
+        ai.NewTextPart("Change the video style to be a cartoon from 1950."),
+        videoPart,
+    )),
+    ai.WithConfig(&genai.GenerateVideosConfig{
+        AspectRatio: "16:9",
+    }),
 )
 ```
 
@@ -558,17 +585,17 @@ the JavaScript Gemini TTS samples, which convert the returned PCM bytes with a
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-3.1-flash-tts-preview"),
- ai.WithPrompt("Say that Genkit is an amazing AI framework"),
- ai.WithConfig(&genai.GenerateContentConfig{
-  SpeechConfig: &genai.SpeechConfig{
-   VoiceConfig: &genai.VoiceConfig{
-    PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
-     VoiceName: "Algenib",
-    },
-   },
-  },
- }),
+    ai.WithModelName("googleai/gemini-3.1-flash-tts-preview"),
+    ai.WithPrompt("Say that Genkit is an amazing AI framework"),
+    ai.WithConfig(&genai.GenerateContentConfig{
+        SpeechConfig: &genai.SpeechConfig{
+            VoiceConfig: &genai.VoiceConfig{
+                PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
+                    VoiceName: "Algenib",
+                },
+            },
+        },
+    }),
 )
 
 // Audio-only TTS responses usually have no text output.
