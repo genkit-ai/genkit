@@ -145,7 +145,7 @@ func TestGeminiEmbedding2Registered(t *testing.T) {
 // from supportedGeminiModels still resolves, silently, to the unknown-model
 // fallback, which is labelled with the raw model ID.
 func TestNewlyRegisteredModels(t *testing.T) {
-	for _, name := range []string{gemini36Flash, gemini35FlashLite, gemini31ProPreview, gemini31FlashLiteImage} {
+	for _, name := range []string{gemini37Flash, gemini36Flash, gemini35FlashLite, gemini31ProPreview, gemini31FlashLiteImage} {
 		if got := ClassifyModel(name); got != ModelTypeGemini {
 			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
 		}

@@ -119,6 +119,7 @@ const (
 	geminiOmniFlashPreview = "gemini-omni-flash-preview"
 
 	gemini3FlashPreview    = "gemini-3-flash-preview"
+	gemini37Flash          = "gemini-3.7-flash"
 	gemini36Flash          = "gemini-3.6-flash"
 	gemini35Flash          = "gemini-3.5-flash"
 	gemini35FlashLite      = "gemini-3.5-flash-lite"
@@ -172,6 +173,7 @@ var (
 		gemini25Pro,
 		geminiOmniFlashPreview,
 		gemini3FlashPreview,
+		gemini37Flash,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -198,6 +200,7 @@ var (
 		gemini25Pro,
 		geminiOmniFlash,
 		gemini3FlashPreview,
+		gemini37Flash,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -262,6 +265,12 @@ var (
 		},
 		gemini3FlashPreview: {
 			Label:    "Gemini 3 Flash Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini37Flash: {
+			Label:    "Gemini 3.7 Flash",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
