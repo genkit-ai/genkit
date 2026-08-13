@@ -753,7 +753,6 @@ func TestConstrainedSupport(t *testing.T) {
 		"grok-4.3":                     ai.ConstrainedSupportAll,
 		"grok-4.20-0309-reasoning":     ai.ConstrainedSupportAll,
 		"grok-4.20-0309-non-reasoning": ai.ConstrainedSupportAll,
-		"grok-4.20-multi-agent-0309":   ai.ConstrainedSupportAll,
 		"grok-build-0.1":               ai.ConstrainedSupportNoTools,
 	} {
 		m := genkit.LookupModel(g, "xai/"+id)

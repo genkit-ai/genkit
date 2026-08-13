@@ -116,8 +116,7 @@ type ChatConfig struct {
 	// Seed makes generation reproducible across calls when set.
 	Seed *int `json:"seed,omitempty" jsonschema_description:"Makes generation reproducible across calls when set, on a best-effort basis."`
 	// ReasoningEffort adjusts how hard a reasoning-capable Grok model thinks.
-	// On grok-4.20-multi-agent it sets how many agents collaborate instead.
-	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=low,enum=medium,enum=high,enum=xhigh" jsonschema_description:"How hard a reasoning-capable Grok model thinks, from none to xhigh. Which levels a model takes is the model's to decide; on grok-4.20-multi-agent it sets how many agents collaborate instead."`
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=low,enum=medium,enum=high,enum=xhigh" jsonschema_description:"How hard a reasoning-capable Grok model thinks, from none to xhigh. Which levels a model takes is the model's to decide."`
 	// ParallelToolCalls lets the model request several tool calls in one
 	// response, which it may do by default. Setting it false caps the model at
 	// one call per response. It applies to a request that carries tools.
@@ -228,12 +227,14 @@ var supportedModels = map[string]ai.ModelOptions{
 	"grok-4.3":                     {Label: "Grok 4.3", Supports: &multimodal},
 	"grok-4.20-0309-reasoning":     {Label: "Grok 4.20 Reasoning", Supports: &multimodal},
 	"grok-4.20-0309-non-reasoning": {Label: "Grok 4.20 Non-Reasoning", Supports: &multimodal},
-	// Takes ChatConfig.ReasoningEffort as a count of collaborating agents
-	// rather than a depth of thought.
-	"grok-4.20-multi-agent-0309": {Label: "Grok 4.20 Multi-Agent", Supports: &multimodal},
 	// The agentic coding model, also served as "grok-code-fast-1". Outside the
 	// Grok 4 family, so structured output and tools cannot be combined.
 	"grok-build-0.1": {Label: "Grok Build 0.1", Supports: &multimodalNoToolConstraint},
+
+	// grok-4.20-multi-agent-0309 is deliberately absent: xAI serves the
+	// multi-agent model only through the Responses API and its own SDK, and
+	// chat completions rejects it ("Multi Agent requests are not allowed on
+	// chat completions").
 }
 
 // dynamicModelOptions is advertised for Grok models that resolve dynamically
