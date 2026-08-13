@@ -12,7 +12,7 @@ functions, independent of generate()/prompt wiring.
 from dataclasses import FrozenInstanceError
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from genkit._ai._model import (
     ModelConfig,
@@ -32,6 +32,12 @@ class CustomConfig(BaseModel):
     temperature: float | None = None
     top_k: float | None = None
     safety_settings: dict[str, str] | None = None
+
+
+class ExcludedKeyConfig(ModelConfig):
+    """ModelConfig whose api_key is omitted from model_dump."""
+
+    api_key: str | None = Field(None, exclude=True)
 
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
@@ -131,3 +137,36 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     registry.register_value('defaultModel', 'defaultModel', 123)
     with pytest.raises(GenkitError, match='No model configured.'):
         resolve_model_name(model=None, registry=registry)
+
+
+def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
+    """GenkitModel dump must keep an explicit None so merge can clear defaults."""
+    assert normalize_config(config=ModelConfig(temperature=None)) == {'temperature': None}
+
+
+def test_normalize_config_keeps_python_field_names() -> None:
+    """Aliased fields dump as snake_case so a later snake_case override hits the same key."""
+    assert normalize_config(config=ModelConfig(max_output_tokens=100)) == {'max_output_tokens': 100}
+
+
+def test_resolve_model_ref_model_config_none_clears_default() -> None:
+    """ModelConfig(temperature=None) clears a ref default, not just a dict None."""
+    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    resolved = resolve_model_ref(
+        model=ref,
+        config=normalize_config(config=ModelConfig(temperature=None)),
+    )
+    assert 'temperature' not in resolved.config
+
+
+def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
+    """Call-time max_output_tokens replaces the ref's, rather than sitting beside maxOutputTokens."""
+    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    resolved = resolve_model_ref(model=ref, config={'max_output_tokens': 200})
+    assert resolved.config == {'max_output_tokens': 200}
+
+
+def test_normalize_config_restores_excluded_fields() -> None:
+    """Fields marked exclude=True still reach the plugin (per-request api_key)."""
+    assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
+
