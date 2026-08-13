@@ -18,6 +18,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -498,24 +499,67 @@ func TestNestedSpanPaths(t *testing.T) {
 	}
 }
 
-// TestIsFailureSourceOnError verifies that genkit:isFailureSource is set correctly
+// TestIsFailureSourceOnError verifies that only the span where an error
+// originates is marked as the failure source.
 func TestIsFailureSourceOnError(t *testing.T) {
-	ctx := context.Background()
+	testErr := errors.New("test error")
+	var parent, child *spanMetadata
 
-	testErr := fmt.Errorf("test error")
-
-	// Call RunInNewSpan with a function that returns an error
-	_, err := RunInNewSpan(ctx, &SpanMetadata{
-		Name: "failing-action",
+	_, err := RunInNewSpan(context.Background(), &SpanMetadata{
+		Name: "parent-action",
 		Type: "action",
 	}, "input", func(ctx context.Context, input string) (string, error) {
-		return "", testErr
+		parent = spanMetaKey.FromContext(ctx)
+		return RunInNewSpan(ctx, &SpanMetadata{
+			Name: "child-action",
+			Type: "action",
+		}, input, func(ctx context.Context, input string) (string, error) {
+			child = spanMetaKey.FromContext(ctx)
+			return "", testErr
+		})
 	})
 
-	// The test confirms the function works - isFailureSource should be set
-	// on the span via span.SetAttributes() during error handling
-	if err == nil {
-		t.Fatal("Expected error to be returned")
+	if !errors.Is(err, testErr) {
+		t.Fatalf("errors.Is(err, testErr) = false, err = %v", err)
+	}
+	if err != testErr {
+		t.Errorf("outermost span returned %T %v, want original error identity", err, err)
+	}
+	if parent == nil || child == nil {
+		t.Fatalf("span metadata was not captured: parent = %v, child = %v", parent, child)
+	}
+	if !child.IsFailureSource {
+		t.Error("child span is not marked as the failure source")
+	}
+	if parent.IsFailureSource {
+		t.Error("parent span is incorrectly marked as the failure source")
+	}
+	hasFailureSource := func(sm *spanMetadata) bool {
+		return slices.ContainsFunc(sm.attributes(), func(attr attribute.KeyValue) bool {
+			return attr.Key == "genkit:isFailureSource" && attr.Value.AsBool()
+		})
+	}
+	if !hasFailureSource(child) {
+		t.Error("child span is missing the genkit:isFailureSource attribute")
+	}
+	if hasFailureSource(parent) {
+		t.Error("parent span incorrectly has the genkit:isFailureSource attribute")
+	}
+	if child.State != spanStateError || parent.State != spanStateError {
+		t.Errorf("span states = child %q, parent %q; want both %q", child.State, parent.State, spanStateError)
+	}
+}
+
+func TestUnwrapMarkedError(t *testing.T) {
+	testErr := errors.New("test error")
+	marked := markErrorAsHandled(testErr)
+
+	if got := unwrapMarkedError(marked); got != testErr {
+		t.Errorf("unwrapMarkedError(marked error) = %T %v, want original error", got, got)
+	}
+	wrapped := fmt.Errorf("parent context: %w", marked)
+	if got := unwrapMarkedError(wrapped); got != wrapped {
+		t.Errorf("unwrapMarkedError(contextual wrapper) = %T %v, want wrapper preserved", got, got)
 	}
 }
 

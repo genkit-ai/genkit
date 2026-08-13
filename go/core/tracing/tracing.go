@@ -68,6 +68,15 @@ func isErrorAlreadyMarked(err error) bool {
 	return false
 }
 
+// unwrapMarkedError removes the internal marker when it is the outermost
+// wrapper, preserving the application error's type and identity.
+func unwrapMarkedError(err error) error {
+	if me, ok := err.(*markedError); ok {
+		return me.error
+	}
+	return err
+}
+
 // captureStackTrace captures the current Go stack trace for error reporting
 func captureStackTrace() string {
 	buf := make([]byte, 4096)
@@ -300,14 +309,19 @@ func RunInNewSpan[I, O any](
 	if err != nil {
 		sm.State = spanStateError
 		sm.Error = err.Error()
-		sm.IsFailureSource = true
 		if !isErrorAlreadyMarked(err) {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			sm.IsFailureSource = true
+			err = markErrorAsHandled(err)
 		}
+		telemetryErr := unwrapMarkedError(err)
+		span.RecordError(telemetryErr)
+		span.SetStatus(codes.Error, telemetryErr.Error())
 	} else {
 		sm.State = spanStateSuccess
 		sm.Output = output
+	}
+	if parentSM == nil {
+		err = unwrapMarkedError(err)
 	}
 	return output, err
 }
