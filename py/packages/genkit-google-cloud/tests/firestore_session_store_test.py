@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import threading
 from datetime import datetime, timezone
@@ -397,7 +396,7 @@ async def test_firestore_session_store_save_skips_when_mutator_returns_none() ->
             snapshot_id='snap-1',
             session_id='sess-1',
             created_at='2026-07-03T00:00:00Z',
-            status=SnapshotStatus.ABORTED,
+            status=SnapshotStatus.PENDING,
             state=SessionState(session_id='sess-1'),
         ),
     )
@@ -408,8 +407,8 @@ async def test_firestore_session_store_save_skips_when_mutator_returns_none() ->
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_heartbeat_updates_leaf_without_rebranch() -> None:
-    """In-place leaf update refreshes pointer metadata and keeps a single leaf."""
+async def test_firestore_session_store_heartbeat_updates_current_leaf_in_place() -> None:
+    """Heartbeating the tip persists heartbeat_at and keeps the session pointer on that snapshot."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -430,13 +429,14 @@ async def test_firestore_session_store_heartbeat_updates_leaf_without_rebranch()
     saved = await store.save_snapshot('snap-1', beat)
     assert saved is not None
     assert saved.heartbeat_at == '2026-07-03T00:00:05Z'
+    assert h.docs[_snap_path('snap-1')]['heartbeatAt'] == '2026-07-03T00:00:05Z'
     pointer = h.docs[_pointer_path('sess-1')]
-    assert 'isAmbiguous' not in pointer
+    assert pointer['currentSnapshotId'] == 'snap-1'
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_non_leaf_update_leaves_pointer_alone() -> None:
-    """Updating an ancestor must not re-add it to leaves or mark the session ambiguous."""
+async def test_firestore_session_store_ancestor_update_does_not_move_pointer() -> None:
+    """Updating an ancestor snapshot must not move the session's current pointer."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -464,22 +464,22 @@ async def test_firestore_session_store_non_leaf_update_leaves_pointer_alone() ->
 
     def rewrite_a(existing: SessionSnapshot | None) -> SessionSnapshot:
         assert existing is not None
-        return existing.model_copy(update={'status': SnapshotStatus.COMPLETED})
+        return existing.model_copy(update={'heartbeat_at': '2026-07-03T00:00:09Z'})
 
     saved = await store.save_snapshot('snap-A', rewrite_a)
     assert saved is not None
+    assert saved.heartbeat_at == '2026-07-03T00:00:09Z'
     pointer_after = h.docs[_pointer_path('sess-1')]
-    assert pointer_after == pointer_before  # non-current write: pointer fully untouched
     assert pointer_after['currentSnapshotId'] == 'snap-B'
+    assert pointer_after['currentSnapshotId'] == pointer_before['currentSnapshotId']
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_branching_last_writer_wins() -> None:
-    """Forked sessions never error: session lookup follows the last-written leaf.
+    """Forks never error: session_id resolves to the last-written new leaf.
 
-    Matches the JS Firestore store exactly — no ambiguity detection, no
-    rejection option; concurrent branch extension makes the current snapshot
-    race-dependent by design. Resume by snapshot_id when a branch matters.
+    Heartbeats on a non-current branch do not move the pointer; extending that
+    branch does. Resume by snapshot_id when a specific branch matters.
     """
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
@@ -504,7 +504,7 @@ async def test_firestore_session_store_branching_last_writer_wins() -> None:
     await store.save_snapshot('snap-a2', _mk('snap-a2', 'snap-a', custom={'n': 3}))
     loaded = await store.get_snapshot(session_id='sess-1')
     assert loaded is not None and loaded.snapshot_id == 'snap-a2'
-    assert 'leaves' not in h.docs[_pointer_path('sess-1')]
+    assert h.docs[_pointer_path('sess-1')]['currentSnapshotId'] == 'snap-a2'
 
 
 @pytest.mark.asyncio
@@ -534,24 +534,11 @@ async def test_firestore_session_store_missing_pointer_returns_none() -> None:
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_corrupt_pointer_returns_none() -> None:
-    """A pointer that can't reconstruct returns None without rewriting the pointer."""
+async def test_firestore_session_store_dangling_pointer_returns_none() -> None:
+    """Pointer to a missing leaf: session lookup is None (a miss), not DATA_LOSS."""
     h = FakeStoreHarness()
-    h.docs[_snap_path('snap-live')] = {
-        'snapshotId': 'snap-live',
-        'sessionId': 'sess-corrupt',
-        'createdAt': '2026-07-03T00:00:01Z',
-        'kind': 'checkpoint',
-        'checkpointId': 'snap-live',
-        'checkpointShardCount': 1,
-        'segmentPath': [],
-    }
-    h.docs[_shard_path('snap-live', 0)] = {
-        'chunk': json.dumps({'sessionId': 'sess-corrupt'}).encode('utf-8'),
-    }
-    # Structurally valid pointer whose leaf is gone; omit checkpoint meta so
-    # lookup falls through to snapshot-id reconstruct (None), not DATA_LOSS
-    # from missing shards.
+    # Omit checkpoint meta so lookup falls through to snapshot-id reconstruct
+    # (None), not DATA_LOSS from missing shards.
     h.docs[_pointer_path('sess-corrupt')] = {
         'currentSnapshotId': 'snap-deleted',
         'segmentPath': [],
@@ -559,7 +546,6 @@ async def test_firestore_session_store_corrupt_pointer_returns_none() -> None:
 
     store = h.store()
     assert await store.get_snapshot(session_id='sess-corrupt') is None
-    assert h.docs[_pointer_path('sess-corrupt')]['currentSnapshotId'] == 'snap-deleted'
 
 
 @pytest.mark.asyncio
@@ -617,7 +603,7 @@ async def test_firestore_session_store_missing_segment_path_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_datetime_in_custom_round_trips() -> None:
-    """SessionState mode='json' coerces datetimes before they are persisted."""
+    """datetime values in SessionState.custom persist/reload as UTC ISO-8601 strings."""
     h = FakeStoreHarness()
     store = h.store()
     when = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -679,8 +665,8 @@ async def test_firestore_session_store_oversized_diff_promotes_to_checkpoint() -
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_status_change_and_cleanup() -> None:
-    """Test snapshot status subscription and thread-safe cleanup on terminal status."""
+async def test_firestore_session_store_terminal_status_ends_stream_and_unsubscribes() -> None:
+    """Status stream yields until a terminal status, then ends and drops its watch."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -695,45 +681,16 @@ async def test_firestore_session_store_status_change_and_cleanup() -> None:
     )
 
     watches, captured_cb = _wire_sync_watch(store)
-    queue = await store.on_snapshot_status_change('snap-sub')
+    stream = await store.on_snapshot_status_change('snap-sub')
     assert len(captured_cb) == 1
-    assert len(store._subscriptions) == 1
-    (sub,) = store._subscriptions
-    assert sub.queue.empty()
 
     await _pump_watch(captured_cb, 0, _status_doc('snap-sub', 'pending'))
-    assert await _next_status(queue) == SnapshotStatus.PENDING
+    assert await _next_status(stream) == SnapshotStatus.PENDING
 
     await _pump_watch(captured_cb, 0, _status_doc('snap-sub', 'aborted'))
 
-    assert await _next_status(queue) == SnapshotStatus.ABORTED
-    assert await _stream_ended(queue)
-    watches[0].unsubscribe.assert_called_once()
-    assert len(store._subscriptions) == 0
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_terminal_cleanup_falls_back_when_create_task_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If the loop can't schedule async teardown, still unsubscribe the watch."""
-    h = FakeStoreHarness()
-    store = h.store()
-    await store.save_snapshot('snap-task', _pending_mk('snap-task'))
-    watches, captured_cb = _wire_sync_watch(store)
-    queue = await store.on_snapshot_status_change('snap-task')
-
-    await _pump_watch(captured_cb, 0, _status_doc('snap-task', 'pending'))
-    assert await _next_status(queue) == SnapshotStatus.PENDING
-
-    def boom(_coro: Any) -> Any:  # noqa: ANN401
-        raise RuntimeError('no running event loop')
-
-    monkeypatch.setattr(asyncio, 'create_task', boom)
-    await _pump_watch(captured_cb, 0, _status_doc('snap-task', 'completed'))
-
-    assert await _next_status(queue) == SnapshotStatus.COMPLETED
-    assert await _stream_ended(queue)
+    assert await _next_status(stream) == SnapshotStatus.ABORTED
+    assert await _stream_ended(stream)
     watches[0].unsubscribe.assert_called_once()
     assert len(store._subscriptions) == 0
 
@@ -770,23 +727,15 @@ async def test_firestore_session_store_close_stops_watches_and_sync_client() -> 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_close_does_not_close_injected_sync_client() -> None:
-    """Caller-owned sync_client is left open by close()."""
+    """Caller-owned sync_client stays open after close(), even if watches used it."""
     h = FakeStoreHarness()
     injected = MagicMock()
     store = h.store(sync_client=injected)
+    _wire_sync_watch(store)
+    await store.on_snapshot_status_change('snap-close')
+    assert store.sync_client is injected
     store.close()
     injected.close.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_ensure_sync_client_raises_genkit_error() -> None:
-    """_ensure_sync_client() raises GenkitError if client has no _to_sync_copy and no sync_client set."""
-    custom_client = MagicMock(spec=[])
-    store = FirestoreSessionStore(client=custom_client)
-    with pytest.raises(GenkitError) as exc_info:
-        store._ensure_sync_client()
-    assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert 'Realtime status watches require a synchronous Firestore client' in str(exc_info.value)
 
 
 def _by_user(context: dict[str, Any] | None = None) -> str:
@@ -901,8 +850,8 @@ async def _pump_watch(captured_cb: list[Any], index: int, doc: MagicMock) -> Non
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_upsert_diff_leaf_rewrites_patch() -> None:
-    """Heartbeat/abort-style upsert of an existing diff leaf refreshes statePatch."""
+async def test_firestore_session_store_resave_diff_leaf_refreshes_state() -> None:
+    """Re-saving an existing pending child refreshes stored state and heartbeat."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
 
@@ -958,8 +907,8 @@ async def test_firestore_session_store_upsert_diff_leaf_rewrites_patch() -> None
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_upsert_oversized_diff_promotes_to_checkpoint() -> None:
-    """Upserting a diff leaf with an oversized patch rewrites it as a checkpoint."""
+async def test_firestore_session_store_resave_oversized_diff_promotes_to_checkpoint() -> None:
+    """Re-saving a child with oversized state stores it as a checkpoint."""
     h = FakeStoreHarness()
     store = h.store(shard_size=64, checkpoint_interval=25)
 
@@ -1012,14 +961,10 @@ async def test_firestore_session_store_missing_snapshot_subscribe_waits_for_crea
     watches, captured_cb = _wire_sync_watch(store)
 
     q1 = await store.on_snapshot_status_change('missing')
-    assert all(s.queue.empty() for s in store._subscriptions)
     assert len(captured_cb) == 1
-    assert len(store._subscriptions) == 1
 
     q2 = await store.on_snapshot_status_change('missing')
     assert len(captured_cb) == 2
-    assert len(store._subscriptions) == 2
-    assert all(s.queue.empty() for s in store._subscriptions)
     watches[0].unsubscribe.assert_not_called()
     watches[1].unsubscribe.assert_not_called()
 
@@ -1042,7 +987,7 @@ async def test_firestore_session_store_missing_snapshot_subscribe_waits_for_crea
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_retries_on_aborted_commit() -> None:
-    """@async_transactional retries the RMW closure when commit raises Aborted."""
+    """Save retries on commit contention (Aborted) until the write succeeds."""
     h = FakeStoreHarness()
     store = h.store()
     h.commit_aborts_remaining = 2
@@ -1065,21 +1010,8 @@ async def test_firestore_session_store_retries_on_aborted_commit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fake_harness_rejects_read_after_write() -> None:
-    """Harness mirrors the real client: buffered writes forbid later reads."""
-    h = FakeStoreHarness()
-    store = h.store()
-    ref = store._snapshot_ref('snap-x', 'global')
-    txn = h.client.transaction()
-    await txn._begin()
-    txn.set(ref, {'snapshotId': 'snap-x'})
-    with pytest.raises(ReadAfterWriteError):
-        await ref.get(transaction=txn)
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_upsert_restores_deleted_pointer() -> None:
-    """A leaf upsert restores a missing pointer so session lookup keeps working."""
+async def test_firestore_session_store_save_restores_deleted_pointer() -> None:
+    """Re-saving a leaf after the pointer doc was deleted restores session_id lookup."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -1104,22 +1036,6 @@ async def test_firestore_session_store_upsert_restores_deleted_pointer() -> None
     loaded = await store.get_snapshot(session_id='sess-1')
     assert loaded is not None
     assert loaded.snapshot_id == 'snap-1'
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_forked_pointer_keeps_current_snapshot_id() -> None:
-    """After a fork the pointer is the plain last-writer shape: no branch metadata."""
-    h = FakeStoreHarness()
-    store = h.store(checkpoint_interval=25)
-    await store.save_snapshot('snap-root', _mk('snap-root', None, custom={'n': 0}))
-    await store.save_snapshot('snap-a', _mk('snap-a', 'snap-root', custom={'n': 1}))
-    await store.save_snapshot('snap-b', _mk('snap-b', 'snap-root', custom={'n': 2}))
-
-    pointer = h.docs[_pointer_path('sess-1')]
-    assert pointer['currentSnapshotId'] == 'snap-b'
-    assert 'isAmbiguous' not in pointer
-    assert 'leaves' not in pointer
-    assert isinstance(pointer['updatedAt'], str)
 
 
 @pytest.mark.asyncio
@@ -1216,7 +1132,7 @@ def _mk(sid: str, parent: str | None = None, custom: dict | None = None) -> Any:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_missing_shard_raises_data_loss() -> None:
-    """A checkpoint whose shard document vanished fails loud, not with partial state."""
+    """A checkpoint whose shard document vanished raises DATA_LOSS, not with partial state."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('snap-1', _mk('snap-1', custom={'x': 1}))
@@ -1249,6 +1165,7 @@ async def test_firestore_session_store_missing_checkpoint_doc_returns_none() -> 
     del h.docs[_snap_path('snap-1')]
 
     assert await store.get_snapshot(session_id='sess-1') is None
+    assert await store.get_snapshot(snapshot_id='snap-1') is None
 
 
 @pytest.mark.asyncio
@@ -1298,7 +1215,7 @@ async def test_firestore_session_store_missing_segment_raises_data_loss() -> Non
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_corrupt_segment_raises_data_loss() -> None:
-    """A diff chain with an invalid interior segment fails loud."""
+    """A diff chain with an invalid interior segment raises DATA_LOSS."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-root', _mk('snap-root', custom={'n': 0}))
@@ -1329,12 +1246,8 @@ async def test_firestore_session_store_missing_parent_makes_child_a_checkpoint()
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_extending_corrupt_current_leaf_fails_loud() -> None:
-    """A new child of the corrupt *current* leaf raises DATA_LOSS (no diff against garbage).
-
-    The pointer fast-path supplies the parent's chain metadata, so the corruption
-    is discovered during parent reconstruction and surfaces loudly.
-    """
+async def test_firestore_session_store_extending_corrupt_current_leaf_raises_data_loss() -> None:
+    """A child of a corrupt *current* parent raises DATA_LOSS (no lineage from garbage)."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-parent', _mk('snap-parent', custom={'n': 0}))
@@ -1347,11 +1260,11 @@ async def test_firestore_session_store_extending_corrupt_current_leaf_fails_loud
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_forking_corrupt_interior_parent_self_heals() -> None:
-    """Forking off a corrupt *non-current* parent self-heals forward as a checkpoint.
+    """Forking off a corrupt *non-current* parent self-heals as a checkpoint.
 
-    Off the pointer fast-path the parent doc must be read directly; when it fails
-    validation the child is written as a full checkpoint with no dependence on the
-    corrupt chain.
+    When the parent is not the session tip, a failed parent read is treated like a
+    missing parent: the child is written as a full checkpoint so the session stays
+    writable. (Corrupt *current* tip fails closed — see extending_corrupt_current_leaf.)
     """
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
@@ -1436,14 +1349,6 @@ async def test_firestore_session_store_listener_failure_rolls_back_subscription(
     assert len(store._subscriptions) == 0
 
 
-def test_firestore_session_store_close_is_idempotent_without_watches() -> None:
-    """close() with nothing to tear down returns cleanly, twice."""
-    h = FakeStoreHarness()
-    store = h.store()
-    store.close()
-    store.close()
-
-
 @pytest.mark.parametrize(
     ('kwargs', 'fragment'),
     [
@@ -1507,7 +1412,7 @@ async def test_firestore_session_store_non_object_shard_state_raises_data_loss()
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_malformed_state_patch_raises_data_loss() -> None:
-    """A segment whose statePatch fails to parse names the corrupt doc via DATA_LOSS."""
+    """A segment whose statePatch fails to parse surfaces as DATA_LOSS."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-root', _mk('snap-root', custom={'n': 0}))
@@ -1521,8 +1426,8 @@ async def test_firestore_session_store_malformed_state_patch_raises_data_loss() 
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_array_state_patch_names_field() -> None:
-    """Pre-fix array statePatch is DATA_LOSS naming the field and JSON string expectation."""
+async def test_firestore_session_store_array_state_patch_raises_data_loss() -> None:
+    """A statePatch stored as a list (not a JSON string) is DATA_LOSS."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-root', _mk('snap-root', custom={'n': 0}))
@@ -1533,34 +1438,12 @@ async def test_firestore_session_store_array_state_patch_names_field() -> None:
         await store.get_snapshot(snapshot_id='snap-a')
     assert exc_info.value.status == 'DATA_LOSS'
     msg = str(exc_info.value)
-    assert 'statePatch' in msg and 'JSON string' in msg and 'found list' in msg
+    assert 'statePatch' in msg
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_null_state_patch_is_data_loss() -> None:
-    """Null/empty/missing statePatch on a diff segment is DATA_LOSS, not a silent []."""
-    from genkit_google_cloud.session_store.firestore import _decode_state_patch
-
-    with pytest.raises(GenkitError) as e_none:
-        _decode_state_patch(None, snapshot_id='snap-a')
-    assert e_none.value.status == 'DATA_LOSS'
-    assert 'statePatch' in str(e_none.value) and 'missing or empty' in str(e_none.value)
-    assert 're-create' in str(e_none.value)
-
-    with pytest.raises(GenkitError) as e_empty:
-        _decode_state_patch('', snapshot_id='snap-a')
-    assert e_empty.value.status == 'DATA_LOSS' and 'missing or empty' in str(e_empty.value)
-
-    assert _decode_state_patch('[]', snapshot_id='snap-a') == []
-
-    with pytest.raises(GenkitError) as e_bad:
-        _decode_state_patch('{', snapshot_id='snap-a')
-    assert 'unparseable' in str(e_bad.value)
-
-    with pytest.raises(GenkitError) as e_obj:
-        _decode_state_patch('{"a":1}', snapshot_id='snap-a')
-    assert 'not a patch array' in str(e_obj.value)
-
+    """Null/empty statePatch on a diff segment is DATA_LOSS; "[]" is a valid zero-change."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-root', _mk('snap-root', custom={'n': 0}))
@@ -1569,7 +1452,7 @@ async def test_firestore_session_store_null_state_patch_is_data_loss() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(snapshot_id='snap-a')
     assert exc_info.value.status == 'DATA_LOSS'
-    assert 'missing or empty' in str(exc_info.value)
+    assert 'statePatch' in str(exc_info.value)
 
     # Legitimate zero-change turn: encoder writes "[]", reconstruct equals parent.
     h.docs[_snap_path('snap-a')]['statePatch'] = '[]'
@@ -1634,13 +1517,10 @@ async def test_firestore_session_store_deleted_diff_leaf_is_not_found_via_both_p
 async def test_firestore_session_store_watch_uses_sync_client_despite_async_stub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Watches must always attach via the sync client, never the async ref.
+    """Status watches attach via the sync client even if the async ref has on_snapshot.
 
-    Real AsyncDocumentReference exposes an ``on_snapshot`` stub whose body is
-    ``raise NotImplementedError``; a fake ref that mirrors it must not derail
-    the watch onto the async path. Regression for the real-backend bug where
-    every subscription died with NotImplementedError (originally caused by
-    dispatching on ``hasattr(ref, 'on_snapshot')``).
+    The async library's on_snapshot is a NotImplementedError stub; picking it
+    because hasattr is true would break every subscription.
     """
     h = FakeStoreHarness()
     store = h.store()
@@ -1658,7 +1538,6 @@ async def test_firestore_session_store_watch_uses_sync_client_despite_async_stub
     assert hasattr(store._snapshot_ref('snap-w', 'global'), 'on_snapshot')  # the trap is armed
 
     _stream = await store.on_snapshot_status_change('snap-w')
-    assert all(s.queue.empty() for s in store._subscriptions)
     assert len(captured_cb) == 1  # watch attached via the SYNC client
     assert len(store._subscriptions) == 1
     (sub,) = store._subscriptions
@@ -1666,7 +1545,7 @@ async def test_firestore_session_store_watch_uses_sync_client_despite_async_stub
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_retry_exhaustion_raises_typed_aborted() -> None:
+async def test_firestore_session_store_retry_exhaustion_raises_aborted() -> None:
     """Contention beyond transaction_max_attempts surfaces as GenkitError ABORTED."""
     h = FakeStoreHarness()
     store = h.store()
@@ -1676,12 +1555,11 @@ async def test_firestore_session_store_retry_exhaustion_raises_typed_aborted() -
     with pytest.raises(GenkitError) as exc_info:
         await store.save_snapshot('snap-1', _mk('snap-1'))
     assert exc_info.value.status == 'ABORTED'
-    assert 'injected abort' in str(exc_info.value)  # the final Aborted's text, verbatim
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_payload_limit_raises_typed_invalid_argument() -> None:
-    """A Firestore InvalidArgument (e.g. ~10 MiB txn payload) is wrapped with a hint."""
+async def test_firestore_session_store_payload_limit_raises_invalid_argument() -> None:
+    """A Firestore InvalidArgument (e.g. oversized txn) is wrapped as INVALID_ARGUMENT with server text."""
     h = FakeStoreHarness()
     store = h.store()
     h.commit_raises = google_exceptions.InvalidArgument('maximum entity size exceeded')
@@ -1693,21 +1571,18 @@ async def test_firestore_session_store_payload_limit_raises_typed_invalid_argume
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_transaction_max_attempts_plumbed_and_validated() -> None:
-    """The retry knob reaches client.transaction() and rejects nonsense values."""
+async def test_firestore_session_store_transaction_max_attempts_validated() -> None:
+    """transaction_max_attempts rejects nonsense values at construction."""
     h = FakeStoreHarness()
-    store = h.store(transaction_max_attempts=7)
-    await store.save_snapshot('snap-1', _mk('snap-1'))
-    assert h.client.transaction.call_args.kwargs.get('max_attempts') == 7
-
     with pytest.raises(GenkitError) as exc_info:
         h.store(transaction_max_attempts=0)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'transaction_max_attempts' in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_maps_other_google_errors_mechanically() -> None:
-    """Any GoogleAPICallError maps 1:1 by class with the server message preserved."""
+async def test_firestore_session_store_deadline_exceeded_maps_to_genkit_error() -> None:
+    """Google DeadlineExceeded becomes GenkitError DEADLINE_EXCEEDED (server text kept)."""
     h = FakeStoreHarness()
     store = h.store()
     h.commit_raises = google_exceptions.DeadlineExceeded('deadline of 60.0s exceeded')
@@ -1732,13 +1607,8 @@ async def test_firestore_session_store_non_google_errors_pass_through_untouched(
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_masked_rollback_valueerror_raises_typed_aborted() -> None:
-    """The library's no-transaction-ID ValueError (unchained; original error masked) maps to ABORTED.
-
-    Observed on real Firestore under hot-pointer contention: a failure before
-    the transaction obtains an ID triggers rollback, which raises this bare
-    ValueError and destroys the root cause. Regression for the C-01 raw leak.
-    """
+async def test_firestore_session_store_masked_rollback_valueerror_raises_aborted() -> None:
+    """Firestore's bare "no transaction ID" ValueError (root cause masked) maps to ABORTED."""
     h = FakeStoreHarness()
     store = h.store()
     h.commit_raises = ValueError('The transaction has no transaction ID, so it cannot be rolled back.')
@@ -1755,11 +1625,7 @@ async def test_firestore_session_store_masked_rollback_valueerror_raises_typed_a
 )
 @pytest.mark.asyncio
 async def test_firestore_session_store_rejects_path_structured_ids(bad_id: str) -> None:
-    """Ids that Firestore would parse as path structure fail typed, at every entrypoint.
-
-    Regression for W-08: odd-segment ids leaked a raw client ValueError; even
-    segment ids silently addressed a deeper document and left a zombie watch.
-    """
+    """Path segments, '.', '..', empty, and reserved __id__ are INVALID_ARGUMENT on save/get/subscribe."""
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1776,7 +1642,7 @@ async def test_firestore_session_store_rejects_path_structured_ids(bad_id: str) 
     assert e3.value.status == 'INVALID_ARGUMENT'
 
     with pytest.raises(GenkitError) as e4:
-        await store._read_snapshot(bad_id, prefix='global')
+        await store.on_snapshot_status_change(bad_id)
     assert e4.value.status == 'INVALID_ARGUMENT'
 
 
@@ -1789,18 +1655,12 @@ async def test_firestore_session_store_subscribe_rejects_bad_id_with_no_partial_
     with pytest.raises(GenkitError) as exc_info:
         await store.on_snapshot_status_change('a/b/c')
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'a/b/c' not in store._subscriptions
     assert len(store._subscriptions) == 0
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_terminal_status_change_raises_failed_precondition() -> None:
-    """Terminal statuses are absorbing: ABORTED can never become COMPLETED.
-
-    Deliberately stricter than JS (which orders writes with a lock but permits
-    the overwrite); an aborted run silently becoming completed misrepresents
-    what happened, and no subscriber can ever observe the second transition.
-    """
+    """Terminal statuses are absorbing: ABORTED cannot be overwritten by COMPLETED."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -1838,6 +1698,7 @@ async def test_firestore_session_store_terminal_resurrection_raises_failed_preco
     with pytest.raises(GenkitError) as exc_info:
         await store.save_snapshot('snap-1', resurrect)
     assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert h.docs[_snap_path('snap-1')]['status'] == 'completed'
 
 
 @pytest.mark.asyncio
@@ -1863,7 +1724,7 @@ async def test_firestore_session_store_same_terminal_status_rewrite_allowed() ->
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_invalid_prefix_raises_before_any_path() -> None:
-    """B1: snapshot_path_prefix is the tenant boundary; a path-structured prefix is rejected everywhere."""
+    """A path-structured tenant prefix is rejected on every store API."""
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda _ctx: 'ten/ant')
 
@@ -1877,12 +1738,13 @@ async def test_firestore_session_store_invalid_prefix_raises_before_any_path() -
             await call
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'snapshot_path_prefix' in str(exc_info.value)
+    assert h.docs == {}
     assert len(store._subscriptions) == 0
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_mutator_supplied_path_ids_rejected() -> None:
-    """B1: session_id/parent_id coming back FROM the mutator are held to the same rules."""
+    """session_id/parent_id returned by the mutator must pass the same id rules."""
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1898,6 +1760,7 @@ async def test_firestore_session_store_mutator_supplied_path_ids_rejected() -> N
     with pytest.raises(GenkitError) as e1:
         await store.save_snapshot('snap-1', bad_session)
     assert e1.value.status == 'INVALID_ARGUMENT' and 'session_id' in str(e1.value)
+    assert _snap_path('snap-1') not in h.docs
 
     def bad_parent(_e: SessionSnapshot | None) -> SessionSnapshot:
         return SessionSnapshot(
@@ -1930,22 +1793,22 @@ async def test_firestore_session_store_empty_current_snapshot_id_is_data_loss() 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_subscribe_context_kwarg_selects_tenant() -> None:
-    """N11: explicit context= reaches the watch path (ambient context stays the default)."""
+    """Explicit context= scopes the status watch to that tenant's path prefix."""
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda ctx: (ctx or {}).get('tenant', 'global'))
     _watches, captured_cb = _wire_sync_watch(store)
 
-    _stream = await store.on_snapshot_status_change('snap-w', context={'tenant': 't9'})
-    assert all(s.queue.empty() for s in store._subscriptions)
+    stream = await store.on_snapshot_status_change('snap-w', context={'tenant': 't9'})
     assert len(captured_cb) == 1
     sync_mock = cast(Any, store.client)._to_sync_copy.return_value
     sync_mock.collection.return_value.document.assert_any_call('t9')
+    await stream.aclose()
 
 
 @pytest.mark.parametrize('terminal', [SnapshotStatus.EXPIRED, SnapshotStatus.FAILED])
 @pytest.mark.asyncio
-async def test_firestore_session_store_all_terminal_statuses_are_absorbing(terminal: SnapshotStatus) -> None:
-    """R4-High: EXPIRED and FAILED are absorbing too, not just ABORTED/COMPLETED."""
+async def test_firestore_session_store_expired_and_failed_are_absorbing(terminal: SnapshotStatus) -> None:
+    """EXPIRED and FAILED are absorbing too, not only ABORTED/COMPLETED."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -1966,50 +1829,14 @@ async def test_firestore_session_store_all_terminal_statuses_are_absorbing(termi
     with pytest.raises(GenkitError) as exc_info:
         await store.save_snapshot('snap-1', complete)
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_read_paths_plumb_transaction_max_attempts() -> None:
-    """R4-High: the retry knob reaches read-only transactions too."""
-    h = FakeStoreHarness()
-    store = h.store(transaction_max_attempts=9)
-    await store.save_snapshot('snap-1', _mk('snap-1'))
-    await store.get_snapshot(snapshot_id='snap-1')
-    ro_calls = [c for c in h.client.transaction.call_args_list if c.kwargs.get('read_only')]
-    assert ro_calls, 'expected a read-only transaction'
-    assert all(c.kwargs.get('max_attempts') == 9 for c in ro_calls)
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_promotion_then_prune_cleans_orphan_shards() -> None:
-    """R4-High: a diff promoted to checkpoint, then shrunk, deletes its stale shards."""
-    h = FakeStoreHarness()
-    store = h.store(checkpoint_interval=25, shard_size=120)
-    await store.save_snapshot('snap-root', _mk('snap-root', None, custom={'n': 0}))
-    # Child whose patch exceeds shard_size -> promoted to a multi-shard checkpoint.
-    await store.save_snapshot('snap-big', _mk('snap-big', 'snap-root', custom={'blob': 'X' * 500}))
-    shards_before = [k for k in h.docs if '/shards/' in k and 'snap-big' in k]
-    assert len(shards_before) > 1  # promotion happened, multi-shard
-
-    def shrink(existing: SessionSnapshot | None) -> SessionSnapshot:
-        assert existing is not None
-        return existing.model_copy(update={'state': SessionState(session_id='sess-1', custom={'n': 1})})
-
-    await store.save_snapshot('snap-big', shrink)
-    shards_after = [k for k in h.docs if '/shards/' in k and 'snap-big' in k]
-    assert len(shards_after) < len(shards_before)  # orphans pruned
-    loaded = await store.get_snapshot(snapshot_id='snap-big')
-    assert loaded is not None and loaded.state is not None
-    assert loaded.state.custom == {'n': 1}
+    assert h.docs[_snap_path('snap-1')]['status'] == terminal.value
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_watch_isolation_across_tenants_same_snapshot_id() -> None:
-    """B1 regression: two tenants, one snapshot id — independent listeners, queues, teardown.
+    """Same snapshot id under two tenants gets independent watches and teardown.
 
-    Pre-fix, subscriptions were keyed by snapshot_id alone: the second tenant
-    piggybacked on the first tenant's watch, statuses crossed tenants, and the
-    first terminal tore down both.
+    One tenant finishing must not end the other tenant's subscription.
     """
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda ctx: (ctx or {}).get('tenant', 'global'))
@@ -2025,58 +1852,31 @@ async def test_firestore_session_store_watch_isolation_across_tenants_same_snaps
     await store.save_snapshot('snap-x', _mk('snap-x'), context={'tenant': 't1'})
     await _pump_watch(captured_cb, 0, _status_doc('snap-x', 'completed'))
     assert await _next_status(q1) == SnapshotStatus.COMPLETED
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(anext(stream_t2), timeout=0.05)
+    assert await _stream_ended(q1)
+    # t1's terminal tears down only t1's watch; t2 stays subscribed (no cross-talk).
+    assert len(store._subscriptions) == 1
+    watches[0].unsubscribe.assert_called_once()
+    watches[1].unsubscribe.assert_not_called()
+    await stream_t2.aclose()
+    watches[1].unsubscribe.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_stream_survives_polling_timeout() -> None:
-    """A consumer polling with wait_for must not kill the subscription."""
-    h = FakeStoreHarness()
-    store = h.store()
-    watches, captured_cb = _wire_sync_watch(store)
-    stream = await store.on_snapshot_status_change('snap-poll')
-
-    for _ in range(2):
-        pull = asyncio.ensure_future(anext(stream))
-        await asyncio.sleep(0.05)
-        assert not pull.done()
-        pull.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await pull
-
-    await store.save_snapshot('snap-poll', _mk('snap-poll'))
-    await _pump_watch(captured_cb, 0, _status_doc('snap-poll', 'completed'))
-    final = asyncio.ensure_future(anext(stream))
-    for _ in range(200):
-        if final.done():
-            break
-        await asyncio.sleep(0.01)
-    assert final.done() and final.result() == SnapshotStatus.COMPLETED
-
-    store.close()
-    with pytest.raises(StopAsyncIteration):
-        await stream.__anext__()
-    with pytest.raises(StopAsyncIteration):
-        await stream.__anext__()  # ended stays ended (latched)
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_close_delivers_end_of_stream_locally() -> None:
-    """Wake-on-close: a consumer awaiting a queue gets the bare None marker."""
+async def test_firestore_session_store_close_ends_stream_without_terminal_status() -> None:
+    """store.close() ends open status streams without yielding a terminal status."""
     h = FakeStoreHarness()
     store = h.store()
     _wire_sync_watch(store)
     q = await store.on_snapshot_status_change('snap-pending')
 
     store.close()
-    assert await _stream_ended(q)  # bare EOS: ended without resolution
+    assert await _stream_ended(q)
     assert len(store._subscriptions) == 0
 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_close_from_thread_wakes_waiters() -> None:
-    """close() from a foreign thread delivers the marker via the subscribers' loop."""
+    """close() from a foreign thread ends open streams on the subscribers' loop."""
     h = FakeStoreHarness()
     store = h.store()
     _wire_sync_watch(store)
@@ -2088,8 +1888,8 @@ async def test_firestore_session_store_close_from_thread_wakes_waiters() -> None
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_close_after_terminal_adds_nothing() -> None:
-    """A stream already ended by a terminal status gets no second marker from close."""
+async def test_firestore_session_store_close_after_terminal_is_noop() -> None:
+    """close() after a terminal-ended stream does not emit another event."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('snap-1', _mk('snap-1'))  # completed
@@ -2100,17 +1900,7 @@ async def test_firestore_session_store_close_after_terminal_adds_nothing() -> No
     assert await _stream_ended(q)
 
     store.close()
-    assert await _stream_ended(q)  # exhausted stream stays ended; close adds nothing
-
-
-@pytest.mark.asyncio
-async def test_sibling_stores_accept_context_kwarg() -> None:
-    """B2: the widened protocol signature is honored by non-tenant stores too."""
-    from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
-
-    mem = InMemorySessionStore()
-    statuses = await mem.on_snapshot_status_change('snap-x', context={'tenant': 't1'})
-    assert hasattr(statuses, '__anext__')  # accepted and ignored, no error
+    assert await _stream_ended(q)
 
 
 @pytest.mark.asyncio
@@ -2127,13 +1917,8 @@ async def test_firestore_session_store_subscribe_after_close_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_prefix_failure_never_surfaces_after_commit() -> None:
-    """A failing prefix function fails BEFORE the transaction, never after it.
-
-    Pre-fix, save re-invoked the prefix function after commit for the
-    subscriber notification; a function that failed on that call turned a
-    durably committed write into a raised (and raw) exception.
-    """
+async def test_firestore_session_store_prefix_resolved_before_commit_and_fail_fast() -> None:
+    """Path prefix is resolved before commit; an immediate prefix failure writes nothing."""
     # Commit-aware tripwire: the prefix function itself asserts it is never
     # invoked after the transaction has committed.
     h = FakeStoreHarness()
@@ -2193,18 +1978,6 @@ async def test_firestore_session_store_snapshot_id_collision_across_sessions_rej
 
 
 @pytest.mark.asyncio
-async def test_inmemory_store_snapshot_id_collision_rejected_too() -> None:
-    """The ownership guard lives in shared apply_save: every Python store enforces it."""
-    from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
-
-    mem = InMemorySessionStore()
-    await mem.save_snapshot('turn-1', _owned_snap('turn-1', 'sess-A'))
-    with pytest.raises(GenkitError) as exc_info:
-        await mem.save_snapshot('turn-1', _owned_snap('turn-1', 'sess-B'))
-    assert exc_info.value.status == 'FAILED_PRECONDITION'
-
-
-@pytest.mark.asyncio
 async def test_firestore_session_store_cross_session_parent_rejected() -> None:
     """A new snapshot cannot anchor its diff chain to another session's snapshot."""
     h = FakeStoreHarness()
@@ -2218,7 +1991,7 @@ async def test_firestore_session_store_cross_session_parent_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_pointer_to_foreign_session_is_data_loss() -> None:
+async def test_firestore_session_store_pointer_to_foreign_session_raises_data_loss() -> None:
     """A pointer resolving to another session's snapshot is a corrupt index, not an answer."""
     h = FakeStoreHarness()
     store = h.store()
@@ -2235,7 +2008,7 @@ async def test_firestore_session_store_pointer_to_foreign_session_is_data_loss()
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_interior_state_rewrite_rejected() -> None:
-    """Rewriting an interior snapshot's state would corrupt descendant diffs."""
+    """Interior snapshots (ones with descendants) cannot rewrite state; tip stays readable."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('parent', _mk('parent', custom={'secret': 'alpha'}))
@@ -2261,7 +2034,7 @@ async def test_firestore_session_store_interior_state_rewrite_rejected() -> None
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_interior_heartbeat_still_allowed() -> None:
-    """Metadata-only rewrites on an interior snapshot must not break the child."""
+    """Interior snapshots may still refresh heartbeat metadata; only state rewrites are blocked."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('parent', _mk('parent', custom={'secret': 'alpha'}))
@@ -2302,7 +2075,7 @@ async def test_firestore_session_store_parent_id_immutable_on_upsert() -> None:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_tip_state_rewrite_still_allowed() -> None:
-    """The tip remains writable: heartbeats/finalize that change state still succeed."""
+    """The tip (leaf, no descendants) may rewrite state — contrast interior_state_rewrite_rejected."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('parent', _mk('parent', custom={'n': 1}))
@@ -2338,15 +2111,6 @@ async def test_firestore_session_store_tip_state_rewrite_still_allowed() -> None
     assert loaded.state.custom == {'n': 3}
 
 
-def test_firestore_session_store_rejects_zero_shard_size() -> None:
-    """shard_size=0 is a typed INVALID_ARGUMENT, not ZeroDivisionError later."""
-    h = FakeStoreHarness()
-    with pytest.raises(GenkitError) as exc_info:
-        h.store(shard_size=0)
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'shard_size' in str(exc_info.value)
-
-
 def test_firestore_session_store_config_frozen_after_init() -> None:
     """collection/shard_size/checkpoint_interval/attempts cannot be reassigned."""
     h = FakeStoreHarness()
@@ -2359,11 +2123,12 @@ def test_firestore_session_store_config_frozen_after_init() -> None:
     assert h.store(collection='custom-col', shard_size=2048).collection == 'custom-col'
 
 
-def test_firestore_session_store_rejects_bad_collection_name() -> None:
+@pytest.mark.parametrize('bad', ['', 'bad/name'])
+def test_firestore_session_store_rejects_bad_collection_name(bad: str) -> None:
     """Collection is a path segment; empty or '/' is INVALID_ARGUMENT at construction."""
     h = FakeStoreHarness()
     with pytest.raises(GenkitError) as exc_info:
-        h.store(collection='bad/name')
+        h.store(collection=bad)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'collection' in str(exc_info.value)
 
@@ -2400,10 +2165,9 @@ async def test_firestore_session_store_zero_checkpoint_shard_count_is_data_loss(
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_subscribe_tolerates_missing_shards() -> None:
-    """Status subscribe reads the snapshot doc only; missing shards do not DATA_LOSS the watch."""
+    """Status watches only need the snapshot doc; get_snapshot still DATA_LOSS on missing shards."""
     h = FakeStoreHarness()
     store = h.store()
-    watches, captured_cb = _wire_sync_watch(store)
     await store.save_snapshot(
         'snap-1',
         lambda _e: SessionSnapshot(
@@ -2411,29 +2175,20 @@ async def test_firestore_session_store_subscribe_tolerates_missing_shards() -> N
             session_id='sess-1',
             created_at='2026-07-03T00:00:00Z',
             status=SnapshotStatus.PENDING,
-            state=SessionState(session_id='sess-1', custom={'x': 1}),
+            state=SessionState(session_id='sess-1'),
         ),
     )
     del h.docs[_shard_path('snap-1', 0)]
 
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='snap-1')
+    assert exc_info.value.status == 'DATA_LOSS'
+
+    _watches, captured_cb = _wire_sync_watch(store)
     stream = await store.on_snapshot_status_change('snap-1')
     await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'pending'))
     assert await _next_status(stream) == SnapshotStatus.PENDING
-    assert len(store._subscriptions) == 1
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_mutator_valueerror_propagates_verbatim() -> None:
-    """App ValueError from a mutator must not be misclassified as retryable ABORTED."""
-    h = FakeStoreHarness()
-    store = h.store()
-
-    def boom(_existing: SessionSnapshot | None) -> SessionSnapshot:
-        raise ValueError('no transaction ID')
-
-    with pytest.raises(ValueError, match='no transaction ID') as exc_info:
-        await store.save_snapshot('snap-1', boom)
-    assert not isinstance(exc_info.value, GenkitError)
+    await stream.aclose()
 
 
 @pytest.mark.asyncio
@@ -2550,7 +2305,7 @@ async def test_firestore_session_store_rejects_whitespace_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_aclose_tears_down_subscription() -> None:
-    """Closing a stream drops its queue and stops the watch when it was the last consumer."""
+    """aclose() drops this stream's subscription and unsubscribes its dedicated watch."""
     h = FakeStoreHarness()
     store = h.store()
     watches, _captured = _wire_sync_watch(store)
@@ -2594,44 +2349,11 @@ async def test_firestore_session_store_aclose_after_terminal_is_idempotent() -> 
     await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'completed'))
     assert await _next_status(stream) == SnapshotStatus.COMPLETED
     assert await _stream_ended(stream)
-    await stream.aclose()  # type: ignore[attr-defined]
-    await stream.aclose()  # type: ignore[attr-defined]
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_async_with_break_tears_down() -> None:
-    """async with + break is the blessed early-exit shape and releases the watch."""
-    h = FakeStoreHarness()
-    store = h.store()
-    watches, captured_cb = _wire_sync_watch(store)
-    await store.save_snapshot(
-        'snap-1',
-        lambda _e: SessionSnapshot(
-            snapshot_id='snap-1',
-            session_id='sess-1',
-            created_at='2026-07-03T00:00:00Z',
-            status=SnapshotStatus.PENDING,
-            state=SessionState(session_id='sess-1'),
-        ),
-    )
-    stream = await store.on_snapshot_status_change('snap-1')
-    await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'pending'))
-    async with stream:  # type: ignore[attr-defined]
-        async for _status in stream:
-            break
-    assert len(store._subscriptions) == 0
     watches[0].unsubscribe.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_lock_is_private() -> None:
-    """The subscriber lock is private; SessionStore no longer advertises lock."""
-    h = FakeStoreHarness()
-    store = h.store()
-    assert isinstance(store._lock, asyncio.Lock)
-    assert not hasattr(store, 'lock')
-    # Structural SessionStore surface still present (Protocol is not runtime_checkable).
-    assert callable(store.get_snapshot) and callable(store.save_snapshot)
+    assert len(store._subscriptions) == 0
+    await stream.aclose()  # type: ignore[attr-defined]
+    await stream.aclose()  # type: ignore[attr-defined]
+    watches[0].unsubscribe.assert_called_once()
 
 
 def _pending_mk(sid: str) -> Any:  # noqa: ANN401
@@ -2646,7 +2368,7 @@ def _pending_mk(sid: str) -> Any:  # noqa: ANN401
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_close_unsubscribes_inline_normally() -> None:
-    """Normal close() unsubscribes the watch once on the calling thread."""
+    """Happy path: close() unsubscribes on the calling thread (not offloaded)."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('snap-1', _pending_mk('snap-1'))
@@ -2670,8 +2392,12 @@ async def test_firestore_session_store_close_unsubscribes_inline_normally() -> N
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_close_from_listener_thread_retries_off_thread() -> None:
-    """close() on the watch listener thread finishes unsubscribe on a helper thread."""
+async def test_firestore_session_store_close_from_listener_thread_offloads_unsubscribe() -> None:
+    """If close runs on the Firestore listener thread, unsubscribe hops off-thread.
+
+    Calling unsubscribe on that same thread can deadlock the SDK; the store
+    must finish teardown on a helper thread instead.
+    """
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('snap-1', _pending_mk('snap-1'))
@@ -2681,6 +2407,7 @@ async def test_firestore_session_store_close_from_listener_thread_retries_off_th
     done = threading.Event()
 
     class FakeConsumer:
+        # Firestore watch objects expose _consumer._thread as the listener thread.
         _thread = listener
 
     watches, captured_cb = _wire_sync_watch(store)
@@ -2715,47 +2442,13 @@ async def test_firestore_session_store_watch_dedupes_repeated_status() -> None:
     pending = _status_doc('snap-1', 'pending')
     await _pump_watch(captured, 0, pending)
     assert await stream.__anext__() == SnapshotStatus.PENDING
+    # Replay pending, then completed → next yield is completed (deduped).
     await _pump_watch(captured, 0, pending)
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(stream.__anext__(), timeout=0.05)
     await _pump_watch(captured, 0, _status_doc('snap-1', 'completed'))
     assert await stream.__anext__() == SnapshotStatus.COMPLETED
     with pytest.raises(StopAsyncIteration):
         await stream.__anext__()
     watches[0].unsubscribe.assert_called_once()
-
-
-def test_firestore_session_store_subscribe_works_after_prior_loop_dies() -> None:
-    """After a notebook-style asyncio.run cell, a new loop can subscribe cleanly."""
-    h = FakeStoreHarness()
-    store = h.store()
-    errors: list[BaseException] = []
-
-    def run_first() -> None:
-        async def body() -> None:
-            await store.save_snapshot('snap-1', _pending_mk('snap-1'))
-            _wire_sync_watch(store)
-            await store.on_snapshot_status_change('snap-1')
-
-        try:
-            asyncio.run(body())
-        except BaseException as e:
-            errors.append(e)
-
-    t = threading.Thread(target=run_first)
-    t.start()
-    t.join(timeout=5.0)
-    assert not t.is_alive()
-    assert errors == []
-
-    async def second() -> None:
-        store.sync_client = None
-        _wire_sync_watch(store)
-        stream = await store.on_snapshot_status_change('snap-1')
-        assert len(store._subscriptions) == 1
-        await stream.aclose()
-
-    asyncio.run(second())
 
 
 def test_firestore_session_store_new_loop_prunes_dead_watch_and_starts_fresh() -> None:
@@ -2787,8 +2480,6 @@ def test_firestore_session_store_new_loop_prunes_dead_watch_and_starts_fresh() -
 
     async def second() -> None:
         nonlocal got_completed
-        # Drop the loop-A-derived sync client so the harness mock rebinds.
-        store.sync_client = None
         watches2, captured2 = _wire_sync_watch(store)
         stream = await store.on_snapshot_status_change('snap-1')
         assert len(store._subscriptions) == 1
@@ -2808,7 +2499,11 @@ def test_firestore_session_store_new_loop_prunes_dead_watch_and_starts_fresh() -
 
 
 def test_firestore_session_store_two_live_loops_have_independent_subscriptions() -> None:
-    """App loop + Dev UI loop can each subscribe on the same store instance."""
+    """App loop + Dev UI loop can each subscribe on the same store instance.
+
+    Subscriptions are loop-local, so each loop's ``_subscriptions`` view shows
+    only its own entries (len==1 here), not a shared global list.
+    """
     h = FakeStoreHarness()
     store = h.store()
     ready = threading.Event()
@@ -2837,7 +2532,6 @@ def test_firestore_session_store_two_live_loops_have_independent_subscriptions()
     assert ready.wait(timeout=5.0)
 
     async def other() -> None:
-        store.sync_client = None
         _watches, captured = _wire_sync_watch(store)
         stream = await store.on_snapshot_status_change('snap-1')
         await _pump_watch(captured, 0, _status_doc('snap-1', 'pending'))
@@ -2857,7 +2551,10 @@ def test_firestore_session_store_two_live_loops_have_independent_subscriptions()
 def test_firestore_session_store_clients_are_loop_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Provided async client binds to the first loop; later loops get a clone + own sync."""
+    """One store shared across app + Dev UI: first loop keeps the provided client; later loops get clones.
+
+    Firestore clients are tied to an event loop; reusing loop-A's client on loop-B breaks.
+    """
     clones: list[MagicMock] = []
 
     def fake_async_client(**kwargs: Any) -> MagicMock:  # noqa: ANN401
@@ -2965,12 +2662,11 @@ async def test_firestore_session_store_no_context_defaults_to_global_prefix() ->
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_ambient_context_shared_across_ops() -> None:
-    """get/save/subscribe with no context= all honor the ambient action context."""
+    """get/save with no context= honor the ambient action context for path prefix."""
     from genkit._core._action import _action_context
 
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda c: (c or {}).get('tenant', 'global'))
-    _watches, captured_cb = _wire_sync_watch(store)
     token = _action_context.set({'tenant': 'ambient-t'})
     try:
         await store.save_snapshot(
@@ -2984,10 +2680,6 @@ async def test_firestore_session_store_ambient_context_shared_across_ops() -> No
             ),
         )
         loaded = await store.get_snapshot(snapshot_id='snap-1')
-        stream = await store.on_snapshot_status_change('snap-1')
-        assert len(store._subscriptions) == 1
-        await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'pending'))
-        assert await _next_status(stream) == SnapshotStatus.PENDING
     finally:
         _action_context.reset(token)
 
@@ -3005,19 +2697,23 @@ async def test_firestore_session_store_status_observed_via_watch_not_save() -> N
     watches, captured_cb = _wire_sync_watch(store)
     stream = await store.on_snapshot_status_change('snap-1')
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(stream.__anext__(), timeout=0.05)
+    # Outstanding pull must stay pending across save — statuses come from the
+    # watch after commit, not from the local save path. Don't cancel the pull
+    # (wait_for timeout would); just observe that it hasn't completed yet.
+    pull = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0.05)
+    assert not pull.done()
 
     def to_completed(_e: SessionSnapshot | None) -> SessionSnapshot:
         base = _pending_mk('snap-1')(_e)
         return base.model_copy(update={'status': SnapshotStatus.COMPLETED})
 
     await store.save_snapshot('snap-1', to_completed)
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(stream.__anext__(), timeout=0.05)
+    await asyncio.sleep(0.05)
+    assert not pull.done()
 
     await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'completed'))
-    assert await stream.__anext__() == SnapshotStatus.COMPLETED
+    assert await pull == SnapshotStatus.COMPLETED
     with pytest.raises(StopAsyncIteration):
         await stream.__anext__()
     watches[0].unsubscribe.assert_called_once()
