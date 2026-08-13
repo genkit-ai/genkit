@@ -2815,6 +2815,18 @@ func TestGenerateAbnormalFinishSkipsOutputParsing(t *testing.T) {
 			opts:    []GenerateOption{WithOutputType(OutputData{})},
 			wantErr: status.ErrInvalidOutput,
 		},
+		{
+			// Plugins map unrecognized provider finish reasons to unknown, so
+			// it keeps the parse path: only reasons known to be abnormal skip
+			// output validation.
+			name: "unknown with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonUnknown,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			opts:    []GenerateOption{WithOutputType(OutputData{})},
+			wantErr: status.ErrInvalidOutput,
+		},
 	}
 
 	for i, tt := range tests {

@@ -583,13 +583,19 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 			if formatHandler != nil {
 				resp.formatHandler = streamingHandler
-				// Only parse output when the model delivered it: a natural
-				// stop, a length-capped response, or a model that reports no
-				// finish reason. An abnormal termination (blocked, aborted,
-				// ...) carries no conforming output, and a schema error here
-				// would mask the FinishReason and FinishMessage the caller
-				// needs to handle it, so those responses pass through as-is.
-				if resp.FinishReason == FinishReasonStop || resp.FinishReason == FinishReasonLength || resp.FinishReason == "" {
+				switch resp.FinishReason {
+				case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
+					// A termination known to be abnormal carries no conforming
+					// output, and a schema error here would mask the
+					// FinishReason and FinishMessage the caller needs to
+					// handle it, so the response passes through as-is.
+					// FinishReasonUnknown is not in this set on purpose:
+					// plugins map unrecognized provider reasons to it, and
+					// ParseMessage is the only place the output schema is
+					// enforced, so skipping it on an unclassified reason would
+					// silently drop validation for output the model may well
+					// have completed.
+				default:
 					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
 					resp.Message, err = formatHandler.ParseMessage(resp.Message)
 					if err != nil {
