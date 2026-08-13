@@ -14,17 +14,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Amazon Bedrock samples for the Converse, ConverseStream, and embedding paths.
+"""Amazon Bedrock samples for every surface the plugin exposes.
 
 Needs AWS credentials and a region (``AWS_REGION`` or ``~/.aws/config``) with
 model access granted for the models below. The flows named ``*_stream`` go
-through ConverseStream; the ``embed_*`` flows go through InvokeModel; the rest
-are a single Converse call.
+through ConverseStream; ``embed_*``, ``generate_image`` and ``rerank`` go
+through InvokeModel; the rest are Converse calls. ``describe_image`` and
+``summarize_pdf`` attach media to a Converse prompt, and ``prompt_caching``
+reuses a cached system prompt across two calls.
+
+``us-west-2`` is the region that runs all of these; see the README for the
+per-model exceptions.
 """
 
 import math
 
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock, BedrockRerankOptions, ModelDefinition, cache_point_part
 from pydantic import BaseModel, Field
 
 from genkit import (
@@ -35,6 +40,7 @@ from genkit import (
     Media,
     MediaPart,
     ModelResponse,
+    Part,
     ReasoningPart,
     TextPart,
 )
@@ -47,6 +53,8 @@ TITAN_EMBED = 'amazon.titan-embed-text-v2:0'
 TITAN_EMBED_IMAGE = 'amazon.titan-embed-image-v1'
 COHERE_EMBED = 'cohere.embed-english-v3'
 NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
+STABILITY_IMAGE = 'stability.sd3-5-large-v1:0'
+COHERE_RERANK = 'cohere.rerank-v3-5:0'
 
 # The smallest PNG Titan accepts (1x1 pixel), inline so the multimodal flow
 # needs no asset file. Titan wants raw base64 in the request body; the plugin
@@ -55,22 +63,101 @@ PNG_1X1_DATA_URL = (
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
 )
 
-# Declaring an embedder costs nothing at startup: no AWS call happens until a flow runs one,
-# so a missing model-access grant only surfaces when you use it.
-ai = Genkit(
-    plugins=[
-        Bedrock(
-            models=[
-                ModelDefinition(name='us.amazon.nova-lite-v1:0'),
-                ModelDefinition(name='us.meta.llama3-3-70b-instruct-v1:0'),
-                ModelDefinition(name='us.deepseek.r1-v1:0'),
-                ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
-            ],
-            embedders=[TITAN_EMBED, TITAN_EMBED_IMAGE, COHERE_EMBED, NOVA_EMBED],
-        )
-    ],
-    model=NOVA,
+# A 64x48 PNG of three horizontal bands (red, white, blue). Big enough for a
+# model to describe, unlike the 1x1 pixel above, and small enough to inline.
+STRIPES_PNG_DATA_URL = (
+    'data:image/png;base64,'
+    'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAATklEQVR42u3PMQ0AMAwEsWAKksIOiNLoXg7ZXvLpCLhud/QFAAAAAAAA'
+    'AAAAALAGvPAAAAAAAAAAAAAAAPaAPhM9AAAAAAAAAAAAAMD6DyqspTygWsHeAAAAAElFTkSuQmCC'
 )
+
+# A one-page PDF holding three lines of text, inline for the same reason.
+MEMO_PDF_DATA_URL = (
+    'data:application/pdf;base64,'
+    'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1Bh'
+    'Z2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVk'
+    'aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4K'
+    'ZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNTAgPj4Kc3RyZWFtCkJUCi9GMSAxNCBUZgoxIDAgMCAxIDcyIDcyMCBUbQoxOCBUTAoo'
+    'R2Vua2l0IEJlZHJvY2sgc2FtcGxlIG1lbW8pIFRqClQqCihUaGUgb2ZmaWNlIGtldHRsZSBpcyBicm9rZW4uKSBUagpUKgooVGVhIHNl'
+    'cnZpY2UgcmVzdW1lcyBvbiBGcmlkYXkuKSBUagpUKgpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1'
+    'YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iagp4cmVmCjAg'
+    'NgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAw'
+    'IG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4K'
+    'c3RhcnR4cmVmCjUzOQolJUVPRgo='
+)
+
+# Facts the prompt_caching questions are answered from.
+_MANUAL_ARTICLES = [
+    (
+        'Returns and refunds',
+        'Kettles, toasters, blenders and other small kitchen appliances may be returned within 30 days of '
+        'delivery for a full refund, whether or not the box has been opened. Furniture and mattresses have a '
+        '100-night trial instead. Refunds are issued to the original payment method within five business days '
+        'of the return arriving at the warehouse.',
+    ),
+    (
+        'Shipping destinations',
+        'We ship to Canada, Mexico, Ireland, Germany, Japan and Australia. Domestic orders over 50 dollars '
+        'ship free; international orders are quoted at checkout and are shipped on a delivered-duty-paid '
+        'basis, so no customs charges are collected on arrival.',
+    ),
+    (
+        'Warranty',
+        'Every appliance carries a two-year warranty against manufacturing defects, extended to five years '
+        'for the Heirloom range. Accidental damage is not covered. A warranty claim needs the order number '
+        'and a photograph of the serial-number plate.',
+    ),
+]
+
+# Padding: a prompt below the minimum cacheable size (roughly 1,000 tokens for
+# Claude Sonnet) is silently not cached.
+_MANUAL_REGIONS = ['North America', 'Ireland', 'Germany', 'Japan', 'Australia']
+_MANUAL_TIERS = [
+    ('Standard', '3 to 6 business days', 'no signature required'),
+    ('Express', '1 to 2 business days', 'signature required on delivery'),
+    ('Freight', '7 to 21 business days', 'a two-person delivery team and an appointment window'),
+]
+
+
+def _support_manual() -> str:
+    """Build the static system prompt the caching flow reuses across calls."""
+    sections = [
+        'You are the support assistant for Kettle & Crate, a home goods retailer. Answer only from the '
+        'manual below, in one or two sentences, and say so plainly when the manual does not cover the '
+        'question.',
+    ]
+    for title, body in _MANUAL_ARTICLES:
+        sections.append(f'{title}\n{body}')
+    for region in _MANUAL_REGIONS:
+        for tier, window, note in _MANUAL_TIERS:
+            sections.append(
+                f'{tier} delivery, {region}\n'
+                f'{tier} delivery to {region} arrives in {window} and requires {note}. Orders placed after '
+                f'14:00 local time enter the next working day. Tracking is emailed when the parcel leaves the '
+                f'warehouse and again on the morning of delivery. A missed delivery is held at the local depot '
+                f'for ten days before it is returned to us, and a redelivery can be booked once at no charge. '
+                f'Damage in transit must be reported within 48 hours of delivery with photographs of both the '
+                f'packaging and the item.'
+            )
+    return '\n\n'.join(sections)
+
+
+CACHED_SYSTEM_PROMPT = _support_manual()
+
+# Declaring a model or embedder costs nothing at startup: no AWS call happens until a flow runs
+# one, so a missing model-access grant only surfaces when you use it. The plugin instance is kept
+# because rerank is a method on it rather than a registered action.
+bedrock = Bedrock(
+    models=[
+        ModelDefinition(name='us.amazon.nova-lite-v1:0'),
+        ModelDefinition(name='us.meta.llama3-3-70b-instruct-v1:0'),
+        ModelDefinition(name='us.deepseek.r1-v1:0'),
+        ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+        ModelDefinition(name=STABILITY_IMAGE, type='image'),
+    ],
+    embedders=[TITAN_EMBED, TITAN_EMBED_IMAGE, COHERE_EMBED, NOVA_EMBED],
+)
+ai = Genkit(plugins=[bedrock], model=NOVA)
 
 
 class TopicInput(BaseModel):
@@ -140,6 +227,79 @@ class MultimodalEmbedInput(BaseModel):
 
     text: str = Field(default='a white square', description='Caption embedded alongside the image')
     image_data_url: str = Field(default=PNG_1X1_DATA_URL, description='PNG or JPEG image as a data URL')
+
+
+class VisionInput(BaseModel):
+    """Input for the image-description flow."""
+
+    question: str = Field(
+        default='What does this image look like? Answer in one sentence.',
+        description='Question to ask about the image',
+    )
+    image_data_url: str = Field(
+        default=STRIPES_PNG_DATA_URL,
+        description='PNG, JPEG, GIF or WebP image as a data URL; remote URLs are rejected',
+    )
+
+
+class PdfInput(BaseModel):
+    """Input for the document-summary flow."""
+
+    question: str = Field(
+        default='What does this document say? Answer in one sentence.',
+        description='Question to ask about the document',
+    )
+    pdf_data_url: str = Field(
+        default=MEMO_PDF_DATA_URL,
+        description='PDF as a data URL; csv, docx, xlsx, html, txt and md work the same way',
+    )
+
+
+class CacheInput(BaseModel):
+    """Input for the prompt-caching flow."""
+
+    first_question: str = Field(
+        default='What is the return window for a kettle?',
+        description='Asked on the first call, which writes the cache',
+    )
+    second_question: str = Field(
+        default='Which countries do you ship to?',
+        description='Asked on the second call, which should read the cache',
+    )
+
+
+class ImageInput(BaseModel):
+    """Input for the text-to-image flow."""
+
+    prompt: str = Field(
+        default='A tabby cat asleep on a sunlit windowsill, watercolour.',
+        description='Text-to-image prompt',
+    )
+    model: str = Field(
+        default=STABILITY_IMAGE,
+        description='Bedrock image model ID; the active text-to-image models are offered in us-west-2 only',
+    )
+    aspect_ratio: str = Field(default='1:1', description="Stability aspect ratio, e.g. '16:9'")
+    output_format: str = Field(default='png', description='Stability output format: png, jpeg or webp')
+
+
+class RerankInput(BaseModel):
+    """Input for the rerank flow."""
+
+    model: str = Field(
+        default=COHERE_RERANK,
+        description='Bedrock rerank model ID; amazon.rerank-v1:0 is not offered in us-east-1',
+    )
+    query: str = Field(default='How do I configure authentication for Bedrock?', description='Query to rank against')
+    documents: list[str] = Field(
+        default=[
+            'Configure AWS credentials with environment variables, a shared credentials file, or AWS SSO.',
+            'Nova Canvas returns generated images as base64-encoded PNG data.',
+            'Model access is granted per account and region in the Bedrock console.',
+        ],
+        description='Documents to rank; only the first answers the default query',
+    )
+    top_n: int = Field(default=0, description='How many ranked documents to return; 0 or less means all of them')
 
 
 @ai.tool()
@@ -404,6 +564,151 @@ async def embed_image(data: MultimodalEmbedInput) -> dict[str, object]:
     }
 
 
+@ai.flow()
+async def describe_image(data: VisionInput) -> str:
+    """Ask a multimodal model about an image attached to the prompt.
+
+    Genkit carries the image as a data URL; the plugin decodes it to raw bytes
+    because boto3 base64-encodes the field itself, so passing base64 through
+    would double-encode it. Remote http(s) URLs are refused rather than
+    fetched, and the MIME type is read from the data URL when the media part
+    does not carry one.
+    """
+    response = await ai.generate(
+        prompt=[
+            Part(root=MediaPart(media=Media(url=data.image_data_url))),
+            Part(root=TextPart(text=data.question)),
+        ]
+    )
+    return response.text
+
+
+@ai.flow()
+async def summarize_pdf(data: PdfInput) -> str:
+    """Ask a model about a PDF attached to the prompt.
+
+    A media part whose MIME type is a document type becomes a Converse
+    ``document`` block rather than an ``image`` block, so attaching a
+    spreadsheet or a CSV is this same code path. Bedrock parses the document
+    server-side, and requires accompanying text in the message, which the
+    question supplies. Claude is used rather than the default Nova because
+    document support is per model, and it is the model the Go plugin's own
+    document example runs on.
+    """
+    response = await ai.generate(
+        model=CLAUDE,
+        prompt=[
+            Part(root=MediaPart(media=Media(url=data.pdf_data_url))),
+            Part(root=TextPart(text=data.question)),
+        ],
+        config={'maxTokens': 512},
+    )
+    return response.text
+
+
+@ai.flow()
+async def prompt_caching(data: CacheInput) -> dict[str, object]:
+    """Reuse a cached system prompt across two calls.
+
+    The cache point goes after the static prefix it should cache, and the
+    prefix has to be byte-identical between calls to hit, which is why the
+    manual is a module-level constant. Only cache reads surface:
+    ``cacheReadInputTokens`` becomes ``cached_content_tokens`` while the write
+    counter is deliberately dropped, so the evidence is the second call
+    reporting cached tokens the first did not. ``input_tokens`` counts only the
+    uncached remainder, which is why it stays small on both calls and the
+    manual shows up in ``total_tokens`` instead.
+    """
+    system = [Part(root=TextPart(text=CACHED_SYSTEM_PROMPT)), cache_point_part()]
+    first = await ai.generate(model=CLAUDE, system=system, prompt=data.first_question, config={'maxTokens': 512})
+    second = await ai.generate(model=CLAUDE, system=system, prompt=data.second_question, config={'maxTokens': 512})
+    return {
+        'model': CLAUDE,
+        'system_prompt_chars': len(CACHED_SYSTEM_PROMPT),
+        'calls': [
+            {
+                'question': question,
+                'answer': response.text,
+                'uncached_input_tokens': _token_count(response, 'input_tokens'),
+                'cached_content_tokens': _token_count(response, 'cached_content_tokens'),
+                'total_tokens': _token_count(response, 'total_tokens'),
+            }
+            for question, response in ((data.first_question, first), (data.second_question, second))
+        ],
+        # Only the second call is claimed: a re-run inside the cache's
+        # few-minute lifetime reads the cache the previous run wrote.
+        'cache_read_on_second_call': bool(second.usage and second.usage.cached_content_tokens),
+    }
+
+
+@ai.flow()
+async def generate_image(data: ImageInput) -> dict[str, object]:
+    """Generate an image through InvokeModel.
+
+    Image models are ordinary Genkit model actions, so the image comes back as
+    a media part holding a data URL; the summary below is returned instead of
+    the base64, which is unreadable in the Dev UI, and the image itself is on
+    the model action's trace. The two families take incompatible bodies and the
+    plugin routes on the model ID: the flat fields below are Stability's, and
+    the Amazon family reads only ``imageGenerationConfig``. Nothing streams.
+    """
+    response = await ai.generate(
+        model=f'bedrock/{data.model}',
+        prompt=data.prompt,
+        config={'aspect_ratio': data.aspect_ratio, 'output_format': data.output_format},
+    )
+    media = response.media
+    if not media:
+        raise RuntimeError(f'Bedrock returned no images for {data.model}.')
+    url = media[0].url
+    _, _, payload = url.partition(',')
+    return {
+        'model': data.model,
+        'images': len(media),
+        'content_type': media[0].content_type,
+        'approx_kilobytes': round(len(payload) * 3 / 4 / 1024),
+        'data_url_preview': f'{url[:48]}...',
+    }
+
+
+@ai.flow()
+async def rerank(data: RerankInput) -> dict[str, object]:
+    """Score documents against a query with a Bedrock reranking model.
+
+    Reranking is a method on the plugin instance rather than a registered
+    action, because Genkit Python has no reranker primitive to register
+    against; that is why the sample keeps a reference to the ``Bedrock`` it
+    passed to ``Genkit``. Results arrive in the service's own
+    descending-relevance order and each carries a fresh score, with the input
+    document's content verbatim and its metadata dropped.
+    """
+    response = await bedrock.rerank(
+        data.model,
+        query=data.query,
+        documents=[Document.from_text(text) for text in data.documents],
+        options=BedrockRerankOptions(top_n=data.top_n),
+    )
+    return {
+        'model': data.model,
+        'query': data.query,
+        'ranked': [
+            {'text': _document_text(document.content), 'score': round(document.metadata.score, 5)}
+            for document in response.documents
+        ],
+    }
+
+
+def _document_text(content: list[DocumentPart]) -> str:
+    """Concatenate the text parts of a ranked document."""
+    return ''.join(part.root.text for part in content if isinstance(part.root, TextPart))
+
+
+def _token_count(response: ModelResponse, field: str) -> int | None:
+    """Read a token counter off a response as an int; they arrive as floats."""
+    value = getattr(response.usage, field, None) if response.usage else None
+    return int(value) if value is not None else None
+
+
 def _magnitude(vector: list[float]) -> float:
     """Euclidean length of a vector; stdlib math only, the sample has no numpy."""
     return math.sqrt(math.fsum(value * value for value in vector))
@@ -453,13 +758,16 @@ async def main() -> None:
         print(await haiku(TopicInput()))  # noqa: T201
         print(await haiku_stream(TopicInput()))  # noqa: T201
         print(await weather_report(CityInput()))  # noqa: T201
+        print(await describe_image(VisionInput()))  # noqa: T201
+        print(await summarize_pdf(PdfInput()))  # noqa: T201
         print(await embed_text(EmbedInput()))  # noqa: T201
         print(await embed_similarity(SimilarityInput()))  # noqa: T201
     except Exception as error:
         # Printed, not raised: in dev mode the Dev UI stays up either way.
         print(  # noqa: T201
-            f'Set AWS credentials and a region, and grant model access for {NOVA}, {LLAMA}, {DEEPSEEK}, and '
-            f'{TITAN_EMBED}, before running this sample.\n{error}'
+            f'Set AWS credentials and a region, and grant model access for {NOVA}, {CLAUDE} and {TITAN_EMBED}, '
+            f'before running this sample. Claude also needs the account one-time Anthropic use-case agreement; '
+            f'the other declared models are only used by flows the Dev UI runs.\n{error}'
         )
 
 
