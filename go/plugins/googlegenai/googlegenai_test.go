@@ -39,6 +39,26 @@ func TestVertexAIInit_InvalidAPIVersion(t *testing.T) {
 	}
 }
 
+// TestGoogleAIInit_InvalidAPIVersion verifies that a bad APIVersion is
+// rejected up front, mirroring the Vertex AI check. The invalid value is
+// Vertex AI's valid one, so the test also documents that the two backends
+// name their versions differently.
+func TestGoogleAIInit_InvalidAPIVersion(t *testing.T) {
+	recovered := mustPanic(t, func() {
+		(&googlegenai.GoogleAI{
+			APIKey:     "test-api-key",
+			APIVersion: "v1beta1", // invalid: valid values are "v1", "v1beta", and "v1alpha"
+		}).Init(context.Background())
+	})
+	msg, ok := recovered.(string)
+	if !ok {
+		t.Fatalf("expected panic value to be a string, got %T: %v", recovered, recovered)
+	}
+	if !strings.Contains(msg, "v1beta1") {
+		t.Errorf("panic message %q does not mention the invalid value", msg)
+	}
+}
+
 // mustPanic runs f and returns the recovered panic value, failing the test
 // if f does not panic.
 func mustPanic(t *testing.T, f func()) any {
@@ -58,6 +78,7 @@ func TestGoogleAIInit_HTTPOptions(t *testing.T) {
 	custom := &http.Client{}
 	ga := &googlegenai.GoogleAI{
 		APIKey:     "test-api-key",
+		APIVersion: "v1alpha",
 		BaseURL:    "https://gateway.example.com",
 		Headers:    http.Header{"X-Test-Header": {"yes"}},
 		HTTPClient: custom,
@@ -71,6 +92,9 @@ func TestGoogleAIInit_HTTPOptions(t *testing.T) {
 	cc := client.ClientConfig()
 	if cc.HTTPOptions.BaseURL != "https://gateway.example.com" {
 		t.Errorf("BaseURL = %q, want the configured gateway", cc.HTTPOptions.BaseURL)
+	}
+	if cc.HTTPOptions.APIVersion != "v1alpha" {
+		t.Errorf("APIVersion = %q, want %q", cc.HTTPOptions.APIVersion, "v1alpha")
 	}
 	if got := cc.HTTPOptions.Headers.Get("X-Test-Header"); got != "yes" {
 		t.Errorf("custom header = %q, want %q", got, "yes")

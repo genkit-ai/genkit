@@ -119,6 +119,7 @@ Both plugins accept optional fields for nonstandard network setups:
 ```go
 g := genkit.Init(ctx,
  genkit.WithPlugins(&googlegenai.GoogleAI{
+  APIVersion: "v1alpha",                           // pin the API version ("v1", "v1beta", or "v1alpha"; default v1beta)
   BaseURL: "https://my-gateway.example.com",       // route through a proxy or API gateway
   Headers: http.Header{"X-Team": {"platform"}},    // extra headers on every request
   HTTPClient: myClient,                            // custom *http.Client, used verbatim
@@ -129,7 +130,9 @@ g := genkit.Init(ctx,
 `VertexAI` additionally accepts `Credentials` (a `*auth.Credentials` from
 `cloud.google.com/go/auth`) to override Application Default Credentials. When
 you supply `HTTPClient` to `VertexAI`, that client must handle authentication
-itself; use `Credentials` instead if you only need a different identity.
+itself; use `Credentials` instead if you only need a different identity. Note
+that Vertex AI names its API versions differently: `VertexAI.APIVersion` takes
+`"v1"` or `"v1beta1"` (default `v1beta1`).
 
 ### Accessing the underlying client
 

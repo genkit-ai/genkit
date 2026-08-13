@@ -55,7 +55,8 @@ func rejectBackgroundModel(provider, id string) error {
 
 // GoogleAI is a Genkit plugin for interacting with the Google AI service.
 type GoogleAI struct {
-	APIKey string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
+	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
+	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the genai SDK default (v1beta) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
 	// BaseURL overrides the default API endpoint
 	// (https://generativelanguage.googleapis.com), e.g. to point at a proxy
@@ -257,6 +258,12 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 		panic("plugin already initialized")
 	}
 
+	switch ga.APIVersion {
+	case "", "v1", "v1beta", "v1alpha":
+	default:
+		panic(fmt.Sprintf("Google AI APIVersion must be %q, %q, or %q, got %q", "v1", "v1beta", "v1alpha", ga.APIVersion))
+	}
+
 	apiKey := ga.APIKey
 	if apiKey == "" {
 		apiKey = firstEnv("GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -270,8 +277,9 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 		APIKey:     apiKey,
 		HTTPClient: httpClientOrDefault(ga.HTTPClient),
 		HTTPOptions: genai.HTTPOptions{
-			BaseURL: ga.BaseURL,
-			Headers: mergedHeaders(ga.Headers),
+			BaseURL:    ga.BaseURL,
+			Headers:    mergedHeaders(ga.Headers),
+			APIVersion: ga.APIVersion,
 		},
 	}
 
