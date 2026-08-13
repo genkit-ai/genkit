@@ -98,8 +98,8 @@ def resolve_model_name(
     message: str = 'No model configured.',
 ) -> str:
     """Return an explicit model name or the registry default; error if neither exists."""
-    name = model if model is not None else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    if not name or not isinstance(name, str):
+    name = model if model is not None else registry.lookup_value('defaultModel', 'defaultModel')
+    if not isinstance(name, str) or not name:
         raise GenkitError(status='INVALID_ARGUMENT', message=message)
     return name
 
