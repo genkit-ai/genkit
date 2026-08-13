@@ -223,6 +223,7 @@ func TestClosedEnumsUseNamedTypes(t *testing.T) {
 		"dashscope": dashscope.ChatConfig{},
 		"deepseek":  deepseek.ChatConfig{},
 		"kimi":      kimi.ChatConfig{},
+		"xai":       xai.ChatConfig{},
 		"zai":       zai.ChatConfig{},
 	}
 	for name, config := range configs {
