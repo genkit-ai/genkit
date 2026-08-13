@@ -163,15 +163,24 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "dashscope")
 	}
 
-	// Mirrors the Media flags set in supportedModels.
-	textModels := []string{"qwen-flash", "qwen-plus", "qwen3.7-max", "qwen3-max", "qwen3-coder-plus"}
-	mediaModels := []string{"qwen3.5-flash", "qwen3.5-plus", "qwen3.6-flash", "qwen3.6-plus", "qwen3.7-plus", "qwen3-vl-plus"}
+	// Mirrors the Media and Output claims in supportedModels: qwen3.7-max and
+	// qwen3-coder-plus document structured output as unsupported so they
+	// advertise text only, and the 2026-06-08 max snapshot alone adds media.
+	textAndJSON := []string{"text", "json"}
+	textOutputOnly := []string{"text"}
 	for _, group := range []struct {
-		models    []string
-		wantMedia bool
+		models     []string
+		wantMedia  bool
+		wantOutput []string
 	}{
-		{models: textModels, wantMedia: false},
-		{models: mediaModels, wantMedia: true},
+		{models: []string{"qwen-flash", "qwen-plus", "qwen3-max"},
+			wantMedia: false, wantOutput: textAndJSON},
+		{models: []string{"qwen3.5-flash", "qwen3.5-plus", "qwen3.6-flash", "qwen3.6-plus", "qwen3.7-plus", "qwen3-vl-plus"},
+			wantMedia: true, wantOutput: textAndJSON},
+		{models: []string{"qwen3.7-max", "qwen3-coder-plus"},
+			wantMedia: false, wantOutput: textOutputOnly},
+		{models: []string{"qwen3.7-max-2026-06-08"},
+			wantMedia: true, wantOutput: textOutputOnly},
 	} {
 		for _, modelID := range group.models {
 			model := genkit.LookupModel(g, "dashscope/"+modelID)
@@ -195,8 +204,8 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 				t.Errorf("%s toolChoice support = %v, want false", modelID, got)
 			}
 			output, _ := supports["output"].([]string)
-			if !slices.Equal(output, []string{"text", "json"}) {
-				t.Errorf("%s output = %v, want [text json]", modelID, output)
+			if !slices.Equal(output, group.wantOutput) {
+				t.Errorf("%s output = %v, want %v", modelID, output, group.wantOutput)
 			}
 		}
 	}
@@ -346,6 +355,35 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 	const imageDataURI = "data:image/png;base64,iVBORw0KGgo="
 
+	checkImageBody := func(t *testing.T, body map[string]any) {
+		messages, ok := body["messages"].([]any)
+		if !ok || len(messages) != 1 {
+			t.Fatalf("messages = %#v, want one message", body["messages"])
+		}
+		message, ok := messages[0].(map[string]any)
+		if !ok {
+			t.Fatalf("message = %#v, want object", messages[0])
+		}
+		content, ok := message["content"].([]any)
+		if !ok || len(content) != 2 {
+			t.Fatalf("content = %#v, want image and text parts", message["content"])
+		}
+		imagePart, ok := content[0].(map[string]any)
+		if !ok {
+			t.Fatalf("image part = %#v, want object", content[0])
+		}
+		if got := imagePart["type"]; got != "image_url" {
+			t.Errorf("image part type = %v, want %q", got, "image_url")
+		}
+		imageURL, ok := imagePart["image_url"].(map[string]any)
+		if !ok {
+			t.Fatalf("image_url = %#v, want object", imagePart["image_url"])
+		}
+		if got := imageURL["url"]; got != imageDataURI {
+			t.Errorf("image_url.url = %v, want %q", got, imageDataURI)
+		}
+	}
+
 	tests := []struct {
 		name      string
 		model     string
@@ -372,6 +410,23 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 			response: `{"answer":"ok"}`,
 		},
 		{
+			// qwen3.7-max documents structured output as unsupported, so a
+			// JSON request must reach it without the response_format DashScope
+			// would fail on, carried by the framework's format instructions.
+			name:  "json output without structured output support",
+			model: "qwen3.7-max",
+			options: []ai.GenerateOption{
+				ai.WithPrompt("Return a JSON object."),
+				ai.WithOutputFormat(ai.OutputFormatJSON),
+			},
+			checkBody: func(t *testing.T, body map[string]any) {
+				if got, ok := body["response_format"]; ok {
+					t.Errorf("response_format = %#v, want none for a model without structured output", got)
+				}
+			},
+			response: `{"answer":"ok"}`,
+		},
+		{
 			name:  "vision input",
 			model: "qwen3-vl-plus",
 			options: []ai.GenerateOption{
@@ -380,35 +435,23 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 					ai.NewTextPart("Describe this image."),
 				)),
 			},
-			checkBody: func(t *testing.T, body map[string]any) {
-				messages, ok := body["messages"].([]any)
-				if !ok || len(messages) != 1 {
-					t.Fatalf("messages = %#v, want one message", body["messages"])
-				}
-				message, ok := messages[0].(map[string]any)
-				if !ok {
-					t.Fatalf("message = %#v, want object", messages[0])
-				}
-				content, ok := message["content"].([]any)
-				if !ok || len(content) != 2 {
-					t.Fatalf("content = %#v, want image and text parts", message["content"])
-				}
-				imagePart, ok := content[0].(map[string]any)
-				if !ok {
-					t.Fatalf("image part = %#v, want object", content[0])
-				}
-				if got := imagePart["type"]; got != "image_url" {
-					t.Errorf("image part type = %v, want %q", got, "image_url")
-				}
-				imageURL, ok := imagePart["image_url"].(map[string]any)
-				if !ok {
-					t.Fatalf("image_url = %#v, want object", imagePart["image_url"])
-				}
-				if got := imageURL["url"]; got != imageDataURI {
-					t.Errorf("image_url.url = %v, want %q", got, imageDataURI)
-				}
+			checkBody: checkImageBody,
+			response:  "A test image.",
+		},
+		{
+			// The dated snapshot is the one qwen3.7-max entry that takes
+			// media, so an image request through it must pass validation and
+			// reach the wire.
+			name:  "vision input on the multimodal max snapshot",
+			model: "qwen3.7-max-2026-06-08",
+			options: []ai.GenerateOption{
+				ai.WithMessages(ai.NewUserMessage(
+					ai.NewMediaPart("image/png", imageDataURI),
+					ai.NewTextPart("Describe this image."),
+				)),
 			},
-			response: "A test image.",
+			checkBody: checkImageBody,
+			response:  "A test image.",
 		},
 		{
 			name:  "extra passthrough",

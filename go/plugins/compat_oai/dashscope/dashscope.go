@@ -118,6 +118,11 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 // generation is likewise absent: DashScope's response_format takes
 // json_object only, not json_schema, so a schema reaches the model as prompt
 // instructions. See https://www.alibabacloud.com/help/en/model-studio/json-mode.
+//
+// The NoJSON sets serve the models whose capability tables say "Structured
+// Outputs: Unsupported": response_format fails there, so they advertise text
+// output only, the base sends no response_format, and the format instructions
+// the framework injects carry a JSON request instead.
 var (
 	textOnly = ai.ModelSupports{
 		Multiturn:  true,
@@ -132,6 +137,20 @@ var (
 		SystemRole: true,
 		Media:      true,
 		Output:     []string{"text", "json"},
+	}
+	textOnlyNoJSON = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      false,
+		Output:     []string{"text"},
+	}
+	multimodalNoJSON = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      true,
+		Output:     []string{"text"},
 	}
 )
 
@@ -181,8 +200,17 @@ var supportedModels = map[string]ai.ModelOptions{
 	},
 	"qwen3.7-max": {
 		Label:    "Qwen 3.7 Max",
-		Supports: &textOnly,
+		Supports: &textOnlyNoJSON,
 		Versions: []string{"qwen3.7-max", "qwen3.7-max-2026-06-08", "qwen3.7-max-2026-05-20"},
+	},
+	// The 2026-06-08 snapshot has capabilities of its own: DashScope documents
+	// image and video input for it, which the floating qwen3.7-max and the May
+	// snapshot do not take. It is registered standalone so media requests pass
+	// validation, and stays in the base entry's Versions so pinning it there
+	// keeps working.
+	"qwen3.7-max-2026-06-08": {
+		Label:    "Qwen 3.7 Max (2026-06-08)",
+		Supports: &multimodalNoJSON,
 	},
 	"qwen3-max": {
 		Label:    "Qwen 3 Max",
@@ -196,7 +224,7 @@ var supportedModels = map[string]ai.ModelOptions{
 	},
 	"qwen3-coder-plus": {
 		Label:    "Qwen 3 Coder Plus",
-		Supports: &textOnly,
+		Supports: &textOnlyNoJSON,
 		Versions: []string{"qwen3-coder-plus", "qwen3-coder-plus-2025-07-22", "qwen3-coder-plus-2025-09-23"},
 	},
 }
