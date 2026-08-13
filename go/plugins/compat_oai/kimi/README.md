@@ -43,9 +43,11 @@ as `reasoning_content` during multi-turn and tool-call requests.
 
 `kimi-k3`, `kimi-k2.6`, `kimi-k2.7-code`, and `kimi-k2.7-code-highspeed` are
 registered, with `kimi-k2.5` kept as deprecated for existing users during its
-platform sunset period. The catalog is not a ceiling: any model ID Moonshot
-serves resolves on demand, and the `Models` field describes or corrects any
-model, curated or not:
+platform sunset period. Tool-choice steering (`ai.WithToolChoice`) is
+advertised for `kimi-k3` only: the K2 generation rejects a forced tool call
+as incompatible with thinking, which is on by default. The catalog is not a
+ceiling: any model ID Moonshot serves resolves on demand, and the `Models`
+field describes or corrects any model, curated or not:
 
 ```go
 plugin := &kimi.Kimi{Models: map[string]ai.ModelOptions{

@@ -71,8 +71,9 @@ type ChatConfig struct {
 	// and the ceiling vary by model.
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty" jsonschema:"minimum=1" jsonschema_description:"Maximum number of tokens to generate, sent as the API's max_completion_tokens. The default and the ceiling vary by model."`
 	// StopSequences stop generation when produced by the model, up to five of
-	// at most 32 bytes each.
-	StopSequences []string `json:"stopSequences,omitempty" jsonschema:"maxItems=5" jsonschema_description:"Stop generation when produced by the model, up to five sequences of at most 32 bytes each."`
+	// at most 32 bytes each. The schema enforces the per-entry limit in
+	// characters; Moonshot counts bytes.
+	StopSequences []string `json:"stopSequences,omitempty" jsonschema:"maxItems=5,maxLength=32" jsonschema_description:"Stop generation when produced by the model, up to five sequences of at most 32 bytes each."`
 	// LogProbs requests log probabilities for the output tokens.
 	LogProbs *bool `json:"logProbs,omitempty" jsonschema_description:"Requests log probabilities for the output tokens."`
 	// TopLogProbs is how many of the most likely tokens to return log
@@ -134,20 +135,37 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
-// multimodal is the capability set every K-series Kimi model shares: text and
-// images in, text or JSON out, and tools. Moonshot's chat API takes
-// response_format json_schema, so structured output is generated natively
-// rather than coaxed through prompt instructions. See
-// https://platform.kimi.ai/docs/api/chat.
-var multimodal = ai.ModelSupports{
-	Multiturn:   true,
-	Tools:       true,
-	SystemRole:  true,
-	Media:       true,
-	ToolChoice:  true,
-	Output:      []string{"text", "json"},
-	Constrained: ai.ConstrainedSupportAll,
-}
+// Capability sets shared by the entries below: text and images in, text or
+// JSON out, and tools. Moonshot's chat API takes response_format json_schema,
+// so structured output is generated natively rather than coaxed through
+// prompt instructions. See https://platform.kimi.ai/docs/api/chat.
+var (
+	// multimodal is the Kimi K3 set, with free tool choice.
+	multimodal = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+	// multimodalNoToolChoice is multimodal minus tool-choice steering: the K2
+	// generation rejects tool_choice required as incompatible with thinking,
+	// which is on by default (K2.7 Code cannot even turn it off), so only the
+	// auto default is dependable and the framework waves auto through while
+	// rejecting the rest. A caller who always disables thinking can restore
+	// the claim through [Kimi.Models].
+	multimodalNoToolChoice = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  false,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+)
 
 // supportedModels curates capabilities for well-known Kimi models. It is not
 // the set of usable models: any Kimi model resolves on demand and takes
@@ -159,14 +177,15 @@ var multimodal = ai.ModelSupports{
 // Catalog: https://platform.kimi.ai/docs/api/chat
 var supportedModels = map[string]ai.ModelOptions{
 	"kimi-k3":                  {Label: "Kimi K3", Supports: &multimodal},
-	"kimi-k2.5":                {Label: "Kimi K2.5 (Deprecated)", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
-	"kimi-k2.6":                {Label: "Kimi K2.6", Supports: &multimodal},
-	"kimi-k2.7-code":           {Label: "Kimi K2.7 Code", Supports: &multimodal},
-	"kimi-k2.7-code-highspeed": {Label: "Kimi K2.7 Code Highspeed", Supports: &multimodal},
+	"kimi-k2.5":                {Label: "Kimi K2.5 (Deprecated)", Supports: &multimodalNoToolChoice, Stage: ai.ModelStageDeprecated},
+	"kimi-k2.6":                {Label: "Kimi K2.6", Supports: &multimodalNoToolChoice},
+	"kimi-k2.7-code":           {Label: "Kimi K2.7 Code", Supports: &multimodalNoToolChoice},
+	"kimi-k2.7-code-highspeed": {Label: "Kimi K2.7 Code Highspeed", Supports: &multimodalNoToolChoice},
 }
 
 // dynamicModelOptions is advertised for Kimi models that resolve dynamically
-// rather than appearing in supportedModels.
+// rather than appearing in supportedModels. A model Moonshot adds later is
+// assumed K3-shaped, with free tool choice.
 var dynamicModelOptions = ai.ModelOptions{
 	Supports: &multimodal,
 	Versions: []string{},

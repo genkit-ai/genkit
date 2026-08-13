@@ -54,17 +54,17 @@ func TestPluginRegistersKimiModelsAndHandlesReasoning(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != "kimi-k2.6" {
-			t.Errorf("model = %q, want %q", body.Model, "kimi-k2.6")
+		if body.Model != "kimi-k3" {
+			t.Errorf("model = %q, want %q", body.Model, "kimi-k3")
 		}
 
 		if body.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
 			for _, event := range []string{
-				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k2.6","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Think "},"finish_reason":null}]}`,
-				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k2.6","choices":[{"index":0,"delta":{"reasoning_content":"carefully."},"finish_reason":null}]}`,
-				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k2.6","choices":[{"index":0,"delta":{"content":"Final answer"},"finish_reason":null}]}`,
-				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k2.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Think "},"finish_reason":null}]}`,
+				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k3","choices":[{"index":0,"delta":{"reasoning_content":"carefully."},"finish_reason":null}]}`,
+				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k3","choices":[{"index":0,"delta":{"content":"Final answer"},"finish_reason":null}]}`,
+				`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"kimi-k3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 			} {
 				_, _ = io.WriteString(w, "data: "+event+"\n\n")
 			}
@@ -77,7 +77,7 @@ func TestPluginRegistersKimiModelsAndHandlesReasoning(t *testing.T) {
 			"id":"chatcmpl-1",
 			"object":"chat.completion",
 			"created":1,
-			"model":"kimi-k2.6",
+			"model":"kimi-k3",
 			"choices":[{
 				"index":0,
 				"message":{
@@ -100,21 +100,30 @@ func TestPluginRegistersKimiModelsAndHandlesReasoning(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/kimi-k2.6"),
+		genkit.WithDefaultModel("kimi/kimi-k3"),
 	)
 
 	if plugin.Name() != "kimi" {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "kimi")
 	}
-	for _, model := range []string{
-		"kimi-k3",
-		"kimi-k2.5",
-		"kimi-k2.6",
-		"kimi-k2.7-code",
-		"kimi-k2.7-code-highspeed",
+	// Tool-choice steering is K3's alone: the K2 generation rejects
+	// tool_choice required as incompatible with thinking, which is on by
+	// default.
+	for model, wantToolChoice := range map[string]bool{
+		"kimi-k3":                  true,
+		"kimi-k2.5":                false,
+		"kimi-k2.6":                false,
+		"kimi-k2.7-code":           false,
+		"kimi-k2.7-code-highspeed": false,
 	} {
-		if genkit.LookupModel(g, "kimi/"+model) == nil {
+		m := genkit.LookupModel(g, "kimi/"+model)
+		if m == nil {
 			t.Errorf("LookupModel(%q) = nil", model)
+			continue
+		}
+		supports := m.(api.Action).Desc().Metadata["model"].(map[string]any)["supports"].(map[string]any)
+		if got := supports["toolChoice"]; got != wantToolChoice {
+			t.Errorf("%s toolChoice support = %v, want %v", model, got, wantToolChoice)
 		}
 	}
 	for _, model := range []string{
@@ -215,8 +224,8 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != "kimi-k2.6" {
-			t.Errorf("model = %q, want %q", body.Model, "kimi-k2.6")
+		if body.Model != "kimi-k3" {
+			t.Errorf("model = %q, want %q", body.Model, "kimi-k3")
 		}
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want %q", got, "enabled")
@@ -234,7 +243,7 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 				"id":"chatcmpl-tool-1",
 				"object":"chat.completion",
 				"created":1,
-				"model":"kimi-k2.6",
+				"model":"kimi-k3",
 				"choices":[{
 					"index":0,
 					"message":{
@@ -275,7 +284,7 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 			"id":"chatcmpl-tool-2",
 			"object":"chat.completion",
 			"created":1,
-			"model":"kimi-k2.6",
+			"model":"kimi-k3",
 			"choices":[{
 				"index":0,
 				"message":{
@@ -294,7 +303,7 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/kimi-k2.6"),
+		genkit.WithDefaultModel("kimi/kimi-k3"),
 	)
 	lookup := genkit.DefineTool(
 		g,
@@ -463,6 +472,13 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 			}
 		}
 	}
+	// The per-entry limit lands on the items schema, where each sequence is
+	// checked against Moonshot's 32 maximum.
+	stop, _ := props["stopSequences"].(map[string]any)
+	stopItems, _ := stop["items"].(map[string]any)
+	if got := stopItems["maxLength"]; got != 32.0 {
+		t.Errorf("stopSequences items maxLength = %v, want 32 to match Moonshot's per-entry limit", got)
+	}
 	thinking, _ := props["thinking"].(map[string]any)
 	thinkingProps, _ := thinking["properties"].(map[string]any)
 	thinkingType, _ := thinkingProps["type"].(map[string]any)
@@ -475,5 +491,63 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	keep, _ := thinkingProps["keep"].(map[string]any)
 	if got, has := keep["enum"]; has {
 		t.Errorf("thinking.keep enum = %v, want none since the set is Moonshot's to grow", got)
+	}
+}
+
+// TestToolChoiceRejectedOnK2Generation pins the capability split: Moonshot
+// rejects tool_choice required on the K2 generation as "incompatible with
+// thinking enabled", and thinking is on by default, so those models advertise
+// no tool-choice steering and Genkit fails the request before the wire.
+func TestToolChoiceRejectedOnK2Generation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request reached the server, want local rejection")
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &kimi.Kimi{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/v1")}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
+		func(_ *ai.ToolContext, input struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			return "result for " + input.Value, nil
+		})
+
+	for _, model := range []string{"kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
+		if _, err := genkit.Generate(ctx, g,
+			ai.WithModelName("kimi/"+model),
+			ai.WithPrompt("Use the lookup tool."),
+			ai.WithTools(lookup),
+			ai.WithToolChoice(ai.ToolChoiceRequired),
+		); err == nil {
+			t.Errorf("%s Generate() error = nil, want the tool choice rejected", model)
+		}
+	}
+}
+
+// TestStopSequenceLengthRejected pins the per-entry limit end to end:
+// Moonshot rejects a stop sequence over 32 ("stop sequence must not be longer
+// than 32"), so the schema catches one before the wire.
+func TestStopSequenceLengthRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request reached the server, want boundary validation to reject the config")
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &kimi.Kimi{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/v1")}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModelName("kimi/kimi-k3"),
+		ai.WithPrompt("Say OK."),
+		ai.WithConfig(map[string]any{"stopSequences": []string{strings.Repeat("x", 33)}}),
+	)
+	if err == nil {
+		t.Fatal("Generate() error = nil, want the 33-character stop sequence rejected")
+	}
+	if !strings.Contains(err.Error(), "stopSequences") {
+		t.Errorf("error = %v, want it to name stopSequences", err)
 	}
 }
