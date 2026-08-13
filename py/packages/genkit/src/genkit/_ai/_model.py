@@ -87,8 +87,8 @@ def normalize_config(*, config: object) -> dict[str, Any]:
                 dumped[name] = getattr(config, name)
         return dumped
     if isinstance(config, Mapping):
-        return dict(config)
-    raise TypeError(f"Unsupported config type: {type(config).__name__}")
+        return dict(cast(Mapping[str, Any], config))
+    raise TypeError(f'Unsupported config type: {type(config).__name__}')
 
 
 def resolve_model_name(
