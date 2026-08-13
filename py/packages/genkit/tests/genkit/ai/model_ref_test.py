@@ -98,7 +98,8 @@ def test_model_ref_is_unhashable() -> None:
 
 def test_model_ref_invalid_config_type_raises() -> None:
     """ModelRef raises GenkitError(INVALID_ARGUMENT) when config is not an instance of config_schema."""
-    with pytest.raises(GenkitError, match='config must be an instance of CustomConfig'):
+    expected = f'm1: config must be an instance of {CustomConfig.__module__}.CustomConfig, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
         model_ref('m1', config_schema=CustomConfig, config={'temperature': 0.7})  # type: ignore[arg-type]
 
 

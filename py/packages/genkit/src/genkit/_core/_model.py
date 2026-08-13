@@ -91,10 +91,11 @@ class ModelRef(Generic[ModelRefConfigT]):
         # Catch dicts / wrong types at construction so plugins don't discover
         # the mismatch later when they touch typed config fields.
         if self.config is not None and not isinstance(self.config, self.config_schema):
-            config_type = type(self.config).__name__
+            expected = f'{self.config_schema.__module__}.{self.config_schema.__name__}'
+            actual = f'{type(self.config).__module__}.{type(self.config).__name__}'
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message=f'config must be an instance of {self.config_schema.__name__}, got {config_type}',
+                message=f'{self.name}: config must be an instance of {expected}, got {actual}',
             )
 
 
