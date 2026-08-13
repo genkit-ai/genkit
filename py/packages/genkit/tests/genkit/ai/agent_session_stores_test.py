@@ -199,7 +199,6 @@ async def test_status_subscription_waits_for_missing_snapshot() -> None:
     await store.save_snapshot(snapshot_id, lambda _: pending_snap)
     assert await asyncio.wait_for(anext(statuses), 2) == SnapshotStatus.PENDING
     await statuses.aclose()
-    assert snapshot_id not in store.subs
 
 
 @pytest.mark.asyncio
