@@ -67,12 +67,16 @@ import "github.com/openai/openai-go"
 
 response, err := genkit.Generate(ctx, g,
     ai.WithModel(oai.ModelRef("gpt-5.4", &openai.ChatCompletionNewParams{
-        Temperature: openai.Float(0.2),
-        MaxTokens:   openai.Int(1024),
+        Temperature:         openai.Float(0.2),
+        MaxCompletionTokens: openai.Int(1024),
     })),
     ai.WithPrompt("Answer concisely."),
 )
 ```
+
+The GPT-5 generation rejects the legacy `max_tokens`, so cap output with
+`MaxCompletionTokens`; the older field remains for the models that still
+read it.
 
 Set the config's `Model` to a dated snapshot to pin the exact version a
 request is served by. The fields Genkit builds from the request (`messages`,

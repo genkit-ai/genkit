@@ -55,8 +55,8 @@ func main() {
 
 		return genkit.GenerateText(ctx, g,
 			ai.WithModel(oai.ModelRef("gpt-5.4", &openai.ChatCompletionNewParams{
-				Temperature: openai.Float(0.2),
-				MaxTokens:   openai.Int(1024),
+				Temperature:         openai.Float(0.2),
+				MaxCompletionTokens: openai.Int(1024),
 			})),
 			ai.WithPrompt("Share a joke about %s.", topic),
 		)
