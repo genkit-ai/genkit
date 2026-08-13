@@ -55,8 +55,8 @@ reference is at https://docs.x.ai.
 ## Config
 
 Models take a typed `xai.ChatConfig`: the generation fields xAI accepts plus
-its own controls (`reasoningEffort`, `searchParameters`). `xai.ModelRef`
-carries the config with the model ID:
+its own controls (`reasoningEffort`, `serviceTier`, `promptCacheKey`).
+`xai.ModelRef` carries the config with the model ID:
 
 ```go
 response, err := genkit.Generate(ctx, g,
