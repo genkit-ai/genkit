@@ -22,16 +22,17 @@ const (
 )
 
 // embedBatchSize returns how many inputs a single EmbedContent call may
-// carry for the given backend and model. Vertex AI serves its Gemini
-// embedding models and the open-source MaaS embedding models through
-// endpoints that take one input per request (the SDK enforces this for most
-// of them, and the gemini-embedding-001 prediction service enforces it
-// server side), so those batch one at a time.
+// carry for the given backend and model. On Vertex AI the SDK routes some
+// models to the embedContent API, which takes one content per request, and
+// the rest to the prediction service, which batches; the condition here
+// mirrors the SDK's routing predicate (tIsVertexEmbedContentModel), under
+// which gemini-embedding-001 is served by the prediction service and so
+// batches like any other predict model.
 func embedBatchSize(backend genai.Backend, model string) int {
 	if backend != genai.BackendVertexAI {
 		return googleAIEmbedBatchSize
 	}
-	if strings.Contains(model, "gemini") || strings.Contains(model, "maas") {
+	if (strings.Contains(model, "gemini") && model != "gemini-embedding-001") || strings.Contains(model, "maas") {
 		return 1
 	}
 	return vertexAIEmbedBatchSize

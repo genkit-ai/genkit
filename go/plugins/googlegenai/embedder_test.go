@@ -27,8 +27,10 @@ func TestEmbedBatchSize(t *testing.T) {
 		{genai.BackendGeminiAPI, "text-embedding-004", googleAIEmbedBatchSize},
 		{genai.BackendVertexAI, "text-embedding-005", vertexAIEmbedBatchSize},
 		{genai.BackendVertexAI, "multimodalembedding", vertexAIEmbedBatchSize},
-		// Vertex serves Gemini and MaaS embedding models one input per request.
-		{genai.BackendVertexAI, "gemini-embedding-001", 1},
+		// Vertex serves most Gemini and all MaaS embedding models through the
+		// one-content embedContent API, but gemini-embedding-001 through the
+		// batching prediction service, mirroring the SDK's routing predicate.
+		{genai.BackendVertexAI, "gemini-embedding-001", vertexAIEmbedBatchSize},
 		{genai.BackendVertexAI, "gemini-embedding-2", 1},
 		{genai.BackendVertexAI, "some-embedding-maas", 1},
 	}

@@ -497,9 +497,10 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 ```
 
 Requests with more inputs than the service accepts per call (100 on the
-Gemini API, 250 on Vertex AI's prediction service, 1 for Vertex AI Gemini
-embedding models) are split into sequential batches automatically; the
-response carries one embedding per input, in input order.
+Gemini API, 250 on Vertex AI's prediction service including
+`gemini-embedding-001`, 1 for the Vertex AI models served by the
+one-content embedContent API) are split into sequential batches
+automatically; the response carries one embedding per input, in input order.
 
 ## Image Models
 
