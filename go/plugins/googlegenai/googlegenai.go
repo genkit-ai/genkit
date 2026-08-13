@@ -76,6 +76,12 @@ type GoogleAI struct {
 	// embedder ID. It works exactly as Models does.
 	Embedders map[string]ai.EmbedderOptions
 
+	// LegacyResponseSchema uses the GenerateContentConfig.ResponseSchema field
+	// instead of the newer ResponseJsonSchema for constrained output. The
+	// default (false) sends the raw JSON schema via ResponseJsonSchema, which
+	// supports recursion via $ref/$defs.
+	LegacyResponseSchema bool
+
 	gclient *genai.Client // Client for the Google AI service.
 	mu      sync.Mutex    // Mutex to control access.
 	initted bool          // Whether the plugin has been initialized.
@@ -97,6 +103,12 @@ type VertexAI struct {
 	// Embedders overrides what the plugin knows about an embedder, keyed by
 	// embedder ID; see [GoogleAI.Embedders].
 	Embedders map[string]ai.EmbedderOptions
+
+	// LegacyResponseSchema uses the GenerateContentConfig.ResponseSchema field
+	// instead of the newer ResponseJsonSchema for constrained output. The
+	// default (false) sends the raw JSON schema via ResponseJsonSchema, which
+	// supports recursion via $ref/$defs.
+	LegacyResponseSchema bool
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -258,7 +270,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 		return nil, err
 	}
 	if opts != nil {
-		return newModel(ga.gclient, id, *opts), nil
+		return newModel(ga.gclient, id, *opts, ga.LegacyResponseSchema), nil
 	}
 
 	c := ga.catalog()
@@ -270,7 +282,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 		return nil, fmt.Errorf("GoogleAI: called with unknown model %q and nil ModelOptions", id)
 	}
 
-	return newModel(ga.gclient, id, c.modelOptions(id)), nil
+	return newModel(ga.gclient, id, c.modelOptions(id), ga.LegacyResponseSchema), nil
 }
 
 // DefineModel defines an unknown model with the given ID.
@@ -295,7 +307,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 		return nil, err
 	}
 	if opts != nil {
-		return newModel(v.gclient, id, *opts), nil
+		return newModel(v.gclient, id, *opts, v.LegacyResponseSchema), nil
 	}
 
 	c := v.catalog()
@@ -309,7 +321,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 		}
 	}
 
-	return newModel(v.gclient, id, c.modelOptions(id)), nil
+	return newModel(v.gclient, id, c.modelOptions(id), v.LegacyResponseSchema), nil
 }
 
 // DefineEmbedder defines an embedder with a given ID.

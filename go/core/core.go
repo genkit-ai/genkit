@@ -65,7 +65,8 @@ func ResolveSchema(r api.Registry, schema map[string]any) (map[string]any, error
 }
 
 // InferSchemaMap infers a JSON schema from a Go value and converts it to a map.
+// Non-recursive definitions are inlined; only recursive types retain
+// `$ref`/`$defs`.
 func InferSchemaMap(value any) map[string]any {
-	schema := base.InferJSONSchema(value)
-	return base.SchemaAsMap(schema)
+	return base.InferJSONSchemaMap(value)
 }

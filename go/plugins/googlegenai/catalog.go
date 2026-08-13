@@ -8,9 +8,11 @@ import (
 	"github.com/firebase/genkit/go/plugins/internal"
 )
 
-// catalog is what one plugin instance knows about the models and embedders it
-// serves: the capabilities the plugin ships, with the caller's overrides laid
-// over them.
+// catalog is the per-instance context for describing and building one plugin's
+// actions: the capabilities the plugin ships with the caller's overrides laid
+// over them, alongside the instance-level settings an action is built from.
+// The provider is here for the same reason, since resolving capabilities and
+// naming an action both depend on which backend this instance speaks to.
 //
 // Both paths that describe an action consult it, [listActions] and
 // [resolveAction], which is what makes an override authoritative regardless of
@@ -19,14 +21,32 @@ type catalog struct {
 	provider  string
 	models    map[string]ai.ModelOptions
 	embedders map[string]ai.EmbedderOptions
+
+	// legacyResponseSchema is [GoogleAI.LegacyResponseSchema] /
+	// [VertexAI.LegacyResponseSchema]. It is settled per plugin instance rather
+	// than per model, so it travels with the rest of the instance's settings
+	// instead of as an argument through call paths (Veo, embedders) that have
+	// no use for it. The zero value is the current default, so a catalog
+	// literal that omits it gets ResponseJsonSchema.
+	legacyResponseSchema bool
 }
 
 func (ga *GoogleAI) catalog() catalog {
-	return catalog{provider: googleAIProvider, models: ga.Models, embedders: ga.Embedders}
+	return catalog{
+		provider:             googleAIProvider,
+		models:               ga.Models,
+		embedders:            ga.Embedders,
+		legacyResponseSchema: ga.LegacyResponseSchema,
+	}
 }
 
 func (v *VertexAI) catalog() catalog {
-	return catalog{provider: vertexAIProvider, models: v.Models, embedders: v.Embedders}
+	return catalog{
+		provider:             vertexAIProvider,
+		models:               v.Models,
+		embedders:            v.Embedders,
+		legacyResponseSchema: v.LegacyResponseSchema,
+	}
 }
 
 // modelOptions returns the capabilities to describe a model ID with: what

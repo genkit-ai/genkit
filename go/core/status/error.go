@@ -441,6 +441,10 @@ func (e *Error) UnmarshalJSON(data []byte) error {
 // it, inference would reflect over the struct fields, requiring in-process
 // fields that MarshalJSON never emits, so values embedding an Error would fail
 // validation against their own inferred schema.
+//
+// The inlined form is required: this schema is spliced into whatever document
+// embeds an Error, where a reference into this package's own definitions
+// would not resolve.
 func (Error) JSONSchema() *jsonschema.Schema {
-	return base.InferJSONSchema(errorWire{})
+	return base.InferJSONSchemaInlined(errorWire{})
 }

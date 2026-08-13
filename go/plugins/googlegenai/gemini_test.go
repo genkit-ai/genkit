@@ -30,12 +30,12 @@ import (
 // then the plugin folds the request into it. The tests below set
 // [ai.ModelRequest.Config] the way callers do, so going through both keeps
 // them honest about what the model function actually receives.
-func toGeminiRequestFromRaw(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
+func toGeminiRequestFromRaw(input *ai.ModelRequest, cache *genai.CachedContent, legacyResponseSchema bool, modelName ...string) (*genai.GenerateContentConfig, error) {
 	config, err := base.ConvertToExact[genai.GenerateContentConfig](input.Config)
 	if err != nil {
 		return nil, err
 	}
-	return toGeminiRequest(input, &config, cache, modelName...)
+	return toGeminiRequest(input, &config, cache, legacyResponseSchema, modelName...)
 }
 
 func TestConvertRequest(t *testing.T) {
@@ -136,7 +136,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -174,12 +174,15 @@ func TestConvertRequest(t *testing.T) {
 		}
 		// Constrained JSON output is now compatible with tools: the request sets
 		// Output.Format "json" and Constrained, so we expect both the JSON MIME
-		// type and the response schema to be populated even though tools are present.
+		// type and the response schema to be populated even though tools are
+		// present. The schema rides ResponseJsonSchema here because this is the
+		// default (non-legacy) path; which field carries it is asserted by
+		// TestConstrainedResponseSchemaField.
 		if gcc.ResponseMIMEType != "application/json" {
 			t.Errorf("ResponseMIMEType: got %q, want %q", gcc.ResponseMIMEType, "application/json")
 		}
-		if gcc.ResponseSchema == nil {
-			t.Error("ResponseSchema should be set for constrained JSON output, even when tools are present")
+		if gcc.ResponseJsonSchema == nil {
+			t.Error("ResponseJsonSchema should be set for constrained JSON output, even when tools are present")
 		}
 		if gcc.ThinkingConfig == nil {
 			t.Errorf("ThinkingConfig should not be empty")
@@ -221,7 +224,7 @@ func TestConvertRequest(t *testing.T) {
 		req := ai.ModelRequest{
 			Config: badCfg,
 		}
-		_, err := toGeminiRequestFromRaw(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil, false)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -284,7 +287,7 @@ func TestConvertRequest(t *testing.T) {
 				req := ai.ModelRequest{
 					Config: tc.cfg,
 				}
-				_, err := toGeminiRequestFromRaw(&req, nil)
+				_, err := toGeminiRequestFromRaw(&req, nil, false)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
@@ -297,7 +300,7 @@ func TestConvertRequest(t *testing.T) {
 				"temperature": "not a number", // This should fail map->struct conversion
 			},
 		}
-		_, err := toGeminiRequestFromRaw(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil, false)
 		if err == nil {
 			t.Fatal("expected error for invalid config map")
 		}
@@ -318,7 +321,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -345,7 +348,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -370,7 +373,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -397,7 +400,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +440,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +459,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-2.5-flash")
+		gcc, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-2.5-flash")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -538,7 +541,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -582,7 +585,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -614,7 +617,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -654,7 +657,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -704,7 +707,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -751,7 +754,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -799,7 +802,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		if _, err := toGeminiRequestFromRaw(req, nil); err == nil {
+		if _, err := toGeminiRequestFromRaw(req, nil, false); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -825,7 +828,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequestFromRaw(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -1467,7 +1470,7 @@ func TestCallerConfigNotMutated(t *testing.T) {
 			Config:   caller,
 			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
 		}
-		if _, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview"); err != nil {
+		if _, err := toGeminiRequestFromRaw(req, nil, false, "googleai/gemini-3.1-flash-tts-preview"); err != nil {
 			t.Fatal(err)
 		}
 		if caller.SpeechConfig.VoiceConfig != nil {
@@ -1489,7 +1492,7 @@ func TestCallerConfigNotMutated(t *testing.T) {
 				InputSchema: map[string]any{"type": "object"},
 			}},
 		}
-		if _, err := toGeminiRequestFromRaw(req, nil); err != nil {
+		if _, err := toGeminiRequestFromRaw(req, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		if len(caller.Tools) != 1 {
@@ -1520,7 +1523,7 @@ func TestCallerConfigNotMutated(t *testing.T) {
 				InputSchema: map[string]any{"type": "object"},
 			}},
 		}
-		got, err := toGeminiRequestFromRaw(req, nil)
+		got, err := toGeminiRequestFromRaw(req, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1534,6 +1537,59 @@ func TestCallerConfigNotMutated(t *testing.T) {
 		}
 		if got.ToolConfig.RetrievalConfig != caller.ToolConfig.RetrievalConfig {
 			t.Error("cloning the ToolConfig dropped the caller's RetrievalConfig")
+		}
+	})
+}
+
+// TestConstrainedResponseSchemaField verifies which GenerateContentConfig field
+// carries the output schema: ResponseJsonSchema by default (raw JSON schema with
+// recursion support) and ResponseSchema in legacy mode.
+func TestConstrainedResponseSchemaField(t *testing.T) {
+	outputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+	}
+	newReq := func() *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Config: genai.GenerateContentConfig{},
+			Output: &ai.ModelOutputConfig{
+				Constrained: true,
+				ContentType: "application/json",
+				Format:      "json",
+				Schema:      outputSchema,
+			},
+		}
+	}
+
+	t.Run("default uses ResponseJsonSchema", func(t *testing.T) {
+		gcc, err := toGeminiRequestFromRaw(newReq(), nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.ResponseSchema != nil {
+			t.Errorf("ResponseSchema should be nil in default mode, got %#v", gcc.ResponseSchema)
+		}
+		got, ok := gcc.ResponseJsonSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("ResponseJsonSchema should be the raw schema map, got %T", gcc.ResponseJsonSchema)
+		}
+		if got["type"] != "object" {
+			t.Errorf("ResponseJsonSchema should carry the raw schema, got %#v", got)
+		}
+	})
+
+	t.Run("legacy uses ResponseSchema", func(t *testing.T) {
+		gcc, err := toGeminiRequestFromRaw(newReq(), nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.ResponseJsonSchema != nil {
+			t.Errorf("ResponseJsonSchema should be nil in legacy mode, got %#v", gcc.ResponseJsonSchema)
+		}
+		if gcc.ResponseSchema == nil || gcc.ResponseSchema.Type != genai.TypeObject {
+			t.Errorf("ResponseSchema should be the converted object schema, got %#v", gcc.ResponseSchema)
 		}
 	})
 }

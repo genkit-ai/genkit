@@ -70,7 +70,11 @@ func configToMap(config any) map[string]any {
 // request's config into that type before the model function runs, which
 // yields the request's own copy; the plugin passes that copy by pointer from
 // here down rather than copying the struct again at every hop.
-func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAction {
+//
+// legacyResponseSchema is the plugin-level opt-out that sends constrained
+// output through GenerateContentConfig.ResponseSchema instead of
+// ResponseJsonSchema; see [GoogleAI.LegacyResponseSchema].
+func newModel(client *genai.Client, id string, opts ai.ModelOptions, legacyResponseSchema bool) *ai.ModelAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
@@ -118,10 +122,10 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 			// request while generate needs the per-request typed config.
 			if download != nil {
 				return download(func(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-					return generate(ctx, client, id, input, &config, cb)
+					return generate(ctx, client, id, input, &config, cb, legacyResponseSchema)
 				})(ctx, input, cb)
 			}
-			return generate(ctx, client, id, input, &config, cb)
+			return generate(ctx, client, id, input, &config, cb, legacyResponseSchema)
 		})
 }
 
@@ -154,6 +158,7 @@ func generate(
 	input *ai.ModelRequest,
 	config *genai.GenerateContentConfig,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
+	legacyResponseSchema bool,
 ) (*ai.ModelResponse, error) {
 	if model == "" {
 		return nil, errors.New("model not provided")
@@ -165,7 +170,7 @@ func generate(
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, config, cache, model)
+	gcc, err := toGeminiRequest(input, config, cache, legacyResponseSchema, model)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +312,12 @@ func toGeminiRole(role ai.Role) string {
 // the request's own copy and is amended in place; that copy is shallow, so
 // nested pointers and slices are still shared with the caller and must be
 // cloned before being amended.
-func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
+//
+// legacyResponseSchema selects which config field carries a constrained
+// output schema: ResponseSchema (the OpenAPI 3.0 subset) when set, otherwise
+// ResponseJsonSchema, which takes the raw JSON Schema and so can express
+// recursion.
+func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig, cache *genai.CachedContent, legacyResponseSchema bool, modelName ...string) (*genai.GenerateContentConfig, error) {
 	gcc := config
 
 	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
@@ -385,11 +395,17 @@ func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig
 	}
 
 	if input.Output != nil && input.Output.Constrained && gcc.ResponseMIMEType != "" {
-		schema, err := toGeminiSchema(input.Output.Schema, input.Output.Schema)
-		if err != nil {
-			return nil, err
+		if legacyResponseSchema {
+			schema, err := toGeminiSchema(input.Output.Schema, input.Output.Schema)
+			if err != nil {
+				return nil, err
+			}
+			gcc.ResponseSchema = schema
+		} else {
+			// ResponseJsonSchema accepts the raw JSON schema, including
+			// $ref/$defs for recursive types, which the API unrolls server-side.
+			gcc.ResponseJsonSchema = input.Output.Schema
 		}
-		gcc.ResponseSchema = schema
 	}
 
 	// Add tool configuration from input.Tools and input.ToolChoice directly

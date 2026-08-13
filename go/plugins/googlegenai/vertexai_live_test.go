@@ -327,6 +327,33 @@ func TestVertexAILive(t *testing.T) {
 			t.Errorf("Empty usage stats %#v", *resp.Usage)
 		}
 	})
+	t.Run("constrained recursive output", func(t *testing.T) {
+		// Recursive output type exercises the ResponseJsonSchema path on Vertex
+		// AI, which historically lagged GoogleAI on schema fields. If Vertex
+		// rejects responseJsonSchema this surfaces it here, rather than the
+		// default flip failing silently in production.
+		//
+		// The schema is unbounded recursion with open string fields, so the
+		// generation is deliberately pinned down: temperature 0, thinking off,
+		// a small output cap, and a prompt that bounds both the tree size and
+		// the field lengths. Without this, the model can wander into a
+		// repetition loop on a string field and truncate at MAX_TOKENS.
+		ceo, _, err := genkit.GenerateData[orgChartEmployee](ctx, g,
+			ai.WithConfig(&genai.GenerateContentConfig{
+				Temperature:     genai.Ptr[float32](0),
+				MaxOutputTokens: 2048,
+				ThinkingConfig:  &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+			}),
+			ai.WithSystem("You design small company org charts. Keep every name and title short — at most three words each."),
+			ai.WithPrompt("Build a small org chart two levels deep: a CEO with exactly two direct "+
+				"reports, and give exactly one of those reports two direct reports of their own. "+
+				"Go no deeper than that."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOrgChart(t, ceo)
+	})
 	t.Run("thinking enabled", func(t *testing.T) {
 		if location != "global" && location != "us-central1" {
 			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)

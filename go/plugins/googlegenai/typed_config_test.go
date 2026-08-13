@@ -92,8 +92,8 @@ func TestModelConfigSchema(t *testing.T) {
 	t.Parallel()
 	client := testClient(t)
 
-	gemini := newModel(client, gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider)).Desc()
-	imagen := newModel(client, imagen40Generate001, GetModelOptions(imagen40Generate001, googleAIProvider)).Desc()
+	gemini := newModel(client, gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider), false).Desc()
+	imagen := newModel(client, imagen40Generate001, GetModelOptions(imagen40Generate001, googleAIProvider), false).Desc()
 
 	assertAdvertises(t, "gemini", gemini.Metadata["model"].(map[string]any)["customOptions"], geminiConfigSchema)
 	assertAdvertises(t, "imagen", imagen.Metadata["model"].(map[string]any)["customOptions"], imagenConfigSchema)
@@ -159,7 +159,7 @@ func TestModelConfigSchema(t *testing.T) {
 // schema violation cannot.
 func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 	t.Parallel()
-	inputSchema := newModel(testClient(t), gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider)).Desc().InputSchema
+	inputSchema := newModel(testClient(t), gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider), false).Desc().InputSchema
 
 	tests := []struct {
 		name    string
@@ -181,7 +181,7 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 				t.Fatalf("rejected at the action boundary, so the plugin's error is unreachable: %v", err)
 			}
 			req := &ai.ModelRequest{Config: tt.config}
-			_, err := toGeminiRequestFromRaw(req, nil)
+			_, err := toGeminiRequestFromRaw(req, nil, false)
 			if err == nil {
 				t.Fatalf("toGeminiRequest accepted %v, want an error naming the primitive to use", tt.config)
 			}
@@ -204,7 +204,7 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 	if err := validateConfig(t, inputSchema, map[string]any{"candidateCount": 1}); err != nil {
 		t.Fatalf("candidateCount 1 rejected at the action boundary: %v", err)
 	}
-	if _, err := toGeminiRequestFromRaw(&ai.ModelRequest{Config: map[string]any{"candidateCount": 1}}, nil); err != nil {
+	if _, err := toGeminiRequestFromRaw(&ai.ModelRequest{Config: map[string]any{"candidateCount": 1}}, nil, false); err != nil {
 		t.Errorf("candidateCount 1 should be accepted, got %v", err)
 	}
 }

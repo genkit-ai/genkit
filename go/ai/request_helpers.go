@@ -30,10 +30,69 @@ func requestInputSchema(req any, key string, configSchema map[string]any) map[st
 	inputSchema := core.InferSchemaMap(req)
 	if inputSchema != nil && configSchema != nil {
 		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props[key] = configSchema
+			props[key] = hoistDefs(inputSchema, configSchema)
 		}
 	}
 	return inputSchema
+}
+
+// hoistDefs moves sub's definitions into root's, returning sub without them.
+//
+// A "$ref" resolves against the document root, so a schema carrying its own
+// "$defs" stops resolving the moment it is nested inside another schema. Config
+// schemas are nested under the request's config slot, and a recursive config
+// type keeps its definitions, so without this every request to the action fails
+// validation with "Object has no key". Existing definitions are left alone:
+// names are Go type names, so a collision is the same type either way.
+//
+// Definitions are collected at any depth, since the config schema reaches here
+// already wrapped for null tolerance and its "$defs" sits inside that wrapper.
+func hoistDefs(root, sub map[string]any) map[string]any {
+	var rootDefs map[string]any
+	collect := func(defs map[string]any) {
+		if rootDefs == nil {
+			var ok bool
+			if rootDefs, ok = root["$defs"].(map[string]any); !ok {
+				rootDefs = map[string]any{}
+				root["$defs"] = rootDefs
+			}
+		}
+		for name, def := range defs {
+			if _, exists := rootDefs[name]; !exists {
+				rootDefs[name] = def
+			}
+		}
+	}
+	var strip func(node any) any
+	strip = func(node any) any {
+		switch n := node.(type) {
+		case map[string]any:
+			out := make(map[string]any, len(n))
+			for k, v := range n {
+				if k == "$defs" {
+					if defs, ok := v.(map[string]any); ok {
+						collect(defs)
+						continue
+					}
+				}
+				out[k] = strip(v)
+			}
+			return out
+		case []any:
+			out := make([]any, len(n))
+			for i, v := range n {
+				out[i] = strip(v)
+			}
+			return out
+		default:
+			return node
+		}
+	}
+	stripped, _ := strip(sub).(map[string]any)
+	if stripped == nil {
+		return sub
+	}
+	return stripped
 }
 
 // NewModelRequest create a new ModelRequest with provided config and

@@ -156,7 +156,7 @@ func TestSchemaAsMap(t *testing.T) {
 		"type":     string("object"),
 	}
 
-	got := SchemaAsMap(InferJSONSchema(Foo{}))
+	got := InferJSONSchemaMap(Foo{})
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Errorf("SchemaAsMap diff (+got -want):\n%s", diff)
 	}
@@ -168,29 +168,30 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 		Children []*Node `json:"children,omitempty"`
 	}
 
-	schema := SchemaAsMap(InferJSONSchema(Node{}))
+	schema := InferJSONSchemaMap(Node{})
 
-	// With DoNotReference and recursion limiting, the schema should be flat
-	// and recursive references should become "any" schema.
-	if _, ok := schema["$defs"]; ok {
-		t.Error("expected no $defs with DoNotReference: true")
-	}
-
-	if _, ok := schema["$ref"]; ok {
-		t.Error("expected no $ref with DoNotReference: true")
-	}
-
-	// Check top-level structure
-	if schema["type"] != "object" {
-		t.Errorf("expected type to be object, got %v", schema["type"])
-	}
-
-	props, ok := schema["properties"].(map[string]any)
+	// A recursive type must express recursion via $ref/$defs rather than
+	// collapsing the self-reference to an "any" schema.
+	defs, ok := schema["$defs"].(map[string]any)
 	if !ok {
-		t.Fatal("expected properties in schema")
+		t.Fatalf("expected $defs for recursive type, got %v", schema)
+	}
+	node, ok := defs["Node"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected $defs.Node, got %v", defs)
 	}
 
-	// Check value field
+	// The root references the recursive definition.
+	if ref, _ := schema["$ref"].(string); ref != "#/$defs/Node" {
+		t.Errorf("expected root $ref '#/$defs/Node', got %v", schema["$ref"])
+	}
+
+	props, ok := node["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties in Node definition")
+	}
+
+	// Check value field is inlined.
 	valueField, ok := props["value"].(map[string]any)
 	if !ok {
 		t.Fatal("expected value field in properties")
@@ -199,7 +200,7 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 		t.Errorf("expected value.type to be string, got %v", valueField["type"])
 	}
 
-	// Check children field - recursive reference should be "any" schema
+	// The recursive children field references Node via $ref, not an "any" schema.
 	childrenField, ok := props["children"].(map[string]any)
 	if !ok {
 		t.Fatal("expected children field in properties")
@@ -207,18 +208,12 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 	if childrenField["type"] != "array" {
 		t.Errorf("expected children.type to be array, got %v", childrenField["type"])
 	}
-
 	items, ok := childrenField["items"].(map[string]any)
 	if !ok {
 		t.Fatal("expected children to have items")
 	}
-	// The recursive Node reference should have become an "any" schema
-	// including "type" property to prevent recursion errors for schemas for the same type
-	if items["type"] != "object" {
-		t.Errorf("expected children.items.type to be 'object', got %v", items["type"])
-	}
-	if items["additionalProperties"] != true {
-		t.Errorf("expected children.items to be 'any' schema (additionalProperties: true), got %v", items)
+	if ref, _ := items["$ref"].(string); ref != "#/$defs/Node" {
+		t.Errorf("expected children.items.$ref '#/$defs/Node', got %v", items)
 	}
 }
 
@@ -231,7 +226,7 @@ func TestInferJSONSchema_SharedType(t *testing.T) {
 		Second Shared `json:"second"`
 	}
 
-	schema := SchemaAsMap(InferJSONSchema(Prizes{}))
+	schema := InferJSONSchemaMap(Prizes{})
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in schema")
@@ -271,7 +266,7 @@ func TestInferJSONSchema_SharedTypeWithMarshaler(t *testing.T) {
 		A testStringer
 		B testStringer
 	}
-	schema := SchemaAsMap(InferJSONSchema(Container{}))
+	schema := InferJSONSchemaMap(Container{})
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in schema")
@@ -299,7 +294,7 @@ func TestInferJSONSchema_SharedTimeFields(t *testing.T) {
 		StartsBefore *time.Time `json:"starts_before,omitempty"`
 	}
 
-	schema := SchemaAsMap(InferJSONSchema(Input{}))
+	schema := InferJSONSchemaMap(Input{})
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in schema")
@@ -320,10 +315,10 @@ func TestInferJSONSchema_SharedTimeFields(t *testing.T) {
 	}
 }
 
-// TestInferJSONSchema_RecursiveSharedType verifies that a recursive type
-// used in multiple fields of the same struct still produces a usable schema
-// for every occurrence. Both fields should expand the same way; recursion is
-// only broken at the self-reference inside the type, not across siblings.
+// TestInferJSONSchema_RecursiveSharedType verifies that a recursive type used
+// in multiple fields of the same struct references the same recursive
+// definition. Both fields reference Node via $ref, and the recursive Node
+// definition is retained in $defs.
 func TestInferJSONSchema_RecursiveSharedType(t *testing.T) {
 	type Node struct {
 		Value    string  `json:"value,omitempty"`
@@ -334,7 +329,7 @@ func TestInferJSONSchema_RecursiveSharedType(t *testing.T) {
 		Right Node `json:"right"`
 	}
 
-	schema := SchemaAsMap(InferJSONSchema(Pair{}))
+	schema := InferJSONSchemaMap(Pair{})
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in schema")
@@ -351,14 +346,75 @@ func TestInferJSONSchema_RecursiveSharedType(t *testing.T) {
 	if diff := cmp.Diff(left, right); diff != "" {
 		t.Errorf("expected 'left' and 'right' schemas to match, diff:\n%s", diff)
 	}
-	if left["type"] != "object" {
-		t.Errorf("expected left.type=object, got %v", left["type"])
+	if ref, _ := left["$ref"].(string); ref != "#/$defs/Node" {
+		t.Errorf("expected left.$ref '#/$defs/Node', got %v", left)
 	}
-	leftProps, ok := left["properties"].(map[string]any)
+
+	// The recursive Node definition is retained and exposes its fields.
+	defs, ok := schema["$defs"].(map[string]any)
 	if !ok {
-		t.Fatal("expected 'left' to have properties")
+		t.Fatal("expected $defs for recursive Node type")
 	}
-	if _, ok := leftProps["value"]; !ok {
-		t.Errorf("expected 'left' schema to expose 'value' field, got %v", leftProps)
+	node, ok := defs["Node"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected $defs.Node, got %v", defs)
+	}
+	nodeProps, ok := node["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected Node definition to have properties")
+	}
+	if _, ok := nodeProps["value"]; !ok {
+		t.Errorf("expected Node definition to expose 'value' field, got %v", nodeProps)
+	}
+}
+
+// genericBox is instantiated below with a type argument from another package,
+// which the reflector names after that argument's full import path. The
+// definition name therefore contains "/" characters.
+type genericBox[T any] struct {
+	Item T `json:"item"`
+}
+
+// TestInferJSONSchemaMap_GenericTypeName covers a definition name that
+// contains "/", as an instantiated generic's does: it is named after its type
+// argument, import path and all. Reading the name off the last "/" segment of
+// a "#/$defs/..." reference misidentifies it, leaving the reference behind
+// while its definition is dropped as acyclic — a dangling $ref that no
+// validator can resolve.
+func TestInferJSONSchemaMap_GenericTypeName(t *testing.T) {
+	schema := InferJSONSchemaMap(genericBox[json.RawMessage]{})
+
+	if _, ok := schema["$defs"]; ok {
+		t.Errorf("acyclic generic type should inline fully, got $defs: %v", schema["$defs"])
+	}
+	assertNoRefs(t, schema)
+
+	if schema["type"] != "object" {
+		t.Errorf("expected the definition to be inlined at the root, got %v", schema)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties, got %v", schema)
+	}
+	if _, ok := props["item"]; !ok {
+		t.Errorf("expected inlined 'item' property, got %v", props)
+	}
+}
+
+// assertNoRefs fails if any $ref survives anywhere in node.
+func assertNoRefs(t *testing.T, node any) {
+	t.Helper()
+	switch n := node.(type) {
+	case map[string]any:
+		if ref, ok := n["$ref"]; ok {
+			t.Errorf("unresolved $ref left in schema: %v", ref)
+		}
+		for _, v := range n {
+			assertNoRefs(t, v)
+		}
+	case []any:
+		for _, v := range n {
+			assertNoRefs(t, v)
+		}
 	}
 }
