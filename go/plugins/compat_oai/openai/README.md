@@ -22,8 +22,7 @@ import (
 
 ctx := context.Background()
 plugin := &oai.OpenAI{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("openai/gpt-5.4"),
 )
