@@ -470,8 +470,7 @@ async def test_nova_image_input() -> None:
     request = media_request(STRIPES_PNG_DATA_URL, 'What colours are the bands in this image?')
     response = await make_model(NOVA).generate(request)
     assert response.finish_reason == FinishReason.STOP
-    assert response.message is not None
-    assert mentions_any(response.message.content[0].root.text, 'red', 'white', 'blue')
+    assert mentions_any(response.text, 'red', 'white', 'blue'), response.text
 
 
 async def test_claude_document_input() -> None:
@@ -479,13 +478,10 @@ async def test_claude_document_input() -> None:
     # double-encoded payload fails the call rather than degrading quietly.
     # Claude, not Nova: document support is per model, and this mirrors the
     # model the Go plugin's document example runs on.
-    request = media_request(
-        MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_output_tokens=512)
-    )
+    request = media_request(MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_tokens=512))
     response = await make_model(CLAUDE).generate(request)
     assert response.finish_reason == FinishReason.STOP
-    assert response.message is not None
-    assert mentions_any(response.message.content[0].root.text, 'kettle', 'tea', 'friday')
+    assert mentions_any(response.text, 'kettle', 'tea', 'friday'), response.text
 
 
 async def test_claude_prompt_cache_read() -> None:

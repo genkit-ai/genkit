@@ -700,7 +700,7 @@ async def rerank(data: RerankInput) -> dict[str, object]:
 
 def _document_text(content: list[DocumentPart]) -> str:
     """Concatenate the text parts of a ranked document."""
-    return ''.join(part.root.text for part in content if isinstance(part.root, TextPart))
+    return ''.join(part.root.text or '' for part in content if isinstance(part.root, TextPart))
 
 
 def _token_count(response: ModelResponse, field: str) -> int | None:

@@ -6,16 +6,16 @@ reranking through Genkit with Amazon Bedrock's Converse, ConverseStream, and
 InvokeModel APIs.
 
 You need an AWS account with Amazon Bedrock model access granted for the models
-the sample runs on startup:
+the CLI smoke run below uses:
 
 - `us.amazon.nova-lite-v1:0`
-- `us.meta.llama3-3-70b-instruct-v1:0`
-- `us.deepseek.r1-v1:0`
 - `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
 - `amazon.titan-embed-text-v2:0`
 
 The remaining models need one grant each, and only fail when you run their flow:
 
+- `us.meta.llama3-3-70b-instruct-v1:0` for `cat_profile`
+- `us.deepseek.r1-v1:0` for `reasoning`
 - `amazon.titan-embed-image-v1` for `embed_image`
 - `cohere.embed-english-v3` for `embed_batch` with `embedder` set to Cohere
 - `amazon.nova-2-multimodal-embeddings-v1:0` is offered in `us-east-1` only, and
@@ -25,7 +25,7 @@ The remaining models need one grant each, and only fail when you run their flow:
   not offered in `us-east-1`
 
 `describe_image`, `summarize_pdf` and `prompt_caching` need no grant beyond the
-startup list, since they run on models already on it: Nova Lite for
+smoke-run list, since they run on models already on it: Nova Lite for
 `describe_image`, and Claude for the other two.
 
 The Anthropic model additionally needs the account's one-time use-case
@@ -50,7 +50,7 @@ is offered in `us-east-1` only. In `us-east-1` the trade goes the other way:
 `generate_image` fails with `ValidationException: The provided model identifier
 is invalid`, which is Bedrock's way of saying the model is not offered in the
 calling region, and `amazon.rerank-v1:0` is unavailable, though
-`cohere.rerank-v3-5:0` works. A region set in `~/.aws/config` counts, so an
+`cohere.rerank-v3-5:0` works. A region set in `~/.aws/config` counts, so a
 `us-east-1` profile default quietly wins when no `AWS_REGION` is exported.
 
 Run the quick smoke test:
@@ -173,10 +173,10 @@ Only cache reads surface, because the plugin deliberately drops the write
 counter, so the evidence is the second call reporting `cached_content_tokens`
 that the first did not. Bedrock counts cached tokens separately from
 `inputTokens` rather than inside it, so the flow reports the uncached remainder
-under its own name and the manual only shows up in the total. A prefix below the
-model's minimum, roughly 1,000 tokens
-for Claude Sonnet, is silently not cached rather than rejected, which is why the
-sample's manual is padded out to about 2,000 tokens. Re-running inside the
+under its own name and the manual only shows up in the total. A prefix below
+the model's minimum, roughly 1,000 tokens for Claude Sonnet, is silently not
+cached rather than rejected, which is why the sample's manual is padded out to
+about 2,000 tokens. Re-running inside the
 cache's few-minute lifetime can show a read on the first call too, so the flow
 reports what the second call did and claims nothing about the first.
 

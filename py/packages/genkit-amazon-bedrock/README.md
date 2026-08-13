@@ -19,10 +19,10 @@ pip install genkit-amazon-bedrock
 
 ### Model access
 
-Nothing on Bedrock is callable by default. Access is granted per AWS account and
-per region, in the Bedrock console under Model access, and it has to be
-requested before any call: a grant in `us-east-1` says nothing about
-`us-west-2`, so a working setup can break purely by changing region.
+Model access is granted per AWS account and per region, in the Bedrock console
+under Model access, and most models cannot be called until it is: a grant in
+`us-east-1` says nothing about `us-west-2`, so a working setup can break purely
+by changing region.
 
 The Anthropic models additionally need the account's one-time use-case
 agreement (Bedrock console, Model access, Anthropic use case details). Until it
@@ -68,7 +68,7 @@ Credentials resolve through the standard AWS SDK chain, so any of these work:
   `AWS_SESSION_TOKEN` for temporary credentials)
 - the shared config and credentials files under `~/.aws`, selected with
   `AWS_PROFILE`
-- IAM roles attached to EC2, ECS, or Lambda, read from instance metadata
+- IAM roles attached to EC2, ECS, or Lambda, supplied by the platform at runtime
 - SSO profiles, after `aws sso login`
 
 Anything the chain does not cover goes through `session=`, which takes a
@@ -220,9 +220,9 @@ Notes:
   not treat a small `input_tokens` as a cache failure, and do not assert on it
   to prove a cache hit.
 - Passing a plain string as `system` sends it through Genkit's dotprompt
-  templating, which rewrites the text and can only produce text parts anyway. A
-  list of parts is what you want here, both to hold the cache point and to keep
-  the cached prefix byte-identical.
+  templating, which rewrites the text and cannot express a cache point. A list
+  of parts is what you want here, both to hold the cache point and to keep the
+  cached prefix byte-identical.
 
 ## Embedders
 
