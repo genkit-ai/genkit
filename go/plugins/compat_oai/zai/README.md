@@ -26,8 +26,7 @@ import (
 
 ctx := context.Background()
 plugin := &zai.ZAI{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("zai/glm-5.1"),
 )
@@ -64,7 +63,7 @@ with the model ID:
 ```go
 response, err := genkit.Generate(ctx, g,
     ai.WithModel(zai.ModelRef("glm-5.1", &zai.ChatConfig{
-        Thinking: &zai.ThinkingConfig{Type: "disabled"},
+        Thinking: &zai.ThinkingConfig{Type: zai.ThinkingTypeDisabled},
     })),
     ai.WithPrompt("Answer concisely."),
 )
