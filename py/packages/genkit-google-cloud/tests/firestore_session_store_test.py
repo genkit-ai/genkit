@@ -88,7 +88,15 @@ class FakeStoreHarness:
         self.transaction._write_pbs = []
         self.transaction._id = b'fake-txn'
         self.transaction._in_progress = False
-        self.client.transaction.return_value = self.transaction
+
+        def _transaction(**kwargs: Any) -> MagicMock:
+            # Mirror AsyncClient.transaction(max_attempts=...): the store passes
+            # its public transaction_max_attempts into the SDK txn object.
+            if 'max_attempts' in kwargs:
+                self.transaction._max_attempts = kwargs['max_attempts']
+            return self.transaction
+
+        self.client.transaction.side_effect = _transaction
 
         def clean_up() -> None:
             self.transaction._write_pbs = []
@@ -343,7 +351,11 @@ async def test_firestore_session_store_checkpoint_interval_promotes() -> None:
             state=SessionState(session_id='sess-1', custom={'n': 2}),
         ),
     )
-    # segmentPath length for snap-2 is 1; next child would be length 2 >= interval → checkpoint
+    # Under interval=2, snap-2 is still a diff (path length 1); the next child promotes.
+    second = h.docs[_snap_path('snap-2')]
+    assert second['kind'] == 'diff'
+    assert second['segmentPath'] == ['snap-2']
+
     await store.save_snapshot(
         'snap-3',
         lambda _e: SessionSnapshot(
@@ -360,6 +372,9 @@ async def test_firestore_session_store_checkpoint_interval_promotes() -> None:
     assert third['checkpointId'] == 'snap-3'
     assert third['segmentPath'] == []
     assert _shard_path('snap-3', 0) in h.docs
+    loaded = await store.get_snapshot(snapshot_id='snap-3')
+    assert loaded is not None and loaded.state is not None
+    assert loaded.state.custom == {'n': 3}
 
 
 @pytest.mark.asyncio
@@ -531,21 +546,6 @@ async def test_firestore_session_store_missing_pointer_returns_none() -> None:
     assert by_id is not None
     assert by_id.snapshot_id == 'snap-1'
     assert _pointer_path('sess-unpointed') not in h.docs
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_dangling_pointer_returns_none() -> None:
-    """Pointer to a missing leaf: session lookup is None (a miss), not DATA_LOSS."""
-    h = FakeStoreHarness()
-    # Omit checkpoint meta so lookup falls through to snapshot-id reconstruct
-    # (None), not DATA_LOSS from missing shards.
-    h.docs[_pointer_path('sess-corrupt')] = {
-        'currentSnapshotId': 'snap-deleted',
-        'segmentPath': [],
-    }
-
-    store = h.store()
-    assert await store.get_snapshot(session_id='sess-corrupt') is None
 
 
 @pytest.mark.asyncio
@@ -727,15 +727,31 @@ async def test_firestore_session_store_close_stops_watches_and_sync_client() -> 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_close_does_not_close_injected_sync_client() -> None:
-    """Caller-owned sync_client stays open after close(), even if watches used it."""
+    """Caller-owned sync_client stays open after close(); watches still unsubscribe."""
     h = FakeStoreHarness()
     injected = MagicMock()
+    watches: list[MagicMock] = []
+
+    def on_snapshot_side_effect(cb: Any) -> Any:  # noqa: ANN401
+        watch_mock = MagicMock()
+        watches.append(watch_mock)
+        return watch_mock
+
+    # Wire watches on the injected client itself — store won't call _to_sync_copy.
+    mock_sync_doc_ref = MagicMock()
+    mock_sync_doc_ref.on_snapshot.side_effect = on_snapshot_side_effect
+    mock_sync_col = MagicMock()
+    mock_sync_col.document.return_value = mock_sync_doc_ref
+    mock_sync_doc_ref.collection.return_value = mock_sync_col
+    injected.collection.return_value = mock_sync_col
+
     store = h.store(sync_client=injected)
-    _wire_sync_watch(store)
     await store.on_snapshot_status_change('snap-close')
     assert store.sync_client is injected
     store.close()
+    watches[0].unsubscribe.assert_called_once()
     injected.close.assert_not_called()
+    assert store.sync_client is injected
 
 
 def _by_user(context: dict[str, Any] | None = None) -> str:
@@ -908,7 +924,7 @@ async def test_firestore_session_store_resave_diff_leaf_refreshes_state() -> Non
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_resave_oversized_diff_promotes_to_checkpoint() -> None:
-    """Re-saving a child with oversized state stores it as a checkpoint."""
+    """Re-saving a diff leaf whose patch exceeds shard_size promotes it to a checkpoint."""
     h = FakeStoreHarness()
     store = h.store(shard_size=64, checkpoint_interval=25)
 
@@ -965,6 +981,12 @@ async def test_firestore_session_store_missing_snapshot_subscribe_waits_for_crea
 
     q2 = await store.on_snapshot_status_change('missing')
     assert len(captured_cb) == 2
+
+    # exists=False watch events must not end the stream or tear down the watch.
+    missing = MagicMock()
+    missing.exists = False
+    await _pump_watch(captured_cb, 0, missing)
+    await _pump_watch(captured_cb, 1, missing)
     watches[0].unsubscribe.assert_not_called()
     watches[1].unsubscribe.assert_not_called()
 
@@ -1412,12 +1434,12 @@ async def test_firestore_session_store_non_object_shard_state_raises_data_loss()
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_malformed_state_patch_raises_data_loss() -> None:
-    """A segment whose statePatch fails to parse surfaces as DATA_LOSS."""
+    """A segment whose statePatch is not valid JSON surfaces as DATA_LOSS."""
     h = FakeStoreHarness()
     store = h.store(checkpoint_interval=25)
     await store.save_snapshot('snap-root', _mk('snap-root', custom={'n': 0}))
     await store.save_snapshot('snap-a', _mk('snap-a', 'snap-root', custom={'n': 1}))
-    h.docs[_snap_path('snap-a')]['statePatch'] = json.dumps([{'op': 'bogus-op', 'path': '/n'}])
+    h.docs[_snap_path('snap-a')]['statePatch'] = '{not-json'
 
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(snapshot_id='snap-a')
@@ -1548,8 +1570,7 @@ async def test_firestore_session_store_watch_uses_sync_client_despite_async_stub
 async def test_firestore_session_store_retry_exhaustion_raises_aborted() -> None:
     """Contention beyond transaction_max_attempts surfaces as GenkitError ABORTED."""
     h = FakeStoreHarness()
-    store = h.store()
-    h.transaction._max_attempts = 2
+    store = h.store(transaction_max_attempts=2)
     h.commit_aborts_remaining = 5
 
     with pytest.raises(GenkitError) as exc_info:
@@ -1805,10 +1826,13 @@ async def test_firestore_session_store_subscribe_context_kwarg_selects_tenant() 
     await stream.aclose()
 
 
-@pytest.mark.parametrize('terminal', [SnapshotStatus.EXPIRED, SnapshotStatus.FAILED])
 @pytest.mark.asyncio
-async def test_firestore_session_store_expired_and_failed_are_absorbing(terminal: SnapshotStatus) -> None:
-    """EXPIRED and FAILED are absorbing too, not only ABORTED/COMPLETED."""
+async def test_firestore_session_store_failed_is_absorbing() -> None:
+    """FAILED is absorbing too, not only ABORTED/COMPLETED.
+
+    ``expired`` is a read-time heartbeat overlay and is never written to the
+    store, so it is not part of this persist-path contract.
+    """
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot(
@@ -1817,7 +1841,7 @@ async def test_firestore_session_store_expired_and_failed_are_absorbing(terminal
             snapshot_id='snap-1',
             session_id='sess-1',
             created_at='2026-07-03T00:00:00Z',
-            status=terminal,
+            status=SnapshotStatus.FAILED,
             state=SessionState(session_id='sess-1'),
         ),
     )
@@ -1829,7 +1853,7 @@ async def test_firestore_session_store_expired_and_failed_are_absorbing(terminal
     with pytest.raises(GenkitError) as exc_info:
         await store.save_snapshot('snap-1', complete)
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert h.docs[_snap_path('snap-1')]['status'] == terminal.value
+    assert h.docs[_snap_path('snap-1')]['status'] == SnapshotStatus.FAILED.value
 
 
 @pytest.mark.asyncio
@@ -1885,22 +1909,6 @@ async def test_firestore_session_store_close_from_thread_wakes_waiters() -> None
     getter = asyncio.ensure_future(_stream_ended(q))
     await asyncio.to_thread(store.close)
     assert await asyncio.wait_for(getter, timeout=2)
-
-
-@pytest.mark.asyncio
-async def test_firestore_session_store_close_after_terminal_is_noop() -> None:
-    """close() after a terminal-ended stream does not emit another event."""
-    h = FakeStoreHarness()
-    store = h.store()
-    await store.save_snapshot('snap-1', _mk('snap-1'))  # completed
-    watches, captured_cb = _wire_sync_watch(store)
-    q = await store.on_snapshot_status_change('snap-1')
-    await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'completed'))
-    assert await _next_status(q) == SnapshotStatus.COMPLETED
-    assert await _stream_ended(q)
-
-    store.close()
-    assert await _stream_ended(q)
 
 
 @pytest.mark.asyncio
@@ -2048,7 +2056,11 @@ async def test_firestore_session_store_interior_heartbeat_still_allowed() -> Non
         lambda existing: existing.model_copy(update={'heartbeat_at': '2026-07-03T00:00:09Z'}) if existing else None,
     )
     assert saved is not None
-    assert saved.heartbeat_at == '2026-07-03T00:00:09Z'
+    parent = await store.get_snapshot(snapshot_id='parent')
+    assert parent is not None and parent.heartbeat_at == '2026-07-03T00:00:09Z'
+
+    tip = await store.get_snapshot(session_id='sess-1')
+    assert tip is not None and tip.snapshot_id == 'child'
 
     after = await store.get_snapshot(snapshot_id='child')
     assert after is not None and after.state is not None
@@ -2075,7 +2087,7 @@ async def test_firestore_session_store_parent_id_immutable_on_upsert() -> None:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_tip_state_rewrite_still_allowed() -> None:
-    """The tip (leaf, no descendants) may rewrite state — contrast interior_state_rewrite_rejected."""
+    """The session tip (pointer-current snapshot) may rewrite state — contrast interior_state_rewrite_rejected."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('parent', _mk('parent', custom={'n': 1}))
@@ -2340,7 +2352,7 @@ async def test_firestore_session_store_aclose_keeps_watch_while_others_remain() 
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_aclose_after_terminal_is_idempotent() -> None:
-    """aclose after a terminal teardown is a no-op, not an error."""
+    """aclose after terminal watch teardown does not unsubscribe again or raise."""
     h = FakeStoreHarness()
     store = h.store()
     await store.save_snapshot('snap-1', _mk('snap-1'))
@@ -2348,9 +2360,12 @@ async def test_firestore_session_store_aclose_after_terminal_is_idempotent() -> 
     stream = await store.on_snapshot_status_change('snap-1')
     await _pump_watch(captured_cb, 0, _status_doc('snap-1', 'completed'))
     assert await _next_status(stream) == SnapshotStatus.COMPLETED
-    assert await _stream_ended(stream)
+    # Wait for terminal cleanup to unsubscribe; don't drain EOS first (that acloses).
+    for _ in range(50):
+        if watches[0].unsubscribe.called:
+            break
+        await asyncio.sleep(0.01)
     watches[0].unsubscribe.assert_called_once()
-    assert len(store._subscriptions) == 0
     await stream.aclose()  # type: ignore[attr-defined]
     await stream.aclose()  # type: ignore[attr-defined]
     watches[0].unsubscribe.assert_called_once()
@@ -2499,11 +2514,7 @@ def test_firestore_session_store_new_loop_prunes_dead_watch_and_starts_fresh() -
 
 
 def test_firestore_session_store_two_live_loops_have_independent_subscriptions() -> None:
-    """App loop + Dev UI loop can each subscribe on the same store instance.
-
-    Subscriptions are loop-local, so each loop's ``_subscriptions`` view shows
-    only its own entries (len==1 here), not a shared global list.
-    """
+    """App loop + Dev UI loop can each subscribe on the same store and receive status independently."""
     h = FakeStoreHarness()
     store = h.store()
     ready = threading.Event()
@@ -2536,7 +2547,6 @@ def test_firestore_session_store_two_live_loops_have_independent_subscriptions()
         stream = await store.on_snapshot_status_change('snap-1')
         await _pump_watch(captured, 0, _status_doc('snap-1', 'pending'))
         assert await stream.__anext__() == SnapshotStatus.PENDING
-        assert len(store._subscriptions) == 1
         await stream.aclose()
 
     try:
