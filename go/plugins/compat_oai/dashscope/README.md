@@ -30,8 +30,7 @@ import (
 
 ctx := context.Background()
 plugin := &dashscope.DashScope{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("dashscope/qwen-plus"),
 )
