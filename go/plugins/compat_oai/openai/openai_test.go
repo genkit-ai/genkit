@@ -407,6 +407,25 @@ func TestManagedConfigFieldsRejected(t *testing.T) {
 	}
 }
 
+// TestInvalidConfigTypeRejected pins the boundary rejection for a config the
+// SDK schema cannot describe at all: the request fails validation before any
+// plugin code runs or anything is sent.
+func TestInvalidConfigTypeRejected(t *testing.T) {
+	_, g := initPlugin(t)
+
+	_, err := genkit.Generate(context.Background(), g,
+		ai.WithModelName("openai/gpt-4o-mini"),
+		ai.WithPrompt("hello"),
+		ai.WithConfig("not a config"),
+	)
+	if err == nil {
+		t.Fatal("Generate() error = nil, want the boundary schema rejection")
+	}
+	if !strings.Contains(err.Error(), "did not match expected schema") {
+		t.Errorf("error = %v, want the boundary schema rejection", err)
+	}
+}
+
 // TestModelsOverride pins that a caller's entry reaches a curated model and an
 // uncurated one alike, through every path that describes a model. It is the
 // only way to describe a curated model differently: Init has already

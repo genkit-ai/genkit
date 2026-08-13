@@ -17,7 +17,6 @@ package openai_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -93,21 +92,6 @@ func TestPluginLive(t *testing.T) {
 		}
 		if resp.Text() == "" {
 			t.Error("Text() is empty")
-		}
-	})
-
-	t.Run("invalid config type", func(t *testing.T) {
-		_, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("Write a short sentence about artificial intelligence."),
-			ai.WithConfig("not a config"),
-		)
-		if err == nil {
-			t.Fatal("expected error for invalid config type")
-		}
-		// The typed path validates config against the SDK request schema at
-		// the action boundary, before any plugin code runs.
-		if !strings.Contains(err.Error(), "did not match expected schema") {
-			t.Errorf("got error %q, want the boundary schema rejection", err.Error())
 		}
 	})
 }
