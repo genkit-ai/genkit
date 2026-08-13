@@ -580,6 +580,18 @@ async def test_fan_out_respects_the_concurrency_cap() -> None:
     assert transport.max_in_flight == EMBED_CONCURRENCY_LIMIT
 
 
+@pytest.mark.asyncio
+async def test_a_failing_batch_cancels_the_calls_that_have_not_started() -> None:
+    documents = [text_doc('bad')] + [text_doc(f'doc {i}') for i in range(49)]
+    transport = FakeInvokeTransport(dispatch=lambda body: titan_response([] if body['inputText'] == 'bad' else [1.0]))
+    with pytest.raises(GenkitError, match='document 0'):
+        await embed(TITAN_TEXT, transport, documents)
+
+    # Go cancels its context on the first error. Without that the semaphore
+    # drains and every remaining document still bills a call.
+    assert len(transport.calls) < len(documents)
+
+
 def test_the_semaphore_is_built_per_call_not_per_module() -> None:
     # A module-level semaphore binds to the first loop that has to wait on it,
     # and the Dev UI reflection server runs a second one. This needs more
@@ -610,9 +622,9 @@ async def test_results_keep_input_order_when_calls_finish_out_of_order() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_first_failure_by_index_wins_not_the_first_to_land() -> None:
-    # The later document fails first in wall-clock terms; the reported error
-    # still has to be the earlier one, as in the Go plugin.
+async def test_the_first_failure_to_land_wins_and_the_slower_one_is_cancelled() -> None:
+    # Go returns the first error off its results channel and cancels the rest,
+    # so the earlier document's slower failure never gets reported.
     class RacingTransport:
         async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:
             text = json.loads(kwargs['body'])['inputText']
@@ -620,7 +632,7 @@ async def test_the_first_failure_by_index_wins_not_the_first_to_land() -> None:
                 await asyncio.sleep(0.02)
             raise ClientError({'Error': {'Code': 'ValidationException', 'Message': text}}, 'InvokeModel')
 
-    with pytest.raises(GenkitError, match='slow-bad'):
+    with pytest.raises(GenkitError, match='fast-bad'):
         await embed(TITAN_TEXT, RacingTransport(), [text_doc('slow-bad'), text_doc('fast-bad')])
 
 

@@ -466,7 +466,7 @@ class BedrockEmbedder:
         return _require_vector(_nova_embedding(payload))
 
     async def _run_bounded(self, calls: list[tuple[int, Coroutine[Any, Any, list[float]]]]) -> list[list[float]]:
-        """Runs per-document calls concurrently under the throttling cap.
+        """Runs per-document calls concurrently, cancelling the rest on the first failure.
 
         The semaphore is built per call rather than once per module: it binds
         to the running loop, and the Dev UI reflection server runs a second one.
@@ -474,22 +474,34 @@ class BedrockEmbedder:
         semaphore = asyncio.Semaphore(EMBED_CONCURRENCY_LIMIT)
 
         async def _bounded(index: int, call: Coroutine[Any, Any, list[float]]) -> list[float]:
-            async with semaphore:
-                try:
-                    return await call
-                except GenkitError as error:
-                    # A batch failure is opaque without the failing document,
-                    # but the inner message already names the plugin.
-                    raise GenkitError(
-                        message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
-                        status=error.status,
-                    ) from error
+            try:
+                async with semaphore:
+                    try:
+                        return await call
+                    except GenkitError as error:
+                        # A batch failure is opaque without the failing document,
+                        # but the inner message already names the plugin.
+                        raise GenkitError(
+                            message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
+                            status=error.status,
+                        ) from error
+            except asyncio.CancelledError:
+                # Cancelled while queued on the semaphore, so nothing awaited it.
+                call.close()
+                raise
 
-        results = await asyncio.gather(*(_bounded(index, call) for index, call in calls), return_exceptions=True)
+        tasks = [asyncio.create_task(_bounded(index, call)) for index, call in calls]
+        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in pending:
+            # Without this the rest of the batch still bills one call each.
+            task.cancel()
+        # Also retrieves the cancelled outcomes, so none resurfaces later as
+        # "Task exception was never retrieved".
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             # Index order, not completion order, so the reported failure is
-            # deterministic; a CancelledError arrives here too and must re-raise.
-            if isinstance(result, BaseException):
+            # deterministic across the calls that were left to run.
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 raise result
         return cast(list[list[float]], results)
 
