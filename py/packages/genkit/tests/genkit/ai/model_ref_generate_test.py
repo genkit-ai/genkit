@@ -8,7 +8,7 @@
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
@@ -26,6 +26,12 @@ class CustomConfig(BaseModel):
     temperature: float | None = None
     top_k: float | None = None
     safety_settings: dict[str, str] | None = None
+
+
+class ExcludedKeyConfig(ModelConfig):
+    """ModelConfig whose api_key is omitted from model_dump."""
+
+    api_key: str | None = Field(default=None, exclude=True)
 
 
 def _config_value(config: Any, key: str) -> Any:
@@ -305,3 +311,50 @@ async def test_unset_fields_do_not_clobber_ref_defaults(
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'temperature') == 0.7
     assert _config_value(echo.last_request.config, 'top_k') == 40
+
+
+@pytest.mark.asyncio
+async def test_model_config_none_clears_ref_default_via_generate(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """ModelConfig(temperature=None) clears a ref default on the generate path."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+
+    await ai.generate(model=ref, config=ModelConfig(temperature=None), prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') is None
+
+
+@pytest.mark.asyncio
+async def test_model_config_aliased_field_same_key_override(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Call-time max_output_tokens replaces the ref default instead of adding maxOutputTokens."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+
+    await ai.generate(model=ref, config={'max_output_tokens': 200}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 200
+    assert _config_value(echo.last_request.config, 'maxOutputTokens') is None
+
+
+@pytest.mark.asyncio
+async def test_excluded_api_key_reaches_plugin(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Per-request api_key still lands on the plugin request after veneer dump."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=ExcludedKeyConfig)
+
+    await ai.generate(model=ref, config=ExcludedKeyConfig(api_key='secret'), prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'api_key') == 'secret'

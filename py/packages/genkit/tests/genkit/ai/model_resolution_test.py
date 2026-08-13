@@ -37,7 +37,7 @@ class CustomConfig(BaseModel):
 class ExcludedKeyConfig(ModelConfig):
     """ModelConfig whose api_key is omitted from model_dump."""
 
-    api_key: str | None = Field(None, exclude=True)
+    api_key: str | None = Field(default=None, exclude=True)
 
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
