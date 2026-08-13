@@ -36,8 +36,7 @@ import (
 
 ctx := context.Background()
 plugin := &anthropic.Anthropic{}
-g := genkit.Init(
-    ctx,
+g := genkit.Init(ctx,
     genkit.WithPlugins(plugin),
     genkit.WithDefaultModel("anthropic/claude-haiku-4-5-20251001"),
 )
