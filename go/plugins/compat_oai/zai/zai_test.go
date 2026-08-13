@@ -613,7 +613,8 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	thinking, _ := props["thinking"].(map[string]any)
 	thinkingProps, _ := thinking["properties"].(map[string]any)
 	thinkingType, _ := thinkingProps["type"].(map[string]any)
-	if got, want := thinkingType["enum"], []any{"enabled", "disabled"}; !reflect.DeepEqual(got, want) {
+	if got, want := thinkingType["enum"], []any{
+		string(zai.ThinkingTypeEnabled), string(zai.ThinkingTypeDisabled)}; !reflect.DeepEqual(got, want) {
 		t.Errorf("thinking.type enum = %#v, want %#v", got, want)
 	}
 }

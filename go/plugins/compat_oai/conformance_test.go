@@ -207,6 +207,7 @@ func TestClosedEnumsUseNamedTypes(t *testing.T) {
 		"anthropic": anthropic.ChatConfig{},
 		"dashscope": dashscope.ChatConfig{},
 		"kimi":      kimi.ChatConfig{},
+		"zai":       zai.ChatConfig{},
 	}
 	for name, config := range configs {
 		t.Run(name, func(t *testing.T) {

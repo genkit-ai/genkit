@@ -31,6 +31,16 @@ const (
 	defaultBaseURL = "https://api.z.ai/api/paas/v4"
 )
 
+// ThinkingType turns the chain-of-thought of GLM models on or off.
+type ThinkingType string
+
+const (
+	// ThinkingTypeEnabled turns thinking on, which is Z.ai's default.
+	ThinkingTypeEnabled ThinkingType = "enabled"
+	// ThinkingTypeDisabled turns thinking off.
+	ThinkingTypeDisabled ThinkingType = "disabled"
+)
+
 // ChatConfig is the per-request config for GLM models: the generation fields
 // Z.ai accepts plus the Z.ai-specific controls. See
 // https://docs.z.ai/api-reference/llm/chat-completion.
@@ -61,8 +71,9 @@ type ChatConfig struct {
 
 // ThinkingConfig configures the chain-of-thought mode of GLM models.
 type ThinkingConfig struct {
-	// Type turns thinking "enabled" (the default) or "disabled".
-	Type string `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled (the default) or disabled."`
+	// Type turns thinking [ThinkingTypeEnabled] (the default) or
+	// [ThinkingTypeDisabled].
+	Type ThinkingType `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled (the default) or disabled."`
 	// ClearThinking controls whether the reasoning content is cleared from
 	// the response, sent as the API's clear_thinking; Z.ai defaults it to
 	// true.
@@ -91,7 +102,7 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	if c.Thinking != nil {
 		thinking := map[string]any{}
 		if c.Thinking.Type != "" {
-			thinking["type"] = c.Thinking.Type
+			thinking["type"] = string(c.Thinking.Type)
 		}
 		if c.Thinking.ClearThinking != nil {
 			thinking["clear_thinking"] = *c.Thinking.ClearThinking
