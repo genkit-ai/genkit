@@ -14,122 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemini models for use with Genkit.
-
-# Naming convention
-Gemini models follow the following naming conventions:
-
-                             +------- Tier/Variant (e.g., pro, flash)
-                             |      +---------- Modifier (Optional, e.g., exp)
-                             |      |         +--- Date/Snapshot ID (Optional)
-                             v      v         v
-        gemini - <VER> - <TIER> [-MOD] [-DATE]
-          ^        ^           ^
-          |        |           |
-(Family)--+        |           +-- Size Specifier (Optional, e.g., -8b,
-          |        |               often follows TIER like 'flash')
-          |        |
-          +--------+---------- Version (Major generation, e.g., 1.0, 1.5, 2.0)
-
-
-## Examples
-
-gemini - 1.5 - flash - 8b
-  ^      ^      ^      ^
-  |      |      |      +-- Size Specifier
-  |      |      +--------- Tier/Variant
-  |      +----------------- Version
-  +------------------------ Family
-
-gemini - 2.0 - pro - exp - 02-05
-  ^      ^      ^     ^      ^
-  |      |      |     |      +-- Date/Snapshot ID
-  |      |      |     +--------- Modifier
-  |      |      +---------------- Tier/Variant
-  |      +------------------------ Version
-  +------------------------------- Family
-
-## Terminology
-
-Family (`gemini`)
-: The base name identifying the overarching group or brand of related AI models
-  developed by Google (e.g., Gemini).
-
-Version Number (e.g., `1.0`, `1.5`, `2.0`, `2.5`)
-: Indicates the major generation or release cycle of the model within the
-  family. Higher numbers typically denote newer iterations, often incorporating
-  significant improvements, architectural changes, or new capabilities compared
-  to previous versions.
-
-Tier / Variant (e.g., `pro`, `flash`)
-: Distinguishes models within the same generation based on specific
-  characteristics like performance profile, size, speed, efficiency, or intended
-  primary use case.
-
-  * **`pro`**: Generally indicates a high-capability, powerful, and versatile
-    model within its generation, suitable for a wide range of complex tasks.
-
-  * **`flash`**: Often signifies a model optimized for speed, latency, and
-    cost-efficiency, potentially offering a different balance of performance
-    characteristics compared to the `pro` variant.
-
-Size Specifier (e.g., `8b`)
-: An optional component, frequently appended to a Tier/Variant (like `flash`),
-  providing more specific detail about the model's scale. This often relates to
-  the approximate number of parameters (e.g., `8b` likely suggests 8 billion
-  parameters), influencing its performance and resource requirements.
-
-Modifier (e.g., `exp`)
-: An optional flag indicating the model's release status, stability, or intended
-  audience.
-
-  * **`exp`**: Stands for "Experimental". Models marked with `exp` are typically
-    previews or early releases. They are subject to change, updates, or removal
-    without the standard notice periods applied to stable models, and they lack
-    long-term stability guarantees, making them generally unsuitable for
-    production systems requiring stability.
-
-Date / Snapshot ID (e.g., `02-05`, `03-25`)
-: An optional identifier, commonly seen with experimental (`exp`) models. It
-  likely represents a specific build date (often in MM-DD format) or a unique
-  snapshot identifier, helping to distinguish between different iterations or
-  releases within the experimental track.
-
-# Model support
-
-The following models are currently supported by GoogleAI API:
-
-| Model                                | Description                          | Status     |
-|--------------------------------------|--------------------------------------|------------|
-| `gemini-1.5-pro`                     | Gemini 1.5 Pro                       | Deprecated |
-| `gemini-1.5-flash`                   | Gemini 1.5 Flash                     | Deprecated |
-| `gemini-1.5-flash-8b`                | Gemini 1.5 Flash 8B                  | Deprecated |
-| `gemini-2.0-flash`                   | Gemini 2.0 Flash                     | Supported  |
-| `gemini-2.0-flash-lite`              | Gemini 2.0 Flash Lite                | Supported  |
-| `gemini-2.0-pro-exp-02-05`           | Gemini 2.0 Pro Exp 02-05             | Supported  |
-| `gemini-2.5-pro-exp-03-25`           | Gemini 2.5 Pro Exp 03-25             | Supported  |
-| `gemini-2.0-flash-exp`               | Gemini 2.0 Flash Experimental        | Supported  |
-| `gemini-2.0-flash-thinking-exp-01-21`| Gemini 2.0 Flash Thinking Exp 01-21  | Supported  |
-| `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported  |
-| `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
-
-
-The following models are currently supported by VertexAI API:
-
-| Model                                | Description                          | Status       |
-|--------------------------------------|--------------------------------------|--------------|
-| `gemini-1.5-pro`                     | Gemini 1.5 Pro                       | Deprecated   |
-| `gemini-1.5-flash`                   | Gemini 1.5 Flash                     | Deprecated   |
-| `gemini-1.5-flash-8b`                | Gemini 1.5 Flash 8B                  | Deprecated   |
-| `gemini-2.0-flash`                   | Gemini 2.0 Flash                     | Supported    |
-| `gemini-2.0-flash-lite`              | Gemini 2.0 Flash Lite                | Supported    |
-| `gemini-2.0-pro-exp-02-05`           | Gemini 2.0 Pro Exp 02-05             | Supported    |
-| `gemini-2.5-pro-exp-03-25`           | Gemini 2.5 Pro Exp 03-25             | Supported    |
-| `gemini-2.0-flash-exp`               | Gemini 2.0 Flash Experimental        | Unavailable  |
-| `gemini-2.0-flash-thinking-exp-01-21`| Gemini 2.0 Flash Thinking Exp 01-21  | Supported    |
-| `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported    |
-| `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
-"""
+"""Gemini models."""
 
 import asyncio
 import sys
@@ -600,6 +485,16 @@ class GemmaConfigSchema(GeminiConfigSchema):
     temperature: float | None = None
 
 
+GEMINI_TEXT_SUPPORTS = Supports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=Constrained.ALL,
+    output=['text', 'json'],
+)
+
 GEMINI_1_5_PRO = ModelInfo(
     label='Google AI - Gemini 1.5 Pro',
     stage=Stage.DEPRECATED,
@@ -821,6 +716,16 @@ GEMINI_3_5_FLASH = ModelInfo(
     ),
 )
 
+GEMINI_3_6_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.6 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_3_7_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.7 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
 GEMINI_3_1_PRO_PREVIEW = ModelInfo(
     label='Google AI - Gemini 3.1 Pro Preview',
     supports=Supports(
@@ -969,43 +874,7 @@ Deprecations = deprecated_enum_metafactory({})
 
 
 class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """VertexAIGemini models.
-
-    Model Support:
-
-    | Model                                | Description                          | Status       |
-    |--------------------------------------|--------------------------------------|--------------|
-    | `gemini-1.5-flash-8b`                | Gemini 1.5 Flash 8B                  | Deprecated   |
-    | `gemini-1.5-flash`                   | Gemini 1.5 Flash                     | Deprecated   |
-    | `gemini-1.5-pro`                     | Gemini 1.5 Pro                       | Deprecated   |
-    | `gemini-2.0-flash-exp`               | Gemini 2.0 Flash Exp                 | Supported    |
-    | `gemini-2.0-flash-lite`              | Gemini 2.0 Flash Lite                | Supported    |
-    | `gemini-2.0-flash-thinking-exp-01-21`| Gemini 2.0 Flash Thinking Exp 01-21  | Supported    |
-    | `gemini-2.0-flash`                   | Gemini 2.0 Flash                     | Supported    |
-    | `gemini-2.0-pro-exp-02-05`           | Gemini 2.0 Pro Exp 02-05             | Supported    |
-    | `gemini-2.5-pro-exp-03-25`           | Gemini 2.5 Pro Exp 03-25             | Supported    |
-    | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported    |
-    | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported    |
-    | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported    |
-    | `gemini-3.5-flash`                   | Gemini 3.5 Flash                     | Supported    |
-    | `gemini-3.1-pro-preview`            | Gemini 3.1 Pro Preview               | Supported    |
-    | `gemini-3.1-flash-lite`             | Gemini 3.1 Flash Lite                | Supported    |
-    | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported    |
-    | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported    |
-    | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported    |
-    | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported    |
-    | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported    |
-    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported    |
-    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported    |
-    | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported    |
-    | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported    |
-    | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported    |
-    | `gemma-3-12b-it`                     | Gemma 3 12B IT                       | Supported    |
-    | `gemma-3-1b-it`                      | Gemma 3 1B IT                        | Supported    |
-    | `gemma-3-27b-it`                     | Gemma 3 27B IT                       | Supported    |
-    | `gemma-3-4b-it`                      | Gemma 3 4B IT                        | Supported    |
-    | `gemma-3n-e4b-it`                    | Gemma 3n E4B IT                      | Supported    |
-    """
+    """Vertex AI Gemini model IDs."""
 
     GEMINI_2_0_FLASH = 'gemini-2.0-flash'
     GEMINI_2_0_FLASH_EXP = 'gemini-2.0-flash-exp'
@@ -1027,6 +896,8 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
     GEMINI_3_5_FLASH = 'gemini-3.5-flash'
+    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
+    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
     GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
     GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
@@ -1037,44 +908,7 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 
 
 class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """GoogleAI Gemini models.
-
-    Model Support:
-
-    | Model                                | Description                          | Status     |
-    |--------------------------------------|--------------------------------------|------------|
-    | `gemini-1.5-flash-8b`                | Gemini 1.5 Flash 8B                  | Deprecated |
-    | `gemini-1.5-flash`                   | Gemini 1.5 Flash                     | Deprecated |
-    | `gemini-1.5-pro`                     | Gemini 1.5 Pro                       | Deprecated |
-    | `gemini-2.0-flash-exp`               | Gemini 2.0 Flash Exp                 | Supported  |
-    | `gemini-2.0-flash-lite`              | Gemini 2.0 Flash Lite                | Supported  |
-    | `gemini-2.0-flash-thinking-exp-01-21`| Gemini 2.0 Flash Thinking Exp 01-21  | Supported  |
-    | `gemini-2.0-flash`                   | Gemini 2.0 Flash                     | Supported  |
-    | `gemini-2.0-pro-exp-02-05`           | Gemini 2.0 Pro Exp 02-05             | Supported  |
-    | `gemini-2.5-pro-exp-03-25`           | Gemini 2.5 Pro Exp 03-25             | Supported  |
-    | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported  |
-    | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
-    | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported  |
-    | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported  |
-    | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported  |
-    | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported  |
-    | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported  |
-    | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported  |
-    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported  |
-    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported  |
-    | `gemini-3.1-flash-image-preview`     | Gemini 3.1 Flash Image Preview       | Supported  |
-    | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported  |
-    | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported  |
-    | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported  |
-    | `gemini-3.1-pro-preview`             | Gemini 3.1 Pro Preview               | Supported  |
-    | `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools  | Supported  |
-    | `gemini-3.1-flash-lite-preview`      | Gemini 3.1 Flash Lite Preview        | Supported  |
-    | `gemma-3-12b-it`                     | Gemma 3 12B IT                       | Supported  |
-    | `gemma-3-1b-it`                      | Gemma 3 1B IT                        | Supported  |
-    | `gemma-3-27b-it`                     | Gemma 3 27B IT                       | Supported  |
-    | `gemma-3-4b-it`                      | Gemma 3 4B IT                        | Supported  |
-    | `gemma-3n-e4b-it`                    | Gemma 3n E4B IT                      | Supported  |
-    """
+    """Google AI Gemini model IDs."""
 
     GEMINI_2_0_FLASH = 'gemini-2.0-flash'
     GEMINI_2_0_FLASH_EXP = 'gemini-2.0-flash-exp'
@@ -1085,6 +919,8 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
     GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
+    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
+    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
     GEMINI_2_5_PRO = 'gemini-2.5-pro'
     GEMINI_2_5_FLASH = 'gemini-2.5-flash'
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
@@ -1133,6 +969,8 @@ _add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
 _add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
 _add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
 _add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
+_add_model(GEMINI_3_6_FLASH, ['gemini-3.6-flash'])
+_add_model(GEMINI_3_7_FLASH, ['gemini-3.7-flash'])
 _add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
 _add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
 _add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
