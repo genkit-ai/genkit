@@ -24,10 +24,14 @@ from pydantic.alias_generators import to_camel
 from genkit import ModelConfig
 
 DEFAULT_MAX_RETRIES = 3
-# Socket read timeout, not a whole-call deadline: Bedrock generations can
+# Socket read timeout: the gap botocore tolerates between two reads, which
+# resets on every byte received. Generous because Bedrock generations can
 # legitimately run for many minutes (Nova allows 60-minute inference).
 DEFAULT_READ_TIMEOUT = 3600.0
 DEFAULT_CONNECT_TIMEOUT = 60.0
+# Whole-call deadline. Unlike the read timeout this does not reset, so a
+# connection that dribbles a byte at a time still ends.
+DEFAULT_TOTAL_TIMEOUT = 3600.0
 # The botocore default of 10 pooled connections throttles LLM concurrency.
 DEFAULT_MAX_POOL_CONNECTIONS = 50
 

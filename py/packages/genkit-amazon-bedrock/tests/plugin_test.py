@@ -41,10 +41,13 @@ def test_constructor_defaults() -> None:
     plugin = Bedrock()
     # No default region: resolution falls to the SDK chain and fails loudly.
     assert plugin.region is None
-    assert plugin.max_retries == 3
-    assert plugin.read_timeout == 3600.0
-    assert plugin.connect_timeout == 60.0
-    assert plugin.max_pool_connections == 50
+    # The AWS client knobs stay unset so the caller's own AWS configuration is
+    # what the transport defers to; package defaults apply below that.
+    assert plugin.max_retries is None
+    assert plugin.read_timeout is None
+    assert plugin.connect_timeout is None
+    assert plugin.max_pool_connections is None
+    assert plugin.total_timeout == 3600.0
     assert plugin.models == []
 
 

@@ -35,10 +35,7 @@ from genkit.plugin_api import (
     to_json_schema,
 )
 from genkit_amazon_bedrock.config import (
-    DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_MAX_POOL_CONNECTIONS,
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_READ_TIMEOUT,
+    DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
     ModelDefinition,
 )
@@ -72,14 +69,20 @@ class Bedrock(Plugin):
     def __init__(
         self,
         region: str | None = None,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        read_timeout: float = DEFAULT_READ_TIMEOUT,
-        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
-        max_pool_connections: int = DEFAULT_MAX_POOL_CONNECTIONS,
+        max_retries: int | None = None,
+        read_timeout: float | None = None,
+        connect_timeout: float | None = None,
+        max_pool_connections: int | None = None,
+        total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
         session: 'boto3.session.Session | None' = None,
         models: list[ModelDefinition] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
+
+        The AWS client knobs all default to None, meaning "use the ambient AWS
+        configuration" (``AWS_MAX_ATTEMPTS``, ``AWS_RETRY_MODE``,
+        ``~/.aws/config``, a session's default client config), and fall back to
+        the package defaults only when that configuration says nothing.
 
         Args:
             region: AWS region. Defaults to the SDK resolution chain
@@ -87,10 +90,13 @@ class Bedrock(Plugin):
                 initialization fails loudly when no region resolves rather
                 than silently picking one.
             max_retries: Retry limit for Bedrock API calls.
-            read_timeout: Socket read timeout in seconds (not a whole-call
-                deadline; long generations must not be killed mid-flight).
+            read_timeout: Socket read timeout in seconds. Resets on every byte
+                received, so it caps silence, not the call.
             connect_timeout: Socket connect timeout in seconds.
             max_pool_connections: HTTP connection pool size.
+            total_timeout: Whole-call deadline in seconds, covering retries and
+                the slow-dribble case the read timeout cannot see. None removes
+                the deadline, leaving only the socket timeouts.
             session: Optional pre-configured ``boto3.session.Session`` for custom
                 credentials or advanced SDK wiring.
             models: Bedrock models to register. Models not listed can still be
@@ -101,6 +107,7 @@ class Bedrock(Plugin):
         self.read_timeout = read_timeout
         self.connect_timeout = connect_timeout
         self.max_pool_connections = max_pool_connections
+        self.total_timeout = total_timeout
         self._session = session
         self.models = models or []
         self._transport = BedrockTransport(
@@ -109,6 +116,7 @@ class Bedrock(Plugin):
             read_timeout=read_timeout,
             connect_timeout=connect_timeout,
             max_pool_connections=max_pool_connections,
+            total_timeout=total_timeout,
             session=session,
         )
 
