@@ -33,7 +33,7 @@ def test_bedrock_name_prefixes_model_id() -> None:
 
 def test_constructor_defaults() -> None:
     plugin = Bedrock()
-    assert plugin.region == 'us-east-1'
+    assert plugin.region is None
     assert plugin.max_retries == 3
     assert plugin.request_timeout == 30.0
     assert plugin.models == []

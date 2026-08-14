@@ -23,7 +23,6 @@ from pydantic.alias_generators import to_camel
 
 from genkit import ModelConfig
 
-DEFAULT_REGION = 'us-east-1'
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_REQUEST_TIMEOUT = 30.0
 

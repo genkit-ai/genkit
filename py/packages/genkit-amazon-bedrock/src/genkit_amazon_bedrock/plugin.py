@@ -35,7 +35,6 @@ from genkit.plugin_api import (
 )
 from genkit_amazon_bedrock.config import (
     DEFAULT_MAX_RETRIES,
-    DEFAULT_REGION,
     DEFAULT_REQUEST_TIMEOUT,
     ModelDefinition,
 )
@@ -75,8 +74,8 @@ class Bedrock(Plugin):
         """Initializes the Bedrock plugin.
 
         Args:
-            region: AWS region. Defaults to the SDK resolution chain, falling
-                back to ``us-east-1`` (Go plugin parity).
+            region: AWS region. Defaults to the SDK resolution chain
+                (``AWS_REGION``, ``AWS_DEFAULT_REGION``, ``~/.aws/config``).
             max_retries: Retry limit for Bedrock API calls.
             request_timeout: Per-call timeout in seconds.
             session: Optional pre-configured ``boto3.session.Session`` for custom
@@ -85,7 +84,7 @@ class Bedrock(Plugin):
                 resolved dynamically by namespaced name.
             embedders: Embedding model IDs to register (Titan, Cohere, Nova).
         """
-        self.region = region or DEFAULT_REGION
+        self.region = region
         self.max_retries = max_retries
         self.request_timeout = request_timeout
         self._session = session
