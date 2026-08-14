@@ -250,7 +250,7 @@ class BedrockTransport:
 
         Raises:
             GenkitError: INTERNAL when the response carries no body, or a body
-                that is not JSON.
+                that is not a JSON object.
         """
         return await asyncio.to_thread(self._invoke_model_sync, kwargs)
 
@@ -263,9 +263,12 @@ class BedrockTransport:
         # read() is a blocking socket read.
         raw = body.read()
         try:
-            return json.loads(raw)
+            payload = json.loads(raw)
         except json.JSONDecodeError as e:
             raise GenkitError(message=f'bedrock: invoke model response is not JSON: {e}', status='INTERNAL') from e
+        if not isinstance(payload, dict):
+            raise GenkitError(message='bedrock: invoke model response body is not a JSON object', status='INTERNAL')
+        return payload
 
     def _resolve_region(self, session: Any) -> str:  # noqa: ANN401
         # botocore only began reading AWS_REGION in 1.41, above this package's

@@ -547,6 +547,17 @@ async def test_invoke_model_rejects_a_non_json_body() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invoke_model_rejects_a_json_body_that_is_not_an_object() -> None:
+    # Callers read the result with .get(); a list would raise AttributeError there.
+    transport, _client = invoking_transport(b'[1.0, 2.0]')
+
+    with pytest.raises(GenkitError, match='not a JSON object') as excinfo:
+        await transport.invoke_model(modelId='m')
+
+    assert excinfo.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
 async def test_invoke_model_without_a_body_member_fails_loudly() -> None:
     transport, _client = invoking_transport(None)
 
