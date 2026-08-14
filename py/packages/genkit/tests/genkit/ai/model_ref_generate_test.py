@@ -34,6 +34,12 @@ class ExcludedKeyConfig(ModelConfig):
     api_key: str | None = Field(default=None, exclude=True)
 
 
+class PluginOnlyConfig(ModelConfig):
+    """Plugin-owned fields that aren't on GenerationCommonConfig."""
+
+    duration_seconds: int | None = None
+
+
 def _config_value(config: Any, key: str) -> Any:
     if isinstance(config, dict):
         return config.get(key)
@@ -127,6 +133,37 @@ async def test_generate_string_model_config_dict_unchanged(
 
     assert '0.1' in response.text
     assert echo.last_request is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_string_model_keeps_typed_config_instance(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """String model + typed config is not dumped; the plugin sees that class."""
+    ai, echo = ai_with_echo
+    cfg = PluginOnlyConfig(duration_seconds=8)
+
+    await ai.generate(model='testEcho', prompt='Hello', config=cfg)
+
+    assert echo.last_request is not None
+    assert type(echo.last_request.config) is PluginOnlyConfig
+    assert echo.last_request.config.duration_seconds == 8
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_string_model_keeps_typed_config_instance(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """define_prompt with a string model keeps the typed config when nothing merges."""
+    ai, echo = ai_with_echo
+    cfg = PluginOnlyConfig(duration_seconds=8)
+
+    prompt = ai.define_prompt(name='typedCfgPrompt', model='testEcho', prompt='Hello', config=cfg)
+    await prompt()
+
+    assert echo.last_request is not None
+    assert type(echo.last_request.config) is PluginOnlyConfig
+    assert echo.last_request.config.duration_seconds == 8
 
 
 @pytest.mark.asyncio

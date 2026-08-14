@@ -53,7 +53,7 @@ ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any
 
 # Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
 ModelArg: TypeAlias = str | ModelRef[BaseModel]
-ConfigArg: TypeAlias = BaseModel | Mapping[str, Any]
+ConfigArg: TypeAlias = Mapping[str, Any] | BaseModel
 
 
 @dataclass(frozen=True, kw_only=True)

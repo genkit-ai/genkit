@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -48,7 +48,6 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
-    ResolvedModel,
     normalize_config,
     resolve_model_name,
     resolve_model_ref,
@@ -65,7 +64,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig, ModelRef
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelRef
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -217,7 +216,7 @@ class PromptConfig(BaseModel):
 
     variant: str | None = None
     model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    config: Mapping[str, Any] | BaseModel | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -387,16 +386,16 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
-        # Normalize at the veneer, then resolve into concrete wire shapes.
         model_arg = opts.get('model') or self._model
-        normalized_config = normalize_config(config=merged_config)
         if isinstance(model_arg, ModelRef):
-            resolved = resolve_model_ref(model=model_arg, config=normalized_config)
-        else:
-            resolved = ResolvedModel(
-                name=resolve_model_name(model=model_arg, registry=self._registry),
-                config=normalized_config,
+            resolved = resolve_model_ref(
+                model=model_arg,
+                config=normalize_config(config=merged_config),
             )
+            model_name, model_config = resolved.name, resolved.config
+        else:
+            model_name = resolve_model_name(model=model_arg, registry=self._registry)
+            model_config = merged_config
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
@@ -406,14 +405,14 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             return opt_val if opt_val is not None else default
 
         return PromptConfig(
-            model=resolved.name,
+            model=model_name,
             prompt=self._prompt,
             system=self._system,
             messages=self._messages,
             tools=opts.get('tools') or self._tools,
             return_tool_requests=_or(opts.get('return_tool_requests'), self._return_tool_requests),
             tool_choice=opts.get('tool_choice') or self._tool_choice,
-            config=resolved.config,
+            config=model_config,
             max_turns=_or(opts.get('max_turns'), self._max_turns),
             output_format=output_opts.get('format') or self._output_format,
             output_content_type=output_opts.get('content_type') or self._output_content_type,
@@ -962,14 +961,17 @@ async def render_prompt_config_for_executable_call(
         merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
 
     resume = resume_from_prompt_call_opts(opts)
-    return PromptConfig.model_validate({
-        **prompt_config.model_dump(),
-        'system': None,
-        'prompt': None,
-        'messages': resolved_msgs,
-        'docs': merged_docs,
-        'resume': resume,
-    })
+    # Copy instead of dump/revalidate so a typed config object the caller
+    # passed through (no merge) is still that object when the plugin runs.
+    return prompt_config.model_copy(
+        update={
+            'system': None,
+            'prompt': None,
+            'messages': resolved_msgs,
+            'docs': merged_docs,
+            'resume': resume,
+        }
+    )
 
 
 async def executable_prompt_call_to_generate_options(
