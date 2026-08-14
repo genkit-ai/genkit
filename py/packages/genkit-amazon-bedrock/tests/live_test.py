@@ -141,7 +141,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
     # Bedrock requires budget_tokens >= 1024 and maxTokens above it; thinking
     # requests reject custom temperature, so none is set.
     config = BedrockConfig(
-        max_tokens=4096,
+        max_output_tokens=4096,
         additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     request = text_request('What is 17 * 23? Think it through.', config=config)
@@ -170,7 +170,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
 
 async def test_deepseek_reasoning_sync_and_round_trip() -> None:
     model = make_model(DEEPSEEK)
-    config = BedrockConfig(max_tokens=2048)
+    config = BedrockConfig(max_output_tokens=2048)
     request = text_request('What is 17 * 23? Think it through.', config=config)
     response = await model.generate(request)
 

@@ -103,7 +103,7 @@ async def cat_profile(data: CatInput) -> Cat:
         output_format='json',
         output_schema=Cat,
         output_instructions=True,
-        config={'maxTokens': 1024},
+        config={'maxOutputTokens': 1024},
     )
     return response.output
 
@@ -129,7 +129,7 @@ async def reasoning(data: TopicInput) -> dict[str, object]:
     response = await ai.generate(
         model=DEEPSEEK,
         prompt=f'What is 17 * 23? Think it through, then state the answer. Mention {data.topic} once.',
-        config={'maxTokens': 2048},
+        config={'maxOutputTokens': 2048},
     )
     return _reasoning_summary(response)
 
@@ -145,8 +145,8 @@ async def thinking(data: TopicInput) -> dict[str, object]:
         model=CLAUDE,
         prompt=f'What is 17 * 23? Think it through, then state the answer. Mention {data.topic} once.',
         config={
-            'maxTokens': 4096,
-            # Bedrock requires budget_tokens >= 1024, below maxTokens.
+            'maxOutputTokens': 4096,
+            # Bedrock requires budget_tokens >= 1024, below maxOutputTokens.
             'additionalModelRequestFields': {'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
         },
     )

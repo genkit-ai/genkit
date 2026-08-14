@@ -125,17 +125,16 @@ def test_normalize_config_from_model_config() -> None:
 
 
 @pytest.mark.parametrize(
-    'raw,field,expected',
+    'raw,expected',
     [
-        ({'maxOutputTokens': 50}, 'max_output_tokens', 50),
-        ({'max_tokens': 60}, 'max_tokens', 60),
-        ({'maxTokens': 70}, 'max_tokens', 70),
+        ({'maxOutputTokens': 50}, 50),
+        ({'max_output_tokens': 60}, 60),
     ],
 )
-def test_normalize_config_from_dict_with_legacy_keys(raw, field, expected) -> None:
+def test_normalize_config_from_dict_accepts_both_spellings(raw, expected) -> None:
     config = normalize_config(raw)
     assert config is not None
-    assert getattr(config, field) == expected
+    assert config.max_output_tokens == expected
 
 
 def test_normalize_config_rejects_unsupported_type() -> None:
@@ -150,7 +149,7 @@ def test_build_inference_config_empty_is_none() -> None:
 
 
 def test_build_inference_config_fields() -> None:
-    config = BedrockConfig(max_tokens=256, temperature=0.7, top_p=0.9, stop_sequences=['END'])
+    config = BedrockConfig(max_output_tokens=256, temperature=0.7, top_p=0.9, stop_sequences=['END'])
     assert build_inference_config(config) == {
         'maxTokens': 256,
         'temperature': 0.7,
@@ -159,10 +158,9 @@ def test_build_inference_config_fields() -> None:
     }
 
 
-def test_bedrock_max_tokens_wins_over_common_field() -> None:
-    inference_config = build_inference_config(BedrockConfig(max_tokens=100, max_output_tokens=999))
-    assert inference_config is not None
-    assert inference_config['maxTokens'] == 100
+def test_non_positive_max_output_tokens_is_dropped() -> None:
+    # Bedrock rejects maxTokens below 1; treat it as unset rather than fail.
+    assert build_inference_config(BedrockConfig(max_output_tokens=0)) is None
 
 
 def test_explicit_zero_temperature_is_sent() -> None:
@@ -183,15 +181,13 @@ def test_top_k_and_version_are_accepted_but_ignored() -> None:
 
 
 def test_configured_max_tokens_is_sent() -> None:
-    request = user_text_request(config=BedrockConfig(max_tokens=32))
+    request = user_text_request(config=BedrockConfig(max_output_tokens=32))
     kwargs = build_converse_request('anthropic.claude-3-haiku-20240307-v1:0', request)
     assert kwargs['inferenceConfig'] == {'maxTokens': 32}
 
 
 @pytest.mark.parametrize('model_id', ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'amazon.nova-lite-v1:0'])
 def test_no_max_tokens_is_injected_for_any_model(model_id) -> None:
-    # Verified live: Converse accepts Claude requests without maxTokens and
-    # applies a service default, so nothing is guessed on the caller's behalf.
     kwargs = build_converse_request(model_id, user_text_request())
     assert 'inferenceConfig' not in kwargs
 

@@ -163,7 +163,7 @@ def test_reasoning_replay_passes_validation() -> None:
 def test_inference_config_passes_validation(model_id: str) -> None:
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-        config=BedrockConfig(temperature=0.0, top_p=0.9, max_tokens=256, stop_sequences=['STOP']),
+        config=BedrockConfig(temperature=0.0, top_p=0.9, max_output_tokens=256, stop_sequences=['STOP']),
     )
     kwargs = build_converse_request(model_id, request)
     report = ParamValidator().validate(kwargs, CONVERSE_INPUT_SHAPE)

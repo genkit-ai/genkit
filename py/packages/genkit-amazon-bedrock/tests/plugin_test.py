@@ -56,12 +56,12 @@ def test_model_definition_defaults_to_chat() -> None:
 def test_config_accepts_camel_case_and_extra_fields() -> None:
     config = BedrockConfig.model_validate({
         'toolChoice': 'auto',
-        'maxTokens': 128,
+        'maxOutputTokens': 128,
         'additionalModelRequestFields': {'thinking': {'type': 'enabled'}},
         'someFutureKnob': True,
     })
     assert config.tool_choice == 'auto'
-    assert config.max_tokens == 128
+    assert config.max_output_tokens == 128
     assert config.additional_model_request_fields == {'thinking': {'type': 'enabled'}}
 
 
