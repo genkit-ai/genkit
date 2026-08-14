@@ -36,7 +36,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
-	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -622,7 +622,13 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config
 	}
 
 	if !isChatModel {
-		modelReq := ollamaModelRequest{
+		// TODO: config is not applied here. ollamaModelRequest has no options,
+		// think, or keep_alive fields, so a caller's GenerateContentConfig is
+		// silently dropped for a non-chat (/api/generate) model. Pre-existing
+		// gap, tracked for a follow-up: /api/generate accepts the same
+		// "options" object /api/chat does, so this needs the same treatment
+		// ollamaChatRequest.ApplyOptions gives the chat request.
+		payload = ollamaModelRequest{
 			Model:  g.model.Name,
 			Prompt: concatMessages(input, []ai.Role{ai.RoleUser, ai.RoleModel, ai.RoleTool}),
 			System: concatMessages(input, []ai.Role{ai.RoleSystem}),
@@ -630,7 +636,6 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config
 			Stream: stream,
 			Format: ollamaFormatValue(input.Output),
 		}
-		payload = modelReq
 	} else {
 		var messages []*ollamaMessage
 		// Translate all messages to ollama message format.
@@ -765,8 +770,11 @@ func ollamaFormatValue(output *ai.ModelOutputConfig) any {
 	if len(output.Schema) > 0 {
 		// Ollama's constrained-output engine does not resolve JSON Schema
 		// references, so flatten schemas supplied explicitly by callers.
-		return pluginjsonschema.ResolveRefs(output.Schema)
+		return schemautil.ResolveRefs(output.Schema)
 	}
+	// Defense in depth: every format handler that sets Constrained also sets
+	// Schema (see ai/format.go), so this is unreached through the framework.
+	// It only matters for a ModelOutputConfig a caller builds by hand.
 	return ai.OutputFormatJSON
 }
 

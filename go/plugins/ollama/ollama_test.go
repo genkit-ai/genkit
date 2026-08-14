@@ -887,7 +887,10 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 			mockBody:   generateResponse,
 		},
 		{
-			// Constrained=true but no schema: safety fallback sends "json" string.
+			// Constrained=true but no schema never happens through the
+			// framework (every format handler that sets Constrained also sets
+			// Schema); this exercises ollamaFormatValue's defense-in-depth
+			// fallback for a caller-built ModelOutputConfig instead.
 			name:       "chat model, Constrained=true without schema → format:\"json\"",
 			modelType:  "chat",
 			output:     &ai.ModelOutputConfig{Constrained: true},

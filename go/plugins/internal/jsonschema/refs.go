@@ -14,17 +14,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package jsonschema
+package schemautil
 
 import (
 	"fmt"
 	"strings"
 )
 
-// ResolveRefs returns a copy of schema with direct $ref pointers into the
-// top-level $defs and definitions maps inlined where possible. Annotation
-// siblings are preserved. References with structural siblings, unknown
-// references, non-object definitions, and cycles are left intact.
+// ResolveRefs returns schema with direct $ref pointers into the top-level
+// $defs and definitions maps inlined where possible. Annotation siblings are
+// preserved. References with structural siblings, unknown references,
+// non-object definitions, and cycles are left intact.
+//
+// The result may share structure with schema: a subtree with no $ref to
+// inline is returned as-is rather than copied, and when schema itself has no
+// $defs or definitions to resolve, schema is returned unchanged. Treat the
+// result as read-only, the same as schema itself.
 func ResolveRefs(schema map[string]any) map[string]any {
 	defs, _ := schema["$defs"].(map[string]any)
 	definitions, _ := schema["definitions"].(map[string]any)
@@ -32,7 +37,14 @@ func ResolveRefs(schema map[string]any) map[string]any {
 		return schema
 	}
 	visited := make(map[string]bool)
-	result, _ := inlineRefs(schema, defs, definitions, visited).(map[string]any)
+	// resolved caches each def's own inlining, keyed by ref, so a def
+	// referenced from multiple places is expanded once rather than once per
+	// occurrence: without it, a schema whose defs form a diamond (several
+	// defs sharing the same descendant) re-expands that descendant from
+	// scratch at every occurrence, and the work doubles with each layer of
+	// the diamond.
+	resolved := make(map[string]map[string]any)
+	result, _ := inlineRefs(schema, defs, definitions, visited, resolved).(map[string]any)
 	if result == nil {
 		return schema
 	}
@@ -64,50 +76,54 @@ func ResolveRef(schema map[string]any, ref string) (map[string]any, error) {
 	return resolved, nil
 }
 
-func inlineRefs(v any, defs, definitions map[string]any, visited map[string]bool) any {
+func inlineRefs(v any, defs, definitions map[string]any, visited map[string]bool, resolved map[string]map[string]any) any {
 	switch node := v.(type) {
 	case map[string]any:
 		if ref, ok := node["$ref"].(string); ok {
 			def, found := refTarget(ref, defs, definitions)
 			defMap, isMap := def.(map[string]any)
 			if found && isMap && !visited[ref] && hasOnlyAnnotationSiblings(node) {
-				visited[ref] = true
-				resolved, _ := inlineRefs(defMap, defs, definitions, visited).(map[string]any)
-				delete(visited, ref)
-				if resolved == nil {
+				inlined, cached := resolved[ref]
+				if !cached {
+					visited[ref] = true
+					inlined, _ = inlineRefs(defMap, defs, definitions, visited, resolved).(map[string]any)
+					delete(visited, ref)
+					resolved[ref] = inlined
+				}
+				if inlined == nil {
 					return node
 				}
 				if len(node) > 1 {
-					merged := make(map[string]any, len(resolved)+len(node))
-					for k, val := range resolved {
+					merged := make(map[string]any, len(inlined)+len(node))
+					for k, val := range inlined {
 						merged[k] = val
 					}
 					for k, val := range node {
 						if k != "$ref" {
-							merged[k] = inlineRefs(val, defs, definitions, visited)
+							merged[k] = inlineRefs(val, defs, definitions, visited, resolved)
 						}
 					}
 					return merged
 				}
-				return resolved
+				return inlined
 			}
 			return node
 		}
 		result := make(map[string]any, len(node))
 		for k, val := range node {
-			result[k] = inlineRefs(val, defs, definitions, visited)
+			result[k] = inlineRefs(val, defs, definitions, visited, resolved)
 		}
 		return result
 	case []any:
 		result := make([]any, len(node))
 		for i, item := range node {
-			result[i] = inlineRefs(item, defs, definitions, visited)
+			result[i] = inlineRefs(item, defs, definitions, visited, resolved)
 		}
 		return result
 	case []map[string]any:
 		result := make([]any, len(node))
 		for i, item := range node {
-			result[i] = inlineRefs(item, defs, definitions, visited)
+			result[i] = inlineRefs(item, defs, definitions, visited, resolved)
 		}
 		return result
 	default:
@@ -146,9 +162,17 @@ func hasOnlyAnnotationSiblings(node map[string]any) bool {
 	return true
 }
 
+// isAnnotation reports whether key is safe to keep alongside an inlined $ref:
+// annotation keywords proper (description, title, ...), plus $comment, $id,
+// and $anchor. Those three are not annotations by the spec's own taxonomy,
+// but this resolver never does identifier- or comment-aware resolution, so
+// they carry no meaning it acts on either; treating them as structural would
+// leave a reflected schema's stray $comment shipping an unresolved $ref to
+// Ollama, which is the exact failure this package exists to prevent.
 func isAnnotation(key string) bool {
 	switch key {
-	case "description", "title", "default", "examples", "deprecated", "readOnly", "writeOnly":
+	case "description", "title", "default", "examples", "deprecated", "readOnly", "writeOnly",
+		"$comment", "$id", "$anchor":
 		return true
 	default:
 		return false
