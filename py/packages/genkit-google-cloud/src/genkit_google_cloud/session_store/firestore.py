@@ -40,7 +40,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Generic, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
@@ -342,8 +342,14 @@ class _UserCodeError(Exception):
     """Carrier: the mutator raised; deliver its exception verbatim."""
 
 
-async def _translate_txn_errors(awaitable: Awaitable[None]) -> None:
+_T = TypeVar('_T')
+
+
+async def _translate_txn_errors(awaitable: Awaitable[_T]) -> _T:
     """Await a transactional coroutine, converting backend failures to ``GenkitError``.
+
+    On success this is the coroutine's return value from the attempt that
+    committed.
 
     The store's public contract is that every failure arising from its own
     serialization, storage, or the Google libraries is a ``GenkitError`` with a
@@ -355,7 +361,7 @@ async def _translate_txn_errors(awaitable: Awaitable[None]) -> None:
     obtained an ID, which masks the original error entirely.
     """
     try:
-        await awaitable
+        return await awaitable
     except _UserCodeError as e:
         cause = e.__cause__
         assert cause is not None
@@ -858,21 +864,17 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             _validate_doc_id(session_id, 'session_id')
         prefix = self._prefix(context)
         transaction = self.client.transaction(read_only=True, max_attempts=self.transaction_max_attempts)
-        result: SessionSnapshot | None = None
 
         @firestore.async_transactional
-        async def read_in_transaction(transaction: AsyncTransaction) -> None:
-            nonlocal result
+        async def read_in_transaction(transaction: AsyncTransaction) -> SessionSnapshot | None:
             if snapshot_id is not None:
                 reconstructed = await self._reconstruct(transaction, snapshot_id, prefix=prefix)
-                result = self._to_snapshot(reconstructed) if reconstructed else None
-                return
+                return self._to_snapshot(reconstructed) if reconstructed else None
 
             assert session_id is not None
             pointer_doc = await self._pointer_ref(session_id, prefix).get(transaction=transaction)
             if not pointer_doc.exists:
-                result = None
-                return
+                return None
 
             try:
                 pointer = _PointerDoc.model_validate(pointer_doc.to_dict() or {})
@@ -897,16 +899,16 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
                 if reconstructed is not None:
                     result = self._to_snapshot(reconstructed)
-                if result is not None:
-                    if result.session_id != session_id:
-                        raise GenkitError(
-                            status='DATA_LOSS',
-                            message=(
-                                f"FirestoreSessionStore: session '{session_id}' pointer resolves to "
-                                f"snapshot '{result.snapshot_id}' owned by session '{result.session_id}'."
-                            ),
-                        )
-                    return
+                    if result is not None:
+                        if result.session_id != session_id:
+                            raise GenkitError(
+                                status='DATA_LOSS',
+                                message=(
+                                    f"FirestoreSessionStore: session '{session_id}' pointer resolves to "
+                                    f"snapshot '{result.snapshot_id}' owned by session '{result.session_id}'."
+                                ),
+                            )
+                        return result
 
             if current_id:
                 reconstructed = await self._reconstruct(transaction, current_id, prefix=prefix)
@@ -919,9 +921,10 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                             f"snapshot '{result.snapshot_id}' owned by session '{result.session_id}'."
                         ),
                     )
+                return result
+            return None
 
-        await _translate_txn_errors(read_in_transaction(transaction))
-        return result
+        return await _translate_txn_errors(read_in_transaction(transaction))
 
     async def save_snapshot(
         self,
@@ -959,11 +962,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         prefix = self._prefix(context)
         snap_ref = self._snapshot_ref(snapshot_id, prefix)
         transaction = self.client.transaction(max_attempts=self.transaction_max_attempts)
-        committed: SessionSnapshot | None = None
 
         @firestore.async_transactional
-        async def rmw(transaction: AsyncTransaction) -> None:
-            nonlocal committed
+        async def rmw(transaction: AsyncTransaction) -> SessionSnapshot | None:
             existing_recon = await self._reconstruct(transaction, snapshot_id, prefix=prefix)
             existing = self._to_snapshot(existing_recon) if existing_recon else None
             try:
@@ -973,7 +974,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             except BaseException as e:
                 raise _UserCodeError() from e
             if next_snapshot is None:
-                return
+                return None
             _validate_doc_id(next_snapshot.session_id, 'session_id')
             if next_snapshot.parent_id:
                 _validate_doc_id(next_snapshot.parent_id, 'parent_id')
@@ -1152,10 +1153,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 segment_path=segment_path,
                 prefix=prefix,
             )
-            committed = next_snapshot
+            return next_snapshot
 
-        await _translate_txn_errors(rmw(transaction))
-        return committed
+        return await _translate_txn_errors(rmw(transaction))
 
     async def on_snapshot_status_change(
         self, snapshot_id: str, *, context: dict[str, Any] | None = None
@@ -1225,16 +1225,13 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         """Read a single snapshot by id, reconstructing state from its checkpoint chain."""
         _validate_doc_id(snapshot_id, 'snapshot_id')
         transaction = self.client.transaction(read_only=True, max_attempts=self.transaction_max_attempts)
-        result: SessionSnapshot | None = None
 
         @firestore.async_transactional
-        async def read_in_transaction(transaction: AsyncTransaction) -> None:
-            nonlocal result
+        async def read_in_transaction(transaction: AsyncTransaction) -> SessionSnapshot | None:
             reconstructed = await self._reconstruct(transaction, snapshot_id, prefix=prefix)
-            result = self._to_snapshot(reconstructed) if reconstructed else None
+            return self._to_snapshot(reconstructed) if reconstructed else None
 
-        await _translate_txn_errors(read_in_transaction(transaction))
-        return result
+        return await _translate_txn_errors(read_in_transaction(transaction))
 
     async def _update_pointer_in_transaction(
         self,

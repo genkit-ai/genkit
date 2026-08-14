@@ -1034,6 +1034,32 @@ async def test_firestore_session_store_retries_on_aborted_commit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_firestore_session_store_retry_noop_does_not_return_uncommitted() -> None:
+    """A retry that skips the write returns None, not the first attempt's uncommitted snapshot."""
+    h = FakeStoreHarness()
+    store = h.store(transaction_max_attempts=2)
+    h.commit_aborts_remaining = 1
+    calls = 0
+
+    def fn(_existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id='sess-1',
+                created_at='2026-07-03T00:00:00Z',
+                state=SessionState(session_id='sess-1', custom={'n': 1}),
+            )
+        return None
+
+    saved = await store.save_snapshot('snap-1', fn)
+    assert saved is None
+    assert h.commit_attempts == 2
+    assert await store.get_snapshot(snapshot_id='snap-1') is None
+
+
+@pytest.mark.asyncio
 async def test_firestore_session_store_save_restores_deleted_pointer() -> None:
     """Re-saving a leaf after the pointer doc was deleted restores session_id lookup."""
     h = FakeStoreHarness()
@@ -1578,6 +1604,7 @@ async def test_firestore_session_store_retry_exhaustion_raises_aborted() -> None
     with pytest.raises(GenkitError) as exc_info:
         await store.save_snapshot('snap-1', _mk('snap-1'))
     assert exc_info.value.status == 'ABORTED'
+    assert h.commit_attempts == 2
 
 
 @pytest.mark.asyncio
