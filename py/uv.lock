@@ -1670,7 +1670,7 @@ provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", 
 
 [[package]]
 name = "genkit-amazon-bedrock"
-version = "0.1.0"
+version = "0.9.0"
 source = { editable = "packages/genkit-amazon-bedrock" }
 dependencies = [
     { name = "boto3" },
