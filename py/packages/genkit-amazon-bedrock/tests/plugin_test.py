@@ -207,6 +207,21 @@ async def test_cohere_v4_resolves_but_fails_when_called() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_embedding_family_resolves_but_fails_when_called() -> None:
+    # A family with no request shape here is still an embedder, not a chat model.
+    plugin = Bedrock(region='us-east-1')
+    model_id = 'amazon.some-new-embed-v9:0'
+
+    assert await plugin.resolve(ActionKind.MODEL, bedrock_name(model_id)) is None
+    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name(model_id))
+
+    assert action is not None
+    with pytest.raises(GenkitError, match='unsupported embedding model') as excinfo:
+        await action.run(EmbedRequest(input=[Document.from_text('hi')]))
+    assert excinfo.value.status == 'UNIMPLEMENTED'
+
+
+@pytest.mark.asyncio
 async def test_list_actions_includes_configured_embedders() -> None:
     plugin = Bedrock(
         region='us-east-1',

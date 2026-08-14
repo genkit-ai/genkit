@@ -140,6 +140,22 @@ def is_embedding_model(model_id: str) -> bool:
     return _embedding_family(model_id) is not None
 
 
+def looks_like_embedding_model(model_id: str) -> bool:
+    """Reports whether a model ID names an embedding model, routable or not.
+
+    Recognition only, never routing: an embedding ID from a family this plugin
+    has no request shape for still answers as an unsupported embedder rather
+    than as a Converse chat model.
+
+    Args:
+        model_id: Bedrock model ID, inference-profile ID, or ARN.
+
+    Returns:
+        True when the ID carries the token every Bedrock embedding family uses.
+    """
+    return 'embed' in strip_inference_profile_prefix(model_id)
+
+
 def get_embedder_options(model_id: str) -> EmbedderOptions:
     """Builds the Genkit embedder metadata for a Bedrock embedding model.
 

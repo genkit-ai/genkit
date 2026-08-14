@@ -40,7 +40,12 @@ from genkit_amazon_bedrock.config import (
     BedrockConfig,
     ModelDefinition,
 )
-from genkit_amazon_bedrock.embedders import BedrockEmbedder, get_embedder_options, is_embedding_model
+from genkit_amazon_bedrock.embedders import (
+    BedrockEmbedder,
+    get_embedder_options,
+    is_embedding_model,
+    looks_like_embedding_model,
+)
 from genkit_amazon_bedrock.model_info import get_model_info
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
@@ -158,10 +163,12 @@ class Bedrock(Plugin):
             return None
         model_id = name.removeprefix(prefix)
         if action_type == ActionKind.EMBEDDER:
-            return self._create_embedder_action(model_id) if is_embedding_model(model_id) else None
+            # An unroutable embedding ID still resolves, so embed() can name it
+            # as an unsupported embedder instead of the registry saying 404.
+            return self._create_embedder_action(model_id) if looks_like_embedding_model(model_id) else None
         if action_type != ActionKind.MODEL:
             return None
-        if is_embedding_model(model_id):
+        if looks_like_embedding_model(model_id):
             # Embedding models speak InvokeModel, not Converse; resolving one
             # as a chat model only defers the failure to call time.
             return None
@@ -216,10 +223,10 @@ class Bedrock(Plugin):
     async def list_actions(self) -> list[ActionMetadata]:
         """List configured Bedrock models and embedders.
 
-        Only explicitly configured entries are listed, and only those ``resolve``
-        can serve: an ID in the wrong list would otherwise be advertised and then
-        answer 404. The catalogue itself is open-ended, and any model ID still
-        resolves on demand.
+        Only explicitly configured entries are listed, and only those this
+        plugin can actually serve: an ID in the wrong list would otherwise be
+        advertised and then fail on use. The catalogue itself is open-ended, and
+        any model ID still resolves on demand.
 
         Returns:
             ActionMetadata for each configured chat model and embedder.
@@ -231,7 +238,7 @@ class Bedrock(Plugin):
                 config_schema=BedrockConfig,
             )
             for definition in self.models
-            if definition.type in ('chat', 'text') and not is_embedding_model(definition.name)
+            if definition.type in ('chat', 'text') and not looks_like_embedding_model(definition.name)
         ]
         actions.extend(
             embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id))
