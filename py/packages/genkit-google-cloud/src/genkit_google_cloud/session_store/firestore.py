@@ -61,6 +61,7 @@ from genkit._ai._agents._session import (
     StateT,
 )
 from genkit._ai._agents._session_stores._util import (
+    TERMINAL_STATUSES,
     SaveFn,
     apply_save,
     iterate_statuses,
@@ -97,13 +98,6 @@ MAX_SHARD_SIZE = 1_000_000
 # Firestore transactions retry internally on contention; after this many
 # attempts the failure surfaces as GenkitError(status='ABORTED').
 DEFAULT_TRANSACTION_MAX_ATTEMPTS = 5
-
-_TERMINAL_STATUSES = frozenset({
-    SnapshotStatus.COMPLETED,
-    SnapshotStatus.FAILED,
-    SnapshotStatus.ABORTED,
-    SnapshotStatus.EXPIRED,
-})
 
 
 @dataclass(eq=False)
@@ -1609,7 +1603,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 sub.last_status = status
                 with contextlib.suppress(Exception):
                     sub.queue.put_nowait(status)
-                if status not in _TERMINAL_STATUSES:
+                if status not in TERMINAL_STATUSES:
                     return
                 with contextlib.suppress(Exception):
                     sub.queue.put_nowait(None)
