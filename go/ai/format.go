@@ -32,12 +32,18 @@ const (
 	// For streaming, each chunk represents the full object received up to that point.
 	OutputFormatJSON string = "json"
 	// OutputFormatJSONL is the format for JSONL content.
-	// For streaming, each chunk represents new items since the last chunk.
+	//
+	// For streaming, each chunk carries the objects whose line finished since
+	// the last chunk. A line still being written is held back until it parses,
+	// so no object is ever handed over incomplete or handed over twice.
 	OutputFormatJSONL string = "jsonl"
 	// OutputFormatMedia is the format for media content.
 	OutputFormatMedia string = "media"
 	// OutputFormatArray is the format for array content.
-	// For streaming, each chunk represents new items since the last chunk.
+	//
+	// For streaming, each chunk carries the elements that finished since the
+	// last chunk. An element still being written is held back until it parses,
+	// so no element is ever handed over incomplete or handed over twice.
 	OutputFormatArray string = "array"
 	// OutputFormatEnum is the format for enum content.
 	// The value must be a string.
@@ -434,7 +440,10 @@ func (j *jsonlHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
 
 // parseJSONL parses JSONL starting from the cursor position.
 // Returns the parsed items, the new cursor position, and any error.
-func (j *jsonlHandler) parseJSONL(text string, cursor int, allowPartial bool) ([]any, int, error) {
+//
+// streaming says the text is a turn in progress, so a trailing line that does
+// not parse is a line still being written rather than malformed output.
+func (j *jsonlHandler) parseJSONL(text string, cursor int, streaming bool) ([]any, int, error) {
 	if text == "" || cursor >= len(text) {
 		return nil, cursor, nil
 	}
@@ -453,12 +462,11 @@ func (j *jsonlHandler) parseJSONL(text string, cursor int, allowPartial bool) ([
 			var result any
 			err := json.Unmarshal([]byte(trimmed), &result)
 			if err != nil {
-				if allowPartial && isLastLine {
-					partialResult, partialErr := base.ParsePartialJSON(trimmed)
-					if partialErr == nil && partialResult != nil {
-						results = append(results, partialResult)
-					}
-					// Don't advance cursor for partial line.
+				if streaming && isLastLine {
+					// The line is still being written. Leave the cursor where it
+					// is and hand nothing over: the next chunk parses the line
+					// once it is whole, so an item reaches the caller complete
+					// and only once.
 					break
 				}
 				return nil, cursor, status.Errorf(status.ErrInvalidOutput, "invalid JSON on line %d: %w", i+1, err)
