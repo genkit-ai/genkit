@@ -40,7 +40,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal
 
 from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
@@ -342,10 +342,9 @@ class _UserCodeError(Exception):
     """Carrier: the mutator raised; deliver its exception verbatim."""
 
 
-_T = TypeVar('_T')
-
-
-async def _translate_txn_errors(awaitable: Awaitable[_T]) -> _T:
+async def _translate_txn_errors(
+    awaitable: Awaitable[SessionSnapshot | None],
+) -> SessionSnapshot | None:
     """Await a transactional coroutine, converting backend failures to ``GenkitError``.
 
     On success this is the coroutine's return value from the attempt that
