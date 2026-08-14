@@ -80,11 +80,19 @@ async function enableTelemetry(
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
   const logExporter = new LogServerExporter();
-  const logProcessor: LogRecordProcessor =
+  const defaultLogProcessor: LogRecordProcessor =
     isDevEnv() || enableRealTimeTelemetry
       ? new SimpleLogRecordProcessor(logExporter)
       : new BatchLogRecordProcessor(logExporter);
-  nodeOtelConfig.logRecordProcessor = logProcessor;
+
+  if (nodeOtelConfig.logRecordProcessor) {
+    nodeOtelConfig.logRecordProcessor = new MultiLogRecordProcessor([
+      nodeOtelConfig.logRecordProcessor,
+      defaultLogProcessor,
+    ]);
+  } else {
+    nodeOtelConfig.logRecordProcessor = defaultLogProcessor;
+  }
 
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
@@ -141,4 +149,22 @@ async function flushTracing() {
     promises.push(nodeOtelConfig.logRecordProcessor.forceFlush());
   }
   await Promise.all(promises);
+}
+
+class MultiLogRecordProcessor implements LogRecordProcessor {
+  constructor(private readonly processors: LogRecordProcessor[]) {}
+
+  async forceFlush(): Promise<void> {
+    await Promise.all(this.processors.map((p) => p.forceFlush()));
+  }
+
+  onEmit(logRecord: any, context?: any): void {
+    for (const processor of this.processors) {
+      processor.onEmit(logRecord, context);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    await Promise.all(this.processors.map((p) => p.shutdown()));
+  }
 }
