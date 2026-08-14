@@ -1690,12 +1690,14 @@ version = "0.9.0"
 source = { editable = "packages/genkit-amazon-bedrock" }
 dependencies = [
     { name = "boto3" },
+    { name = "botocore" },
     { name = "genkit" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.37.24" },
+    { name = "botocore", specifier = ">=1.37.24" },
     { name = "genkit", editable = "packages/genkit" },
 ]
 
