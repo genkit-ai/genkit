@@ -1488,7 +1488,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 		// omit state (fail closed, no leak) rather than recurse. The original
 		// cause is what the caller needs and is preserved on Error above.
 		if state, err := rt.outboundState(ctx, rt.sess.lastGoodState); err != nil {
-			logger.FromContext(ctx).Error(
+			logger.Error(ctx,
 				"agent state transform failed shaping failed-output state; omitting state",
 				"error", err)
 		} else {
@@ -1625,8 +1625,8 @@ func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID stri
 			return
 		case <-ticker.C:
 			if err := beatHeartbeat(ctx, rt.cfg.store, snapshotID); err != nil {
-				logger.FromContext(ctx).Debug("agent: heartbeat refresh failed",
-					"snapshotId", snapshotID, "err", err)
+				logger.Debug(ctx, "agent: heartbeat refresh failed",
+					"snapshotId", snapshotID, "error", err)
 			}
 		}
 	}
@@ -1762,8 +1762,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 			}, nil
 		})
 	if err != nil {
-		logger.FromContext(ctx).Error("agent: failed to finalize pending snapshot",
-			"snapshotId", pending.SnapshotID, "err", err)
+		logger.Error(ctx, "agent: failed to finalize pending snapshot",
+			"snapshotId", pending.SnapshotID, "error", err)
 	}
 }
 
