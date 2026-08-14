@@ -22,9 +22,12 @@ import pytest
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
+    ConnectTimeoutError,
     EndpointConnectionError,
     NoCredentialsError,
+    NoRegionError,
     ParamValidationError,
+    PartialCredentialsError,
     ReadTimeoutError,
 )
 from genkit_amazon_bedrock.models import BedrockModel
@@ -107,16 +110,31 @@ async def test_non_streaming_context_sends_no_chunks(monkeypatch: pytest.MonkeyP
     assert sent == []
 
 
+ENDPOINT = 'https://bedrock-runtime.us-east-1.amazonaws.com'
+
+
 @pytest.mark.parametrize(
     'error,expected_status',
     [
         (ParamValidationError(report='bad param'), 'INVALID_ARGUMENT'),
         (NoCredentialsError(), 'UNAUTHENTICATED'),
-        (ReadTimeoutError(endpoint_url='https://bedrock-runtime.us-east-1.amazonaws.com'), 'DEADLINE_EXCEEDED'),
-        (EndpointConnectionError(endpoint_url='https://bedrock-runtime.us-east-1.amazonaws.com'), 'UNAVAILABLE'),
+        (PartialCredentialsError(provider='env', cred_var='aws_secret_access_key'), 'UNAUTHENTICATED'),
+        (NoRegionError(), 'FAILED_PRECONDITION'),
+        (ReadTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
+        (ConnectTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
+        (EndpointConnectionError(endpoint_url=ENDPOINT), 'UNAVAILABLE'),
         (BotoCoreError(), 'UNKNOWN'),
     ],
-    ids=['param_validation', 'no_credentials', 'read_timeout', 'endpoint_connection', 'unlisted'],
+    ids=[
+        'param_validation',
+        'no_credentials',
+        'partial_credentials',
+        'no_region',
+        'read_timeout',
+        'connect_timeout',
+        'endpoint_connection',
+        'unlisted',
+    ],
 )
 @pytest.mark.asyncio
 async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expected_status: str) -> None:
@@ -135,12 +153,19 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     'code,expected_status',
     [
         ('ThrottlingException', 'RESOURCE_EXHAUSTED'),
+        ('TooManyRequestsException', 'RESOURCE_EXHAUSTED'),
+        ('ServiceQuotaExceededException', 'RESOURCE_EXHAUSTED'),
         ('ValidationException', 'INVALID_ARGUMENT'),
         ('AccessDeniedException', 'PERMISSION_DENIED'),
+        ('UnrecognizedClientException', 'UNAUTHENTICATED'),
+        ('ExpiredTokenException', 'UNAUTHENTICATED'),
         ('ResourceNotFoundException', 'NOT_FOUND'),
         ('ModelTimeoutException', 'DEADLINE_EXCEEDED'),
+        ('ModelNotReadyException', 'UNAVAILABLE'),
         ('ServiceUnavailableException', 'UNAVAILABLE'),
+        ('ModelErrorException', 'INTERNAL'),
         ('SomeFutureException', 'UNKNOWN'),
+        ('', 'UNKNOWN'),
     ],
 )
 @pytest.mark.asyncio
@@ -155,3 +180,47 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.original_message
     assert excinfo.value.__cause__ is error
+
+
+def throttling_error(headers: dict[str, str] | None = None) -> ClientError:
+    response: dict[str, Any] = {'Error': {'Code': 'ThrottlingException', 'Message': 'slow down'}}
+    if headers is not None:
+        response['ResponseMetadata'] = {'HTTPHeaders': headers}
+    return ClientError(response, 'Converse')
+
+
+async def generate_error(error: Exception) -> GenkitError:
+    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=FakeTransport(error=error))
+    with pytest.raises(GenkitError) as excinfo:
+        await model.generate(text_request())
+    return excinfo.value
+
+
+@pytest.mark.asyncio
+async def test_throttling_surfaces_retry_after_seconds() -> None:
+    genkit_error = await generate_error(throttling_error({'retry-after': '2'}))
+
+    assert genkit_error.status == 'RESOURCE_EXHAUSTED'
+    assert genkit_error.response_metadata == {'retry_after_ms': 2000.0}
+
+
+@pytest.mark.asyncio
+async def test_retry_after_accepts_an_http_date() -> None:
+    genkit_error = await generate_error(throttling_error({'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}))
+
+    assert genkit_error.response_metadata is not None
+    # The date is long past, so the wait clamps to zero rather than going negative.
+    assert genkit_error.response_metadata['retry_after_ms'] == 0.0
+
+
+@pytest.mark.parametrize(
+    'headers',
+    [None, {}, {'retry-after': ''}, {'retry-after': 'soon'}, {'content-type': 'application/json'}],
+    ids=['no_metadata', 'no_headers', 'empty', 'unparseable', 'absent'],
+)
+@pytest.mark.asyncio
+async def test_missing_or_unparseable_retry_after_is_omitted(headers: dict[str, str] | None) -> None:
+    genkit_error = await generate_error(throttling_error(headers))
+
+    assert genkit_error.status == 'RESOURCE_EXHAUSTED'
+    assert genkit_error.response_metadata is None

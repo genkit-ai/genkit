@@ -16,6 +16,9 @@
 
 """Bedrock model action implementation (Converse API)."""
 
+import math
+import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from botocore.exceptions import (
@@ -30,7 +33,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from genkit import ModelRequest, ModelResponse, ModelResponseChunk, Role
+from genkit import ErrorResponseMetadata, ModelRequest, ModelResponse, ModelResponseChunk, Role
 from genkit.plugin_api import ActionRunContext, GenkitError, StatusName
 from genkit_amazon_bedrock.converters import build_converse_request, to_model_response
 
@@ -73,13 +76,55 @@ _BOTOCORE_ERROR_STATUS: tuple[tuple[type[BotoCoreError], StatusName], ...] = (
 )
 
 
+def _parse_retry_after_ms(value: str) -> float | None:
+    """Parses an HTTP Retry-After value into milliseconds.
+
+    Accepts both forms the header allows, delay-seconds and an HTTP-date.
+    """
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        pass
+    else:
+        # Check the scaled value: a large finite input can overflow to inf.
+        retry_after_ms = seconds * 1000
+        if seconds >= 0 and math.isfinite(retry_after_ms):
+            return retry_after_ms
+    try:
+        retry_at_ms = parsedate_to_datetime(value).timestamp() * 1000
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return max(0.0, retry_at_ms - time.time() * 1000)
+
+
+def _retry_after_ms(error: ClientError) -> float | None:
+    """Pulls Retry-After out of the response headers Bedrock throttling sends."""
+    metadata = error.response.get('ResponseMetadata') or {}
+    headers = metadata.get('HTTPHeaders') or {}
+    if not isinstance(headers, dict):
+        return None
+    # Header names are case-insensitive; botocore's lowercasing is not promised.
+    for name, value in headers.items():
+        if isinstance(name, str) and name.lower() == 'retry-after' and isinstance(value, str):
+            return _parse_retry_after_ms(value)
+    return None
+
+
 def _from_client_error(error: ClientError) -> GenkitError:
     error_info: dict[str, Any] = error.response.get('Error') or {}
     code = error_info.get('Code') or ''
     message = error_info.get('Message') or str(error)
+    retry_after_ms = _retry_after_ms(error)
+    response_metadata: ErrorResponseMetadata | None = None
+    if retry_after_ms is not None:
+        response_metadata = {'retry_after_ms': retry_after_ms}
     return GenkitError(
         message=f'bedrock converse failed: {code}: {message}' if code else f'bedrock converse failed: {message}',
         status=_ERROR_CODE_STATUS.get(code, 'UNKNOWN'),
+        response_metadata=response_metadata,
     )
 
 
