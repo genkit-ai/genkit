@@ -77,16 +77,14 @@ async function enableTelemetry(
   nodeOtelConfig.spanProcessors = processors;
 
   // Add LogRecordProcessors
-  if (process.env.GENKIT_OTEL_ENABLE_LOGS === 'true') {
-    const enableRealTimeTelemetry =
-      process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-    const logExporter = new LogServerExporter();
-    const logProcessor: LogRecordProcessor =
-      isDevEnv() || enableRealTimeTelemetry
-        ? new SimpleLogRecordProcessor(logExporter)
-        : new BatchLogRecordProcessor(logExporter);
-    nodeOtelConfig.logRecordProcessor = logProcessor;
-  }
+  const enableRealTimeTelemetry =
+    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
+  const logExporter = new LogServerExporter();
+  const logProcessor: LogRecordProcessor =
+    isDevEnv() || enableRealTimeTelemetry
+      ? new SimpleLogRecordProcessor(logExporter)
+      : new BatchLogRecordProcessor(logExporter);
+  nodeOtelConfig.logRecordProcessor = logProcessor;
 
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
