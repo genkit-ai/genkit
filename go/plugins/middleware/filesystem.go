@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -210,6 +211,7 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 		mu.Unlock()
 
 		if len(queued) > 0 {
+			logger.Debug(ctx, "filesystem middleware injecting queued messages", "messages", len(queued))
 			if params.Callback != nil {
 				for _, msg := range queued {
 					if err := params.Callback(ctx, &ai.ModelResponseChunk{
@@ -241,6 +243,10 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			return nil, err
 		}
 
+		// The error is deliberately not propagated: the model sees the failure
+		// as a user message on the next turn and can self-correct, so this log
+		// is the only direct record of the original error.
+		logger.Debug(ctx, "filesystem tool failed, converting to user message", "tool", params.Tool.Name(), "error", err)
 		enqueueParts(ai.NewTextPart(fmt.Sprintf("Tool %q failed: %v", params.Tool.Name(), err)))
 		return &ai.MultipartToolResponse{
 			Output: "Tool call failed; see user message below for details.",

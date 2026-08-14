@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 )
 
 // ToolApproval is a middleware that interrupts tool execution unless the tool
@@ -75,6 +76,7 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 
 	// No span is emitted here: the generate engine attributes a hook that
 	// short-circuits the tool to the tool itself in traces.
+	logger.Debug(ctx, "tool held for approval", "tool", name)
 	return nil, ai.NewToolInterruptError(map[string]any{
 		"message": "Tool not in approved list: " + name,
 	})

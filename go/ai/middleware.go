@@ -239,16 +239,25 @@ func configsToRefs(configs []Middleware) ([]*MiddlewareRef, error) {
 	return refs, nil
 }
 
-// resolveRefs resolves [MiddlewareRef] entries to [Hooks] bundles. If
+// namedHooks pairs a middleware's registered name with the per-call [Hooks]
+// bundle it produced. Middleware gets no spans of its own (its hooks wrap
+// spans other actions create), so the name travels with the hooks to let the
+// chain builders attribute log records to the middleware that ran.
+type namedHooks struct {
+	name  string
+	hooks *Hooks
+}
+
+// resolveRefs resolves [MiddlewareRef] entries to named [Hooks] bundles. If
 // ref.Config is a [Middleware] value, its New method is invoked directly
 // (local fast path). Otherwise the descriptor is looked up in the registry
 // and its build closure is invoked with the marshaled config (JSON dispatch,
 // used for cross-runtime / Dev UI calls).
-func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]*Hooks, error) {
+func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]namedHooks, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	bundles := make([]*Hooks, 0, len(refs))
+	bundles := make([]namedHooks, 0, len(refs))
 	for _, ref := range refs {
 		if mw, ok := ref.Config.(Middleware); ok {
 			h, err := mw.New(ctx)
@@ -258,7 +267,7 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 			if h == nil {
 				return nil, status.Errorf(status.ErrInternal, "ai: middleware %q returned nil hooks", ref.Name)
 			}
-			bundles = append(bundles, h)
+			bundles = append(bundles, namedHooks{name: ref.Name, hooks: h})
 			continue
 		}
 		d := LookupMiddleware(r, ref.Name)
@@ -280,7 +289,7 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 		if h == nil {
 			return nil, status.Errorf(status.ErrInternal, "ai: middleware %q factory returned nil", ref.Name)
 		}
-		bundles = append(bundles, h)
+		bundles = append(bundles, namedHooks{name: ref.Name, hooks: h})
 	}
 	return bundles, nil
 }

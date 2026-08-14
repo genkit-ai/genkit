@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -158,6 +159,12 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 			jitter := time.Duration(float64(time.Second) * math.Pow(2, float64(attempt)) * rand.Float64())
 			delay += jitter
 		}
+
+		logger.Debug(ctx, "model call failed, retrying",
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+			"delay", delay.Round(time.Millisecond),
+			"error", err)
 
 		// Bail out if the caller disconnected mid-backoff; no reason to wait
 		// out the delay (or issue another retry) for a caller who has left.

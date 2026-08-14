@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
@@ -97,6 +98,9 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	lastErr := err
 	for _, ref := range f.Models {
 		name := ref.Name()
+		// A fallback reroutes the request to a different (billed) model, so it
+		// warrants more than debug visibility.
+		logger.Warn(ctx, "model call failed, falling back", "model", name, "error", lastErr)
 		m := genkit.LookupModel(genkit.FromContext(ctx), name)
 		if m == nil {
 			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)

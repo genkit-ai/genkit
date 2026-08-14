@@ -26,6 +26,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/invopop/jsonschema"
@@ -357,10 +359,10 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	}
 	var middlewareTools []Tool
 	for _, mw := range mws {
-		if mw == nil {
+		if mw.hooks == nil {
 			continue
 		}
-		for _, t := range mw.Tools {
+		for _, t := range mw.hooks.Tools {
 			if _, ok := toolDefMap[t.Name()]; ok {
 				return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
 			}
@@ -650,52 +652,116 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		})
 	}
 
-	logger.Debug(ctx, "generate request resolved",
+	resolvedArgs := []any{
 		"model", opts.Model,
 		"messages", len(req.Messages),
 		"tools", len(toolDefs),
 		"maxTurns", maxTurns,
 		"format", outputCfg.Format,
 		"constrained", outputCfg.Constrained,
-		"streaming", cb != nil)
+		"streaming", cb != nil,
+	}
+	if len(mws) > 0 {
+		resolvedArgs = append(resolvedArgs, "middleware", middlewareNames(mws))
+	}
+	logger.Debug(ctx, "generate request resolved", resolvedArgs...)
 
 	return generate(ctx, req, 0, 0)
 }
 
+// middlewareNames returns the names of the resolved middleware in chain
+// order, for the request-resolved log line.
+func middlewareNames(mws []namedHooks) []string {
+	names := make([]string, len(mws))
+	for i, mw := range mws {
+		names[i] = mw.name
+	}
+	return names
+}
+
+// hookLogArgs builds the attributes for the "middleware hook finished" log
+// record: the middleware and hook names, hook-specific extras, the duration,
+// whether the hook short-circuited the chain (returned without invoking
+// next), and any error it returned. Hooks have no spans of their own, so
+// these records are the only per-hook visibility.
+func hookLogArgs(name, hook string, start time.Time, nextCalled bool, err error, extra ...any) []any {
+	args := make([]any, 0, len(extra)+10)
+	args = append(args, "middleware", name, "hook", hook)
+	args = append(args, extra...)
+	args = append(args, "duration", time.Since(start).Round(time.Millisecond))
+	if !nextCalled {
+		args = append(args, "shortCircuited", true)
+	}
+	if err != nil {
+		args = append(args, "error", err)
+	}
+	return args
+}
+
 // buildGenerateChain composes the WrapGenerate hooks from mws (outer-to-inner)
-// around run. Middleware with a nil WrapGenerate hook is skipped.
-func buildGenerateChain(mws []*Hooks, run func(ctx context.Context, params *GenerateParams) (*ModelResponse, error)) func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+// around run. Middleware with a nil WrapGenerate hook is skipped. When debug
+// logging is enabled, each hook invocation is bracketed by log records that
+// attribute the layer, its duration, and whether it short-circuited the chain.
+func buildGenerateChain(mws []namedHooks, run func(ctx context.Context, params *GenerateParams) (*ModelResponse, error)) func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
 	chain := run
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
-		if mw == nil || mw.WrapGenerate == nil {
+		if mw.hooks == nil || mw.hooks.WrapGenerate == nil {
 			continue
 		}
-		hook := mw.WrapGenerate
+		hook := mw.hooks.WrapGenerate
+		name := mw.name
 		next := chain
 		chain = func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
-			return hook(ctx, params, next)
+			if !logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+				return hook(ctx, params, next)
+			}
+			logger.Debug(ctx, "middleware hook started", "middleware", name, "hook", "generate", "iteration", params.Iteration)
+			start := time.Now()
+			var nextCalled atomic.Bool
+			resp, err := hook(ctx, params, func(ctx context.Context, p *GenerateParams) (*ModelResponse, error) {
+				nextCalled.Store(true)
+				return next(ctx, p)
+			})
+			logger.Debug(ctx, "middleware hook finished",
+				hookLogArgs(name, "generate", start, nextCalled.Load(), err, "iteration", params.Iteration)...)
+			return resp, err
 		}
 	}
 	return chain
 }
 
 // buildModelChain composes the WrapModel hooks from mws (outer-to-inner)
-// around fn. Middleware with a nil WrapModel hook is skipped.
-func buildModelChain(mws []*Hooks, fn ModelFunc) ModelFunc {
+// around fn. Middleware with a nil WrapModel hook is skipped. Hook
+// invocations are logged as in [buildGenerateChain].
+func buildModelChain(mws []namedHooks, fn ModelFunc) ModelFunc {
 	chain := fn
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
-		if mw == nil || mw.WrapModel == nil {
+		if mw.hooks == nil || mw.hooks.WrapModel == nil {
 			continue
 		}
-		hook := mw.WrapModel
+		hook := mw.hooks.WrapModel
+		name := mw.name
 		next := chain
 		chain = func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-			return hook(ctx, &ModelParams{Request: req, Callback: cb},
+			nextFn := func(ctx context.Context, params *ModelParams) (*ModelResponse, error) {
+				return next(ctx, params.Request, params.Callback)
+			}
+			if !logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+				return hook(ctx, &ModelParams{Request: req, Callback: cb}, nextFn)
+			}
+			logger.Debug(ctx, "middleware hook started", "middleware", name, "hook", "model")
+			start := time.Now()
+			var nextCalled atomic.Bool
+			resp, err := hook(ctx, &ModelParams{Request: req, Callback: cb},
 				func(ctx context.Context, params *ModelParams) (*ModelResponse, error) {
-					return next(ctx, params.Request, params.Callback)
+					nextCalled.Store(true)
+					return nextFn(ctx, params)
 				})
+			logger.Debug(ctx, "middleware hook finished",
+				hookLogArgs(name, "model", start, nextCalled.Load(), err)...)
+			return resp, err
 		}
 	}
 	return chain
@@ -714,10 +780,10 @@ var toolRanKey = base.NewContextKey[*bool]()
 // invoke from concurrent goroutines; each invocation threads its own params
 // through the shared hook chain. When no WrapTool hooks are configured, the
 // tool is invoked directly without allocating a ToolParams wrapper.
-func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
+func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
 	hasHook := false
 	for _, mw := range mws {
-		if mw != nil && mw.WrapTool != nil {
+		if mw.hooks != nil && mw.hooks.WrapTool != nil {
 			hasHook = true
 			break
 		}
@@ -735,13 +801,26 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
-		if mw == nil || mw.WrapTool == nil {
+		if mw.hooks == nil || mw.hooks.WrapTool == nil {
 			continue
 		}
-		hook := mw.WrapTool
+		hook := mw.hooks.WrapTool
+		name := mw.name
 		next := chain
 		chain = func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
-			return hook(ctx, params, next)
+			if !logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+				return hook(ctx, params, next)
+			}
+			logger.Debug(ctx, "middleware hook started", "middleware", name, "hook", "tool", "tool", params.Tool.Name())
+			start := time.Now()
+			var nextCalled atomic.Bool
+			resp, err := hook(ctx, params, func(ctx context.Context, p *ToolParams) (*MultipartToolResponse, error) {
+				nextCalled.Store(true)
+				return next(ctx, p)
+			})
+			logger.Debug(ctx, "middleware hook finished",
+				hookLogArgs(name, "tool", start, nextCalled.Load(), err, "tool", params.Tool.Name())...)
+			return resp, err
 		}
 	}
 	return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {

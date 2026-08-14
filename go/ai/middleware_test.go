@@ -20,11 +20,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -1055,5 +1058,102 @@ func TestMiddlewareRefArg_NewErrors(t *testing.T) {
 	// of silently producing nil hooks.
 	if _, err := (middlewareRefArg{name: "x"}).New(testCtx); err == nil {
 		t.Fatal("expected middlewareRefArg.New to return an error")
+	}
+}
+
+// --- hook logging: runs are attributed and short-circuits flagged ---
+
+// hookLogRecorder is a slog.Handler that captures records at or above min.
+type hookLogRecorder struct {
+	min     slog.Level
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *hookLogRecorder) Enabled(_ context.Context, l slog.Level) bool { return l >= h.min }
+
+func (h *hookLogRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *hookLogRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *hookLogRecorder) WithGroup(string) slog.Handler      { return h }
+
+func TestMiddlewareHookLogging(t *testing.T) {
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{}, nil
+	}
+	passThrough := namedHooks{name: "test/outer", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}
+	shortCircuit := namedHooks{name: "test/inner", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return &ModelResponse{}, nil // resolves the call without invoking next
+		},
+	}}
+	chain := buildModelChain([]namedHooks{passThrough, shortCircuit}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelDebug}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	type entry struct {
+		msg, mw        string
+		shortCircuited bool
+	}
+	var got []entry
+	for _, r := range rec.records {
+		e := entry{msg: r.Message}
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "middleware":
+				e.mw = a.Value.String()
+			case "shortCircuited":
+				e.shortCircuited = a.Value.Bool()
+			}
+			return true
+		})
+		got = append(got, e)
+	}
+	want := []entry{
+		{msg: "middleware hook started", mw: "test/outer"},
+		{msg: "middleware hook started", mw: "test/inner"},
+		{msg: "middleware hook finished", mw: "test/inner", shortCircuited: true},
+		{msg: "middleware hook finished", mw: "test/outer"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("hook log entries = %v, want %v", got, want)
+	}
+}
+
+func TestMiddlewareHookLoggingDisabled(t *testing.T) {
+	ran := false
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		ran = true
+		return &ModelResponse{}, nil
+	}
+	chain := buildModelChain([]namedHooks{{name: "test/mw", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelInfo}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("base model fn did not run")
+	}
+	if len(rec.records) != 0 {
+		t.Errorf("got %d log records with debug disabled, want 0", len(rec.records))
 	}
 }
