@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/internal/base"
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -64,17 +65,29 @@ func isStdlibDefaultHandler(h slog.Handler) bool {
 }
 
 // SetLevel sets the minimum level of Genkit's console log handler and installs
-// it as the process-wide default logger, replacing the current one. Handlers
-// previously installed with [AddHandler] are preserved.
+// it as the process-wide default logger. Handlers previously installed with
+// [AddHandler] are preserved.
 //
-// Applications that manage their own [slog] handler should set their handler's
-// level directly instead of calling SetLevel.
+// A default handler the application installed itself (via [slog.SetDefault]
+// or [SetDefaultHandler]) is not Genkit's to manage: SetLevel records the
+// level for the managed console handler but leaves the application's handler
+// in place and warns, exactly as GENKIT_LOG_LEVEL does, since that handler's
+// own level is what governs output. Set the application handler's level
+// directly instead.
 func SetLevel(l slog.Level) {
 	mu.Lock()
-	defer mu.Unlock()
 	level.Set(l)
-	ensureConsole()
-	install(console)
+	custom := hasCustomDefaultLocked()
+	if !custom {
+		ensureConsole()
+		install(console)
+	}
+	mu.Unlock()
+	if custom {
+		// Logged after unlocking: the warning flows through the application's
+		// handler, which must be free to call back into this package.
+		slog.Warn("logger.SetLevel: the application installed its own default log handler; set its level directly", "level", l)
+	}
 }
 
 // ensureConsole creates the managed console handler if it does not exist yet.
@@ -127,11 +140,32 @@ func SetDefaultHandler(h slog.Handler) {
 func HasCustomDefault() bool {
 	mu.Lock()
 	defer mu.Unlock()
-	h := slog.Default().Handler()
-	if t, ok := h.(*teeHandler); ok {
-		h = t.handlers[0]
-	}
+	return hasCustomDefaultLocked()
+}
+
+// hasCustomDefaultLocked is [HasCustomDefault] for callers already holding mu.
+func hasCustomDefaultLocked() bool {
+	h := baseHandler(slog.Default().Handler())
 	return !isStdlibDefaultHandler(h) && h != console
+}
+
+// baseHandler strips the composition layers this package wraps around a base
+// handler: the tee that install builds, and the context binding [FromContext]
+// applies (in case an application handed a FromContext logger to
+// slog.SetDefault). What remains is the handler whose identity decides
+// whether the base is the stdlib default, the managed console, or
+// application-owned.
+func baseHandler(h slog.Handler) slog.Handler {
+	for {
+		switch v := h.(type) {
+		case *teeHandler:
+			h = v.handlers[0]
+		case *ctxHandler:
+			h = v.inner
+		default:
+			return h
+		}
+	}
 }
 
 // currentBase returns the handler that console output should continue to flow
@@ -142,10 +176,7 @@ func HasCustomDefault() bool {
 // carried over so the substitution does not change verbosity. Callers must
 // hold mu.
 func currentBase() slog.Handler {
-	h := slog.Default().Handler()
-	if t, ok := h.(*teeHandler); ok {
-		h = t.handlers[0]
-	}
+	h := baseHandler(slog.Default().Handler())
 	if isStdlibDefaultHandler(h) {
 		if console == nil {
 			seedLevelFromStdlib(h)
@@ -186,13 +217,73 @@ func install(base slog.Handler) {
 	slog.SetDefault(slog.New(&teeHandler{handlers: handlers}))
 }
 
-// FromContext returns the Logger in ctx, or the default Logger
-// if there is none.
+// FromContext returns the logger carried by ctx, or the process default
+// logger if there is none, bound to ctx: records logged even through the
+// returned logger's context-free methods (Info, Error, ...) reach the handler
+// carrying ctx, where those methods would otherwise hand the handler a
+// background context. The binding is what lets a context-aware handler, such
+// as the one that streams logs to the Dev UI, correlate such records with the
+// span that was active when the logger was obtained. A context passed
+// explicitly at the call site (InfoContext, Log) wins whenever it carries a
+// span of its own.
 func FromContext(ctx context.Context) *slog.Logger {
+	h := fromContext(ctx).Handler()
+	if c, ok := h.(*ctxHandler); ok {
+		h = c.inner // rebind to ctx rather than nest bindings
+	}
+	return slog.New(&ctxHandler{ctx: ctx, inner: h})
+}
+
+// fromContext returns the logger carried by ctx, or the process default,
+// without the context binding [FromContext] adds. The package-level logging
+// functions use it because they pass the call-site context through
+// explicitly, which makes the binding redundant work.
+func fromContext(ctx context.Context) *slog.Logger {
 	if l := loggerKey.FromContext(ctx); l != nil {
 		return l
 	}
 	return slog.Default()
+}
+
+// ctxHandler binds a context to a handler. slog's context-free logging
+// methods hand handlers context.Background(), stripping the trace span that
+// context-aware handlers correlate records by; the bound context fills that
+// gap.
+type ctxHandler struct {
+	ctx   context.Context
+	inner slog.Handler
+}
+
+// resolve picks the context the inner handler sees: the call-site context
+// when it carries a span, since a log statement under a deeper span must
+// attribute to that span, and the bound context otherwise.
+func (h *ctxHandler) resolve(ctx context.Context) context.Context {
+	if h.ctx == nil || otrace.SpanContextFromContext(ctx).IsValid() {
+		return ctx
+	}
+	return h.ctx
+}
+
+func (h *ctxHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.inner.Enabled(h.resolve(ctx), l)
+}
+
+func (h *ctxHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.inner.Handle(h.resolve(ctx), r)
+}
+
+func (h *ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return h
+	}
+	return &ctxHandler{ctx: h.ctx, inner: h.inner.WithAttrs(attrs)}
+}
+
+func (h *ctxHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	return &ctxHandler{ctx: h.ctx, inner: h.inner.WithGroup(name)}
 }
 
 // WithContext returns a copy of ctx carrying l. [FromContext] and the
@@ -212,20 +303,20 @@ func WithContext(ctx context.Context, l *slog.Logger) context.Context {
 // [WithContext]) and pass ctx through to the handler, which is what lets a
 // context-aware handler correlate the record with the active trace span.
 func Debug(ctx context.Context, msg string, args ...any) {
-	FromContext(ctx).Log(ctx, slog.LevelDebug, msg, args...)
+	fromContext(ctx).Log(ctx, slog.LevelDebug, msg, args...)
 }
 
 // Info logs at slog.LevelInfo using the logger in ctx. See [Debug].
 func Info(ctx context.Context, msg string, args ...any) {
-	FromContext(ctx).Log(ctx, slog.LevelInfo, msg, args...)
+	fromContext(ctx).Log(ctx, slog.LevelInfo, msg, args...)
 }
 
 // Warn logs at slog.LevelWarn using the logger in ctx. See [Debug].
 func Warn(ctx context.Context, msg string, args ...any) {
-	FromContext(ctx).Log(ctx, slog.LevelWarn, msg, args...)
+	fromContext(ctx).Log(ctx, slog.LevelWarn, msg, args...)
 }
 
 // Error logs at slog.LevelError using the logger in ctx. See [Debug].
 func Error(ctx context.Context, msg string, args ...any) {
-	FromContext(ctx).Log(ctx, slog.LevelError, msg, args...)
+	fromContext(ctx).Log(ctx, slog.LevelError, msg, args...)
 }

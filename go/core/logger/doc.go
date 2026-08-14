@@ -66,8 +66,8 @@ receives everything.
 
 [SetLevel] installs Genkit's console handler as the process default.
 Applications that configure their own [slog] handler should set that handler's
-level instead; Genkit respects a custom default handler and, if
-GENKIT_LOG_LEVEL is set, leaves it alone rather than replacing it.
+level instead: Genkit respects a custom default handler, so both SetLevel and
+GENKIT_LOG_LEVEL warn and leave it alone rather than replacing it.
 
 # The Dev UI
 
@@ -80,9 +80,11 @@ GENKIT_OTEL_ENABLE_LOGS=false to turn this off.
 
 # Context integration
 
-[FromContext] returns the logger stored in the context, or the process
-default. Store a derived logger with [WithContext] to bind attributes to
-everything logged downstream:
+[FromContext] returns the context's logger (or the process default) bound to
+that context, so records logged even through its plain methods (Info, Error,
+...) still carry the span that was active when the logger was obtained. Store
+a derived logger with [WithContext] to bind attributes to everything logged
+downstream:
 
 	ctx = logger.WithContext(ctx, logger.FromContext(ctx).With("requestId", id))
 

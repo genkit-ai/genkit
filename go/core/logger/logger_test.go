@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // recordHandler collects records for assertions.
@@ -75,15 +77,94 @@ func resetGlobalState(t *testing.T) {
 func TestWithContext(t *testing.T) {
 	resetGlobalState(t)
 
-	h := newRecordHandler(slog.LevelDebug)
-	l := slog.New(h)
-	ctx := WithContext(context.Background(), l)
+	stored := newRecordHandler(slog.LevelDebug)
+	ctx := WithContext(context.Background(), slog.New(stored))
+	def := newRecordHandler(slog.LevelDebug)
+	slog.SetDefault(slog.New(def))
 
-	if got := FromContext(ctx); got != l {
-		t.Errorf("FromContext returned %v, want the logger from WithContext", got)
+	FromContext(ctx).Info("stored")
+	FromContext(context.Background()).Info("default")
+
+	if got := stored.messages(); !slices.Equal(got, []string{"stored"}) {
+		t.Errorf("stored logger messages = %v, want [stored]", got)
 	}
-	if got := FromContext(context.Background()); got != slog.Default() {
-		t.Errorf("FromContext without a logger returned %v, want slog.Default()", got)
+	if got := def.messages(); !slices.Equal(got, []string{"default"}) {
+		t.Errorf("default logger messages = %v, want [default]", got)
+	}
+}
+
+// spanHandler records the span context carried by each record's context.
+type spanHandler struct {
+	spans *[]otrace.SpanContext
+}
+
+func (h *spanHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *spanHandler) Handle(ctx context.Context, _ slog.Record) error {
+	*h.spans = append(*h.spans, otrace.SpanContextFromContext(ctx))
+	return nil
+}
+
+func (h *spanHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *spanHandler) WithGroup(string) slog.Handler      { return h }
+
+func spanContext(id byte) otrace.SpanContext {
+	return otrace.NewSpanContext(otrace.SpanContextConfig{
+		TraceID: otrace.TraceID{id},
+		SpanID:  otrace.SpanID{id},
+	})
+}
+
+func TestFromContextBindsSpan(t *testing.T) {
+	resetGlobalState(t)
+
+	var spans []otrace.SpanContext
+	slog.SetDefault(slog.New(&spanHandler{spans: &spans}))
+
+	scA, scB := spanContext(1), spanContext(2)
+	ctxA := otrace.ContextWithSpanContext(context.Background(), scA)
+	ctxB := otrace.ContextWithSpanContext(context.Background(), scB)
+
+	l := FromContext(ctxA)
+	l.Info("context-free")                          // bound context supplies span A
+	l.InfoContext(ctxB, "explicit span")            // call-site span B wins
+	l.InfoContext(context.Background(), "spanless") // bound span A fills in
+
+	// Re-fetching a stored bound logger under a new context rebinds it to
+	// that context rather than nesting a stale binding.
+	FromContext(WithContext(ctxB, l)).Info("rebound")
+
+	want := []otrace.SpanContext{scA, scB, scA, scB}
+	if len(spans) != len(want) {
+		t.Fatalf("got %d records, want %d", len(spans), len(want))
+	}
+	for i := range want {
+		if !spans[i].Equal(want[i]) {
+			t.Errorf("record %d span = %v, want %v", i, spans[i], want[i])
+		}
+	}
+}
+
+func TestFromContextKeepsBoundAttrs(t *testing.T) {
+	resetGlobalState(t)
+
+	h := newRecordHandler(slog.LevelDebug)
+	slog.SetDefault(slog.New(h))
+
+	FromContext(context.Background()).With("requestId", "r1").Info("m")
+
+	if len(*h.records) != 1 {
+		t.Fatalf("got %d records, want 1", len(*h.records))
+	}
+	found := false
+	(*h.records)[0].Attrs(func(a slog.Attr) bool {
+		if a.Key == "requestId" {
+			found = true
+		}
+		return true
+	})
+	if !found {
+		t.Error("record lost the attribute bound with With")
 	}
 }
 
@@ -224,6 +305,26 @@ func TestAddHandlerKeepsCustomDefaultAfterSetLevel(t *testing.T) {
 
 	if got := custom.messages(); !slices.Equal(got, []string{"kept"}) {
 		t.Errorf("custom handler messages = %v, want [kept]", got)
+	}
+}
+
+func TestSetLevelKeepsCustomDefault(t *testing.T) {
+	resetGlobalState(t)
+
+	custom := newRecordHandler(slog.LevelInfo)
+	SetDefaultHandler(custom)
+	SetLevel(slog.LevelDebug)
+
+	slog.Info("still through custom")
+
+	// The application's handler stays the default; SetLevel warns through it
+	// instead of replacing it with the managed console.
+	msgs := custom.messages()
+	if len(msgs) != 2 || !strings.Contains(msgs[0], "SetLevel") || msgs[1] != "still through custom" {
+		t.Errorf("custom handler messages = %v, want the SetLevel warning followed by [still through custom]", msgs)
+	}
+	if got := GetLevel(); got != slog.LevelDebug {
+		t.Errorf("GetLevel = %v, want %v", got, slog.LevelDebug)
 	}
 }
 
