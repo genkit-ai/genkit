@@ -6,8 +6,7 @@ Cohere, and others) through the Bedrock Converse API.
 
 > Status: in progress. Only non-streaming text generation (Converse) is
 > available so far. Streaming, embedders, image generation, and reranking are
-> still being ported from the mature Go plugin
-> ([genkit-ai/aws-bedrock-go-plugin](https://github.com/genkit-ai/aws-bedrock-go-plugin)).
+> still to come.
 
 ## Installation
 

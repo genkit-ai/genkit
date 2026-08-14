@@ -35,9 +35,8 @@ DEFAULT_MAX_POOL_CONNECTIONS = 50
 class BedrockConfig(ModelConfig):
     """Per-call configuration for Bedrock models.
 
-    Mirrors the Go plugin's ``Config`` surface. Unknown keys are tolerated for
-    forward compatibility but only the declared fields (and
-    ``additional_model_request_fields``) reach the Converse API.
+    Unknown keys are tolerated for forward compatibility, but only the declared
+    fields (and ``additional_model_request_fields``) reach the Converse API.
     """
 
     model_config = ConfigDict(

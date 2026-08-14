@@ -87,10 +87,9 @@ class BedrockTransport:
         """Returns the shared bedrock-runtime client, building it on first use.
 
         Raises:
-            GenkitError: FAILED_PRECONDITION when no region resolves. Matching
-                the Go plugin, there is deliberately no default region: a
-                silent ``us-east-1`` fallback sends traffic (and data) to a
-                region the user never chose.
+            GenkitError: FAILED_PRECONDITION when no region resolves. There is
+                deliberately no default region: a silent ``us-east-1`` fallback
+                sends traffic (and data) to a region the user never chose.
         """
         with self._lock:
             if self._client is None:

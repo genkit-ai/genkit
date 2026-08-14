@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live Bedrock tests, mirroring the Go plugin's live matrix.
+"""Live Bedrock tests.
 
 Opt-in: set ``BEDROCK_LIVE_TESTS=1`` plus working AWS credentials and a
 region (``AWS_REGION`` or ``~/.aws/config``). These call real models and

@@ -17,7 +17,7 @@
 """Amazon Bedrock samples for the non-streaming Converse path.
 
 Needs AWS credentials and a region (``AWS_REGION`` or ``~/.aws/config``) with
-model access granted for the three models below. Streaming is not wired up yet,
+model access granted for the four models below. Streaming is not wired up yet,
 so every flow here is a single Converse call.
 """
 

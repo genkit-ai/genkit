@@ -16,9 +16,9 @@
 
 """Pure conversion functions between Genkit types and the Bedrock Converse API.
 
-Ported from the Go plugin's ``generate.go``. Everything here is side-effect
-free and testable without AWS: request builders return the keyword arguments
-for ``client.converse(...)``, response parsers take the raw response dict.
+Everything here is side-effect free and testable without AWS: request builders
+return the keyword arguments for ``client.converse(...)``, response parsers take
+the raw response dict.
 """
 
 import base64
@@ -53,7 +53,7 @@ from genkit_amazon_bedrock.config import BedrockConfig
 REASONING_SIGNATURE_METADATA_KEY = 'bedrockReasoningSignature'
 REDACTED_CONTENT_METADATA_KEY = 'bedrockRedactedContent'
 
-# Custom-part key marking a prompt cache point, mirroring the Go plugin.
+# Custom-part key marking a prompt cache point.
 CACHE_POINT_CUSTOM_KEY = 'bedrockCachePointType'
 DEFAULT_CACHE_POINT_TYPE = 'default'
 
@@ -277,7 +277,8 @@ def media_to_block(root: Any) -> dict[str, Any]:  # noqa: ANN401
     media = root.media
     mime = _media_mime(media)
     payload = _decode_media_payload(media.url)
-    # Document formats are checked before image formats, matching Go.
+    # Document formats are checked first: text/plain and text/html are
+    # documents to Converse, and no MIME type belongs to both tables.
     document_format = DOCUMENT_FORMATS.get(mime)
     if document_format is not None:
         return {
@@ -342,8 +343,8 @@ def _tool_use_id(ref: str | None, label: str) -> str:
 def _part_to_blocks(part: Part | Any) -> list[dict[str, Any]]:  # noqa: ANN401
     """Converts one Genkit part to Converse content blocks.
 
-    Unknown part kinds are silently dropped, matching Go's request-side
-    posture (the response side fails loud instead).
+    Unknown part kinds are silently dropped so a foreign part cannot fail a
+    request; the response side fails loud instead.
     """
     root = part.root if isinstance(part, Part) else part
     if getattr(root, 'media', None) is not None:
@@ -415,8 +416,8 @@ def convert_messages(
         if message.role == Role.SYSTEM:
             system.extend(_system_blocks(message))
             continue
-        # Validate the role before converting parts, like Go, so an
-        # unsupported role errors even when its message converts to nothing.
+        # Validate the role before converting parts, so an unsupported role
+        # errors even when its message converts to nothing.
         role = to_bedrock_role(message.role)
         blocks: list[dict[str, Any]] = []
         for part in message.content or []:
@@ -433,7 +434,7 @@ def _normalize_tool_schema(schema: Any) -> dict[str, Any]:  # noqa: ANN401
     """Normalizes a tool input schema for ``toolSpec.inputSchema.json``.
 
     Bedrock requires an input schema; a missing one becomes the empty object
-    schema. Injects ``type``/``properties``/``$schema`` defaults like Go.
+    schema, and ``type``/``properties``/``$schema`` are filled in when absent.
     """
     if schema is None:
         normalized: dict[str, Any] = {'type': 'object', 'properties': {}}
@@ -498,7 +499,7 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
         Keyword arguments for the Converse call.
     """
     if request is None:
-        raise GenkitError(message='bedrock: model request is nil', status='INVALID_ARGUMENT')
+        raise GenkitError(message='bedrock: model request is missing', status='INVALID_ARGUMENT')
     config = normalize_config(request.config)
     messages, system = convert_messages(request.messages)
 
@@ -544,7 +545,7 @@ def _coerce_value(value: Any, schema: Any) -> Any:  # noqa: ANN401
     """Coerces a tool-input value toward its declared schema type.
 
     Models occasionally return numbers or booleans as strings and floats for
-    integers; coerce like Go instead of failing tool dispatch.
+    integers; coercing them keeps tool dispatch alive.
     """
     if not isinstance(schema, dict):
         return value
@@ -560,10 +561,10 @@ def _coerce_value(value: Any, schema: Any) -> Any:  # noqa: ANN401
     if schema_type == 'number' and isinstance(value, int) and not isinstance(value, bool):
         return float(value)
     if schema_type == 'string' and isinstance(value, (int, float)) and not isinstance(value, bool):
-        # Go coerces wire numbers to their string form; a raw int fails dispatch.
+        # A raw int against a string field fails pydantic validation.
         return str(value)
     if schema_type == 'boolean' and isinstance(value, str):
-        # Matches Go's strconv.ParseBool vocabulary.
+        # Anything outside this vocabulary is left alone for the tool to reject.
         lowered = value.strip().lower()
         if lowered in ('true', 't', '1'):
             return True
@@ -578,7 +579,7 @@ def _coerce_value(value: Any, schema: Any) -> Any:  # noqa: ANN401
 
 
 def _coerce_map(value: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
-    # Only object schemas coerce, matching Go; non-object schemas pass through.
+    # Only object schemas coerce; non-object schemas pass through.
     if schema.get('type') != 'object':
         return value
     properties = schema.get('properties')
@@ -678,8 +679,8 @@ def map_finish_reason(stop_reason: str | None) -> FinishReason:
 def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # noqa: ANN401
     """Maps Converse token usage; totals are trusted verbatim from AWS.
 
-    Only ``cacheReadInputTokens`` surfaces (as ``cached_content_tokens``),
-    matching the Go plugin; cache-write tokens are unreported.
+    Only ``cacheReadInputTokens`` surfaces (as ``cached_content_tokens``);
+    Genkit has no field for cache-write tokens.
     """
     if usage is None:
         return None
@@ -694,7 +695,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
 def to_model_response(response: dict[str, Any] | None, request: ModelRequest[Any]) -> ModelResponse:  # noqa: ANN401
     """Converts a raw Converse response to a Genkit ModelResponse."""
     if response is None:
-        raise GenkitError(message='bedrock: converse response is nil', status='INTERNAL')
+        raise GenkitError(message='bedrock: converse response is missing', status='INTERNAL')
     output = response.get('output') or {}
     message = output.get('message')
     if output and message is None:

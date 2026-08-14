@@ -16,8 +16,7 @@
 
 """Tests for the Converse request/response converters.
 
-The expectations mirror the Go plugin's ``generate_test.go`` matrix — they
-encode Bedrock wire-format truths, not incidental structure.
+The expectations encode Bedrock wire-format truths, not incidental structure.
 """
 
 import base64
@@ -102,7 +101,7 @@ def test_unsupported_role_raises() -> None:
 
 
 def test_unsupported_role_errors_even_for_empty_message() -> None:
-    # The role is validated before parts are converted, like Go.
+    # The role is validated before parts are converted.
     request = ModelRequest(messages=[Message(role='reviewer', content=[])])
     with pytest.raises(GenkitError, match='unsupported role'):
         build_converse_request('amazon.nova-lite-v1:0', request)
@@ -173,7 +172,7 @@ def test_explicit_zero_temperature_is_sent() -> None:
 
 
 def test_top_k_and_version_are_accepted_but_ignored() -> None:
-    # Converse has no first-class topK or version; Go drops them silently.
+    # Converse has no first-class topK or version, so both are dropped.
     request = user_text_request(config=BedrockConfig(top_k=40, version='v9'))
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
     assert 'inferenceConfig' not in kwargs
@@ -720,8 +719,8 @@ def test_tool_input_coerced_toward_schema() -> None:
 
 @pytest.mark.parametrize('value,expected', [(7, '7'), (7.5, '7.5'), (True, True)], ids=['int', 'float', 'bool'])
 def test_number_coerced_to_string_schema(value: object, expected: object) -> None:
-    # Go coerces a wire number to its string form; without it, tool dispatch
-    # fails pydantic validation. Booleans are left alone, as in Go.
+    # A wire number against a string field fails pydantic validation unless
+    # it is coerced. Booleans are left alone.
     tool = ToolDefinition(
         name='calc',
         description='',
