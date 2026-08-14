@@ -678,7 +678,7 @@ class AgentRuntime:
             if status == SnapshotStatus.ABORTED:
                 abort_signal.set()
 
-    async def refresh_heartbeat(self, snapshot_id: str) -> None:
+    async def refresh_heartbeat(self, snapshot_id: str, *, context: dict[str, Any] | None = None) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
 
         A reader treats a pending snapshot whose heartbeat has gone stale as
@@ -686,13 +686,14 @@ class AgentRuntime:
         detached turn is genuinely still running we bump the beat on an interval.
         The mutator only touches a still-pending snapshot, so a beat never
         resurrects a terminal snapshot or races a concurrent abort/finalize.
+
+        ``context`` should be the detach-time tenant context (same as abort-watch
+        and finalize). Falls back to ambient context if the caller omitted it.
         """
         if self.store is None:
             return
         interval_s = DEFAULT_HEARTBEAT_INTERVAL_MS / 1000
-        # Capture at start (detach time) so beats keep using the request's
-        # tenant context even if ambient context later changes.
-        beat_context = get_current_context()
+        beat_context = context if context is not None else get_current_context()
 
         def beat(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is None or existing.status != SnapshotStatus.PENDING:
@@ -909,7 +910,9 @@ class AgentRuntime:
                     context=detach_context,
                 )
             )
-            heartbeat_task = asyncio.create_task(self.refresh_heartbeat(pending_snap.snapshot_id))
+            heartbeat_task = asyncio.create_task(
+                self.refresh_heartbeat(pending_snap.snapshot_id, context=detach_context)
+            )
             t2 = asyncio.create_task(
                 self.finalize_detach(
                     pending_snap=pending_snap,

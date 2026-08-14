@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import pytest
 
+from genkit._ai._agents._session_stores._util import apply_save
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._core._error import GenkitError
 from genkit._core._typing import (
@@ -161,6 +162,45 @@ async def test_abort_flips_pending_only() -> None:
     assert await abort_snapshot_in_store(store=store, snapshot_id=done.snapshot_id) == SnapshotStatus.COMPLETED
 
     assert await abort_snapshot_in_store(store=store, snapshot_id='does-not-exist') is None
+
+
+def test_apply_save_rejects_terminal_status_flip() -> None:
+    """Direct apply_save: a terminal snapshot cannot change status."""
+    existing = make_snapshot('sess-term', 'done', SnapshotStatus.ABORTED)
+
+    def flip(prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        assert prev is not None
+        return prev.model_copy(update={'status': SnapshotStatus.COMPLETED})
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=flip)
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+def test_apply_save_rejects_session_id_rewrite() -> None:
+    """Direct apply_save: a snapshot cannot be rewritten onto another session."""
+    existing = make_snapshot('sess-a', 'work', SnapshotStatus.PENDING)
+    existing.session_id = 'sess-a'
+
+    def rewrite(prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        assert prev is not None
+        return prev.model_copy(update={'session_id': 'sess-b'})
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=rewrite)
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+def test_apply_save_rejects_async_mutator() -> None:
+    """Direct apply_save: an async mutator is INVALID_ARGUMENT, not awaited."""
+    existing = make_snapshot('sess-async', 'work', SnapshotStatus.PENDING)
+
+    async def bad(_prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        return existing
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=bad)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
