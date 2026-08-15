@@ -550,8 +550,40 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //			return response, nil
 //		},
 //	)
+//
+// The step's context is not available to `fn`, so anything inside it that takes
+// a context and traces its own work, such as an HTTP client or a database call,
+// reports against the enclosing flow rather than against this step. Use
+// [RunWithContext] for those; keep Run for pure work that traces nothing.
 func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out, error) {
 	return core.Run(ctx, name, fn)
+}
+
+// RunWithContext is [Run] with the step's own context passed to `fn`.
+//
+// Work that `fn` starts with that context nests under the step in the trace
+// instead of under the flow, which is what makes a step's span cover the calls
+// it is timing:
+//
+//	genkit.DefineFlow(g, "describe",
+//		func(ctx context.Context, path string) (string, error) {
+//			// The upload's own HTTP spans nest under "upload-image".
+//			file, err := genkit.RunWithContext(ctx, "upload-image",
+//				func(ctx context.Context) (*genai.File, error) {
+//					return client.Files.UploadFromPath(ctx, path, nil)
+//				})
+//			if err != nil {
+//				return "", err
+//			}
+//			// ... use file.URI in a request ...
+//		},
+//	)
+//
+// Passing the enclosing context instead of the one supplied here is the whole
+// difference, and it is silent: the step still records the right duration while
+// the calls it made appear beside it rather than beneath it.
+func RunWithContext[Out any](ctx context.Context, name string, fn func(context.Context) (Out, error)) (Out, error) {
+	return core.RunWithContext(ctx, name, fn)
 }
 
 // ListFlows returns a slice of all [api.Action] instances that represent

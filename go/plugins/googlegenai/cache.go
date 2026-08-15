@@ -187,7 +187,10 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 			if t <= 0 {
 				return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache ttlSeconds, expected a positive number of whole seconds, got %v", tv)
 			}
-			if m.Text() == "" {
+			// Any content is cacheable, not just text: a long video or PDF is
+			// what caching pays off for most, and [ai.Message.Text] reports a
+			// message holding only media as empty.
+			if len(m.Content) == 0 {
 				return nil, status.Errorf(status.ErrInvalidArgument, "no content to cache, message is empty")
 			}
 			return &cacheSettings{

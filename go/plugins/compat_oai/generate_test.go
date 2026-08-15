@@ -501,16 +501,19 @@ func TestWithParams(t *testing.T) {
 	}
 }
 
-func TestConcatenateContentSkipsNilParts(t *testing.T) {
+// Only text parts become message content. A data part carries a blob, so
+// concatenating it would put base64 on the wire; this matches [ai.Message.Text].
+func TestConcatenateContentSkipsNonTextParts(t *testing.T) {
 	parts := []*ai.Part{
 		nil,
 		ai.NewTextPart("visible"),
 		ai.NewReasoningPart("thought", nil),
 		nil,
-		ai.NewDataPart(" data"),
+		ai.NewDataPart("data:application/octet-stream;base64,AAAA"),
+		ai.NewMediaPart("image/png", "data:image/png;base64,AAAA"),
 	}
-	if got := concatenateTextContent(parts); got != "visible data" {
-		t.Errorf("concatenateTextContent() = %q, want %q", got, "visible data")
+	if got := concatenateTextContent(parts); got != "visible" {
+		t.Errorf("concatenateTextContent() = %q, want %q", got, "visible")
 	}
 	if got := concatenateReasoningContent(parts); got != "thought" {
 		t.Errorf("concatenateReasoningContent() = %q, want %q", got, "thought")

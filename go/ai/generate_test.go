@@ -2925,3 +2925,134 @@ func TestGenerateNoGoroutineLeak(t *testing.T) {
 
 	t.Fatalf("goroutines leaked: %d", runtime.NumGoroutine()-before)
 }
+
+func TestMessageText(t *testing.T) {
+	tests := []struct {
+		name    string
+		message *Message
+		want    string
+	}{
+		{
+			name:    "nil message",
+			message: nil,
+			want:    "",
+		},
+		{
+			name:    "no content",
+			message: &Message{Role: RoleModel},
+			want:    "",
+		},
+		{
+			name:    "lone text part",
+			message: NewModelTextMessage("hello"),
+			want:    "hello",
+		},
+		{
+			// A model allowed to answer with an image often answers with only
+			// an image. Its data is not the message's text.
+			name:    "lone media part",
+			message: NewMessage(RoleModel, nil, NewMediaPart("image/png", "iVBORw0KGgo=")),
+			want:    "",
+		},
+		{
+			// A data part carries a blob, which the plugins send as bytes.
+			// Concatenating it would splice base64 into the message's prose.
+			name:    "lone data part",
+			message: NewMessage(RoleModel, nil, NewDataPart("data:application/octet-stream;base64,AAAA")),
+			want:    "",
+		},
+		{
+			name: "data part alongside text",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("here is the blob"),
+				NewDataPart("data:application/octet-stream;base64,AAAA"),
+			),
+			want: "here is the blob",
+		},
+		{
+			name:    "lone reasoning part",
+			message: NewMessage(RoleModel, nil, NewReasoningPart("thinking", nil)),
+			want:    "",
+		},
+		{
+			name: "text alongside media",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("a drawing of a cat"),
+				NewMediaPart("image/png", "iVBORw0KGgo="),
+			),
+			want: "a drawing of a cat",
+		},
+		{
+			name: "text parts concatenate",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("one "),
+				NewTextPart("two"),
+			),
+			want: "one two",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.message.Text(); got != tt.want {
+				t.Errorf("Text() = %q, want %q", got, tt.want)
+			}
+			// ModelResponse.Text() reads through to the message, so the two
+			// must not disagree.
+			resp := &ModelResponse{Message: tt.message}
+			if got := resp.Text(); got != tt.want {
+				t.Errorf("ModelResponse.Text() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMediaParts(t *testing.T) {
+	t.Run("returns every media part with its content type", func(t *testing.T) {
+		resp := &ModelResponse{
+			Message: NewMessage(RoleModel, nil,
+				NewTextPart("two drawings"),
+				NewMediaPart("image/png", "first"),
+				NewMediaPart("image/jpeg", "second"),
+			),
+		}
+
+		parts := resp.MediaParts()
+
+		if len(parts) != 2 {
+			t.Fatalf("MediaParts() returned %d parts, want 2", len(parts))
+		}
+		for i, want := range []struct{ contentType, data string }{
+			{"image/png", "first"},
+			{"image/jpeg", "second"},
+		} {
+			if parts[i].ContentType != want.contentType || parts[i].Text != want.data {
+				t.Errorf("part %d = (%q, %q), want (%q, %q)",
+					i, parts[i].ContentType, parts[i].Text, want.contentType, want.data)
+			}
+		}
+		// Media returns only the first, which is why MediaParts exists.
+		if got := resp.Media(); got != "first" {
+			t.Errorf("Media() = %q, want %q", got, "first")
+		}
+	})
+
+	t.Run("returns nil when there is no media", func(t *testing.T) {
+		resp := &ModelResponse{Message: NewModelTextMessage("just text")}
+
+		if parts := resp.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() = %v, want nil", parts)
+		}
+	})
+
+	t.Run("nil safe", func(t *testing.T) {
+		var resp *ModelResponse
+		if parts := resp.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() on nil response = %v, want nil", parts)
+		}
+		var msg *Message
+		if parts := msg.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() on nil message = %v, want nil", parts)
+		}
+	})
+}

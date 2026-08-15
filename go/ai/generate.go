@@ -1526,6 +1526,10 @@ func (mr *ModelResponse) Interrupts() []*Part {
 }
 
 // Media returns the media content of the [ModelResponse] as a string.
+//
+// Only the first media part is returned, and its content type is left behind,
+// so a response carrying more than one image, or one whose content type is
+// needed to render it, is better read with [ModelResponse.MediaParts].
 func (mr *ModelResponse) Media() string {
 	if mr == nil || mr.Message == nil {
 		return ""
@@ -1538,8 +1542,22 @@ func (mr *ModelResponse) Media() string {
 	return ""
 }
 
-// Text returns the text content of the ModelResponseChunk as a string.
-// It returns an empty string if there is no Content in the response chunk.
+// MediaParts returns every media part of the [ModelResponse], each carrying its
+// content type alongside its data. It returns nil if the response has none.
+//
+// A model that may answer with media often answers with media alone, so this
+// pairs with [ModelResponse.Text] rather than replacing it: the two read
+// disjoint halves of a response and either may come back empty.
+func (mr *ModelResponse) MediaParts() []*Part {
+	if mr == nil {
+		return nil
+	}
+	return mr.Message.MediaParts()
+}
+
+// Text returns the text content of the ModelResponseChunk as a string,
+// concatenating its text parts and skipping every other kind, as
+// [Message.Text] does. It returns an empty string if the chunk has none.
 // For the parsed structured output, use [ModelResponseChunk.Output] instead.
 func (c *ModelResponseChunk) Text() string {
 	if c == nil {
@@ -1547,7 +1565,7 @@ func (c *ModelResponseChunk) Text() string {
 	}
 	var sb strings.Builder
 	for _, p := range c.Content {
-		if p.IsText() || p.IsData() {
+		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
 	}
@@ -1663,8 +1681,15 @@ func extractTypedOutput[Out any](o outputer) (Out, error) {
 	}
 }
 
-// Text returns the contents of a [Message] as a string. It
-// returns an empty string if the message has no content.
+// Text returns the textual contents of a [Message] as a string, concatenating
+// its text parts and skipping every other kind. It returns an empty string if
+// the message has none, which is what a message carrying only an image, only
+// raw data, or only a tool request comes back as; read those with
+// [Message.MediaParts] and ToolRequests instead.
+//
+// A data part is deliberately not text: it holds a blob, which the plugins
+// send as bytes and [plugins/internal/uri.Data] decodes as a data: URI, so
+// concatenating one here would splice base64 into prose.
 // If you want to get reasoning from the message, use Reasoning() instead.
 func (m *Message) Text() string {
 	if m == nil {
@@ -1673,16 +1698,36 @@ func (m *Message) Text() string {
 	if len(m.Content) == 0 {
 		return ""
 	}
+	// Single-part messages are the common case and skip the builder, but they
+	// are still filtered: a lone media part is not this message's text.
 	if len(m.Content) == 1 {
-		return m.Content[0].Text
+		if p := m.Content[0]; p.IsText() {
+			return p.Text
+		}
+		return ""
 	}
 	var sb strings.Builder
 	for _, p := range m.Content {
-		if p.IsText() || p.IsData() {
+		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
 	}
 	return sb.String()
+}
+
+// MediaParts returns every media part of a [Message], each carrying its content
+// type alongside its data. It returns nil if the message has none.
+func (m *Message) MediaParts() []*Part {
+	if m == nil {
+		return nil
+	}
+	var parts []*Part
+	for _, p := range m.Content {
+		if p.IsMedia() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }
 
 // NewResume constructs a [GenerateActionResume] from Part slices.

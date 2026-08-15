@@ -62,6 +62,31 @@ func TestGetContentForCache_NoContentToCache(t *testing.T) {
 	}
 }
 
+// A long video or PDF is what caching pays off for most, and such a message
+// holds no text at all, so the marker has to look at content rather than text.
+func TestFindCacheMarker_MediaOnlyMessage(t *testing.T) {
+	req := &ai.ModelRequest{
+		Messages: []*ai.Message{
+			ai.NewMessage(ai.RoleUser, nil, ai.NewMediaPart("video/mp4", "data:video/mp4;base64,AAAA")).WithCacheTTL(360),
+			ai.NewUserTextMessage("Summarize the video."),
+		},
+	}
+
+	settings, err := findCacheMarker(req)
+	if err != nil {
+		t.Fatalf("findCacheMarker rejected a media-only message: %v", err)
+	}
+	if settings == nil {
+		t.Fatal("findCacheMarker returned no settings")
+	}
+	if settings.ttl != 360 {
+		t.Errorf("ttl = %d, want 360", settings.ttl)
+	}
+	if settings.endIndex != 0 {
+		t.Errorf("endIndex = %d, want 0", settings.endIndex)
+	}
+}
+
 func TestGetContentForCache_Invalid(t *testing.T) {
 	req := &ai.ModelRequest{
 		Messages: []*ai.Message{

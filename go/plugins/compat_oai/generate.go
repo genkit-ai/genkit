@@ -454,13 +454,16 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	return format
 }
 
+// concatenateTextContent joins a message's text parts, matching [ai.Message.Text].
+// A data part is skipped rather than concatenated: it carries a blob, so writing
+// it here would put base64 in the outbound message content.
 func concatenateTextContent(parts []*ai.Part) string {
 	var content strings.Builder
 	for _, part := range parts {
 		if part == nil {
 			continue
 		}
-		if part.IsText() || part.IsData() {
+		if part.IsText() {
 			content.WriteString(part.Text)
 		}
 	}
