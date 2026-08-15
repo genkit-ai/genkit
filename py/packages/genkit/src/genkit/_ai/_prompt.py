@@ -49,8 +49,7 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     normalize_config,
-    resolve_model_name,
-    resolve_model_ref,
+    resolve_call_model,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -64,7 +63,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelRef
+from genkit._core._model import Document, GenerateActionOptions, Message
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -386,16 +385,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
-        model_arg = opts.get('model') or self._model
-        if isinstance(model_arg, ModelRef):
-            resolved = resolve_model_ref(
-                model=model_arg,
-                config=normalize_config(config=merged_config),
-            )
-            model_name, model_config = resolved.name, resolved.config
-        else:
-            model_name = resolve_model_name(model=model_arg, registry=self._registry)
-            model_config = merged_config
+        model_name, model_config = resolve_call_model(
+            model=opts.get('model') or self._model,
+            config=merged_config,
+            registry=self._registry,
+        )
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata

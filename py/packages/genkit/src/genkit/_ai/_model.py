@@ -129,6 +129,25 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
     return ResolvedModel(name=model.name, config=merged)
 
 
+def resolve_call_model(
+    *,
+    model: str | ModelRef[BaseModel] | None,
+    config: ConfigArg | None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> tuple[str, ConfigArg | None]:
+    """Return the wire name and the config to send with this call.
+
+    A ModelRef carries defaults, so those get dumped and overlaid with
+    call-time config. A string name has nothing to merge — the caller's
+    config object is left alone so the plugin still sees that instance.
+    """
+    if isinstance(model, ModelRef):
+        resolved = resolve_model_ref(model=model, config=normalize_config(config=config))
+        return resolved.name, resolved.config
+    return resolve_model_name(model=model, registry=registry, message=message), config
+
+
 def model_action_metadata(
     name: str,
     info: dict[str, object] | None = None,

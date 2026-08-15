@@ -67,9 +67,7 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     define_model,
-    normalize_config,
-    resolve_model_name,
-    resolve_model_ref,
+    resolve_call_model,
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -164,25 +162,6 @@ def _model_supports_long_running(model_action: Action) -> bool:
         supports = model_dict.get('supports')
         return bool(supports.get('longRunning', False)) if isinstance(supports, dict) else False
     return False
-
-
-def resolve_call_model(
-    *,
-    model: str | ModelRef[BaseModel] | None,
-    config: Mapping[str, Any] | BaseModel | None,
-    registry: Registry,
-    message: str = 'No model configured.',
-) -> tuple[str, Mapping[str, Any] | BaseModel | None]:
-    """Return the wire name and the config to send with this call.
-
-    A ModelRef carries defaults, so those get dumped and overlaid with
-    call-time config. A string name has nothing to merge — the caller's
-    config object is left alone so the plugin still sees that instance.
-    """
-    if isinstance(model, ModelRef):
-        resolved = resolve_model_ref(model=model, config=normalize_config(config=config))
-        return resolved.name, resolved.config
-    return resolve_model_name(model=model, registry=registry, message=message), config
 
 
 class Genkit:
