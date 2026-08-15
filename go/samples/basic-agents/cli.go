@@ -386,9 +386,8 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 			}
 			return final, true
 		case "2":
-			// Ignore the pending snapshot; start a fresh chat. The
-			// background invocation keeps running and writes its
-			// terminal status — this CLI just stops tracking it.
+			// Ignore the pending snapshot and start fresh. The background
+			// invocation keeps running; this CLI just stops tracking it.
 			return nil, true
 		case "3":
 			return nil, false
@@ -624,11 +623,10 @@ repl:
 	return sessionID, nil
 }
 
-// streamReply consumes one user turn end to end: it streams the model's
-// reply and, whenever the turn pauses on tool interrupts, routes them
-// through the agent's handler and resumes — repeating until the turn
-// settles on its own (or the stream ends). It returns the settling TurnEnd
-// (ok=true) or signals a stream error/close (ok=false, already reported).
+// streamReply consumes one user turn end to end: it streams the reply and,
+// whenever the turn pauses on tool interrupts, routes them through the agent's
+// handler and resumes, until the turn settles or the stream ends. It returns
+// the settling TurnEnd (ok=true) or reports a stream error (ok=false).
 //
 // Interrupt rounds reuse the connection: per AgentConnection.Receive, a
 // caller may break on TurnEnd, send the next input (here a resume), and
@@ -755,12 +753,10 @@ func formatToolInput(input any) string {
 	return s
 }
 
-// resolveInterrupts turns a batch of tool interrupts into one resume
-// payload by asking the agent's handler about each. The handler builds the
-// resume part (tool.Resume or tool.Respond); this sorts each into the
-// matching half of aix.ToolResume by part kind — a restart is a tool
-// request, a direct response is a tool response — so handlers never deal
-// with the wire shape. Returns nil when nothing could be resolved.
+// resolveInterrupts turns a batch of tool interrupts into one resume payload by
+// asking the agent's handler about each. The handler builds the resume part;
+// this sorts each into the matching half of aix.ToolResume by part kind, so
+// handlers never deal with the wire shape. Returns nil if none resolved.
 func resolveInterrupts(hooks agentHooks, p *Prompter, interrupts []*ai.Part) *aix.ToolResume {
 	if hooks.onInterrupt == nil {
 		// An interruptible tool fired on an agent the CLI wasn't told how to
@@ -859,18 +855,13 @@ func waitForFinalize[State any](ctx context.Context, a *aix.Agent[State], snapsh
 	}
 }
 
-// printHistory replays prior turns in the same format the live REPL uses, so
-// a resumed chat reads continuously rather than dropping the user into an
-// empty prompt. It renders user and model text plus any tool calls the model
-// made — the same ⚙ lines streamTurn shows live — so a delegation or transfer
-// is visible on resume exactly as it happened. Tool result messages
-// (role=tool) are skipped, matching the live stream, which doesn't echo them
-// either; the agent's per-turn loop still has the full history under the hood.
+// printHistory replays prior turns in the format the live REPL uses, so a
+// resumed chat reads continuously. It renders user and model text plus the tool
+// calls the model made, as the same lines streamTurn shows live, so a
+// delegation or transfer is visible on resume exactly as it happened.
 //
-// The model's tool requests live in the durable snapshot (the agent loop
-// persists modelResp.History(), tool messages included). Earlier this function
-// only printed m.Text(), so those calls were absent on resume even though they
-// were saved — a replay gap here, not a persistence bug in the agent runtime.
+// Tool result messages (role=tool) are skipped, matching the live stream; the
+// agent's per-turn loop still has the full history under the hood.
 func printHistory(msgs []*ai.Message) {
 	prevToolReq := false
 	for _, m := range msgs {

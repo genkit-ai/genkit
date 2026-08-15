@@ -13,23 +13,31 @@
 // limitations under the License.
 
 // This sample demonstrates the base compat_oai plugin pointed at a custom
-// OpenAI-compatible provider, here OpenRouter: models resolve dynamically by
-// name and take the OpenAI SDK's own request type as their config.
+// OpenAI-compatible provider, here OpenRouter: a streaming flow that generates
+// a joke with a model that resolves dynamically by name and takes the OpenAI
+// SDK's own request type as its config.
 //
-// To run:
+// Run it:
 //
 //	export OPENROUTER_API_KEY=...
 //	go run .
 //
-// In another terminal:
+// Or with the Dev UI, to call the flow from a browser and read a trace of
+// every run at http://localhost:4000/traces:
 //
-//	curl -X POST http://localhost:8080/jokesFlow \
+//	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
+//	genkit start -- go run .
+//
+// Or over HTTP. Streaming needs ?stream=true:
+//
+//	curl -N -X POST 'http://localhost:8080/jokesFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
-//	  -d '{"data": "bananas"}'
+//	  -d '{"data": {"topic": "bananas"}}'
 package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,9 +49,32 @@ import (
 	"github.com/openai/openai-go"
 )
 
+// JokeRequest is what the flow takes. A struct rather than a bare string lets
+// the field carry a description and a default, which the Dev UI pre-fills its
+// form from. The default is not applied in transit, and a field without
+// omitempty is required.
+type JokeRequest struct {
+	Topic string `json:"topic" jsonschema:"description=What the joke should be about,default=airplane food"`
+}
+
+// model pins the model and its config in one place, so switching either is a
+// one-line change. The base plugin ships no typed ModelRef helper, since it
+// knows nothing about the provider it is pointed at, so ai.NewModelRef pins any
+// model the provider serves by name under the plugin's provider prefix.
+//
+// The name after the prefix is OpenRouter's, not Genkit's, and OpenRouter
+// retires models on its own schedule; a 404 saying "no endpoints found" means
+// this one is gone. The current catalog is at https://openrouter.ai/models.
+var model = ai.NewModelRef("openrouter/deepseek/deepseek-chat", &openai.ChatCompletionNewParams{
+	Temperature: openai.Float(0.7),
+	MaxTokens:   openai.Int(1024),
+})
+
 func main() {
 	ctx := context.Background()
 
+	// A custom provider has no environment variable of its own, so the plugin
+	// takes the key, the provider prefix, and the endpoint as fields.
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENROUTER_API_KEY environment variable not set")
@@ -55,24 +86,24 @@ func main() {
 		BaseURL:  "https://openrouter.ai/api/v1",
 	}))
 
-	// Define a flow that generates a joke about a given topic. Any model the
-	// provider serves resolves by name under the plugin's provider prefix.
-	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, topic string) (string, error) {
-		if topic == "" {
-			topic = "airplane food"
-		}
+	// Passing sendChunk straight to WithStreaming forwards the model's chunks
+	// to the caller untouched.
+	genkit.DefineStreamingFlow(g, "jokesFlow",
+		func(ctx context.Context, input JokeRequest, sendChunk ai.ModelStreamCallback) (string, error) {
+			resp, err := genkit.Generate(ctx, g,
+				ai.WithModel(model),
+				ai.WithPrompt("Share a joke about %s.", input.Topic),
+				ai.WithStreaming(sendChunk),
+			)
+			if err != nil {
+				return "", fmt.Errorf("could not generate joke: %w", err)
+			}
 
-		return genkit.GenerateText(ctx, g,
-			ai.WithModelName("openrouter/tngtech/deepseek-r1t2-chimera:free"),
-			ai.WithConfig(&openai.ChatCompletionNewParams{
-				Temperature: openai.Float(0.7),
-				MaxTokens:   openai.Int(1024),
-			}),
-			ai.WithPrompt("Share a joke about %s.", topic),
-		)
-	})
+			return resp.Text(), nil
+		},
+	)
 
-	// Optionally, start a web server to make the flow callable via HTTP.
+	// Serve every flow over HTTP.
 	mux := http.NewServeMux()
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))

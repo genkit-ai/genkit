@@ -153,7 +153,7 @@ file, err := client.Files.UploadFromPath(ctx, "photo.jpg", &genai.UploadFileConf
 })
 ```
 
-See `go/samples/files-api-vision` for a complete example.
+See `go/samples/basic-media` for a complete example.
 
 ## Language Models
 
@@ -699,5 +699,6 @@ The returned `audio` value may look like:
 data:audio/L16;codec=pcm;rate=24000;base64,...
 ```
 
-For a complete Go sample that writes a playable WAV file, see
-`go/samples/text-to-speech/gemini`.
+To write a playable file, strip the `data:` prefix, decode the base64 payload,
+and wrap the raw PCM bytes in a WAV container using the sample rate from the
+media type, 24000 Hz above.

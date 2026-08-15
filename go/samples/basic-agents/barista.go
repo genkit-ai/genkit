@@ -95,7 +95,7 @@ func defineBaristaAgent(g *genkit.Genkit) *aix.Agent[BaristaOrder] {
 
 	return genkitx.DefineAgent(g, name,
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithTools(addToOrder),
 			// The read side. WithSystemFn runs once per turn, so the
 			// instruction is rebuilt from whatever the earlier turns left
