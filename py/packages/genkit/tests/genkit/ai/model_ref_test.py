@@ -41,6 +41,13 @@ def test_model_ref_with_custom_pydantic_schema() -> None:
     assert ref.config.top_p == 0.9
 
 
+def test_typed_ref_assignable_to_model_ref_base_model() -> None:
+    """A ref built with a plugin config class is still usable as ModelRef[BaseModel]."""
+    ref = model_ref('echo', config_schema=CustomConfig)
+    as_base: ModelRef[BaseModel] = ref
+    assert as_base is ref
+
+
 def test_model_ref_with_bare_base_model_schema() -> None:
     """model_ref() accepts arbitrary BaseModel schemas, including bare BaseModel itself."""
     ref = model_ref('generic-model', config_schema=BaseModel)
