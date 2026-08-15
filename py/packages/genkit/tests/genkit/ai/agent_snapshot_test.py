@@ -148,6 +148,19 @@ async def test_snapshot_action_raises_not_found_for_missing_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_snapshot_data_returns_none_for_missing_snapshot() -> None:
+    """The method returns None on a miss; the action wraps that as NOT_FOUND."""
+    registry = Registry()
+    store = InMemorySessionStore()
+
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        return await session_runner.result()
+
+    agent = define_custom_agent(registry, 'missingMethodSnapTest', fn, store=store)
+    assert await agent.get_snapshot_data(snapshot_id='non-existent-id') is None
+
+
+@pytest.mark.asyncio
 async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     """A turn that raises settles FAILED, keeps the resume handle on the last good
     parent, and rolls the optimistic prompt back instead of crashing the chat."""

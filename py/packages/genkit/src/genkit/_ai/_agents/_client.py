@@ -554,7 +554,19 @@ class AgentAPI(Protocol, Generic[StateT]):
         ...
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot."""
+        """Aborts a running snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+
+        Some servers report the status *after* a successful cancel
+        (``aborted``) instead of the previous one (``pending``). If you only
+        need "did this call stop a running turn?", treat either as yes.
+        """
         ...
 
 
@@ -633,7 +645,19 @@ class AgentClient(Generic[StateT]):
         return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot on the server."""
+        """Aborts a running snapshot on the server.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+
+        Some servers report the status *after* a successful cancel
+        (``aborted``) instead of the previous one (``pending``). If you only
+        need "did this call stop a running turn?", treat either as yes.
+        """
         return await self._transport.abort_snapshot(snapshot_id)
 
 
@@ -1168,6 +1192,16 @@ class AgentChat(Generic[StateT]):
     async def abort(self) -> SnapshotStatus | None:
         """Stops the session's server-side work by aborting its current snapshot.
 
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status means the turn had
+        already finished. ``None`` means nothing was observed.
+
+        Against this SDK the return is always the previous status. After abort
+        the chat still points at the aborted leaf — ``load_chat(session_id=…)``
+        before the next ``send()``. This does not roll back the local
+        transcript; ``DetachedTask.abort`` does.
+
         Raises:
             ValueError: if there's no snapshot to abort — the agent is
                 client-managed (no store) or no turn has produced a snapshot yet.
@@ -1427,7 +1461,9 @@ class DetachedTask(Generic[StateT]):
         # its history stands. ('aborted' also rolls back for wire compatibility
         # with servers that report the resulting status.)
         if status in (SnapshotStatus.PENDING, SnapshotStatus.ABORTED) and self._on_abort_rollback is not None:
-            self._on_abort_rollback()
+            rollback = self._on_abort_rollback
+            self._on_abort_rollback = None
+            rollback()
         return status
 
 

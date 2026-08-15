@@ -127,14 +127,15 @@ async def server_side_task_abort() -> None:
     assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
+    # abort() returns the *previous* status: pending, because the turn was still running.
+    assert status == SnapshotStatus.PENDING
     # Aborting drops the optimistic 'slow a2' prompt the chat was holding for the
     # killed turn, so the local view rolls back to the last completed turn.
     assert turns(chat) == ['a1/user', 'reply/model']
 
-    # Still reload from the store before continuing — it's the authoritative
-    # state, and a detached turn's work never streams back to this chat object,
-    # so load_chat is the way to pick up whatever actually landed server-side.
+    # After abort, `_resume_snapshot_id` still names the aborted leaf, so a
+    # bare send() is rejected as not resumable. Reload by session_id to walk
+    # back to the last completed turn.
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['a1/user', 'reply/model']
 
