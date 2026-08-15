@@ -5,8 +5,8 @@
 
 """Unit tests for veneer model resolution helpers.
 
-Covers normalize_config, resolve_model_name, and resolve_model_ref as pure
-functions, independent of generate()/prompt wiring.
+Covers normalize_config, resolve_model_name, resolve_model_ref, and
+resolve_call_model as pure functions, independent of generate()/prompt wiring.
 """
 
 from dataclasses import FrozenInstanceError
@@ -18,6 +18,7 @@ from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
     normalize_config,
+    resolve_call_model,
     resolve_model_name,
     resolve_model_ref,
 )
@@ -37,7 +38,7 @@ class CustomConfig(BaseModel):
 class ExcludedKeyConfig(ModelConfig):
     """ModelConfig whose api_key is omitted from model_dump."""
 
-    api_key: str | None = Field(None, exclude=True)
+    api_key: str | None = Field(default=None, exclude=True)
 
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
@@ -169,3 +170,25 @@ def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
 def test_normalize_config_restores_excluded_fields() -> None:
     """Fields marked exclude=True still reach the plugin (per-request api_key)."""
     assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
+
+
+def test_resolve_call_model_string_keeps_config_instance() -> None:
+    """A string model has nothing to merge, so the caller's config is unchanged."""
+    registry = Registry()
+    cfg = CustomConfig(temperature=0.2)
+    name, config = resolve_call_model(model='echo', config=cfg, registry=registry)
+    assert name == 'echo'
+    assert config is cfg
+
+
+def test_resolve_call_model_ref_dumps_and_merges() -> None:
+    """A ModelRef dumps defaults and overlays call-time config."""
+    registry = Registry()
+    ref = model_ref(
+        'echo',
+        config_schema=CustomConfig,
+        config=CustomConfig(temperature=0.7),
+    )
+    name, config = resolve_call_model(model=ref, config={'top_k': 40}, registry=registry)
+    assert name == 'echo'
+    assert config == {'temperature': 0.7, 'top_k': 40}

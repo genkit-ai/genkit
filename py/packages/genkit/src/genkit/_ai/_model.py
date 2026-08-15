@@ -53,7 +53,7 @@ ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any
 
 # Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
 ModelArg: TypeAlias = str | ModelRef[BaseModel]
-ConfigArg: TypeAlias = BaseModel | Mapping[str, Any]
+ConfigArg: TypeAlias = Mapping[str, Any] | BaseModel
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -98,8 +98,8 @@ def resolve_model_name(
     message: str = 'No model configured.',
 ) -> str:
     """Return an explicit model name or the registry default; error if neither exists."""
-    name = model if model is not None else registry.lookup_value('defaultModel', 'defaultModel')
-    if not isinstance(name, str) or not name:
+    name = model if model is not None else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    if not name or not isinstance(name, str):
         raise GenkitError(status='INVALID_ARGUMENT', message=message)
     return name
 
@@ -127,6 +127,25 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
     merged.update(config)
     merged = {k: v for k, v in merged.items() if v is not None}
     return ResolvedModel(name=model.name, config=merged)
+
+
+def resolve_call_model(
+    *,
+    model: str | ModelRef[BaseModel] | None,
+    config: ConfigArg | None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> tuple[str, ConfigArg | None]:
+    """Return the wire name and the config to send with this call.
+
+    A ModelRef carries defaults, so those get dumped and overlaid with
+    call-time config. A string name has nothing to merge — the caller's
+    config object is left alone so the plugin still sees that instance.
+    """
+    if isinstance(model, ModelRef):
+        resolved = resolve_model_ref(model=model, config=normalize_config(config=config))
+        return resolved.name, resolved.config
+    return resolve_model_name(model=model, registry=registry, message=message), config
 
 
 def model_action_metadata(
