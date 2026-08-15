@@ -337,7 +337,10 @@ func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error)
 
 		if err = h(w, r); err != nil {
 			errorResponse := toReflectionError(err)
-			w.WriteHeader(errorResponse.Code)
+			// The body's code is a canonical status code, not an HTTP one, so
+			// the transport status is derived from it rather than reused. Going
+			// through the code keeps the two from ever disagreeing.
+			w.WriteHeader(status.FromCode(errorResponse.Code).HTTPCode())
 			writeJSON(ctx, w, errorResponse)
 		}
 	}
@@ -356,7 +359,11 @@ type reflectionErrorDetails struct {
 type reflectionError struct {
 	Details *reflectionErrorDetails `json:"details,omitempty"`
 	Message string                  `json:"message"`
-	Code    int                     `json:"code"`
+	// Code is the canonical status code, the same numbering gRPC uses and the
+	// dev UI's Status schema validates against (INVALID_ARGUMENT is 3, not
+	// 400). It is not an HTTP status: callers needing one derive it with
+	// [status.FromCode] and [status.Name.HTTPCode].
+	Code int `json:"code"`
 }
 
 // setTraceID records traceID, allocating the details envelope when the error
@@ -382,7 +389,7 @@ func (re *reflectionError) setTraceID(traceID string) {
 func toReflectionError(err error) reflectionError {
 	e := status.Convert(err)
 	if e == nil {
-		return reflectionError{Code: status.Internal.HTTPCode(), Details: &reflectionErrorDetails{}}
+		return reflectionError{Code: status.Internal.Code(), Details: &reflectionErrorDetails{}}
 	}
 	// The deprecated core constructors recorded the stack under
 	// Details["stack"]; status.Errorf keeps it off the details map and formats
@@ -405,7 +412,7 @@ func toReflectionError(err error) reflectionError {
 	}
 	return reflectionError{
 		Details: details,
-		Code:    e.Status.HTTPCode(),
+		Code:    e.Status.Code(),
 		Message: e.Message,
 	}
 }

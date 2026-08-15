@@ -745,8 +745,10 @@ func TestRunActionWithInit(t *testing.T) {
 }
 
 // TestToReflectionError covers the envelope the reflection API answers a
-// failed run with: the HTTP code comes from the error's status however deeply
-// it is wrapped, and the details ride along only when the error carried them.
+// failed run with: the code is the canonical status code (the numbering the
+// dev UI's Status schema validates, not an HTTP status) taken from the error's
+// status however deeply it is wrapped, and the details ride along only when
+// the error carried them.
 func TestToReflectionError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -758,28 +760,28 @@ func TestToReflectionError(t *testing.T) {
 		{
 			"classified error carries its stack",
 			status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", "/tool/test", errors.New("value must be a number")),
-			http.StatusBadRequest,
+			status.InvalidArgument.Code(),
 			`invalid input to action "/tool/test": value must be a number`,
 			true,
 		},
 		{
 			"plain error is internal",
 			errors.New("plain error"),
-			http.StatusInternalServerError,
+			status.Internal.Code(),
 			"plain error",
 			false,
 		},
 		{
 			"status survives one fmt.Errorf",
 			fmt.Errorf("context: %w", status.Errorf(status.ErrNotFound, "not found")),
-			http.StatusNotFound,
+			status.NotFound.Code(),
 			"not found",
 			true,
 		},
 		{
 			"status survives two",
 			fmt.Errorf("layer2: %w", fmt.Errorf("layer1: %w", status.Errorf(status.ErrPermissionDenied, "denied"))),
-			http.StatusForbidden,
+			status.PermissionDenied.Code(),
 			"denied",
 			true,
 		},
@@ -832,6 +834,38 @@ func TestToReflectionError(t *testing.T) {
 			t.Errorf("an empty trace allocated details: %+v", re.Details)
 		}
 	})
+}
+
+// TestReflectionErrorCodeYieldsValidHTTPStatus pins the split between the two
+// numbering schemes the error envelope touches. The body's code is canonical
+// (INVALID_ARGUMENT is 3), while wrapReflectionHandler still has to put an HTTP
+// status on the response, which it derives from that code. Feeding a canonical
+// code straight to WriteHeader would panic, since 3 is not a valid HTTP status.
+func TestReflectionErrorCodeYieldsValidHTTPStatus(t *testing.T) {
+	tests := []struct {
+		err      error
+		wantHTTP int
+	}{
+		{status.Errorf(status.ErrInvalidArgument, "bad"), http.StatusBadRequest},
+		{status.Errorf(status.ErrNotFound, "missing"), http.StatusNotFound},
+		{status.Errorf(status.ErrPermissionDenied, "denied"), http.StatusForbidden},
+		{status.Errorf(status.ErrUnauthenticated, "who"), http.StatusUnauthorized},
+		{status.Errorf(status.ErrResourceExhausted, "slow down"), http.StatusTooManyRequests},
+		{errors.New("plain"), http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		re := toReflectionError(tt.err)
+		if re.Code < 0 || re.Code > 16 {
+			t.Errorf("Code = %d, want a canonical status code the dev UI's enum accepts", re.Code)
+		}
+		got := status.FromCode(re.Code).HTTPCode()
+		if got != tt.wantHTTP {
+			t.Errorf("HTTP status for code %d = %d, want %d", re.Code, got, tt.wantHTTP)
+		}
+		if got < 100 || got > 999 {
+			t.Errorf("HTTP status %d is outside the range WriteHeader accepts", got)
+		}
+	}
 }
 
 // TestRunActionPlainErrorResponse pins that an action failing with an error the
