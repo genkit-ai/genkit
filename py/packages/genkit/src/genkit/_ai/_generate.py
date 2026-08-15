@@ -36,6 +36,7 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    resolve_model_name,
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
@@ -1104,13 +1105,7 @@ async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
 ) -> tuple[Action, list[Action], FormatDef | None]:
     """Resolve model, tools, and format from registry for a generation request."""
-    model = (
-        request.model
-        if request.model is not None
-        else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    )
-    if not model:
-        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
+    model = resolve_model_name(model=request.model, registry=registry)
 
     model_action = await registry.resolve_model(model)
     if model_action is None:

@@ -31,7 +31,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._model import ModelRequest
+from genkit._core._model import ModelConfig, ModelRequest
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
@@ -55,6 +55,7 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.model import model_ref
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -85,6 +86,18 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
     stream_result = ai.generate_stream(prompt='hi', config={'temperature': 11})
 
     assert (await stream_result.response).text == want_txt
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_constructor_model_ref() -> None:
+    """Genkit(model=ref) stores the ref; generate() with no model uses its name."""
+    ref = model_ref('echoModel', config_schema=ModelConfig)
+    ai = Genkit(model=ref)
+    define_echo_model(ai)
+
+    response = await ai.generate(prompt='hi')
+
+    assert response.text.startswith('[ECHO] user: "hi"')
 
 
 @pytest.mark.asyncio

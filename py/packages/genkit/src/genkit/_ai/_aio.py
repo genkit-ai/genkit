@@ -62,11 +62,13 @@ from genkit._ai._generate import (
 )
 from genkit._ai._model import (
     Message,
+    ModelArg,
     ModelConfig,
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
     define_model,
+    resolve_model_name,
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -169,7 +171,7 @@ class Genkit:
     def __init__(
         self,
         plugins: list[Plugin] | None = None,
-        model: str | None = None,
+        model: ModelArg | None = None,
         prompt_dir: str | Path | None = None,
         reflection_server_spec: ServerSpec | None = None,
     ) -> None:
@@ -905,7 +907,7 @@ class Genkit:
             name='genkit-reflection-server',
         ).start()
 
-    def _initialize_registry(self, model: str | None, plugins: list[Plugin] | None) -> None:
+    def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
         if model:
             self.registry.register_value('defaultModel', 'defaultModel', model)
@@ -1406,12 +1408,11 @@ class Genkit:
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
-        if not resolved_model:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message='No model specified for generate_operation.',
-            )
+        resolved_model = resolve_model_name(
+            model=model,
+            registry=self.registry,
+            message='No model specified for generate_operation.',
+        )
 
         model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved_model)
         if not model_action:

@@ -64,6 +64,23 @@ class ResolvedModel:
     config: dict[str, Any]
 
 
+def reject_camel_case_keys(*, config: Mapping[str, Any]) -> None:
+    """Raise if a call-site config dict used JSON/Dev UI names.
+
+    Python ``config=`` uses the same names as the Pydantic fields
+    (``max_output_tokens``). camelCase (``maxOutputTokens``) is the wire
+    spelling; accepting both here makes a typo look like it worked.
+    """
+    camel = [k for k in config if isinstance(k, str) and any(c.isupper() for c in k)]
+    if not camel:
+        return
+    shown = ', '.join(camel)
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(f'config keys must be snake_case (max_output_tokens), not camelCase (maxOutputTokens). Got: {shown}'),
+    )
+
+
 def normalize_config(*, config: object) -> dict[str, Any]:
     """Convert a config object or dict into a mergeable dict.
 
@@ -87,21 +104,36 @@ def normalize_config(*, config: object) -> dict[str, Any]:
                 dumped[name] = getattr(config, name)
         return dumped
     if isinstance(config, Mapping):
-        return dict(cast(Mapping[str, Any], config))
+        data = dict(cast(Mapping[str, Any], config))
+        reject_camel_case_keys(config=data)
+        return data
     raise TypeError(f'Unsupported config type: {type(config).__name__}')
+
+
+def resolve_model_arg(
+    *,
+    model: ModelArg | None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> ModelArg:
+    """Return the explicit model or the registry default (name or ModelRef)."""
+    resolved = model if model is not None else registry.lookup_value('defaultModel', 'defaultModel')
+    if isinstance(resolved, ModelRef):
+        return cast(ModelArg, resolved)
+    if isinstance(resolved, str) and resolved:
+        return resolved
+    raise GenkitError(status='INVALID_ARGUMENT', message=message)
 
 
 def resolve_model_name(
     *,
-    model: str | None,
+    model: ModelArg | None,
     registry: Registry,
     message: str = 'No model configured.',
 ) -> str:
-    """Return an explicit model name or the registry default; error if neither exists."""
-    name = model if model is not None else registry.lookup_value('defaultModel', 'defaultModel')
-    if not isinstance(name, str) or not name:
-        raise GenkitError(status='INVALID_ARGUMENT', message=message)
-    return name
+    """Return a wire model name, unwrapping a ModelRef default if needed."""
+    resolved = resolve_model_arg(model=model, registry=registry, message=message)
+    return resolved.name if isinstance(resolved, ModelRef) else resolved
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:

@@ -5,8 +5,8 @@
 
 """Unit tests for veneer model resolution helpers.
 
-Covers normalize_config, resolve_model_name, and resolve_model_ref as pure
-functions, independent of generate()/prompt wiring.
+Covers normalize_config, resolve_model_arg, resolve_model_name, and
+resolve_model_ref as pure functions, independent of generate()/prompt wiring.
 """
 
 from dataclasses import FrozenInstanceError
@@ -18,6 +18,7 @@ from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
     normalize_config,
+    resolve_model_arg,
     resolve_model_name,
     resolve_model_ref,
 )
@@ -169,3 +170,36 @@ def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
 def test_normalize_config_restores_excluded_fields() -> None:
     """Fields marked exclude=True still reach the plugin (per-request api_key)."""
     assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
+
+
+def test_normalize_config_rejects_camel_case_keys() -> None:
+    """camelCase dict keys are the JSON spelling; call-site config is snake_case."""
+    with pytest.raises(GenkitError, match='max_output_tokens'):
+        normalize_config(config={'maxOutputTokens': 100})
+
+
+def test_normalize_config_accepts_snake_case_keys() -> None:
+    """snake_case dict keys pass through unchanged."""
+    assert normalize_config(config={'max_output_tokens': 100}) == {'max_output_tokens': 100}
+
+
+def test_resolve_model_name_unwraps_model_ref_default() -> None:
+    """A constructor ModelRef stored as defaultModel resolves to its wire name."""
+    registry = Registry()
+    ref = model_ref('echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    registry.register_value('defaultModel', 'defaultModel', ref)
+    assert resolve_model_name(model=None, registry=registry) == 'echo-model'
+
+
+def test_resolve_model_name_unwraps_explicit_model_ref() -> None:
+    """An explicit ModelRef argument resolves to its wire name."""
+    ref = model_ref('echo-model', namespace='googleai', config_schema=CustomConfig)
+    assert resolve_model_name(model=ref, registry=Registry()) == 'googleai/echo-model'
+
+
+def test_resolve_model_arg_returns_default_model_ref() -> None:
+    """resolve_model_arg keeps the stored ModelRef so callers can merge its config."""
+    registry = Registry()
+    ref = model_ref('echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    registry.register_value('defaultModel', 'defaultModel', ref)
+    assert resolve_model_arg(model=None, registry=registry) is ref

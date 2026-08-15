@@ -50,6 +50,7 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
+from genkit._core._model import ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
@@ -709,7 +710,9 @@ class ReflectionServerV2:
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
-                mapped[name] = value
+                # Dev UI lists a model name. A constructor ModelRef is stored
+                # as-is; only the name is JSON-serializable here.
+                mapped[name] = value.name if isinstance(value, ModelRef) else value
         await self.send_response(sid, {'values': mapped})
 
     def handle_configure(self, params: dict[str, Any]) -> None:
