@@ -705,9 +705,8 @@ def validate_init(init: AgentInit) -> None:
     custom state alongside either id — resume from the store, or seed a new
     conversation, not both.
     """
-    has_state = init.state is not None
     has_resume = bool(init.snapshot_id) or bool(init.session_id)
-    if has_state and has_resume:
+    if init.state is not None and has_resume:
         fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
