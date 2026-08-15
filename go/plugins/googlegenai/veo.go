@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 )
 
@@ -49,7 +50,7 @@ func newVeoModel(
 		// Extract text prompt from the request
 		prompt := extractTextFromRequest(req)
 		if prompt == "" {
-			return nil, fmt.Errorf("no text prompt found in request")
+			return nil, status.Errorf(status.ErrInvalidArgument, "no text prompt found in request")
 		}
 
 		video := extractVeoVideoFromRequest(req)
@@ -214,12 +215,15 @@ func fromVeoOperation(veoOp *genai.GenerateVideosOperation) *ai.ModelOperation {
 		}
 	}
 
-	// Handle error cases
+	// Handle error cases. veoOp.Error is a google.rpc.Status, so it carries the
+	// canonical code alongside the message; classifying with it is what lets a
+	// caller tell a rejected prompt from a transient backend failure.
 	if veoOp.Error != nil {
+		sentinel := status.Base(veoOperationStatus(veoOp.Error))
 		if errorMsg, ok := veoOp.Error["message"].(string); ok {
-			operation.Error = fmt.Errorf("%s", errorMsg)
+			operation.Error = status.Errorf(sentinel, "%s", errorMsg)
 		} else {
-			operation.Error = fmt.Errorf("operation error: %v", veoOp.Error)
+			operation.Error = status.Errorf(sentinel, "operation error: %v", veoOp.Error)
 		}
 		return operation
 	}
@@ -296,4 +300,20 @@ func checkVeoOperation(ctx context.Context, client *genai.Client, ops *core.Oper
 		Name: ops.ID,
 	}
 	return client.Operations.GetVideosOperation(ctx, genaiOps, nil)
+}
+
+// veoOperationStatus reads the canonical status out of the google.rpc.Status
+// map a failed Veo operation carries. The code field is a gRPC status code,
+// numeric over the wire but a float64 (or json.Number) once decoded into a
+// map. An absent or unrecognized code answers Internal, which is what an
+// unexplained backend failure is.
+func veoOperationStatus(opErr map[string]any) status.Name {
+	code, ok := castToInt64(opErr["code"])
+	if !ok {
+		return status.Internal
+	}
+	if n := status.FromCode(int(code)); n != status.Unknown {
+		return n
+	}
+	return status.Internal
 }

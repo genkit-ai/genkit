@@ -19,7 +19,6 @@ package googlegenai
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -156,7 +155,7 @@ func generate(
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
 	if model == "" {
-		return nil, errors.New("model not provided")
+		return nil, status.Errorf(status.ErrInvalidArgument, "model not provided")
 	}
 	model = resolveVertexModelName(client, model)
 
@@ -175,7 +174,7 @@ func generate(
 		return nil, err
 	}
 	if len(contents) == 0 {
-		return nil, fmt.Errorf("at least one message is required in generate request")
+		return nil, status.Errorf(status.ErrInvalidArgument, "at least one message is required in generate request")
 	}
 
 	// Send out the actual request.
@@ -253,7 +252,7 @@ func generate(
 		// A stream can end without yielding a chunk: the SDK only logs a
 		// scanner failure rather than surfacing it, so an empty or truncated
 		// 2xx body reaches here with no error to report.
-		return nil, errors.New("model stream returned no responses")
+		return nil, status.Errorf(status.ErrUnavailable, "model stream returned no responses")
 	}
 
 	// Fold the stream back into a single response: one candidate carrying the
@@ -567,7 +566,7 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 		// failing the request; a candidate with neither content nor a finish
 		// reason is malformed.
 		if m.FinishReason == "" {
-			return nil, fmt.Errorf("no valid candidates were found in the generate response")
+			return nil, status.Errorf(status.ErrInternal, "no valid candidates were found in the generate response")
 		}
 		msg.Role = ai.RoleModel
 		m.Message = msg
@@ -663,7 +662,7 @@ func translateResponse(resp *genai.GenerateContentResponse) (*ai.ModelResponse, 
 			Message:       &ai.Message{Role: ai.RoleModel},
 		}
 	default:
-		return nil, errors.New("model returned no candidates")
+		return nil, status.Errorf(status.ErrInternal, "model returned no candidates")
 	}
 
 	if r.Usage == nil {
@@ -772,7 +771,7 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 		}
 		return fc, nil
 	default:
-		return nil, fmt.Errorf("unknown part in the request: %q", p.Kind)
+		return nil, status.Errorf(status.ErrInvalidArgument, "unknown part in the request: %q", p.Kind)
 	}
 
 	// Restore ThoughtSignature if present in metadata.

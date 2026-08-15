@@ -22,6 +22,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/plugins/internal"
+	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
 // Capability sets shared by the entries below. claudeSupports is what every
@@ -108,7 +109,7 @@ func listModels(ctx context.Context, client *anthropic.Client) ([]string, error)
 	}
 
 	if err := iter.Err(); err != nil {
-		return nil, err
+		return nil, ant.WrapAPIError(err)
 	}
 
 	return models, nil

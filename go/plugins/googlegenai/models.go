@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/internal"
 	"google.golang.org/genai"
 )
@@ -542,7 +543,7 @@ func listModels(provider string) (map[string]ai.ModelOptions, error) {
 	case vertexAIProvider:
 		names = vertexAIModels
 	default:
-		return nil, fmt.Errorf("unknown provider detected %s", provider)
+		return nil, status.Errorf(status.ErrInvalidArgument, "unknown provider detected %s", provider)
 	}
 
 	models := make(map[string]ai.ModelOptions, len(names))
@@ -569,7 +570,7 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 	for item, err := range client.Models.All(ctx) {
 		if err != nil {
-			return genaiModels{}, fmt.Errorf("failed to list models: %w", err)
+			return genaiModels{}, fmt.Errorf("failed to list models: %w", wrapAPIError(err))
 		}
 
 		name := strings.TrimPrefix(item.Name, "publishers/google/")

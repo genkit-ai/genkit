@@ -5,7 +5,6 @@ package googlegenai
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 
@@ -47,7 +47,7 @@ func displayName(provider string) string {
 // video fields and can only fail at the API.
 func rejectBackgroundModel(provider, id string) error {
 	if ClassifyModel(id).ActionType() == api.ActionTypeBackgroundModel {
-		return fmt.Errorf("%s: %q is a background model; generate with it directly instead of defining it as a model", provider, id)
+		return status.Errorf(status.ErrInvalidArgument, "%s: %q is a background model; generate with it directly instead of defining it as a model", provider, id)
 	}
 	return nil
 }
@@ -413,7 +413,7 @@ func (ga *GoogleAI) Client() (*genai.Client, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
-		return nil, errors.New("GoogleAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "GoogleAI plugin not initialized")
 	}
 	return ga.gclient, nil
 }
@@ -424,7 +424,7 @@ func (v *VertexAI) Client() (*genai.Client, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
-		return nil, errors.New("VertexAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "VertexAI plugin not initialized")
 	}
 	return v.gclient, nil
 }
@@ -441,7 +441,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
-		return nil, errors.New("GoogleAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "GoogleAI plugin not initialized")
 	}
 	id = internal.TrimProvider(googleAIProvider, id)
 	if err := rejectBackgroundModel(googleAIProvider, id); err != nil {
@@ -457,7 +457,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 		return nil, err
 	}
 	if _, known := models[id]; !known && !c.modelOverridden(id) {
-		return nil, fmt.Errorf("GoogleAI: called with unknown model %q and nil ModelOptions", id)
+		return nil, status.Errorf(status.ErrInvalidArgument, "called with unknown model %q and nil ModelOptions", id)
 	}
 
 	return newModel(ga.gclient, id, c.modelOptions(id)), nil
@@ -478,7 +478,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
-		return nil, errors.New("VertexAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "VertexAI plugin not initialized")
 	}
 	id = internal.TrimProvider(vertexAIProvider, id)
 	if err := rejectBackgroundModel(vertexAIProvider, id); err != nil {
@@ -495,7 +495,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 			return nil, err
 		}
 		if _, known := models[id]; !known {
-			return nil, fmt.Errorf("VertexAI: called with unknown model %q and nil ModelOptions", id)
+			return nil, status.Errorf(status.ErrInvalidArgument, "called with unknown model %q and nil ModelOptions", id)
 		}
 	}
 
@@ -512,7 +512,7 @@ func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Em
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
-		return nil, errors.New("GoogleAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "GoogleAI plugin not initialized")
 	}
 	id = internal.TrimProvider(googleAIProvider, id)
 	if embedOpts == nil {
@@ -530,7 +530,7 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Emb
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
-		return nil, errors.New("VertexAI plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "VertexAI plugin not initialized")
 	}
 	id = internal.TrimProvider(vertexAIProvider, id)
 	if embedOpts == nil {

@@ -18,7 +18,6 @@ package anthropic
 
 import (
 	"context"
-	"errors"
 	"os"
 	"regexp"
 	"sync"
@@ -29,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
@@ -207,7 +207,7 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.initted {
-		return nil, errors.New("anthropic plugin not initialized")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "anthropic plugin not initialized")
 	}
 
 	// Trim before resolving, so a prefixed ID still hits supportedModels.

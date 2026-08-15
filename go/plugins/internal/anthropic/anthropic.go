@@ -230,7 +230,7 @@ func Generate(
 	if cb == nil {
 		msg, err := client.Messages.New(ctx, *req)
 		if err != nil {
-			return nil, err
+			return nil, WrapAPIError(err)
 		}
 
 		r, err := toGenkitResponse(msg)
@@ -291,13 +291,16 @@ func Generate(
 			}
 		}
 		if err := stream.Err(); err != nil {
-			return nil, err
+			return nil, WrapAPIError(err)
 		}
 		// The loop only returns from the message_stop case. Falling out of it
 		// means the stream ended early without one, and the SDK reports no
 		// error for a body that simply stops, so say so rather than returning
 		// a nil response the caller would dereference.
-		return nil, fmt.Errorf("anthropic stream ended without a message_stop event")
+		// Internal, not InvalidArgument: a body that stops early is usually a
+		// truncated response rather than a bad request, so this stays in the
+		// set the retry middleware reissues.
+		return nil, status.Errorf(status.ErrInternal, "anthropic stream ended without a message_stop event")
 	}
 }
 
@@ -310,7 +313,7 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 	case ai.RoleTool:
 		return anthropic.MessageParamRoleAssistant, nil
 	default:
-		return "", fmt.Errorf("unknown role given: %q", role)
+		return "", status.Errorf(status.ErrInvalidArgument, "unknown role given: %q", role)
 	}
 }
 
@@ -434,10 +437,10 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 	for _, t := range tools {
 		if t.Name == "" {
-			return nil, fmt.Errorf("tool name is required")
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name is required")
 		}
 		if !regex.MatchString(t.Name) {
-			return nil, fmt.Errorf("tool name must match regex: %s", ToolNameRegex)
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name %q must match regex: %s", t.Name, ToolNameRegex)
 		}
 
 		inputSchema := t.InputSchema
@@ -460,7 +463,7 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
-			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "unable to parse input schema for tool %q: %w", t.Name, err)
 		}
 
 		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
@@ -552,7 +555,7 @@ func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlo
 	if toolResp.Output != nil || len(toolResp.Content) == 0 {
 		output, err := json.Marshal(toolResp.Output)
 		if err != nil {
-			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse tool response, err: %w", err)
+			return anthropic.ContentBlockParamUnion{}, status.Errorf(status.ErrInvalidArgument, "unable to marshal response of tool %q: %w", toolResp.Name, err)
 		}
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
 			OfText: &anthropic.TextBlockParam{Text: string(output)},

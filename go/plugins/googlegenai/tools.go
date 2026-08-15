@@ -4,12 +4,12 @@
 package googlegenai
 
 import (
-	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"google.golang.org/genai"
 )
@@ -26,7 +26,7 @@ func toGeminiTools(inTools []*ai.ToolDefinition) ([]*genai.Tool, error) {
 
 	for _, t := range inTools {
 		if !validToolName(t.Name) {
-			return nil, fmt.Errorf(`invalid tool name: %q, must start with a letter or an underscore, must be alphanumeric, underscores, dots or dashes with a max length of 64 chars`, t.Name)
+			return nil, status.Errorf(status.ErrInvalidArgument, `invalid tool name: %q, must start with a letter or an underscore, must be alphanumeric, underscores, dots or dashes with a max length of 64 chars`, t.Name)
 		}
 		inputSchema, err := toGeminiSchema(t.InputSchema, t.InputSchema)
 		if err != nil {
@@ -71,7 +71,7 @@ func toGeminiFunctionResponsePart(parts []*ai.Part) ([]*genai.FunctionResponsePa
 			}
 			frp = append(frp, genai.NewFunctionResponsePartFromURI(p.Text, p.ContentType))
 		default:
-			return nil, fmt.Errorf("unsupported function response part type: %d", p.Kind)
+			return nil, status.Errorf(status.ErrInvalidArgument, "unsupported function response part type: %d", p.Kind)
 		}
 	}
 	return frp, nil
@@ -128,7 +128,7 @@ func toGeminiToolChoice(toolConfig *genai.ToolConfig, toolChoice ai.ToolChoice, 
 	case ai.ToolChoiceNone:
 		mode = genai.FunctionCallingConfigModeNone
 	default:
-		return nil, fmt.Errorf("tool choice mode %q not supported", toolChoice)
+		return nil, status.Errorf(status.ErrInvalidArgument, "tool choice mode %q not supported", toolChoice)
 	}
 
 	var toolNames []string

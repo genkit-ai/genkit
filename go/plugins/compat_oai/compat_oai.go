@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"math"
 	"slices"
@@ -483,7 +482,7 @@ func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.Embedd
 
 		embeddingResp, err := o.clientForKey(config.APIKey).Embeddings.New(ctx, params)
 		if err != nil {
-			return nil, err
+			return nil, WrapAPIError(err)
 		}
 
 		resp := &ai.EmbedResponse{}
@@ -518,10 +517,10 @@ func embeddingFloats(emb openai.Embedding) ([]float32, error) {
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("compat_oai: decoding base64 embedding: %w", err)
+		return nil, status.Errorf(status.ErrInvalidOutput, "compat_oai: decoding base64 embedding: %w", err)
 	}
 	if len(data)%4 != 0 {
-		return nil, fmt.Errorf("compat_oai: base64 embedding has %d bytes, want a multiple of 4", len(data))
+		return nil, status.Errorf(status.ErrInvalidOutput, "compat_oai: base64 embedding has %d bytes, want a multiple of 4", len(data))
 	}
 	embedding := make([]float32, len(data)/4)
 	for i := range embedding {
@@ -723,7 +722,7 @@ func listOpenAIModels(ctx context.Context, client *openai.Client) ([]string, err
 		models = append(models, m.ID)
 	}
 	if err := iter.Err(); err != nil {
-		return nil, err
+		return nil, WrapAPIError(err)
 	}
 
 	return models, nil

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/openai/openai-go"
@@ -224,7 +225,7 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 		var err error
 		openaiConfig, err = base.MapToStruct[openai.ChatCompletionNewParams](normalizedConfig)
 		if err != nil {
-			g.err = fmt.Errorf("failed to convert config to openai.ChatCompletionNewParams: %w", err)
+			g.err = status.Errorf(status.ErrInvalidArgument, "failed to convert config to openai.ChatCompletionNewParams: %w", err)
 			return g
 		}
 		// Match the JS compat-oai adapter's config passthrough behavior. The
@@ -240,7 +241,7 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 		}
 		openaiConfig.SetExtraFields(extraFields)
 	default:
-		g.err = fmt.Errorf("unexpected config type: %T", config)
+		g.err = status.Errorf(status.ErrInvalidArgument, "unexpected config type: %T", config)
 		return g
 	}
 
@@ -324,7 +325,7 @@ func (g *ModelGenerator) WithToolChoice(toolChoice ai.ToolChoice) *ModelGenerato
 	case ai.ToolChoiceAuto, ai.ToolChoiceNone, ai.ToolChoiceRequired:
 		g.request.ToolChoice.OfAuto = param.NewOpt(string(toolChoice))
 	default:
-		g.err = fmt.Errorf("unsupported tool choice: %q", toolChoice)
+		g.err = status.Errorf(status.ErrInvalidArgument, "unsupported tool choice: %q", toolChoice)
 	}
 
 	return g
@@ -390,7 +391,7 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 	}
 
 	if len(g.messages) == 0 {
-		return nil, fmt.Errorf("no messages provided")
+		return nil, status.Errorf(status.ErrInvalidArgument, "no messages provided")
 	}
 	g.request.Messages = g.messages
 
@@ -557,8 +558,10 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		}
 	}
 
+	// NewStreaming defers its HTTP error to the stream, so a 4xx on the
+	// request that opened it surfaces here rather than at the call.
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("stream error: %w", err)
+		return nil, fmt.Errorf("stream error: %w", WrapAPIError(err))
 	}
 
 	if usageSeen {
@@ -631,7 +634,7 @@ func extractReasoningContent(raw string) string {
 // convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
 func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*ai.ModelResponse, error) {
 	if len(completion.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in completion")
+		return nil, status.Errorf(status.ErrInvalidOutput, "no choices in completion")
 	}
 
 	choice := completion.Choices[0]
@@ -770,7 +773,7 @@ func addCustomTokens(usage *ai.GenerationUsage, name string, count int) {
 func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequest) (*ai.ModelResponse, error) {
 	completion, err := g.client.Chat.Completions.New(ctx, *g.request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create completion: %w", err)
+		return nil, fmt.Errorf("failed to create completion: %w", WrapAPIError(err))
 	}
 
 	resp, err := convertChatCompletionToModelResponse(completion)
@@ -826,7 +829,7 @@ func convertToolCall(part *ai.Part) (*openai.ChatCompletionMessageToolCallParam,
 func jsonStringToMap(jsonString string) (map[string]any, error) {
 	var result map[string]any
 	if err := json.Unmarshal([]byte(jsonString), &result); err != nil {
-		return nil, fmt.Errorf("unmarshal failed to parse json string %s: %w", jsonString, err)
+		return nil, status.Errorf(status.ErrInvalidOutput, "unmarshal failed to parse json string %s: %w", jsonString, err)
 	}
 	return result, nil
 }
@@ -834,7 +837,7 @@ func jsonStringToMap(jsonString string) (map[string]any, error) {
 func anyToJSONString(data any) (string, error) {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal any to JSON string: data, %#v %w", data, err)
+		return "", status.Errorf(status.ErrInvalidArgument, "failed to marshal any to JSON string: data %#v: %w", data, err)
 	}
 	return string(jsonBytes), nil
 }

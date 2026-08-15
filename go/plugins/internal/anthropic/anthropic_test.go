@@ -347,7 +347,7 @@ func TestToAnthropicTools(t *testing.T) {
 					Description: "my tool description",
 				},
 			},
-			expectedErr: "tool name must match regex",
+			expectedErr: "must match regex",
 		},
 	}
 

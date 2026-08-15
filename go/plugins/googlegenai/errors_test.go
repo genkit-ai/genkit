@@ -22,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -237,5 +239,91 @@ func TestWrapAPIError_AttachesRetryAfterDetails(t *testing.T) {
 	}
 	if got, want := ge.Details["retryAfterMs"], int64(3000); got != want {
 		t.Fatalf("Details[retryAfterMs] = %v (%T), want %v", got, got, want)
+	}
+}
+
+// TestRequestShapingErrorsAreNotRetryable covers the request-shaping failures
+// this package raises before any HTTP call. Each is deterministic in its input,
+// so reissuing it would fail identically; classifying them keeps the retry
+// middleware, whose default set is UNAVAILABLE, DEADLINE_EXCEEDED,
+// RESOURCE_EXHAUSTED, ABORTED, and INTERNAL, from spending its budget on a
+// request that can never succeed. An unclassified error is retried regardless
+// of that list, which is what these guard.
+func TestRequestShapingErrorsAreNotRetryable(t *testing.T) {
+	retried := map[status.Name]bool{
+		status.Unavailable:       true,
+		status.DeadlineExceeded:  true,
+		status.ResourceExhausted: true,
+		status.Aborted:           true,
+		status.Internal:          true,
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "invalid tool name",
+			call: func() error {
+				_, err := toGeminiTools([]*ai.ToolDefinition{{Name: "not a valid name!"}})
+				return err
+			},
+		},
+		{
+			name: "schema missing type",
+			call: func() error {
+				_, err := toGeminiSchema(map[string]any{}, map[string]any{"description": "no type"})
+				return err
+			},
+		},
+		{
+			name: "schema type not a string",
+			call: func() error {
+				_, err := toGeminiSchema(map[string]any{}, map[string]any{"type": 42})
+				return err
+			},
+		},
+		{
+			name: "cache metadata not a map",
+			call: func() error {
+				_, err := findCacheMarker(&ai.ModelRequest{Messages: []*ai.Message{
+					{Role: ai.RoleUser, Metadata: map[string]any{"cache": "not a map"}},
+				}})
+				return err
+			},
+		},
+		{
+			name: "cache ttl not a number",
+			call: func() error {
+				_, err := findCacheMarker(&ai.ModelRequest{Messages: []*ai.Message{
+					{Role: ai.RoleUser, Metadata: map[string]any{"cache": map[string]any{"ttlSeconds": "soon"}}},
+				}})
+				return err
+			},
+		},
+		{
+			name: "tools with context caching",
+			call: func() error {
+				return validateContextCacheRequest(&ai.ModelRequest{
+					Tools: []*ai.ToolDefinition{{Name: "someTool"}},
+				}, "gemini-flash-latest")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			s, ok := status.Classified(err)
+			if !ok {
+				t.Fatalf("error is unclassified, so retry would reissue it: %v", err)
+			}
+			if retried[s] {
+				t.Errorf("error maps to %v, which the retry middleware reissues: %v", s, err)
+			}
+		})
 	}
 }

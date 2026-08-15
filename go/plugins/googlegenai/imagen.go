@@ -19,11 +19,11 @@ package googlegenai
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 
 	"google.golang.org/genai"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // translateImagenCandidates translates the image generation response to [*ai.ModelResponse]
@@ -64,11 +64,11 @@ func generateImage(
 		}
 	}
 	if userPrompt == "" {
-		return nil, fmt.Errorf("error generating images: empty prompt detected")
+		return nil, status.Errorf(status.ErrInvalidArgument, "empty prompt detected")
 	}
 
 	if cb != nil {
-		return nil, fmt.Errorf("streaming mode not supported for image generation")
+		return nil, status.Errorf(status.ErrUnimplemented, "streaming mode not supported for image generation")
 	}
 
 	resp, err := client.Models.GenerateImages(ctx, model, userPrompt, gic)

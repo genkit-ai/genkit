@@ -404,7 +404,7 @@ func listClaudeModels(ctx context.Context, client *openai.Client) ([]string, err
 			path += "&after_id=" + url.QueryEscape(after)
 		}
 		if err := client.Get(ctx, path, nil, &page); err != nil {
-			return nil, err
+			return nil, compat_oai.WrapAPIError(err)
 		}
 		for _, m := range page.Data {
 			models = append(models, m.ID)

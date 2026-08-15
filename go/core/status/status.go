@@ -85,10 +85,34 @@ var httpCodeToName = map[int]Name{
 	http.StatusServiceUnavailable:  Unavailable,
 }
 
+// codeToName is the reverse of the gRPC code column above. Unlike the HTTP
+// column it is one-to-one, so it is derived from the canonical table rather
+// than restated, and cannot drift from it.
+var codeToName = func() map[int]Name {
+	m := make(map[int]Name, len(statuses))
+	for name, s := range statuses {
+		m[s.code] = name
+	}
+	return m
+}()
+
 // IsValid reports whether n is one of the canonical status names.
 func (n Name) IsValid() bool {
 	_, ok := statuses[n]
 	return ok
+}
+
+// FromCode returns the canonical status name for a gRPC integer code, or
+// Unknown if the code is not canonical. It is the reverse of [Name.Code].
+//
+// Like [FromHTTPCode], it is intended for plugins translating a provider's
+// error into a status middleware can reason about. Google APIs report a failed
+// long-running operation as a google.rpc.Status, whose code is numeric.
+func FromCode(code int) Name {
+	if n, ok := codeToName[code]; ok {
+		return n
+	}
+	return Unknown
 }
 
 // Code returns the gRPC integer code for n, or 2 (Unknown) if n is not
