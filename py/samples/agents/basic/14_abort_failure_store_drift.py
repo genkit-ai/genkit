@@ -27,10 +27,11 @@ store, which is the source of truth:
      prompt. The client view drifts ahead of (really, behind) the store.
 
   2. task.abort() — a *server-side* cancel of a detached turn. The snapshot
-     settles ABORTED and never becomes the session's resume point. Your chat is
-     left holding the optimistic prompt (drift again), so you reload from the
-     store to resync — which skips the dead aborted leaf back to the last
-     completed turn.
+     settles ABORTED and never becomes the session's resume point. abort()
+     returns the snapshot's status from *before* this call (``pending`` when
+     it cancelled in-flight work) and rolls back the optimistic prompt on
+     the in-memory chat. Reload from the store to resync — which skips the
+     dead aborted leaf back to the last completed turn.
 
   3. a real server error (e.g. the model is exhausted) — the chat client raises
      AgentError, the optimistic prompt is rolled back, and the resume handle stays
@@ -127,14 +128,15 @@ async def server_side_task_abort() -> None:
     assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
+    # abort() returns the *previous* status: pending, because the turn was still running.
+    assert status == SnapshotStatus.PENDING
     # Aborting drops the optimistic 'slow a2' prompt the chat was holding for the
     # killed turn, so the local view rolls back to the last completed turn.
     assert turns(chat) == ['a1/user', 'reply/model']
 
-    # Still reload from the store before continuing — it's the authoritative
-    # state, and a detached turn's work never streams back to this chat object,
-    # so load_chat is the way to pick up whatever actually landed server-side.
+    # After abort, `_resume_snapshot_id` still names the aborted leaf, so a
+    # bare send() is rejected as not resumable. Reload by session_id to walk
+    # back to the last completed turn.
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['a1/user', 'reply/model']
 

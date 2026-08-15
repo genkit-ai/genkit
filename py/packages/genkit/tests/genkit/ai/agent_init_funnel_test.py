@@ -137,6 +137,23 @@ def test_chat_rejects_messages_on_server_managed_agent() -> None:
     assert "Cannot send 'state'" not in str(exc.value)
 
 
+def test_chat_rejects_messages_mixed_with_snapshot_id() -> None:
+    """messages= + snapshot_id= is AgentInitError naming 'messages', not 'state'."""
+    registry = Registry()
+    store = InMemorySessionStore()
+    agent = define_custom_agent(registry, 'serverChatMix', echo_fn, store=store)
+
+    with pytest.raises(AgentInitError) as exc:
+        agent.chat(
+            messages=[MessageData(role='user', content=[Part(root=TextPart(text='hi'))])],
+            snapshot_id='snap-1',
+        )
+
+    assert exc.value.status == 'FAILED_PRECONDITION'
+    assert "Cannot send 'messages'" in str(exc.value)
+    assert "Cannot send 'state'" not in str(exc.value)
+
+
 @pytest.mark.asyncio
 async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> None:
     registry = Registry()

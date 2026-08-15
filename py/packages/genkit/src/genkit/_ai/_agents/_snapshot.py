@@ -176,18 +176,29 @@ async def abort_snapshot_in_store(
 ) -> SnapshotStatus | None:
     """Abort a running snapshot by flipping it to aborted.
 
-    There's no dedicated store abort call: aborting is an ordinary atomic
-    snapshot write whose mutator flips a still-pending turn to aborted and leaves
-    an already-finished one untouched, so a late abort never rewrites a
-    completed/failed result. The write also notifies any status subscribers,
-    which is how a detached turn learns it was aborted. Returns the snapshot's
-    resulting status (aborted when this call did the flip), or None if it doesn't
-    exist.
+    There's no separate abort API on the store. Aborting is an ordinary atomic
+    snapshot write: the mutator flips a still-pending turn to aborted and leaves
+    an already-finished one untouched, so a late abort never overwrites a
+    completed or failed result. The write also notifies status subscribers,
+    which is how a detached turn learns it was aborted.
+
+    Returns the last status the mutator saw on the existing row — typically
+    ``pending`` when this call cancelled in-flight work, or the unchanged
+    terminal status if the turn had already finished. ``None`` if the mutator
+    never ran (missing row, or the store skipped the write).
+
+    Stores may invoke the mutator more than once under contention. We keep the
+    last observation, not the first, so the return matches what the winning
+    write saw. We do not re-read the row afterward to invent a previous
+    status: if the mutator never ran, there is nothing to report.
     """
-    saved = await store.save_snapshot(snapshot_id, abort_if_pending, context=context)
-    if saved is not None:
-        return saved.status
-    # The mutator skipped the write: either the snapshot is gone or already
-    # terminal. Report its current status without touching it.
-    current = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
-    return current.status if current is not None else None
+    previous: SnapshotStatus | None = None
+
+    def capture_and_abort(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        nonlocal previous
+        if existing is not None:
+            previous = existing.status
+        return abort_if_pending(existing)
+
+    await store.save_snapshot(snapshot_id, capture_and_abort, context=context)
+    return previous

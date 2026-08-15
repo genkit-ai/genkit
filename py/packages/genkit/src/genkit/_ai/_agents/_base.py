@@ -188,7 +188,15 @@ class Agent(
         )
 
     async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Abort a running snapshot."""
+        """Abort a running snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status means the turn had
+        already finished — this call did not rewrite it. ``None`` means
+        nothing was observed (no store, no row, or the store never ran the
+        abort write). This Python server always returns the previous status.
+        """
         if self.store is None:
             return None
         return await abort_snapshot_in_store(

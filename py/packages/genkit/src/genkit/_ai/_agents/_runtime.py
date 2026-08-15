@@ -37,6 +37,7 @@ from genkit._ai._agents._session import (
     reserve_snapshot_id,
     run_with_session,
 )
+from genkit._ai._agents._session_stores._util import session_id_of
 from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
 from genkit._ai._generate import generate_action
@@ -316,7 +317,9 @@ def assert_init_matches_state_management(
 ) -> None:
     """Raise ``AgentInitError`` when init does not match the agent's store mode."""
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        # Wire-facing errors use the wire (camelCase) field names so a
+        # client talking over HTTP sees the same identifiers it sent.
+        field = 'snapshotId' if init.snapshot_id else 'sessionId'
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -325,12 +328,11 @@ def assert_init_matches_state_management(
             ),
         )
     if init.state is not None and store is not None:
-        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
             ),
         )
 
@@ -356,11 +358,6 @@ async def load_session(
     """
     name = agent_name or 'agent'
 
-    if init.snapshot_id and init.session_id:
-        raise AgentInitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
-        )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     ctx = get_current_context()
@@ -372,6 +369,20 @@ async def load_session(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
+        # When init carries both ids, the snapshot id picks the row and the
+        # session id is an ownership check: the snapshot must belong to that
+        # session. Wrong pairing is a client error, not a silent load.
+        if init.session_id:
+            snap_session_id = session_id_of(snap)
+            if snap_session_id != init.session_id:
+                owner = snap_session_id if snap_session_id is not None else 'an unknown session'
+                raise AgentInitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'Snapshot {init.snapshot_id!r} does not belong to session '
+                        f'{init.session_id!r} (it belongs to {owner!r}).'
+                    ),
+                )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
@@ -738,7 +749,17 @@ class AgentRuntime:
         state = await self.session.state()
         now = datetime.now(timezone.utc).isoformat()
         fn_err = err_holder[0] if err_holder else None
-        if fn_err:
+        # SessionRunner.run swallows turn exceptions into last_turn_error and
+        # still returns. The attached path consults that field; detached
+        # finalize used to look only at err_holder, so a graceful turn failure
+        # wrote status=completed / error=None. Same rule as emit_turn_end.
+        turn_err = self.session_runner.last_turn_error
+        is_failed = (
+            fn_err is not None
+            or turn_err is not None
+            or self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
+        )
+        if is_failed:
             finish_reason = AgentFinishReason.FAILED
         else:
             result = result_holder[0] if result_holder else None
@@ -753,9 +774,9 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id=existing.snapshot_id if existing else '',
                 parent_id=pending_snap.parent_id or '',
-                status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
+                status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(to_error_details(fn_err) if fn_err else None),
+                error=(to_error_details(fn_err) if fn_err else turn_err),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -796,6 +817,12 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if item.detach:
                         is_detached = True
+                        # Stop chunk emission immediately: a detached run must
+                        # not stream chunks back on this connection. Setting the
+                        # flag here — before the payload is queued — closes the
+                        # race where the background turn starts streaming before
+                        # the detach branch of run() marks the runtime detached.
+                        self.detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
                         # this order means the turn is deterministically queued for

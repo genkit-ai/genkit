@@ -529,9 +529,13 @@ class AgentAPI(Protocol, Generic[StateT]):
     ) -> AgentChat[StateT]:
         """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
 
-        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
-        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
-        passing a state blob raises :class:`AgentInitError`.
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed
+        agents (no store). Store-backed agents take ``snapshot_id`` and/or
+        ``session_id``. Passing both is fine: the snapshot id picks the row,
+        and the session id checks that the row belongs to that session.
+        Passing a state blob, or mixing ``messages`` / ``artifacts`` /
+        ``state`` with a resume id, raises :class:`AgentInitError` naming the
+        kwargs.
         """
         ...
 
@@ -554,7 +558,19 @@ class AgentAPI(Protocol, Generic[StateT]):
         ...
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot."""
+        """Aborts a running snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+
+        Some servers report the status *after* a successful cancel
+        (``aborted``) instead of the previous one (``pending``). If you only
+        need "did this call stop a running turn?", treat either as yes.
+        """
         ...
 
 
@@ -590,9 +606,13 @@ class AgentClient(Generic[StateT]):
     ) -> AgentChat[StateT]:
         """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
 
-        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
-        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
-        passing a state blob raises :class:`AgentInitError`.
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed
+        agents (no store). Store-backed agents take ``snapshot_id`` and/or
+        ``session_id``. Passing both is fine: the snapshot id picks the row,
+        and the session id checks that the row belongs to that session.
+        Passing a state blob, or mixing ``messages`` / ``artifacts`` /
+        ``state`` with a resume id, raises :class:`AgentInitError` naming the
+        kwargs.
         """
         session_transport = copy.copy(self._transport)
         return AgentChat(
@@ -633,7 +653,19 @@ class AgentClient(Generic[StateT]):
         return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot on the server."""
+        """Aborts a running snapshot on the server.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+
+        Some servers report the status *after* a successful cancel
+        (``aborted``) instead of the previous one (``pending``). If you only
+        need "did this call stop a running turn?", treat either as yes.
+        """
         return await self._transport.abort_snapshot(snapshot_id)
 
 
@@ -665,19 +697,24 @@ def init_from(
 
 
 def validate_init(init: AgentInit) -> None:
-    """Ensures init specifies at most one resume handle."""
-    provided = [
-        name
-        for name, present in (
-            ('state', init.state is not None),
-            ('snapshot_id', bool(init.snapshot_id)),
-            ('session_id', bool(init.session_id)),
-        )
-        if present
-    ]
-    if len(provided) > 1:
-        raise ValueError(
-            f'AgentInit may specify at most one of state, snapshot_id, or session_id; got {", ".join(provided)}.'
+    """Rejects mixing a state blob with a resume id.
+
+    Passing both ``snapshot_id`` and ``session_id`` is fine: the snapshot id
+    picks the row, and the session id checks that the row belongs to that
+    session. What is not allowed is sending ``messages`` / ``artifacts`` /
+    custom state alongside either id — resume from the store, or seed a new
+    conversation, not both.
+    """
+    has_state = init.state is not None
+    has_resume = bool(init.snapshot_id) or bool(init.session_id)
+    if has_state and has_resume:
+        fields = seeded_init_fields(init.state)
+        raise AgentInitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f'Cannot send {fields} together with snapshot_id/session_id. '
+                'Resume with snapshot_id and/or session_id, or send a state blob, not both.'
+            ),
         )
 
 
@@ -973,10 +1010,10 @@ class AgentChat(Generic[StateT]):
                 )
             if init.state is not None:
                 self._set_state(init.state)
-            elif init.snapshot_id:
+            if init.snapshot_id:
                 self._snapshot_id = init.snapshot_id
                 self._resume_snapshot_id = init.snapshot_id
-            elif init.session_id:
+            if init.session_id:
                 self._session_id = init.session_id
 
     @property
@@ -1168,6 +1205,16 @@ class AgentChat(Generic[StateT]):
     async def abort(self) -> SnapshotStatus | None:
         """Stops the session's server-side work by aborting its current snapshot.
 
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status means the turn had
+        already finished. ``None`` means nothing was observed.
+
+        Against this SDK the return is always the previous status. After abort
+        the chat still points at the aborted leaf — ``load_chat(session_id=…)``
+        before the next ``send()``. This does not roll back the local
+        transcript; ``DetachedTask.abort`` does.
+
         Raises:
             ValueError: if there's no snapshot to abort — the agent is
                 client-managed (no store) or no turn has produced a snapshot yet.
@@ -1222,8 +1269,10 @@ class AgentChat(Generic[StateT]):
 
         # Server store owns the state; point it at what to load. Prefer the
         # current resume snapshot, fall back to the session id, else start fresh.
+        # When both are set, the snapshot id picks the row and the session id
+        # stays as an ownership check.
         if self._resume_snapshot_id:
-            return AgentInit(snapshot_id=self._resume_snapshot_id)
+            return AgentInit(snapshot_id=self._resume_snapshot_id, session_id=self._session_id)
         if self._session_id:
             return AgentInit(session_id=self._session_id)
         return AgentInit()
@@ -1418,13 +1467,23 @@ class DetachedTask(Generic[StateT]):
     async def abort(self) -> SnapshotStatus | None:
         """Aborts the detached task on the server.
 
-        If the turn was actually aborted (and not already finished by the time the
-        abort lands), the originating chat drops the prompt it optimistically held
-        for this turn, so its view doesn't strand an unanswered message.
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means this call cancelled a still-running turn (the row is
+        now ``aborted``). A terminal status means the turn had already
+        finished. ``None`` means nothing was observed.
+
+        If this call cancelled a running turn, the originating chat drops the
+        optimistic prompt it added when detach started. That rollback runs at
+        most once. Some servers report ``aborted`` (status after the cancel)
+        instead of ``pending`` (status before); either one is treated as "this
+        call stopped in-flight work" so the prompt is still dropped. A later
+        abort is a no-op.
         """
         status = await self._transport.abort_snapshot(self.snapshot_id)
-        if status == SnapshotStatus.ABORTED and self._on_abort_rollback is not None:
-            self._on_abort_rollback()
+        if status in (SnapshotStatus.PENDING, SnapshotStatus.ABORTED) and self._on_abort_rollback is not None:
+            rollback = self._on_abort_rollback
+            self._on_abort_rollback = None
+            rollback()
         return status
 
 

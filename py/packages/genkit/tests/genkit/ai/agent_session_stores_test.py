@@ -151,7 +151,9 @@ async def test_abort_flips_pending_only() -> None:
     pending = await store.save_snapshot(pending_snap.snapshot_id, lambda _: pending_snap)
     assert pending is not None
 
-    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.ABORTED
+    # Abort returns the *previous* status (spec: tests/specs/agent.yaml) —
+    # 'pending' when this call performed the flip.
+    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.PENDING
     snap = await store.get_snapshot(snapshot_id=pending.snapshot_id)
     assert snap is not None and snap.status == SnapshotStatus.ABORTED
 
@@ -201,6 +203,42 @@ def test_apply_save_rejects_async_mutator() -> None:
     with pytest.raises(GenkitError) as exc_info:
         apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=bad)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_abort_returns_last_mutator_observation_under_retry() -> None:
+    """save_snapshot may call fn more than once; return the last pre-image, not the first."""
+    pending = make_snapshot('sess-retry', 'work', SnapshotStatus.PENDING)
+    completed = pending.model_copy(update={'status': SnapshotStatus.COMPLETED})
+
+    class _RetryStore(SessionStore):
+        async def get_snapshot(self, *, snapshot_id=None, session_id=None, context=None):  # noqa: ANN001
+            return completed
+
+        async def save_snapshot(self, snapshot_id, fn, *, context=None):  # noqa: ANN001
+            fn(pending)
+            fn(completed)
+            return completed
+
+    # First observation is pending; last observation is completed (finalize won).
+    assert (
+        await abort_snapshot_in_store(store=_RetryStore(), snapshot_id=pending.snapshot_id) == SnapshotStatus.COMPLETED
+    )
+
+
+@pytest.mark.asyncio
+async def test_abort_returns_none_when_mutator_never_runs() -> None:
+    """JS returns undefined if saveSnapshot never invokes the callback — do not invent pending via get_snapshot."""
+    pending = make_snapshot('sess-skip', 'work', SnapshotStatus.PENDING)
+
+    class _SkipMutatorStore(SessionStore):
+        async def get_snapshot(self, *, snapshot_id=None, session_id=None, context=None):  # noqa: ANN001
+            return pending
+
+        async def save_snapshot(self, snapshot_id, fn, *, context=None):  # noqa: ANN001
+            return pending
+
+    assert await abort_snapshot_in_store(store=_SkipMutatorStore(), snapshot_id=pending.snapshot_id) is None
 
 
 @pytest.mark.asyncio
