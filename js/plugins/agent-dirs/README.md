@@ -27,7 +27,15 @@ model: vertexai/gemini-2.5-flash
 You are a helpful, concise assistant.
 ```
 
-And a `src/index.ts`:
+No host code is needed - the runner serves every agent directory:
+
+```sh
+npx agent-dirs serve ./agents   # POST /api/helper (+ /getSnapshot, /abort)
+```
+
+The runner uses Vertex AI via ADC and the built-in defaults; per-project
+choices (provider, session store) are platform configuration
+(firebase.json), not project code. To embed in your own app instead:
 
 ```ts
 import { agentDirs, serveAgents } from '@genkit-ai/agent-dirs';
@@ -37,7 +45,7 @@ import { genkit } from 'genkit/beta';
 const ai = genkit({
   plugins: [vertexAI(), agentDirs({ dir: './agents' })],
 });
-await serveAgents(ai); // POST /api/helper (+ /getSnapshot, /abort)
+await serveAgents(ai);
 ```
 
 Test locally: `genkit start -- tsx src/index.ts` and chat with the agent in
@@ -229,6 +237,8 @@ the entry as stale. Exported standalone; upstream candidate for
 
 ## API summary
 
+- `agent-dirs serve [dir] [--port <n>]` - zero-code CLI runner (see
+  Quickstart).
 - `agentDirs(options)` - the plugin. `dir`, `store`, `snapshotDir`,
   `strict`, `defaultModel`.
 - `directoryAgent(ai, name)` - resolve a registered agent (the `remoteAgent`

@@ -6,6 +6,7 @@
   "description": "Demo of the experimental @genkit-ai/agent-dirs plugin: chat with directory agents via Dev UI or HTTP.",
   "scripts": {
     "server": "tsx src/index.ts",
+    "server:zero": "agent-dirs serve ./agents",
     "genkit:dev": "genkit start -- tsx --watch src/index.ts"
   },
   "license": "Apache-2.0",

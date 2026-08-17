@@ -27,14 +27,24 @@
   },
   "author": "genkit",
   "license": "Apache-2.0",
+  "bin": {
+    "agent-dirs": "lib/cli.js"
+  },
   "dependencies": {
     "@genkit-ai/middleware": "workspace:*",
     "@genkit-ai/express": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "cors": "^2.8.5",
     "express": "^4.21.1"
   },
   "peerDependencies": {
-    "genkit": "workspace:^"
+    "genkit": "workspace:^",
+    "tsx": "^4.19.2"
+  },
+  "peerDependenciesMeta": {
+    "tsx": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
