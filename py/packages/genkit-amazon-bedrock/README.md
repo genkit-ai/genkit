@@ -85,10 +85,10 @@ ai = Genkit(
     plugins=[
         Bedrock(
             region='us-east-1',
-            models=[ModelDefinition(name='anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
         )
     ],
-    model='bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
 )
 ```
 
