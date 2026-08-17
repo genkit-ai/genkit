@@ -27,7 +27,8 @@
  * ```
  *
  * Every sub-directory of `dir` compiles to one `ai.defineAgent(...)` call:
- * `agent.prompt` (dotprompt) supplies model/config/system prompt, `tools/*.ts`
+ * `instructions.md` (YAML frontmatter + markdown system prompt) supplies
+ * model/config/system prompt, `tools/*.ts`
  * supply tools, `skills/*.md` supply progressively-disclosed instructions, and
  * an optional `agent.ts` can amend the compiled config in code.
  *

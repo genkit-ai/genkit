@@ -46,7 +46,7 @@ export async function directoryAgent<State = unknown>(
   if (!action) {
     throw new Error(
       `[agent-dirs] no agent named '${name}' is registered. Is its ` +
-        `directory under the plugin's 'dir' and does it contain agent.prompt?`
+        `directory under the plugin's 'dir' and does it contain instructions.md?`
     );
   }
   if (action.__action.actionType !== 'agent') {

@@ -65,34 +65,23 @@ export interface AgentDirsOptions {
   strict?: boolean;
 }
 
-/** A parsed `agent.prompt` file. */
+/** A parsed `instructions.md` file (YAML frontmatter + markdown body). */
 type ParsedPrompt = ReturnType<GenkitBeta['registry']['dotprompt']['parse']>;
 
-/** Raw frontmatter of an `agent.prompt`, for convention-specific keys. */
+/** Raw frontmatter of an `instructions.md`, for convention-specific keys. */
 type Frontmatter = Record<string, unknown>;
 
 type MiddlewareEntry = NonNullable<CompiledAgentConfig['use']>[number];
 
 /**
- * Dotprompt's own reserved frontmatter keys plus this convention's. Bare keys
- * outside this set are warned about (dotprompt gives them no diagnostics).
+ * The convention's frontmatter vocabulary. Keys outside this set are warned
+ * about (the parser gives them no diagnostics).
  */
 const KNOWN_FRONTMATTER_KEYS = new Set([
-  // dotprompt reserved
-  'name',
-  'variant',
-  'version',
   'description',
   'model',
   'tools',
-  'toolDefs',
   'config',
-  'input',
-  'output',
-  'metadata',
-  'raw',
-  'ext',
-  // agent-dirs convention
   'delegates',
   'requireApproval',
 ]);
@@ -204,7 +193,7 @@ async function compileAgentDir(
     return false;
   };
 
-  const parsed = parseAgentPrompt(ai, agentPath, agentName, fail);
+  const parsed = parseInstructions(ai, agentPath, agentName, fail);
   if (!parsed) return;
 
   const frontmatter = validateFrontmatter(
@@ -216,7 +205,7 @@ async function compileAgentDir(
 
   if (/\{\{\s*(role|history)\b/.test(parsed.template)) {
     fail(
-      `agent.prompt template is used as the agent's system prompt; ` +
+      `instructions.md is used as the agent's system prompt; ` +
         `multi-message templates ({{role}}/{{history}}) are not supported here`
     );
     return;
@@ -281,20 +270,21 @@ async function compileAgentDir(
 }
 
 /**
- * Reads and parses `agent.prompt`. Detects dotprompt's silent YAML-error
+ * Reads and parses `instructions.md` (YAML frontmatter + markdown body,
+ * parsed with dotprompt's splitter). Detects dotprompt's silent YAML-error
  * fallback (it logs to console and returns the whole file - fence included -
  * as the template with empty metadata), which would otherwise become a
  * garbage system prompt.
  */
-function parseAgentPrompt(
+function parseInstructions(
   ai: GenkitBeta,
   agentPath: string,
   agentName: string,
   fail: (message: string) => false
 ): ParsedPrompt | undefined {
-  const promptFile = path.join(agentPath, 'agent.prompt');
+  const promptFile = path.join(agentPath, 'instructions.md');
   if (!existsSync(promptFile)) {
-    fail(`no agent.prompt in ${agentPath}`);
+    fail(`no instructions.md in ${agentPath}`);
     return undefined;
   }
   const source = readFileSync(promptFile, 'utf8');
@@ -329,8 +319,8 @@ function validateFrontmatter(
   for (const key of Object.keys(frontmatter)) {
     if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
       logger.warn(
-        `[agent-dirs] unknown frontmatter key '${key}' in agent.prompt ` +
-          `(known custom keys: delegates, requireApproval) - ignoring`
+        `[agent-dirs] unknown frontmatter key '${key}' in instructions.md ` +
+          `(known keys: ${[...KNOWN_FRONTMATTER_KEYS].join(', ')}) - ignoring`
       );
     }
   }

@@ -9,7 +9,7 @@ anything it produces can be written by hand (see
 
 ## Quickstart
 
-The minimum viable agent is one file. Create `agents/helper/agent.prompt`:
+The minimum viable agent is one file. Create `agents/helper/instructions.md`:
 
 ```yaml
 ---
@@ -50,7 +50,7 @@ snapshots (full chat transcripts) to `./.genkit/agent-snapshots/<name>`.
 ```
 agents/
   support/
-    agent.prompt      # REQUIRED - dotprompt file; frontmatter + system prompt
+    instructions.md   # REQUIRED - YAML frontmatter + markdown system prompt
     tools/
       lookupOrder.ts  # one file per tool; default-exports defineDirTool(...)
     skills/
@@ -108,14 +108,14 @@ work with no extra wiring:
 
 | Convention | Compiles to |
 | ---------- | ----------- |
-| `agent.prompt` frontmatter + template | `definePrompt` fields (model, config, system) |
+| `instructions.md` frontmatter + body | `definePrompt` fields (model, config, system) |
 | `tools/*.ts` | `defineTool` under `agent-dirs/<agent>/<file>` |
 | `skills/<name>/SKILL.md` | `use: [skills({skillPaths})]` (`@genkit-ai/middleware`) |
 | `knowledge/` (OKF bundle) | `use: [okfKnowledge({knowledgePaths})]` (this package) |
 | frontmatter `delegates: [agent]` | `use: [agents({agents})]` - `delegate_to_<name>` tools |
 | frontmatter `requireApproval: [tool]` | `use: [toolApproval(...)]` - listed tools interrupt for approval |
 
-### Frontmatter reference (`agent.prompt`)
+### Frontmatter reference (`instructions.md`)
 
 | Key | Type | Notes |
 | --- | ---- | ----- |
@@ -126,8 +126,9 @@ work with no extra wiring:
 | `delegates` | string[] | other agent directory names; validated |
 | `requireApproval` | string[] | model-visible tool names to gate; validated, fail-closed |
 
-The template body is the agent's **system prompt**. Multi-message dotprompt
-templates (`{{role}}`, `{{history}}`) are rejected at compile time. An empty
+The markdown body is the agent's **system prompt**. It still flows through
+Genkit's prompt templating, so multi-message directives (`{{role}}`,
+`{{history}}`) are rejected at compile time. An empty
 body means "no system prompt" (e.g. an `agent.ts` override supplies one).
 Unknown frontmatter keys warn. `skills/<name>/SKILL.md` takes optional
 `name`/`description` frontmatter (the *directory* name is authoritative);
@@ -159,9 +160,9 @@ compiled:
 ### Dev loop
 
 Skill bodies, knowledge documents and the knowledge index are re-read per
-turn, so edits are live in a running session. `agent.prompt` and tool code
-are compiled at startup - restart (`tsx --watch` restarts on TS changes; a
-prompt edit needs a manual restart). Real watch mode is future work.
+turn, so edits are live in a running session. `instructions.md` and tool code
+are compiled at startup - restart (`tsx --watch` restarts on TS changes; an
+instructions edit needs a manual restart). Real watch mode is future work.
 
 ## Serving and deployment
 

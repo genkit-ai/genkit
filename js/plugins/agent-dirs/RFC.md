@@ -24,7 +24,7 @@ isn't exported, and there's no session-store default that survives
 deployment.
 
 Concretely, `agents/<name>/` compiles to one `ai.defineAgent(...)` call:
-`agent.prompt` supplies model, config and system prompt; `tools/*.ts` supply
+`instructions.md` supplies model, config and system prompt; `tools/*.ts` supply
 tools; `skills/` and `knowledge/` folders and the `delegates:` /
 `requireApproval:` frontmatter keys each compile to an entry on the standard
 `use: [...]` chain; `serveAgents(ai)` exposes every registered agent over
@@ -54,8 +54,9 @@ usage is tied to Vercel's platform. Genkit is positioned to be the open
 counterpart: the capability layer exists, Cloud Run deployment exists, and,
 via OKF, the knowledge layer of this convergence is already a Google
 standard looking for an agent framework that executes it. This convention
-deliberately adopts all three existing contracts (dotprompt, SKILL.md, OKF)
-rather than inventing a fourth. The distance from Genkit today to the full
+deliberately adopts the existing contracts (SKILL.md, OKF, and one shared
+markdown-plus-frontmatter shape for instructions) rather than inventing new
+ones. The distance from Genkit today to the full
 directory model turned out to be one thin compiler plus three or four small
 first-party pieces: agent HTTP serving, agent lookup by name, and a
 session-store default that survives deployment.
@@ -91,7 +92,8 @@ and addressed in priority order under "Possible upstreaming."
    names, so adding a capability cannot silently gate its own tools.
 3. **Native surfaces only.** Registration goes through the ordinary
    registry, so Dev UI, `remoteAgent`, evals and tracing work unchanged.
-   Prompts are dotprompt files.
+   Instructions are markdown with YAML frontmatter, parsed with dotprompt's
+   splitter and compiled to `definePrompt` fields.
 4. **Authoring errors fail loudly by default.** Broken frontmatter YAML
    (including dotprompt's silent fallback, where the unparsed file becomes
    the template), unknown `requireApproval` or `delegates` names, broken
@@ -106,14 +108,15 @@ and addressed in priority order under "Possible upstreaming."
 ```
 agents/
   support/
-    agent.prompt        # dotprompt; template = system prompt (single message)
+    instructions.md     # YAML frontmatter + markdown; body = system prompt
     tools/*.ts          # defineDirTool({config}, fn) or (ai) => ai.defineTool(...)
     skills/<name>/SKILL.md # -> skills middleware (use_skill, progressive disclosure)
     knowledge/*.md      # OKF bundle -> okfKnowledge middleware (lookup_knowledge)
     agent.ts            # optional override: (config) => config
 ```
 
-Frontmatter is standard dotprompt plus `delegates: [agent]` (delegation
+Frontmatter carries `description`, `model`, `config` and `tools`, plus
+`delegates: [agent]` (delegation
 tools via the `agents` middleware; sub-agents are just other registered
 agents, directory-defined or not) and `requireApproval: [tool]`
 (interrupt-gated tools via `toolApproval`, allow-list computed after the
@@ -143,20 +146,22 @@ name both abort startup with specific errors.
 
 ## Costs and open risks
 
-- **Template semantics.** We use the `.prompt` template as a system prompt
-  (single message), where `loadPromptFolder` maps templates to `messages`.
-  The compiler rejects `{{role}}` / `{{history}}` templates with a clear
-  error, but reusing the file extension while narrowing its semantics is a
-  real cost. Alternatives: compile through the `messages` channel, or use a
-  distinct extension.
+- **Template semantics.** The `instructions.md` body becomes the system
+  prompt (single message) but still flows through Genkit's prompt
+  templating, so `{{...}}` is live in what looks like plain markdown. The
+  compiler rejects `{{role}}` / `{{history}}` with a clear error;
+  whether templating should be disabled entirely for `.md` instructions is
+  open. (An earlier revision reused the `.prompt` extension; we moved to
+  `instructions.md` so the file renders in review and matches the SKILL.md /
+  OKF authoring shape.)
 - **Beta-API surface.** Everything sits on `GenkitBeta`. `AgentConfig` is
   not exported from `genkit/beta`, so the plugin derives it via
   `Parameters<GenkitBeta['defineAgent']>[0]`, which collapses the generics
   and will break silently if the signature changes.
 - **Tool loading needs a TS-capable runtime** (tsx) in dev; production
   should precompile.
-- Three frontmatter dialects (dotprompt, SKILL.md, OKF) coexist by design
-  but need the reference table now in the README.
+- Three frontmatter dialects (instructions.md, SKILL.md, OKF) coexist by
+  design but need the reference table now in the README.
 
 ## Alternatives considered
 
