@@ -581,10 +581,6 @@ class AgentAPI(Protocol, Generic[StateT]):
         ``failed``, ``aborted``) means the turn had already finished — this
         call did not rewrite it. ``None`` means nothing was observed (no row,
         or the store never ran the abort write).
-
-        Some servers report the status *after* a successful cancel
-        (``aborted``) instead of the previous one (``pending``). If you only
-        need "did this call stop a running turn?", treat either as yes.
         """
         ...
 
@@ -691,10 +687,6 @@ class AgentClient(Generic[StateT]):
         ``failed``, ``aborted``) means the turn had already finished — this
         call did not rewrite it. ``None`` means nothing was observed (no row,
         or the store never ran the abort write).
-
-        Some servers report the status *after* a successful cancel
-        (``aborted``) instead of the previous one (``pending``). If you only
-        need "did this call stop a running turn?", treat either as yes.
         """
         return await self._transport.abort_snapshot(snapshot_id)
 
