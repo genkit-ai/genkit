@@ -155,8 +155,7 @@ accompanying text in the message, which the question supplies.
 
 Support for either kind of attachment is per model, not a plugin feature, which
 is why `summarize_pdf` asks Claude rather than the Nova Lite default that
-`describe_image` uses; Claude is also the model the Go plugin's own document
-example runs on.
+`describe_image` uses.
 
 Both assets are inline constants in the sample, so there are no asset files to
 keep around: a 64x48 PNG of three horizontal bands, and a one-page PDF holding

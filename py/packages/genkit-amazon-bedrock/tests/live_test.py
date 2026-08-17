@@ -476,8 +476,7 @@ async def test_nova_image_input() -> None:
 async def test_claude_document_input() -> None:
     # Bedrock parses the PDF server-side, so a malformed document block or a
     # double-encoded payload fails the call rather than degrading quietly.
-    # Claude, not Nova: document support is per model, and this mirrors the
-    # model the Go plugin's document example runs on.
+    # Claude, not Nova: document support is per model.
     request = media_request(
         MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_output_tokens=512)
     )

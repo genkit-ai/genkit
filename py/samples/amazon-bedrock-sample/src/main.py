@@ -592,8 +592,7 @@ async def summarize_pdf(data: PdfInput) -> str:
     spreadsheet or a CSV is this same code path. Bedrock parses the document
     server-side, and requires accompanying text in the message, which the
     question supplies. Claude is used rather than the default Nova because
-    document support is per model, and it is the model the Go plugin's own
-    document example runs on.
+    document support is per model.
     """
     response = await ai.generate(
         model=CLAUDE,
