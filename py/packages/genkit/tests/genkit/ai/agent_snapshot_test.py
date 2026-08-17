@@ -231,9 +231,9 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reload() -> None:
-    """After detach the chat resumes the pending snapshot (JS applyOutput shape).
+    """After detach the chat resumes the pending snapshot.
 
-    A send while it is still pending (or after abort) is rejected; reload by
+    A send while it is still pending (or after abort) is rejected; resume by
     session_id walks back to the last completed turn.
     """
     registry = Registry()
@@ -259,7 +259,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
 
     task = await chat.detach('slow background work')
     assert chat.messages != history_before_detach  # optimistic prompt pushed
-    # Resume handle tracks the pending detached snapshot — same as JS.
+    # Resume handle tracks the pending detached snapshot.
     assert chat.snapshot_id == task.snapshot_id
     assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
 
@@ -275,16 +275,16 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     with pytest.raises(AgentError, match='not resumable'):
         await chat.send('still stranded')
 
-    chat = await agent.load_chat(session_id=session_id)
+    chat = agent.chat(session_id=session_id)
     out = await chat.send('are you there?')
     assert out.finish_reason == AgentFinishReason.STOP
     assert chat.snapshot_id not in (None, task.snapshot_id)
 
 
 @pytest.mark.asyncio
-async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> None:
-    """Reloading a session whose newest snapshot is an aborted detached turn lands
-    on the last completed turn, not the dead leaf — so the reloaded chat resumes."""
+async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
+    """load_chat is inspect: a session whose newest snapshot is aborted lands
+    on that leaf. send() is rejected; chat(session_id=) walks back to resume."""
     registry = Registry()
     store = InMemorySessionStore()
 
@@ -303,7 +303,6 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     chat = agent.chat()
     await chat.send('hello')
     session_id = chat.session_id
-    last_good_parent = chat.snapshot_id
 
     task = await chat.detach('slow background work')
     assert await task.abort() == SnapshotStatus.PENDING  # previous status
@@ -315,7 +314,11 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     assert inspected.status == SnapshotStatus.ABORTED
 
     reloaded = await agent.load_chat(session_id=session_id)
-    # Landed on the last completed turn, not the aborted leaf.
-    assert reloaded.snapshot_id == last_good_parent
-    out = await reloaded.send('still there?')
+    assert reloaded.snapshot_id == task.snapshot_id
+    with pytest.raises(AgentError, match='not resumable'):
+        await reloaded.send('still there?')
+
+    resumed = agent.chat(session_id=session_id)
+    out = await resumed.send('still there?')
     assert out.finish_reason == AgentFinishReason.STOP
+    assert resumed.snapshot_id not in (None, task.snapshot_id)

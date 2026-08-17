@@ -35,16 +35,11 @@ async def walk_back_to_resumable(
     store: SessionStore,
     snapshot: SessionSnapshot | None,
 ) -> SessionSnapshot | None:
-    """Falls back from a session leaf to the last resumable (completed) snapshot.
+    """Skip a failed / aborted / pending leaf back to the last completed snapshot.
 
-    A session's newest snapshot can be a failed, aborted, or still-pending turn,
-    and none of those are a place you can pick the conversation back up from. So
-    a non-completed leaf walks its parent chain back to the last good turn —
-    landing a reload on the same spot a live chat would resume from, instead of a
-    dead handle. A visited set guards a corrupt or cyclic chain.
-
-    Parent hops use the ambient request context so tenant-scoped stores keep
-    reading under the same auth as the caller.
+    That's the only kind of row you can continue a conversation from. If the
+    parent chain loops, we fail instead of reading forever. Parent hops use
+    the ambient request context so tenant-scoped stores keep the caller's auth.
     """
     visited: set[str] = set()
     while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
@@ -149,9 +144,9 @@ async def resolve_snapshot(
         snapshot = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     else:
         assert session_id is not None
-        # Inspect returns the stored leaf as-is — including a failed, aborted,
-        # or still-pending turn — so you can see why the last turn died.
-        # Resume (chat / load_chat / load_session) walks back separately.
+        # Return the stored leaf as-is — including a failed, aborted, or
+        # still-pending turn — so you can see why the last turn died.
+        # chat(session_id=) / load_session skip a dead leaf separately.
         snapshot = await store.get_snapshot(session_id=session_id, context=context)
     if snapshot is None:
         return None

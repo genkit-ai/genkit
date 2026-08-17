@@ -176,11 +176,12 @@ class Agent(
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
-        """Read a snapshot by id, or the stored session leaf (client-visible form).
+        """Read a stored snapshot without starting a session.
 
-        A session lookup returns the newest row even when it isn't resumable.
-        Use ``load_chat(session_id=…)`` / ``chat(session_id=…)`` to land on the
-        last completed turn.
+        Pass exactly one of ``snapshot_id`` or ``session_id``. A session
+        lookup returns the newest row even when that turn failed or was
+        aborted. ``chat(session_id=)`` is how you continue from the last
+        good turn.
         """
         if self.store is None:
             return None

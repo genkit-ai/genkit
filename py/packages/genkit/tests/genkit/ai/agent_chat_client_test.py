@@ -218,7 +218,7 @@ async def test_detached_task_abort_rolls_back_on_after_status_aborted() -> None:
 
 
 def test_connect_init_allows_snapshot_id_and_session_id() -> None:
-    # JS resolveSession: snapshotId selects, sessionId is an ownership guard.
+    # snapshot_id picks the row; session_id is an ownership check.
     chat = AgentChat(
         MockAgentTransport(state_management='server'),
         AgentInit(snapshot_id='snap-1', session_id='sess-1'),
@@ -273,9 +273,9 @@ async def test_wire_init_derives_from_live_session_state() -> None:
 
     # First turn (no snapshot yet) resumes by the bootstrap session id.
     assert transport.connect_init == AgentInit(session_id='sess-bootstrap')
-    # Output advanced the live snapshot id; sessionId stays as the ownership guard.
+    # Output advanced the live snapshot id; later turns resume that row only.
     assert chat.snapshot_id == 'snap-1'
-    assert chat._wire_init() == AgentInit(snapshot_id='snap-1', session_id='sess-bootstrap')
+    assert chat._wire_init() == AgentInit(snapshot_id='snap-1')
 
 
 # ---------------------------------------------------------------------------

@@ -228,7 +228,7 @@ async def test_abort_returns_last_mutator_observation_under_retry() -> None:
 
 @pytest.mark.asyncio
 async def test_abort_returns_none_when_mutator_never_runs() -> None:
-    """JS returns undefined if saveSnapshot never invokes the callback — do not invent pending via get_snapshot."""
+    """If save_snapshot never runs the mutator, abort reports nothing — don't invent pending via get_snapshot."""
     pending = make_snapshot('sess-skip', 'work', SnapshotStatus.PENDING)
 
     class _SkipMutatorStore(SessionStore):

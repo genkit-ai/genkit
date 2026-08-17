@@ -347,6 +347,8 @@ async def load_session(
     """Construct a Session from AgentInit payload.
 
     Server-managed (store set): resume via snapshot_id or session_id.
+    snapshot_id is that exact row (must be completed). session_id continues
+    the conversation: skip a dead leaf, or start fresh if none is completed.
     Client-managed (no store): use init.state or start fresh.
 
     When ``state_schema`` is set the custom state loaded from a snapshot or the
