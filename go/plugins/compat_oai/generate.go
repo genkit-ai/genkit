@@ -506,8 +506,12 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// The accumulator knows nothing of the citations xAI answers a live search
 	// with either, so they are carried out of the chunk that has them.
 	var citations any
-	// The error object a gateway attaches to a failing choice is raw JSON the
-	// accumulator drops with the rest, so it too is carried out by hand.
+	// An error object a provider attaches to a failing choice is raw JSON the
+	// accumulator drops with the rest, so it too is carried out by hand. That
+	// is the shape of a failure a gateway reports on the response as a whole; a
+	// failure part-way through a stream is reported at the top level of a chunk
+	// instead, which ends the stream rather than reaching this loop. See
+	// [wrapStreamError].
 	var failure map[string]any
 
 	for stream.Next() {
@@ -570,10 +574,14 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		}
 	}
 
-	// NewStreaming defers its HTTP error to the stream, so a 4xx on the
-	// request that opened it surfaces here rather than at the call.
+	// NewStreaming defers its HTTP error to the stream, so a 4xx on the request
+	// that opened it surfaces here rather than at the call, as does a gateway's
+	// mid-stream failure. Whatever was generated before the failure has already
+	// reached the callback, and the aggregate response is dropped: a caller and
+	// the middleware around it are told the generation failed, rather than
+	// handed a short answer that reads as a complete one.
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("stream error: %w", WrapAPIError(err))
+		return nil, wrapStreamError(err)
 	}
 
 	if usageSeen {
@@ -614,6 +622,37 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	}
 	resp.Request = req
 	return resp, nil
+}
+
+// wrapStreamError classifies the error a stream ended with, so that
+// status-aware middleware can tell a rate limit from a request the provider
+// will refuse again.
+//
+// A gateway whose upstream fails part-way through a generation reports it as an
+// error object at the top level of a chunk. The SDK looks for that field before
+// it unmarshals and ends the stream when it finds one, so the chunk never
+// reaches the caller and the object survives only as raw JSON inside the error
+// message. Reading the code back out of it is the one way to recover the status
+// the failure carries.
+//
+// An error that classifies to nothing is left unclassified rather than marked
+// Unknown, since the retry middleware reissues an unclassified error and gives
+// up on an Unknown one, and a failure this cannot read is not a reason to stop
+// trying.
+func wrapStreamError(err error) error {
+	err = WrapAPIError(err)
+	if _, classified := status.Classified(err); classified {
+		return fmt.Errorf("stream error: %w", err)
+	}
+	message := err.Error()
+	if brace := strings.IndexByte(message, '{'); brace >= 0 {
+		if code, ok := extractErrorObject(message[brace:])["code"].(float64); ok {
+			if name := status.FromHTTPCode(int(code)); name != status.Unknown {
+				return status.Errorf(status.Base(name), "stream error: %w", err)
+			}
+		}
+	}
+	return fmt.Errorf("stream error: %w", err)
 }
 
 // extractTokenCount reads a token count a provider reports as a usage field the
@@ -818,9 +857,9 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	if citations := extractJSONValue(completion.JSON.ExtraFields["citations"].Raw()); citations != nil {
 		custom["citations"] = citations
 	}
-	// The error object rides whole beside the finish message it fed: retrying
-	// around a failed upstream takes its name and the failure's code, which
-	// have no [ai.ModelResponse] field but belong to the response's metadata.
+	// The error object rides whole beside the finish message it fed: the code
+	// and the typed error_type saying which class of failure it was have no
+	// [ai.ModelResponse] field but belong to the response's metadata.
 	if failure != nil {
 		custom["error"] = failure
 	}

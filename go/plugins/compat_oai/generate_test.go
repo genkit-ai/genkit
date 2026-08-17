@@ -17,6 +17,7 @@ package compat_oai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
@@ -364,7 +366,7 @@ func TestConvertChatCompletionToModelResponseProviderFailure(t *testing.T) {
 		"id":"1","object":"chat.completion","created":1,"model":"openai/gpt-5",
 		"choices":[{"index":0,"message":{"role":"assistant","content":"partial out"},
 			"finish_reason":"error","native_finish_reason":"provider_error",
-			"error":{"code":502,"message":"Provider returned error","metadata":{"provider_name":"Together"}}}],
+			"error":{"code":502,"message":"Provider returned error","metadata":{"error_type":"provider_unavailable"}}}],
 		"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
 	}`), &completion); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
@@ -385,8 +387,8 @@ func TestConvertChatCompletionToModelResponseProviderFailure(t *testing.T) {
 	if want := "partial out"; resp.Text() != want {
 		t.Errorf("Text() = %q, want %q", resp.Text(), want)
 	}
-	// The code and the upstream provider's name ride whole on the response
-	// metadata: routing around a failed upstream needs them, and the finish
+	// The code and the typed error_type ride whole on the response metadata:
+	// telling a rate limit from a dead upstream needs them, and the finish
 	// message carries only the prose.
 	custom, _ := resp.Custom.(map[string]any)
 	failure, _ := custom["error"].(map[string]any)
@@ -394,8 +396,8 @@ func TestConvertChatCompletionToModelResponseProviderFailure(t *testing.T) {
 		t.Errorf("custom[error][code] = %v, want 502", failure["code"])
 	}
 	metadata, _ := failure["metadata"].(map[string]any)
-	if got, _ := metadata["provider_name"].(string); got != "Together" {
-		t.Errorf("custom[error][metadata][provider_name] = %v, want %q", metadata["provider_name"], "Together")
+	if want := "provider_unavailable"; metadata["error_type"] != want {
+		t.Errorf("custom[error][metadata][error_type] = %v, want %q", metadata["error_type"], want)
 	}
 }
 
@@ -556,19 +558,20 @@ func TestGenerateStreamReportsCitations(t *testing.T) {
 	}
 }
 
-// TestGenerateStreamReportsProviderFailure pins that a streamed provider
-// failure is told apart from a complete answer the same way a non-streamed one
-// is. The error object rides on a chunk's raw choice, which
-// [openai.ChatCompletionAccumulator] rebuilds from the fields it models, so
-// the failure is lost unless it is carried out of the stream directly. A
-// stream that instead fails with a top-level error object never gets here: the
-// SDK turns that shape into a stream error.
+// TestGenerateStreamReportsProviderFailure covers a stream whose failing choice
+// carries the error object, the shape a gateway reports a failure on the
+// response as a whole with. It is told apart from a complete answer the same
+// way a non-streamed one is: the object rides on a chunk's raw choice, which
+// [openai.ChatCompletionAccumulator] rebuilds from the fields it models, so the
+// failure is lost unless it is carried out of the stream directly. A failure
+// reported at the top level of a chunk takes the other path, covered by
+// [TestGenerateStreamTopLevelFailureEndsStream].
 func TestGenerateStreamReportsProviderFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
 			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"partial out"},"finish_reason":null}]}`,
-			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{},"finish_reason":"error","native_finish_reason":"provider_error","error":{"code":502,"message":"Provider returned error","metadata":{"provider_name":"Together"}}}]}`,
+			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{},"finish_reason":"error","native_finish_reason":"provider_error","error":{"code":502,"message":"Provider returned error","metadata":{"error_type":"provider_unavailable"}}}]}`,
 		} {
 			_, _ = io.WriteString(w, "data: "+event+"\n\n")
 		}
@@ -600,6 +603,82 @@ func TestGenerateStreamReportsProviderFailure(t *testing.T) {
 	failure, _ := custom["error"].(map[string]any)
 	if got, _ := failure["code"].(float64); got != 502 {
 		t.Errorf("custom[error][code] = %v, want 502", failure["code"])
+	}
+}
+
+// TestGenerateStreamTopLevelFailureEndsStream covers the other shape: a gateway
+// whose upstream dies part-way through a stream reports it at the top level of
+// a chunk rather than on the choice. The SDK looks for that field before it
+// unmarshals and ends the stream when it finds one, so the chunk never reaches
+// the loop and no response is assembled.
+//
+// What the model generated first has already reached the callback, so the test
+// pins that too: the failure costs the aggregate response, not the output. That
+// is what keeps the failure retryable, since retry and fallback middleware read
+// the error rather than the finish reason, and a truncated answer returned as a
+// success would reach neither.
+func TestGenerateStreamTopLevelFailureEndsStream(t *testing.T) {
+	// The code the gateway reports decides the status the failure carries. A
+	// code that maps to nothing stays unclassified rather than becoming
+	// Unknown, which the retry middleware would give up on.
+	for name, tc := range map[string]struct {
+		code int
+		want status.Name
+	}{
+		"rate limited upstream": {code: 429, want: status.ResourceExhausted},
+		"dead upstream":         {code: 502, want: status.Internal},
+		"unmapped code":         {code: 402, want: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, event := range []string{
+					`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"partial out"},"finish_reason":null}]}`,
+					fmt.Sprintf(`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","provider":"Together","error":{"code":%d,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"provider_error"}]}`, tc.code),
+				} {
+					_, _ = io.WriteString(w, "data: "+event+"\n\n")
+				}
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			}))
+			t.Cleanup(srv.Close)
+
+			client := openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("stub"))
+			messages := []*ai.Message{ai.NewUserTextMessage("hi")}
+			var streamed strings.Builder
+			resp, err := NewModelGenerator(&client, "openai/gpt-5").
+				WithMessages(messages).
+				Generate(context.Background(), &ai.ModelRequest{Messages: messages},
+					func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+						streamed.WriteString(chunk.Text())
+						return nil
+					})
+			if err == nil {
+				t.Fatal("Generate() error = nil, want the stream failure reported")
+			}
+			if resp != nil {
+				t.Errorf("Generate() response = %v, want nil", resp)
+			}
+			// The generated text is not lost with the response: a streaming
+			// caller was handed it as it arrived.
+			if want := "partial out"; streamed.String() != want {
+				t.Errorf("streamed text = %q, want %q", streamed.String(), want)
+			}
+			// The gateway's own wording is what says which upstream failed and
+			// why, so it has to survive the wrapping.
+			if want := "Provider disconnected"; !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to carry %q", err, want)
+			}
+			got, classified := status.Classified(err)
+			if tc.want == "" {
+				if classified {
+					t.Errorf("status = %q, want the error left unclassified", got)
+				}
+				return
+			}
+			if !classified || got != tc.want {
+				t.Errorf("status = %q (classified %v), want %q", got, classified, tc.want)
+			}
+		})
 	}
 }
 
