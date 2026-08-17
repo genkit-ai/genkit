@@ -28,20 +28,19 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Libraries that log every HTTP request or poll. Under Dev UI, health checks
-# and span exports generate noise unless GENKIT_LOG=debug is explicitly set.
+# Libraries that log every HTTP hop or provider chatter. Under Dev UI those
+# are health checks, span exports, and "AFC is enabled..." on every
+# tool-using generate — useful in GENKIT_LOG=debug, noise otherwise.
 QUIET_LOGGERS = (
     'httpx',
     'httpcore',
     'uvicorn.access',
     'uvicorn.error',
-    'opentelemetry',
-    'opentelemetry.sdk',
+    'opentelemetry.exporter',
     'opentelemetry.instrumentation',
-    # google-genai logs "AFC is enabled with max remote calls: N" at INFO on
-    # every tool-using generate — fine for debug, noisy in the shared TTY.
-    'google.genai',
-    'google_genai',
+    'opentelemetry.sdk.trace.export',
+    # AFC only. Muting google_genai would also hide auth-precedence INFO.
+    'google_genai.models',
 )
 
 

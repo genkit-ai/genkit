@@ -21,10 +21,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 from genkit._core._compat import override
-from genkit._core._logger import get_logger
 from genkit._core._trace._suppress import suppress_telemetry
-
-logger = get_logger(__name__)
 
 
 class RealtimeSpanProcessor(SimpleSpanProcessor):
@@ -35,17 +32,9 @@ class RealtimeSpanProcessor(SimpleSpanProcessor):
         """Export span immediately so DevUI can show in-progress traces."""
         if suppress_telemetry.get():
             return
-        try:
-            self.span_exporter.export([span])
-        except Exception as e:  # noqa: BLE001 — must never crash the caller
-            # httpx.ConnectError isn't a builtins.ConnectionError; treat all export
-            # failures as best-effort and keep the shared terminal clean.
-            logger.debug(
-                'RealtimeSpanProcessor: export failed on_start: %s: %s',
-                type(e).__name__,
-                e,
-                exc_info=True,
-            )
+        # Transport failures are handled in the exporter. A broken encoder
+        # has to stay loud so it isn't mistaken for a quiet collector miss.
+        self.span_exporter.export([span])
 
     @override
     def on_end(self, span: ReadableSpan) -> None:

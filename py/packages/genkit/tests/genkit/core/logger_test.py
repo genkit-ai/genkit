@@ -53,6 +53,16 @@ def test_resolve_level() -> None:
         assert resolve_level() == logging.INFO
 
 
+def test_quiet_loggers_mute_afc_and_otel_hops_not_auth_precedence() -> None:
+    """AFC and OTel hop INFO are muted; auth-precedence on _api_client is not."""
+    assert 'google_genai.models' in QUIET_LOGGERS
+    assert 'opentelemetry.exporter' in QUIET_LOGGERS
+    assert 'opentelemetry.instrumentation' in QUIET_LOGGERS
+    assert 'google_genai' not in QUIET_LOGGERS
+    assert 'google_genai._api_client' not in QUIET_LOGGERS
+    assert 'google.genai' not in QUIET_LOGGERS
+
+
 def test_configure_logging_mutes_quiet_loggers() -> None:
     """Test that configure_logging sets QUIET_LOGGERS to WARNING in dev environment."""
     with (

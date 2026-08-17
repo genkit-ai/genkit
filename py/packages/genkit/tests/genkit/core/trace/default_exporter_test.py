@@ -23,13 +23,19 @@ This module tests:
     - init_telemetry_server_exporter: Initializes the telemetry server exporter
 """
 
+import json
 import os
+import threading
+import time
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
+from structlog.testing import capture_logs
 
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
 from genkit._core._trace._default_exporter import (
@@ -128,19 +134,35 @@ def test_telemetry_server_exporter_init_custom_endpoint() -> None:
 
 
 def test_telemetry_server_exporter_force_flush_returns_true() -> None:
-    """Test that force_flush always returns True (no buffering)."""
+    """Test that force_flush returns True when the worker queue is empty."""
     exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     result = exporter.force_flush()
     assert result is True
 
 
-def test_telemetry_server_exporter_force_flush_ignores_timeout() -> None:
-    """Test that force_flush ignores the timeout parameter."""
-    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+def test_telemetry_server_exporter_force_flush_respects_timeout() -> None:
+    """Test that force_flush can time out while a post is still in flight."""
+    started = threading.Event()
+    release = threading.Event()
 
-    result = exporter.force_flush(timeout_millis=1)
-    assert result is True
+    def blocking_post(*_args: object, **_kwargs: object) -> MagicMock:
+        started.set()
+        release.wait(timeout=5)
+        return MagicMock()
+
+    with patch('genkit._core._trace._default_exporter.httpx.Client') as mock_client_class:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = blocking_post
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+        exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+        exporter.export([create_mock_span()])
+        assert started.wait(timeout=1)
+        assert exporter.force_flush(timeout_millis=20) is False
+        release.set()
+        assert exporter.force_flush(timeout_millis=2000) is True
 
 
 @patch('genkit._core._trace._default_exporter.httpx.Client')
@@ -158,31 +180,135 @@ def test_telemetry_server_exporter_export_sends_http_post(mock_client_class: Mag
 
     # Export
     result = exporter.export([mock_span])
+    assert exporter.force_flush(timeout_millis=2000) is True
 
     # Verify
     assert result == SpanExportResult.SUCCESS
     mock_client.post.assert_called_once()
+    mock_client_class.assert_called_with(timeout=None)
 
 
 @patch('genkit._core._trace._default_exporter.httpx.Client')
-def test_telemetry_server_exporter_export_multiple_spans(mock_client_class: MagicMock) -> None:
-    """Test that export sends HTTP POST for each span in the sequence."""
-    # Setup mock client
+def test_telemetry_server_exporter_export_groups_same_trace(mock_client_class: MagicMock) -> None:
+    """A batch of spans on one trace is one POST — BatchSpanProcessor flushes a whole flow."""
     mock_client = MagicMock()
     mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
 
     exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+    root = create_mock_span(trace_id=0xABCD, span_id=1, name='root')
+    child_a = create_mock_span(trace_id=0xABCD, span_id=2, name='child-a')
+    child_b = create_mock_span(trace_id=0xABCD, span_id=3, name='child-b')
+    child_a.parent = root.context
+    child_b.parent = root.context
+    mock_spans = [root, child_a, child_b]
 
-    # Create multiple mock spans
-    mock_spans = [create_mock_span() for _ in range(3)]
-
-    # Export
     result = exporter.export(mock_spans)
+    assert exporter.force_flush(timeout_millis=2000) is True
 
-    # Verify
     assert result == SpanExportResult.SUCCESS
-    assert mock_client.post.call_count == 3
+    assert mock_client.post.call_count == 1
+    body = json.loads(mock_client.post.call_args.kwargs['content'])
+    assert body['traceId'] == format(0xABCD, '032x')
+    assert set(body['spans']) == {format(1, '016x'), format(2, '016x'), format(3, '016x')}
+    assert body['displayName'] == 'root'
+
+
+@patch('genkit._core._trace._default_exporter.httpx.Client')
+def test_telemetry_server_exporter_export_posts_once_per_trace(mock_client_class: MagicMock) -> None:
+    """Two traces in one batch are two POSTs, not one per span."""
+    mock_client = MagicMock()
+    mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+    mock_spans = [
+        create_mock_span(trace_id=0xA, span_id=1),
+        create_mock_span(trace_id=0xA, span_id=2),
+        create_mock_span(trace_id=0xB, span_id=3),
+    ]
+
+    result = exporter.export(mock_spans)
+    assert exporter.force_flush(timeout_millis=2000) is True
+
+    assert result == SpanExportResult.SUCCESS
+    assert mock_client.post.call_count == 2
+    posted = {json.loads(c.kwargs['content'])['traceId'] for c in mock_client.post.call_args_list}
+    assert posted == {format(0xA, '032x'), format(0xB, '032x')}
+
+
+def test_export_transport_failure_logs_one_error_and_records_failure() -> None:
+    """A dead collector is one error line that names the trace — not a traceback."""
+    exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:1')
+    mock_span = create_mock_span(trace_id=0xABCDEF)
+
+    with capture_logs() as entries:
+        started = time.perf_counter()
+        result = exporter.export([mock_span])
+        elapsed = time.perf_counter() - started
+        assert exporter.force_flush(timeout_millis=2000) is True
+
+    assert result == SpanExportResult.SUCCESS
+    assert elapsed < 0.5
+    assert exporter.last_result == SpanExportResult.FAILURE
+    errors = [e for e in entries if 'Failed to save trace' in str(e.get('event', ''))]
+    assert len(errors) == 1
+    event = errors[0]['event']
+    assert format(0xABCDEF, '032x') in event
+    assert 'Connection refused' in event or 'ConnectError' in event
+    assert 'exception' not in errors[0]
+    assert 'exc_info' not in errors[0]
+
+
+def test_export_does_not_stall_on_hung_collector() -> None:
+    """generate() must return while a collector that accept()s and never reads is still hanging."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_post(*_args: object, **_kwargs: object) -> MagicMock:
+        started.set()
+        release.wait(timeout=5)
+        raise httpx.ConnectError('hung')
+
+    with patch('genkit._core._trace._default_exporter.httpx.Client') as mock_client_class:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = blocking_post
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+        exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:9')
+        t0 = time.perf_counter()
+        result = exporter.export([create_mock_span()])
+        elapsed = time.perf_counter() - t0
+
+        assert result == SpanExportResult.SUCCESS
+        assert elapsed < 0.5
+        assert started.wait(timeout=1)
+        release.set()
+        assert exporter.force_flush(timeout_millis=2000) is True
+        assert exporter.last_result == SpanExportResult.FAILURE
+
+
+def test_export_encode_bug_is_loud() -> None:
+    """A span that cannot serialize must raise — not become a quiet FAILURE."""
+    exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:1')
+    mock_span = create_mock_span()
+    mock_span.context = None
+
+    with pytest.raises((AttributeError, TypeError)), capture_logs() as entries:
+        exporter.export([mock_span])
+
+    assert exporter.last_result == SpanExportResult.SUCCESS
+    assert not [e for e in entries if 'Failed to save trace' in str(e.get('event', ''))]
+
+
+def test_export_non_json_attribute_is_loud() -> None:
+    """A value httpx cannot JSON-encode must raise on the generate thread."""
+    exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:1')
+    mock_span = create_mock_span(attributes={'bad': object()})
+
+    with pytest.raises(TypeError):
+        exporter.export([mock_span])
 
 
 # =============================================================================
