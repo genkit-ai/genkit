@@ -55,15 +55,22 @@ MODEL_CAPABILITIES: dict[str, ModelCapability] = {
     'anthropic.claude-3-5-sonnet-20240620-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-3-5-sonnet-20241022-v2:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-3-7-sonnet-20250219-v1:0': ModelCapability(multimodal=True, tools=True),
-    # Anthropic Claude 4/4.5/4.6 models
+    # Anthropic Claude 4.x models
     'anthropic.claude-haiku-4-5-20251001-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-opus-4-1-20250805-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-opus-4-20250514-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-sonnet-4-20250514-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-sonnet-4-5-20250929-v1:0': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-opus-4-5-20251101-v1:0': ModelCapability(multimodal=True, tools=True),
+    # From 4.6 on, IDs carry no date stamp and the -v1 suffix is per-model.
     'anthropic.claude-sonnet-4-6': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-opus-4-6-v1': ModelCapability(multimodal=True, tools=True),
+    'anthropic.claude-opus-4-7': ModelCapability(multimodal=True, tools=True),
+    'anthropic.claude-opus-4-8': ModelCapability(multimodal=True, tools=True),
+    # Anthropic Claude 5 models
+    'anthropic.claude-sonnet-5': ModelCapability(multimodal=True, tools=True),
+    'anthropic.claude-opus-5': ModelCapability(multimodal=True, tools=True),
+    'anthropic.claude-fable-5': ModelCapability(multimodal=True, tools=True),
     # Provisioned-throughput variants (28k/48k/200k context)
     'anthropic.claude-3-haiku-20240307-v1:0:48k': ModelCapability(multimodal=True, tools=True),
     'anthropic.claude-3-haiku-20240307-v1:0:200k': ModelCapability(multimodal=True, tools=True),
