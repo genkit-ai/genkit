@@ -119,14 +119,11 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 			targetPath := si.Path
 			if in.FilePath != "" {
 				candidate := filepath.Join(si.Dir, filepath.FromSlash(in.FilePath))
-				resolved, err := filepath.Abs(candidate)
-				if err != nil {
-					return "", fmt.Errorf("invalid file path %q in skill %q: %w", in.FilePath, in.SkillName, err)
-				}
-				if !strings.HasPrefix(resolved, si.Dir+string(filepath.Separator)) {
+				rel, err := filepath.Rel(si.Dir, candidate)
+				if err != nil || strings.HasPrefix(rel, "..") {
 					return "", fmt.Errorf("file path %q escapes skill directory %q", in.FilePath, in.SkillName)
 				}
-				targetPath = resolved
+				targetPath = candidate
 			}
 
 			data, err := os.ReadFile(targetPath)
