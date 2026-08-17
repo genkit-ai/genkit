@@ -602,12 +602,15 @@ func sdkModelOptions(provider, id string) ai.ModelOptions {
 }
 
 // DefaultModelOptions is the capability set advertised for models that are
-// discovered or resolved dynamically rather than curated by a plugin.
+// discovered or resolved dynamically rather than curated by a plugin. Each
+// call returns its own copy of the capabilities, so a caller that adjusts
+// them adjusts one model's description rather than the package's default.
 func DefaultModelOptions() ai.ModelOptions {
+	supports := Multimodal
 	return ai.ModelOptions{
 		Stage:    ai.ModelStageStable,
 		Versions: []string{},
-		Supports: &Multimodal,
+		Supports: &supports,
 	}
 }
 
