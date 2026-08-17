@@ -22,7 +22,3 @@ packages:
   - '!testapps/firebase-functions-sample1/functions'
   - 'third_party/*'
   - '!./scripts'
-minimumReleaseAgeExclude:
-  - genkit
-  - "@genkit-ai/*"
-  - genkit-cli
