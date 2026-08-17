@@ -7,11 +7,25 @@ assignees: ''
 
 ---
 
-**Is your report related to a problem? Please describe.**
-A clear and concise description of what the problem is. Please provide links where you observed the problem.
+**What is the URL of the relevant page(s)?**
 
-**Is your report related to a suggestion/improvement? Please describe.**
-Please provide a concise description of the suggestion with examples or relevant scenarios.
 
-**Additional context**
-Add any other context or screenshots about the request here.
+**Please provide a clear, concise explanation of the issue you wish to report.**
+
+**What is your suggested fix? Please be as specific as possible.**
+
+**What's the priority for this request?**
+
+* P0: Critical issue on the live Genkit site.
+    E.g.: misinformation that will break many devs’ apps; a technical failure
+    impairing access to Genkit content; a glaring-and-embarrassing problem
+    with site appearance.
+
+* P1: Launch blocker.
+
+* P2: Important, but not urgent.
+
+* P3: Nice to have at some point.
+
+
+**Add any other context or screenshots about the request here.**
