@@ -216,7 +216,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
 
 async def test_claude_thinking_stream() -> None:
     config = BedrockConfig(
-        max_tokens=4096,
+        max_output_tokens=4096,
         additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     ctx, chunks = streaming_ctx()
@@ -239,7 +239,7 @@ async def test_claude_thinking_stream() -> None:
 async def test_deepseek_reasoning_stream() -> None:
     ctx, chunks = streaming_ctx()
     response = await make_model(DEEPSEEK).generate(
-        text_request('What is 17 * 23? Think it through.', config=BedrockConfig(max_tokens=2048)), ctx
+        text_request('What is 17 * 23? Think it through.', config=BedrockConfig(max_output_tokens=2048)), ctx
     )
 
     assert any(getattr(chunk.content[0].root, 'reasoning', None) for chunk in chunks)
