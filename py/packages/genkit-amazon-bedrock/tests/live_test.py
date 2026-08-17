@@ -478,7 +478,9 @@ async def test_claude_document_input() -> None:
     # double-encoded payload fails the call rather than degrading quietly.
     # Claude, not Nova: document support is per model, and this mirrors the
     # model the Go plugin's document example runs on.
-    request = media_request(MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_tokens=512))
+    request = media_request(
+        MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_output_tokens=512)
+    )
     response = await make_model(CLAUDE).generate(request)
     assert response.finish_reason == FinishReason.STOP
     assert mentions_any(response.text, 'kettle', 'tea', 'friday'), response.text
@@ -493,7 +495,7 @@ async def test_claude_prompt_cache_read() -> None:
         role=Role.SYSTEM,
         content=[Part(root=TextPart(text=cacheable_prefix())), cache_point_part()],
     )
-    config = BedrockConfig(max_tokens=512)
+    config = BedrockConfig(max_output_tokens=512)
 
     def ask(question: str) -> ModelRequest:
         return ModelRequest(
