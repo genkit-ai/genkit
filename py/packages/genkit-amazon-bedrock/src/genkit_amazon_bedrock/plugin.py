@@ -165,8 +165,9 @@ class Bedrock(Plugin):
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by namespaced name.
 
-        Any model ID resolves — the Bedrock catalogue includes arbitrary
-        inference profiles and ARNs and can never be fully enumerated.
+        Any model ID resolves. Nothing is discovered: listing the catalogue
+        needs a second, control-plane ``bedrock`` client and the IAM actions
+        that go with it, and this plugin opens only ``bedrock-runtime``.
 
         Args:
             action_type: The kind of action to resolve.
@@ -260,9 +261,9 @@ class Bedrock(Plugin):
         plugin can actually serve: an ID in the wrong list, or a chat model
         declared ``type='image'``, would otherwise be advertised and then fail
         on use. Such a declaration still resolves, so the caller reads the
-        image path's reason rather than a generic model-not-found. The
-        catalogue itself is open-ended, and any model ID still resolves on
-        demand.
+        image path's reason rather than a generic model-not-found. A bare
+        ``Bedrock()`` therefore lists nothing; see ``resolve`` for why the
+        catalogue is not read.
 
         Returns:
             ActionMetadata for each configured model and embedder.

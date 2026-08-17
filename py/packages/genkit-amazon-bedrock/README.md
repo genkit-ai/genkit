@@ -147,6 +147,12 @@ by the socket timeouts alone.
 never the bottleneck; concurrency is bounded first by the event loop's default
 thread pool, which the boto3 calls are dispatched to.
 
+`models` and `embedders` are what the Dev UI lists, so a bare `Bedrock()` lists
+nothing. The plugin does not discover the catalogue for you: that would mean a
+second client against the `bedrock` control plane and the IAM actions to go with
+it, on top of the runtime-only policy [above](#iam). Calls are unaffected, since
+any model ID resolves on demand either way.
+
 ### Config fields that are ignored
 
 `BedrockConfig` inherits the core `ModelConfig` fields, so the Dev UI offers
@@ -504,6 +510,13 @@ region. The plugin retries automatically with exponential backoff, up to
 `max_retries` retries after the initial attempt, and surfaces the error once
 those are exhausted. Raise `max_retries`, spread the load, or move to
 provisioned throughput.
+
+### Debug logging
+
+`GENKIT_LOG=debug` turns on the plugin's own log lines: the resolved region and
+client config, which model each call routed to, stop reasons, token counts, and
+what `resolve` declined. They carry metadata only, never prompts, embeddings or
+image bytes, so they are safe to leave on.
 
 ## Examples
 
