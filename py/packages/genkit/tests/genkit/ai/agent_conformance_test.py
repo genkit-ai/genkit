@@ -30,12 +30,13 @@ import json
 import pathlib
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, TypeVar
 
 import pytest
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._ai._agents._runtime import SessionRunner
@@ -82,17 +83,61 @@ def spec_path() -> pathlib.Path:
 
 
 class SpecModel(BaseModel):
-    model_config = ConfigDict(extra='ignore', populate_by_name=True, alias_generator=to_camel)
+    # Forbid unknown keys so a typo in agent.yaml fails at load, not as a skip.
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+
+
+class SpecInit(SpecModel):
+    """Send init. ``state`` stays untyped — it can be an object or ``{{state1}}``."""
+
+    session_id: str | None = None
+    snapshot_id: str | None = None
+    state: Any | None = None
+
+
+class SpecInput(SpecModel):
+    detach: bool | None = None
+    message: dict[str, Any] | None = None
+    resume: dict[str, Any] | None = None
+
+
+class TurnEndExpect(SpecModel):
+    finish_reason: str | None = None
+    snapshot_id: str | None = None
+
+
+class ExpectChunk(SpecModel):
+    turn_end: TurnEndExpect | None = None
+    model_chunk: dict[str, Any] | None = None
+    artifact: dict[str, Any] | None = None
+    custom_patch: Any | None = None
+
+    @model_validator(mode='after')
+    def exactly_one_payload(self) -> ExpectChunk:
+        kinds = [n for n in ('turn_end', 'model_chunk', 'artifact', 'custom_patch') if n in self.model_fields_set]
+        if len(kinds) != 1:
+            raise ValueError('expectChunks item must have exactly one of turnEnd, modelChunk, artifact, customPatch')
+        return self
+
+
+class PartialState(SpecModel):
+    """Subset match on session state. Extra keys are allowed so the spec can grow."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    session_id: str | None = None
+    messages: list[Any] | None = None
+    custom: Any | None = None
+    artifacts: list[Any] | None = None
 
 
 class OutputAssertions(SpecModel):
-    message: Any | None = None
+    message: dict[str, Any] | None = None
     has_snapshot_id: bool | None = None
     has_session_id: bool | None = None
-    state_contains: Any | None = None
-    artifacts_contain: list[Any] | None = None
+    state_contains: PartialState | None = None
+    artifacts_contain: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
-    error_contains: Any | None = None
+    error_contains: dict[str, Any] | None = None
 
 
 class SnapshotAssertions(SpecModel):
@@ -100,8 +145,8 @@ class SnapshotAssertions(SpecModel):
     status: str | None = None
     finish_reason: str | None = None
     has_session_id: bool | None = None
-    state_contains: Any | None = None
-    error_contains: Any | None = None
+    state_contains: PartialState | None = None
+    error_contains: dict[str, Any] | None = None
 
 
 class SendExpectError(SpecModel):
@@ -111,11 +156,11 @@ class SendExpectError(SpecModel):
 
 class SendStep(SpecModel):
     type: Literal['send']
-    init: Any | None = None
-    inputs: list[Any] | None = None
-    model_responses: list[Any] | None = None
-    stream_chunks: list[list[Any]] | None = None
-    expect_chunks: list[Any] | None = None
+    init: SpecInit | None = None
+    inputs: list[SpecInput] | None = None
+    model_responses: list[dict[str, Any]] | None = None
+    stream_chunks: list[list[dict[str, Any]]] | None = None
+    expect_chunks: list[ExpectChunk] | None = None
     expect_output: OutputAssertions | None = None
     expect_error: SendExpectError | None = None
     capture_snapshot_id: str | None = None
@@ -312,6 +357,14 @@ def assert_pinned_scalar(*, live: Any, expect_model: BaseModel, name: str, path:
     assert got == want, f'{path}: expected {want!r}, got {got!r}'
 
 
+def assert_has_id(*, actual: Any, want: bool, path: str) -> None:  # noqa: ANN401
+    present = isinstance(actual, str) and bool(actual)
+    if want:
+        assert present, f'Expected {path} to be a non-empty string, got: {actual!r}'
+    else:
+        assert not present, f'Expected {path} to be absent, got: {actual!r}'
+
+
 # ---------------------------------------------------------------------------
 # Harness setup
 # ---------------------------------------------------------------------------
@@ -333,6 +386,24 @@ class RestartOutput(BaseModel):
     result: str
 
 
+@dataclass(frozen=True)
+class PromptAgentDef:
+    name: str
+    tools: tuple[str, ...] = ()
+    store: bool = False
+
+
+PROMPT_AGENTS = (
+    PromptAgentDef(name='promptAgent'),
+    PromptAgentDef(name='promptAgentWithStore', store=True),
+    PromptAgentDef(name='promptAgentWithTools', tools=('testTool',)),
+    PromptAgentDef(name='promptAgentWithInterrupt', tools=('interruptTool',), store=True),
+    PromptAgentDef(name='promptAgentWithRestartTool', tools=('restartTool',), store=True),
+)
+
+TurnBody = Callable[[SessionRunner, ActionRunContext, AgentInput, TurnContext], Awaitable[None]]
+
+
 @dataclass
 class Harness:
     ai: Genkit
@@ -344,9 +415,13 @@ def setup_harness() -> Harness:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
     h = Harness(ai=ai, pm=pm)
+    _register_tools(ai=ai)
+    _register_prompt_agents(ai=ai, agents=h.agents)
+    _register_custom_agents(ai=ai, agents=h.agents)
+    return h
 
-    # --- Tools ---
 
+def _register_tools(*, ai: Genkit) -> None:
     @ai.tool(name='testTool', description='A simple test tool')
     async def test_tool(_: dict) -> str:  # noqa: ARG001
         return 'tool called'
@@ -366,70 +441,86 @@ def setup_harness() -> Harness:
             raise Interrupt({'requiresConfirmation': True})
         return RestartOutput(result=f'confirmed: {input.action}')
 
-    # --- Prompt-backed agents ---
 
-    h.agents['promptAgent'] = ai.define_agent(
-        name='promptAgent',
-        model='programmableModel',
-        config={'temperature': 1},
-    )
-    h.agents['promptAgentWithStore'] = ai.define_agent(
-        name='promptAgentWithStore',
-        model='programmableModel',
-        config={'temperature': 1},
-        store=InMemorySessionStore(),
-    )
-    h.agents['promptAgentWithTools'] = ai.define_agent(
-        name='promptAgentWithTools',
-        model='programmableModel',
-        config={'temperature': 1},
-        tools=['testTool'],
-    )
-    h.agents['promptAgentWithInterrupt'] = ai.define_agent(
-        name='promptAgentWithInterrupt',
-        model='programmableModel',
-        config={'temperature': 1},
-        tools=['interruptTool'],
-        store=InMemorySessionStore(),
-    )
-    h.agents['promptAgentWithRestartTool'] = ai.define_agent(
-        name='promptAgentWithRestartTool',
-        model='programmableModel',
-        config={'temperature': 1},
-        tools=['restartTool'],
-        store=InMemorySessionStore(),
-    )
+def _register_prompt_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
+    for spec in PROMPT_AGENTS:
+        agents[spec.name] = ai.define_agent(
+            name=spec.name,
+            model='programmableModel',
+            config={'temperature': 1},
+            tools=list(spec.tools) if spec.tools else None,
+            store=InMemorySessionStore() if spec.store else None,
+        )
 
-    # --- Custom agents ---
 
-    def run_turns(*, turn_body):  # noqa: ANN001, ANN202 - AgentFn factory
-        """Wrap a per-turn body into the canonical custom AgentFn shape."""
+def _run_turns(*, turn_body: TurnBody) -> Callable[[SessionRunner, ActionRunContext], Awaitable[AgentResult]]:
+    """Wrap a per-turn body into the canonical custom AgentFn shape."""
 
-        async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-            async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
-                await turn_body(session_runner, ctx, inp, turn_ctx)
-                return TurnResult(finish_reason=AgentFinishReason.STOP)
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
+            await turn_body(session_runner, ctx, inp, turn_ctx)
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
 
-            await session_runner.run(handle_turn)
-            return await session_runner.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-        return agent_fn
+    return agent_fn
 
-    # customAgentBlocking: server-managed, blocks until the abort signal fires.
-    async def blocking_turn(sr: SessionRunner, ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
-        await ctx.abort_signal.wait()
-        await sr.add_messages([_model_text(text='unblocked')])
 
-    h.agents['customAgentBlocking'] = ai.define_custom_agent(
-        name='customAgentBlocking',
-        fn=run_turns(turn_body=blocking_turn),
-        store=InMemorySessionStore(),
-    )
+async def _blocking_turn(sr: SessionRunner, ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    await ctx.abort_signal.wait()
+    await sr.add_messages([_model_text(text='unblocked')])
 
-    # customAgentFailing: server-managed; the turn raises on purpose.
-    # Raise inside the turn callback so run() records last_turn_error, then
-    # return session_runner.result() so an attached caller gets a graceful
-    # failed output. The snapshot write comes from that recorded error.
+
+async def _artifacts_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v1'))])])
+    await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v2'))])])
+    await sr.add_artifacts([Artifact(name='doc2', parts=[Part(root=TextPart(text='other'))])])
+    await sr.add_messages([_model_text(text='done')])
+
+
+async def _counter_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    prev = await sr.get_custom() or {}
+    counter = (prev.get('counter') or 0) + 1
+    await sr.update_custom(lambda _prev: {'counter': counter})
+    await sr.add_messages([_model_text(text='done')])
+
+
+async def _multi_custom_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    # First patch is a whole-doc replace; later ones are incremental diffs.
+    await sr.update_custom(lambda _prev: {'counter': 1, 'status': 'working'})
+    await sr.update_custom(lambda prev: {**(prev or {}), 'counter': 2})
+    await sr.update_custom(lambda prev: {**(prev or {}), 'status': 'done'})
+    await sr.add_messages([_model_text(text='done')])
+
+
+async def _artifacts_store_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    existing = await sr.get_artifacts()
+    count = len(existing) + 1
+    await sr.add_artifacts([Artifact(name=f'doc{count}', parts=[Part(root=TextPart(text=f'content{count}'))])])
+    await sr.add_messages([_model_text(text='done')])
+
+
+CUSTOM_TURN_AGENTS: tuple[tuple[str, TurnBody, bool], ...] = (
+    ('customAgentBlocking', _blocking_turn, True),
+    ('customAgentWithArtifacts', _artifacts_turn, False),
+    ('customAgentWithCustomState', _counter_turn, False),
+    ('customAgentWithMultiCustomState', _multi_custom_turn, False),
+    ('customAgentWithArtifactsStore', _artifacts_store_turn, True),
+    ('customAgentWithCustomStateStore', _counter_turn, True),
+)
+
+
+def _register_custom_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
+    for name, turn, store in CUSTOM_TURN_AGENTS:
+        agents[name] = ai.define_custom_agent(
+            name=name,
+            fn=_run_turns(turn_body=turn),
+            store=InMemorySessionStore() if store else None,
+        )
+
+    # Raise inside the turn so run() records last_turn_error, then return
+    # result() so an attached caller gets a graceful failed output.
     async def failing_agent_fn(session_runner: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput, _tc: TurnContext) -> TurnResult | None:
             raise RuntimeError('intentional failure')
@@ -437,73 +528,11 @@ def setup_harness() -> Harness:
         await session_runner.run(handle_turn)
         return await session_runner.result()
 
-    h.agents['customAgentFailing'] = ai.define_custom_agent(
+    agents['customAgentFailing'] = ai.define_custom_agent(
         name='customAgentFailing',
         fn=failing_agent_fn,
         store=InMemorySessionStore(),
     )
-
-    # customAgentWithArtifacts: client-managed, adds and updates artifacts.
-    async def artifacts_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
-        await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v1'))])])
-        await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v2'))])])
-        await sr.add_artifacts([Artifact(name='doc2', parts=[Part(root=TextPart(text='other'))])])
-        await sr.add_messages([_model_text(text='done')])
-
-    h.agents['customAgentWithArtifacts'] = ai.define_custom_agent(
-        name='customAgentWithArtifacts',
-        fn=run_turns(turn_body=artifacts_turn),
-    )
-
-    # customAgentWithCustomState: client-managed, increments a counter per turn.
-    async def counter_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
-        prev = await sr.get_custom() or {}
-        counter = (prev.get('counter') or 0) + 1
-        await sr.update_custom(lambda _prev: {'counter': counter})
-        await sr.add_messages([_model_text(text='done')])
-
-    h.agents['customAgentWithCustomState'] = ai.define_custom_agent(
-        name='customAgentWithCustomState',
-        fn=run_turns(turn_body=counter_turn),
-    )
-
-    # customAgentWithMultiCustomState: several sequential custom-state updates
-    # within one turn (first patch = whole-doc replace, then incremental diffs).
-    async def multi_custom_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
-        await sr.update_custom(lambda _prev: {'counter': 1, 'status': 'working'})
-        await sr.update_custom(lambda prev: {**(prev or {}), 'counter': 2})
-        await sr.update_custom(lambda prev: {**(prev or {}), 'status': 'done'})
-        await sr.add_messages([_model_text(text='done')])
-
-    h.agents['customAgentWithMultiCustomState'] = ai.define_custom_agent(
-        name='customAgentWithMultiCustomState',
-        fn=run_turns(turn_body=multi_custom_turn),
-    )
-
-    # customAgentWithArtifactsStore: server-managed, adds a numbered artifact
-    # on each invocation.
-    async def artifacts_store_turn(
-        sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext
-    ) -> None:
-        existing = await sr.get_artifacts()
-        count = len(existing) + 1
-        await sr.add_artifacts([Artifact(name=f'doc{count}', parts=[Part(root=TextPart(text=f'content{count}'))])])
-        await sr.add_messages([_model_text(text='done')])
-
-    h.agents['customAgentWithArtifactsStore'] = ai.define_custom_agent(
-        name='customAgentWithArtifactsStore',
-        fn=run_turns(turn_body=artifacts_store_turn),
-        store=InMemorySessionStore(),
-    )
-
-    # customAgentWithCustomStateStore: server-managed counter.
-    h.agents['customAgentWithCustomStateStore'] = ai.define_custom_agent(
-        name='customAgentWithCustomStateStore',
-        fn=run_turns(turn_body=counter_turn),
-        store=InMemorySessionStore(),
-    )
-
-    return h
 
 
 # ---------------------------------------------------------------------------
@@ -527,38 +556,35 @@ def program_model(*, pm: ProgrammableModel, step: SendStep) -> None:
         ]
 
 
-def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[Any]) -> None:
+def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[ExpectChunk]) -> None:
     """Strict ordered chunk comparison per the spec's expectChunks contract."""
     actual = [dump(model=c) for c in actual_chunks]
+    expected_dump = [dump(model=c) for c in expected_chunks]
     assert len(actual) == len(expected_chunks), (
         f'Expected {len(expected_chunks)} chunks, got {len(actual)}.\n'
         f'  Actual: {actual!r}\n'
-        f'  Expected: {expected_chunks!r}'
+        f'  Expected: {expected_dump!r}'
     )
     for i, expected in enumerate(expected_chunks):
         got = actual[i]
-        if 'turnEnd' in expected:
+        if field_was_set(model=expected, name='turn_end'):
             # turnEnd carries a dynamic snapshotId; only assert presence, plus
             # finishReason exactly when the spec pins it (key present, including YAML ~).
             assert 'turnEnd' in got, f'Chunk {i}: expected turnEnd, got {got!r}'
-            turn_end = expected['turnEnd']
-            if isinstance(turn_end, dict) and 'finishReason' in turn_end:
+            turn_end = expected.turn_end
+            if turn_end is not None and field_was_set(model=turn_end, name='finish_reason'):
                 te_model = actual_chunks[i].turn_end
-                want_fr = turn_end['finishReason']
+                want_fr = turn_end.finish_reason
                 got_fr = wire_scalar(live=te_model.finish_reason if te_model is not None else None)
                 assert got_fr == want_fr, f'Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got_fr!r}'
-        elif 'modelChunk' in expected:
-            assert_contains(
-                actual=got.get('modelChunk'), expected=expected['modelChunk'], path=f'chunk[{i}].modelChunk'
-            )
-        elif 'artifact' in expected:
-            assert_contains(actual=got.get('artifact'), expected=expected['artifact'], path=f'chunk[{i}].artifact')
-        elif 'customPatch' in expected:
-            assert_contains(
-                actual=got.get('customPatch'), expected=expected['customPatch'], path=f'chunk[{i}].customPatch'
-            )
+        elif field_was_set(model=expected, name='model_chunk'):
+            assert_contains(actual=got.get('modelChunk'), expected=expected.model_chunk, path=f'chunk[{i}].modelChunk')
+        elif field_was_set(model=expected, name='artifact'):
+            assert_contains(actual=got.get('artifact'), expected=expected.artifact, path=f'chunk[{i}].artifact')
         else:
-            assert_contains(actual=got, expected=expected, path=f'chunk[{i}]')
+            assert_contains(
+                actual=got.get('customPatch'), expected=expected.custom_patch, path=f'chunk[{i}].customPatch'
+            )
 
 
 def assert_output(*, output: AgentOutput, expect: OutputAssertions) -> None:
@@ -568,21 +594,16 @@ def assert_output(*, output: AgentOutput, expect: OutputAssertions) -> None:
         # spec that pins only content still matches a live message that has role.
         assert_contains(actual=out.get('message'), expected=expect.message, path='output.message')
 
-    if expect.has_snapshot_id:
-        assert isinstance(out.get('snapshotId'), str) and out['snapshotId'], (
-            f'Expected output to have a snapshotId, got: {out.get("snapshotId")!r}'
-        )
+    if field_was_set(model=expect, name='has_snapshot_id'):
+        assert_has_id(actual=out.get('snapshotId'), want=bool(expect.has_snapshot_id), path='output.snapshotId')
 
-    if expect.has_session_id:
-        state = out.get('state')
-        assert state, 'Expected output to have state for sessionId check'
-        assert isinstance(state.get('sessionId'), str) and state['sessionId'], (
-            f'Expected output.state to have a sessionId, got: {state.get("sessionId")!r}'
-        )
+    if field_was_set(model=expect, name='has_session_id'):
+        state = out.get('state') or {}
+        assert_has_id(actual=state.get('sessionId'), want=bool(expect.has_session_id), path='output.state.sessionId')
 
     if expect.state_contains is not None:
         assert out.get('state') is not None, 'Expected output to have state'
-        assert_contains(actual=out['state'], expected=expect.state_contains, path='output.state')
+        assert_contains(actual=out['state'], expected=dump(model=expect.state_contains), path='output.state')
 
     if expect.artifacts_contain is not None:
         artifacts = out.get('artifacts')
@@ -628,13 +649,15 @@ def assert_snapshot(*, snap: SessionSnapshotSchema, expect: SnapshotAssertions) 
         name='finish_reason',
         path='snapshot.finishReason',
     )
-    if expect.has_session_id:
+    if field_was_set(model=expect, name='has_session_id'):
         state = dumped.get('state') or {}
-        assert isinstance(state.get('sessionId'), str) and state['sessionId'], (
-            f'Expected snapshot.state to have a sessionId, got: {state.get("sessionId")!r}'
+        assert_has_id(
+            actual=state.get('sessionId'),
+            want=bool(expect.has_session_id),
+            path='snapshot.state.sessionId',
         )
     if expect.state_contains is not None:
-        assert_contains(actual=dumped.get('state'), expected=expect.state_contains, path='snapshot.state')
+        assert_contains(actual=dumped.get('state'), expected=dump(model=expect.state_contains), path='snapshot.state')
     if expect.error_contains is not None:
         err = dumped.get('error')
         assert err, 'Expected snapshot to have error'
@@ -651,7 +674,9 @@ async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
 
 
 def _thrown_message(*, thrown: BaseException) -> str:
-    """The string the caller sees, including a ``STATUS: `` prefix on GenkitError."""
+    """``STATUS: text`` for a GenkitError — the status prefix, not a cause suffix."""
+    if isinstance(thrown, GenkitError):
+        return f'{thrown.status}: {thrown.original_message}'
     return str(thrown)
 
 
@@ -676,11 +701,15 @@ async def execute_send(*, agent: Agent, pm: ProgrammableModel, step: SendStep, c
 
     async def run_turn() -> tuple[list[Any], AgentOutput]:
         conn = await agent.stream_bidi(
-            validate_wire(model_type=AgentInit, data=resolved.init or {}, path='init'),
+            validate_wire(
+                model_type=AgentInit,
+                data=dump(model=resolved.init) if resolved.init is not None else {},
+                path='init',
+            ),
         )
         try:
             for i, inp in enumerate(resolved.inputs or []):
-                await conn.send(validate_wire(model_type=AgentInput, data=inp, path=f'inputs[{i}]'))
+                await conn.send(validate_wire(model_type=AgentInput, data=dump(model=inp), path=f'inputs[{i}]'))
             await conn.close()
             chunks = [c async for c in conn.receive()]
             output = await conn.output()
@@ -829,6 +858,8 @@ async def test_agent_conformance(spec_test: SpecTest) -> None:
                 await execute_wait_until_completed(agent=agent, step=step, captures=captures)
             else:
                 raise AssertionError(f'Unknown step type: {type(step).__name__}')
+        except AssertionError:
+            raise
         except Exception as e:
             raise AssertionError(f'{label} in test {spec_test.name!r} failed: {e}') from e
 
@@ -847,6 +878,25 @@ def test_spec_suite_rejects_unknown_step_type() -> None:
         SpecSuite.model_validate({'tests': [{'name': 't', 'agent': 'a', 'steps': ['send']}]})
     with pytest.raises(ValidationError):
         SpecSuite.model_validate({'tests': ['foo']})
+
+
+def test_spec_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError, match='hasSnapshatId'):
+        OutputAssertions.model_validate({'hasSnapshatId': True})
+
+
+def test_expect_chunk_requires_exactly_one_payload() -> None:
+    ExpectChunk.model_validate({'turnEnd': {'finishReason': 'stop'}})
+    with pytest.raises(ValidationError, match='exactly one'):
+        ExpectChunk.model_validate({})
+    with pytest.raises(ValidationError, match='exactly one'):
+        ExpectChunk.model_validate({'turnEnd': {}, 'modelChunk': {'role': 'model'}})
+
+
+def test_spec_init_keeps_template_state() -> None:
+    init = SpecInit.model_validate({'snapshotId': '{{snap1}}', 'state': '{{state1}}'})
+    assert init.snapshot_id == '{{snap1}}'
+    assert init.state == '{{state1}}'
 
 
 def test_abort_keeps_explicit_null_previous_status() -> None:
@@ -898,6 +948,15 @@ def test_lookup_expect_error_rejects_mapping() -> None:
 def test_thrown_message_includes_status_prefix() -> None:
     err = GenkitError(status='NOT_FOUND', message='branching session')
     assert _thrown_message(thrown=err) == 'NOT_FOUND: branching session'
+    wrapped = GenkitError(status='NOT_FOUND', message='branching session', cause=RuntimeError('inner'))
+    assert _thrown_message(thrown=wrapped) == 'NOT_FOUND: branching session'
+    assert 'inner' not in _thrown_message(thrown=wrapped)
+
+
+def test_has_id_false_means_absent() -> None:
+    assert_has_id(actual=None, want=False, path='output.snapshotId')
+    with pytest.raises(AssertionError, match='absent'):
+        assert_has_id(actual='snap-1', want=False, path='output.snapshotId')
 
 
 def test_dump_keeps_explicit_null_and_drops_unset() -> None:
