@@ -19,8 +19,7 @@
 Reads the shared spec from tests/specs/agent.yaml and executes each test case
 against harness-provided agent implementations. See
 docs/agents-conformance-testing.md for the full spec format reference and
-harness requirements. Mirrors js/ai/tests/agents_spec_test.ts and
-go/ai/exp/agents_conformance_test.go.
+harness requirements.
 """
 
 from __future__ import annotations
@@ -32,11 +31,12 @@ import pathlib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any, Literal, TypeVar
 
 import pytest
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic.alias_generators import to_camel
 
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
@@ -51,43 +51,127 @@ from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
     AgentInput,
+    AgentOutput,
     AgentResult,
     Artifact,
+    GenkitRuntimeError,
     MessageData,
     Part,
     Role,
+    SessionSnapshot as SessionSnapshotSchema,
     TextPart,
 )
 from genkit.agent import Agent
 
-SPEC_PATH = pathlib.Path(__file__).parent / '../../../../../../tests/specs/agent.yaml'
 TERMINAL_STATUSES = {'completed', 'failed', 'aborted'}
+DEFAULT_STEP_TIMEOUT_S = 5.0
 
 
-def _tests_from_suite(*, suite: Any) -> list[dict[str, Any]]:  # noqa: ANN401
-    if not isinstance(suite, dict):
-        raise AssertionError(f'agent.yaml must be a mapping, got {type(suite).__name__}')
-    tests = suite.get('tests')
-    assert isinstance(tests, list) and tests, 'agent.yaml contains no tests'
-    for i, t in enumerate(tests):
-        if not isinstance(t, dict):
-            raise AssertionError(f'agent.yaml tests[{i}] must be a mapping, got {type(t).__name__}')
-        assert isinstance(t.get('name'), str), f'spec test at tests[{i}] missing name'
-        assert isinstance(t.get('agent'), str), f'spec test {t.get("name")!r} missing agent'
-        steps = t.get('steps')
-        assert isinstance(steps, list), f'spec test {t.get("name")!r} missing steps'
-        for j, step in enumerate(steps):
-            if not isinstance(step, dict):
-                raise AssertionError(
-                    f'agent.yaml tests[{i}] ({t["name"]!r}) steps[{j}] must be a mapping, got {type(step).__name__}'
-                )
-    return tests
+def spec_path() -> pathlib.Path:
+    """Walk up from this file to the repo's tests/specs/agent.yaml."""
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / 'tests' / 'specs' / 'agent.yaml'
+        if candidate.is_file():
+            return candidate
+    raise AssertionError('tests/specs/agent.yaml not found from agent_conformance_test.py')
 
 
-def load_spec() -> list[dict[str, Any]]:
-    with SPEC_PATH.open() as f:
-        suite = yaml.safe_load(f)
-    return _tests_from_suite(suite={} if suite is None else suite)
+# ---------------------------------------------------------------------------
+# Spec models (discriminated on step.type)
+# ---------------------------------------------------------------------------
+
+
+class SpecModel(BaseModel):
+    model_config = ConfigDict(extra='ignore', populate_by_name=True, alias_generator=to_camel)
+
+
+class OutputAssertions(SpecModel):
+    message: Any | None = None
+    has_snapshot_id: bool | None = None
+    has_session_id: bool | None = None
+    state_contains: Any | None = None
+    artifacts_contain: list[Any] | None = None
+    finish_reason: str | None = None
+    error_contains: Any | None = None
+
+
+class SnapshotAssertions(SpecModel):
+    parent_id: str | None = None
+    status: str | None = None
+    finish_reason: str | None = None
+    has_session_id: bool | None = None
+    state_contains: Any | None = None
+    error_contains: Any | None = None
+
+
+class SendExpectError(SpecModel):
+    status: str | None = None
+    message: str | None = None
+
+
+class SendStep(SpecModel):
+    type: Literal['send']
+    init: Any | None = None
+    inputs: list[Any] | None = None
+    model_responses: list[Any] | None = None
+    stream_chunks: list[list[Any]] | None = None
+    expect_chunks: list[Any] | None = None
+    expect_output: OutputAssertions | None = None
+    expect_error: SendExpectError | None = None
+    capture_snapshot_id: str | None = None
+    capture_state: str | None = None
+    capture_session_id: str | None = None
+
+
+class GetSnapshotDataStep(SpecModel):
+    type: Literal['getSnapshotData']
+    snapshot_id: str | None = None
+    session_id: str | None = None
+    expect_snapshot: SnapshotAssertions | None = None
+    expect_error: str | None = None
+
+
+class AbortStep(SpecModel):
+    type: Literal['abort']
+    snapshot_id: str
+    expect_previous_status: str | None = None
+
+
+class WaitUntilCompletedStep(SpecModel):
+    type: Literal['waitUntilCompleted']
+    snapshot_id: str
+    timeout_ms: float | None = None
+    expect_snapshot: SnapshotAssertions | None = None
+
+
+SpecStep = Annotated[
+    SendStep | GetSnapshotDataStep | AbortStep | WaitUntilCompletedStep,
+    Field(discriminator='type'),
+]
+
+
+class SpecTest(SpecModel):
+    name: str
+    description: str | None = None
+    agent: str
+    steps: list[SpecStep]
+
+
+class SpecSuite(SpecModel):
+    tests: list[SpecTest]
+
+
+def load_spec() -> list[SpecTest]:
+    path = spec_path()
+    with path.open() as f:
+        raw = yaml.safe_load(f)
+    try:
+        suite = SpecSuite.model_validate({} if raw is None else raw)
+    except ValidationError as e:
+        raise AssertionError(f'agent.yaml: {e}') from e
+    if not suite.tests:
+        raise AssertionError('agent.yaml contains no tests')
+    return suite.tests
 
 
 SPEC_TESTS = load_spec()
@@ -124,6 +208,16 @@ def resolve_templates(*, value: Any, captures: dict[str, Any]) -> Any:
     if isinstance(value, dict):
         return {k: resolve_templates(value=v, captures=captures) for k, v in value.items()}
     return value
+
+
+def resolve_step(*, step: SpecStep, captures: dict[str, Any]) -> SpecStep:
+    """Apply ``{{name}}`` captures, keeping explicit YAML nulls (including ``~``)."""
+    raw = step.model_dump(by_alias=True, exclude_unset=True)
+    resolved = resolve_templates(value=raw, captures=captures)
+    try:
+        return type(step).model_validate(resolved)
+    except ValidationError as e:
+        raise AssertionError(f'spec step after template resolve: {e}') from e
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +272,44 @@ def assert_contains_subsequence(*, actual: list[Any], expected: list[Any], path:
 
 
 def dump(*, model: BaseModel) -> dict[str, Any]:
-    """Serialize a wire model to its camelCase JSON form for spec comparison."""
-    return model.model_dump(by_alias=True, exclude_none=True, mode='json')
+    """Serialize a wire model to its camelCase JSON form for spec comparison.
+
+    Unset fields stay off the object. A field that was set to null stays null,
+    so a spec can tell "not present" from an explicit ``~``. Wire models
+    default to dropping nulls, so this has to opt out.
+    """
+    return model.model_dump(by_alias=True, exclude_unset=True, exclude_none=False, mode='json')
+
+
+WireT = TypeVar('WireT', bound=BaseModel)
+
+
+def validate_wire(*, model_type: type[WireT], data: Any, path: str) -> WireT:  # noqa: ANN401
+    """Build a runtime wire object; name the YAML path if the shape is wrong."""
+    try:
+        return model_type.model_validate(data)
+    except ValidationError as e:
+        raise AssertionError(f'{path}: {e}') from e
+
+
+def field_was_set(*, model: BaseModel, name: str) -> bool:
+    return name in model.model_fields_set
+
+
+def wire_scalar(*, live: Any) -> Any:  # noqa: ANN401
+    if live is None:
+        return None
+    value = getattr(live, 'value', None)
+    return value if isinstance(value, str) else live
+
+
+def assert_pinned_scalar(*, live: Any, expect_model: BaseModel, name: str, path: str) -> None:  # noqa: ANN401
+    """If the spec pinned this field (including YAML ~), compare the live value."""
+    if not field_was_set(model=expect_model, name=name):
+        return
+    want = getattr(expect_model, name)
+    got = wire_scalar(live=live)
+    assert got == want, f'{path}: expected {want!r}, got {got!r}'
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +427,9 @@ def setup_harness() -> Harness:
     )
 
     # customAgentFailing: server-managed; the turn raises on purpose.
-    # Raise inside the turn callback, then return session_runner.result().
-    # run() records the failure on the session and returns, so a detached
-    # client can still read status=failed and the error from the snapshot.
-    # Re-raising after run() fails the invocation and skips that write.
+    # Raise inside the turn callback so run() records last_turn_error, then
+    # return session_runner.result() so an attached caller gets a graceful
+    # failed output. The snapshot write comes from that recorded error.
     async def failing_agent_fn(session_runner: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput, _tc: TurnContext) -> TurnResult | None:
             raise RuntimeError('intentional failure')
@@ -382,13 +511,20 @@ def setup_harness() -> Harness:
 # ---------------------------------------------------------------------------
 
 
-def program_model(*, pm: ProgrammableModel, step: dict[str, Any]) -> None:
+def program_model(*, pm: ProgrammableModel, step: SendStep) -> None:
     pm.reset()
-    responses = step.get('modelResponses') or []
-    pm.responses = [ModelResponse.model_validate(r) for r in responses]
-    stream_chunks = step.get('streamChunks')
-    if stream_chunks:
-        pm.chunks = [[ModelResponseChunk.model_validate(c) for c in group] for group in stream_chunks]
+    responses = step.model_responses or []
+    pm.responses = [
+        validate_wire(model_type=ModelResponse, data=r, path=f'modelResponses[{i}]') for i, r in enumerate(responses)
+    ]
+    if step.stream_chunks:
+        pm.chunks = [
+            [
+                validate_wire(model_type=ModelResponseChunk, data=c, path=f'streamChunks[{i}][{j}]')
+                for j, c in enumerate(group)
+            ]
+            for i, group in enumerate(step.stream_chunks)
+        ]
 
 
 def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[Any]) -> None:
@@ -407,11 +543,9 @@ def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[Any]) -> No
             assert 'turnEnd' in got, f'Chunk {i}: expected turnEnd, got {got!r}'
             turn_end = expected['turnEnd']
             if isinstance(turn_end, dict) and 'finishReason' in turn_end:
-                # Omitted and explicit-null serialize the same (the key is
-                # dropped), so treat them as one optional field.
                 te_model = actual_chunks[i].turn_end
                 want_fr = turn_end['finishReason']
-                got_fr = te_model.finish_reason if te_model is not None else None
+                got_fr = wire_scalar(live=te_model.finish_reason if te_model is not None else None)
                 assert got_fr == want_fr, f'Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got_fr!r}'
         elif 'modelChunk' in expected:
             assert_contains(
@@ -427,43 +561,48 @@ def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[Any]) -> No
             assert_contains(actual=got, expected=expected, path=f'chunk[{i}]')
 
 
-def assert_output(*, out: dict[str, Any], expect: dict[str, Any]) -> None:
-    if expect.get('message') is not None:
-        assert_contains(actual=out.get('message'), expected=expect['message'], path='output.message')
+def assert_output(*, output: AgentOutput, expect: OutputAssertions) -> None:
+    out = dump(model=output)
+    if expect.message is not None:
+        # Contains / subsequence — extra keys and extra parts are allowed, so a
+        # spec that pins only content still matches a live message that has role.
+        assert_contains(actual=out.get('message'), expected=expect.message, path='output.message')
 
-    if expect.get('hasSnapshotId'):
+    if expect.has_snapshot_id:
         assert isinstance(out.get('snapshotId'), str) and out['snapshotId'], (
             f'Expected output to have a snapshotId, got: {out.get("snapshotId")!r}'
         )
 
-    if expect.get('hasSessionId'):
+    if expect.has_session_id:
         state = out.get('state')
         assert state, 'Expected output to have state for sessionId check'
         assert isinstance(state.get('sessionId'), str) and state['sessionId'], (
             f'Expected output.state to have a sessionId, got: {state.get("sessionId")!r}'
         )
 
-    if expect.get('stateContains') is not None:
+    if expect.state_contains is not None:
         assert out.get('state') is not None, 'Expected output to have state'
-        assert_contains(actual=out['state'], expected=expect['stateContains'], path='output.state')
+        assert_contains(actual=out['state'], expected=expect.state_contains, path='output.state')
 
-    if expect.get('artifactsContain') is not None:
+    if expect.artifacts_contain is not None:
         artifacts = out.get('artifacts')
         assert artifacts is not None, 'Expected output to have artifacts'
-        for expected_art in expect['artifactsContain']:
+        for expected_art in expect.artifacts_contain:
             found = next((a for a in artifacts if a.get('name') == expected_art.get('name')), None)
             assert found is not None, f'Expected artifact {expected_art.get("name")!r} not found in output'
             assert_contains(actual=found, expected=expected_art, path=f'artifact({expected_art.get("name")})')
 
-    if 'finishReason' in expect:
-        assert out.get('finishReason') == expect['finishReason'], (
-            f'Expected output.finishReason {expect["finishReason"]!r}, got {out.get("finishReason")!r}'
-        )
+    assert_pinned_scalar(
+        live=output.finish_reason,
+        expect_model=expect,
+        name='finish_reason',
+        path='output.finishReason',
+    )
 
-    if expect.get('errorContains') is not None:
+    if expect.error_contains is not None:
         err = out.get('error')
         assert err, f'Expected output to have an error, got: {err!r}'
-        want = expect['errorContains']
+        want = expect.error_contains
         if 'status' in want:
             assert err.get('status') == want['status'], (
                 f'Expected output.error.status {want["status"]!r}, got {err.get("status")!r}'
@@ -474,32 +613,34 @@ def assert_output(*, out: dict[str, Any], expect: dict[str, Any]) -> None:
             )
 
 
-def assert_snapshot(*, snap: dict[str, Any], expect: dict[str, Any]) -> None:
-    if 'parentId' in expect:
-        assert snap.get('parentId') == expect['parentId'], (
-            f'Expected parentId {expect["parentId"]!r}, got {snap.get("parentId")!r}'
-        )
-    if 'status' in expect:
-        assert snap.get('status') == expect['status'], (
-            f'Expected status {expect["status"]!r}, got {snap.get("status")!r}'
-        )
-    if 'finishReason' in expect:
-        assert snap.get('finishReason') == expect['finishReason'], (
-            f'Expected snapshot.finishReason {expect["finishReason"]!r}, got {snap.get("finishReason")!r}'
-        )
-    if expect.get('hasSessionId'):
-        state = snap.get('state') or {}
+def assert_snapshot(*, snap: SessionSnapshotSchema, expect: SnapshotAssertions) -> None:
+    dumped = dump(model=snap)
+    assert_pinned_scalar(live=snap.parent_id, expect_model=expect, name='parent_id', path='snapshot.parentId')
+    assert_pinned_scalar(
+        live=snap.status.value if snap.status is not None else None,
+        expect_model=expect,
+        name='status',
+        path='snapshot.status',
+    )
+    assert_pinned_scalar(
+        live=snap.finish_reason,
+        expect_model=expect,
+        name='finish_reason',
+        path='snapshot.finishReason',
+    )
+    if expect.has_session_id:
+        state = dumped.get('state') or {}
         assert isinstance(state.get('sessionId'), str) and state['sessionId'], (
             f'Expected snapshot.state to have a sessionId, got: {state.get("sessionId")!r}'
         )
-    if expect.get('stateContains') is not None:
-        assert_contains(actual=snap.get('state'), expected=expect['stateContains'], path='snapshot.state')
-    if expect.get('errorContains') is not None:
-        err = snap.get('error')
+    if expect.state_contains is not None:
+        assert_contains(actual=dumped.get('state'), expected=expect.state_contains, path='snapshot.state')
+    if expect.error_contains is not None:
+        err = dumped.get('error')
         assert err, 'Expected snapshot to have error'
-        # Snapshot error is subset/contains (scalar fields exact), same as JS.
+        # Snapshot errorContains is subset matching (a string field is exact).
         # Output errorContains is different: status exact, message substring.
-        assert_contains(actual=err, expected=expect['errorContains'], path='snapshot.error')
+        assert_contains(actual=err, expected=expect.error_contains, path='snapshot.error')
 
 
 async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
@@ -509,119 +650,97 @@ async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
         await conn.close()
 
 
-def _require_send_expect_error(*, value: Any) -> dict[str, Any]:  # noqa: ANN401
-    if not isinstance(value, dict):
-        raise AssertionError(
-            f'send expectError must be a mapping with optional status/message, got {type(value).__name__}: {value!r}'
-        )
-    if not value:
-        raise AssertionError('send expectError must include status and/or message, got {}')
-    for key in ('status', 'message'):
-        if key in value and not isinstance(value[key], str):
-            raise AssertionError(
-                f'send expectError.{key} must be a string, got {type(value[key]).__name__}: {value[key]!r}'
-            )
-    return value
-
-
-def _require_lookup_expect_error(*, value: Any) -> str:  # noqa: ANN401
-    if not isinstance(value, str) or not value:
-        raise AssertionError(
-            f'getSnapshotData expectError must be a non-empty string substring, got {type(value).__name__}: {value!r}'
-        )
-    return value
-
-
 def _thrown_message(*, thrown: BaseException) -> str:
-    """Return the error's message field, not ``str(exc)`` (which prefixes status)."""
-    return getattr(thrown, 'original_message', None) or getattr(thrown, 'message', None) or str(thrown)
+    """The string the caller sees, including a ``STATUS: `` prefix on GenkitError."""
+    return str(thrown)
 
 
-def _assert_expect_error(*, thrown: BaseException | None, expect_err: dict[str, Any]) -> None:
+def _assert_expect_error(*, thrown: BaseException | None, expect_err: SendExpectError) -> None:
     assert thrown is not None, 'Expected the turn to throw an error, but it resolved successfully.'
-    if 'status' in expect_err:
+    if expect_err.status is not None:
         status = getattr(thrown, 'status', None)
-        assert status == expect_err['status'], (
-            f'Expected thrown error.status {expect_err["status"]!r}, got {status!r} (message: {thrown})'
+        assert status == expect_err.status, (
+            f'Expected thrown error.status {expect_err.status!r}, got {status!r} (message: {thrown})'
         )
-    if 'message' in expect_err:
+    if expect_err.message is not None:
         thrown_msg = _thrown_message(thrown=thrown)
-        assert expect_err['message'] in thrown_msg, (
-            f'Expected thrown error.message to contain {expect_err["message"]!r}, got: {thrown_msg!r}'
+        assert expect_err.message in thrown_msg, (
+            f'Expected thrown error.message to contain {expect_err.message!r}, got: {thrown_msg!r}'
         )
 
 
-async def execute_send(*, agent: Agent, pm: ProgrammableModel, step: dict[str, Any], captures: dict[str, Any]) -> None:
-    resolved = resolve_templates(value=step, captures=captures)
+async def execute_send(*, agent: Agent, pm: ProgrammableModel, step: SendStep, captures: dict[str, Any]) -> None:
+    resolved = resolve_step(step=step, captures=captures)
+    assert isinstance(resolved, SendStep)
     program_model(pm=pm, step=resolved)
+
+    async def run_turn() -> tuple[list[Any], AgentOutput]:
+        conn = await agent.stream_bidi(
+            validate_wire(model_type=AgentInit, data=resolved.init or {}, path='init'),
+        )
+        try:
+            for i, inp in enumerate(resolved.inputs or []):
+                await conn.send(validate_wire(model_type=AgentInput, data=inp, path=f'inputs[{i}]'))
+            await conn.close()
+            chunks = [c async for c in conn.receive()]
+            output = await conn.output()
+            return chunks, output
+        finally:
+            await _close_quietly(conn=conn)
 
     # expectError: the turn throws (API misuse) rather than resolving with a
     # graceful finishReason='failed' output. Cover stream_bidi / send as well
     # as receive / output — an init rejection can surface before the stream.
-    if 'expectError' in resolved:
-        expect_err = _require_send_expect_error(value=resolved['expectError'])
+    if field_was_set(model=resolved, name='expect_error'):
         thrown: BaseException | None = None
-        conn = None
         try:
-            conn = await agent.stream_bidi(AgentInit.model_validate(resolved.get('init') or {}))
-            for inp in resolved.get('inputs') or []:
-                await conn.send(AgentInput.model_validate(inp))
-            await conn.close()
-            async for _chunk in conn.receive():
-                pass
-            await conn.output()
+            await asyncio.wait_for(run_turn(), timeout=DEFAULT_STEP_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise AssertionError(f'send step timed out after {DEFAULT_STEP_TIMEOUT_S}s') from None
         except Exception as e:  # noqa: BLE001 - spec asserts on the raised error
             thrown = e
-        finally:
-            await _close_quietly(conn=conn)
-        _assert_expect_error(thrown=thrown, expect_err=expect_err)
+        _assert_expect_error(thrown=thrown, expect_err=resolved.expect_error or SendExpectError())
         return
 
-    conn = None
     try:
-        conn = await agent.stream_bidi(AgentInit.model_validate(resolved.get('init') or {}))
-        for inp in resolved.get('inputs') or []:
-            await conn.send(AgentInput.model_validate(inp))
-        await conn.close()
-
-        chunks = [c async for c in conn.receive()]
-        output = await conn.output()
-    finally:
-        await _close_quietly(conn=conn)
+        chunks, output = await asyncio.wait_for(run_turn(), timeout=DEFAULT_STEP_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise AssertionError(f'send step timed out after {DEFAULT_STEP_TIMEOUT_S}s') from None
     out = dump(model=output)
 
-    if resolved.get('expectChunks') is not None:
-        assert_chunks(actual_chunks=chunks, expected_chunks=resolved['expectChunks'])
+    if resolved.expect_chunks is not None:
+        assert_chunks(actual_chunks=chunks, expected_chunks=resolved.expect_chunks)
 
-    if resolved.get('expectOutput') is not None:
-        assert_output(out=out, expect=resolved['expectOutput'])
+    if resolved.expect_output is not None:
+        assert_output(output=output, expect=resolved.expect_output)
 
-    # Captures for subsequent steps (use the unresolved step so capture names
-    # are never themselves template-substituted).
-    if step.get('captureSnapshotId'):
+    # Capture names come from the unresolved step so they are never themselves
+    # template-substituted.
+    if step.capture_snapshot_id:
         assert out.get('snapshotId'), (
-            f'captureSnapshotId {step["captureSnapshotId"]!r} requested but output has no snapshotId'
+            f'captureSnapshotId {step.capture_snapshot_id!r} requested but output has no snapshotId'
         )
-        captures[step['captureSnapshotId']] = out['snapshotId']
-    if step.get('captureState'):
-        assert out.get('state'), f'captureState {step["captureState"]!r} requested but output has no state'
-        captures[step['captureState']] = out['state']
-    if step.get('captureSessionId'):
+        captures[step.capture_snapshot_id] = out['snapshotId']
+    if step.capture_state:
+        assert out.get('state'), f'captureState {step.capture_state!r} requested but output has no state'
+        captures[step.capture_state] = out['state']
+    if step.capture_session_id:
         state = out.get('state') or {}
         assert state.get('sessionId'), (
-            f'captureSessionId {step["captureSessionId"]!r} requested but output has no state.sessionId'
+            f'captureSessionId {step.capture_session_id!r} requested but output has no state.sessionId'
         )
-        captures[step['captureSessionId']] = state['sessionId']
+        captures[step.capture_session_id] = state['sessionId']
 
 
-async def execute_get_snapshot_data(*, agent: Agent, step: dict[str, Any], captures: dict[str, Any]) -> None:
-    resolved = resolve_templates(value=step, captures=captures)
-    snapshot_id = resolved.get('snapshotId')
-    session_id = resolved.get('sessionId')
+async def execute_get_snapshot_data(*, agent: Agent, step: GetSnapshotDataStep, captures: dict[str, Any]) -> None:
+    resolved = resolve_step(step=step, captures=captures)
+    assert isinstance(resolved, GetSnapshotDataStep)
+    snapshot_id = resolved.snapshot_id
+    session_id = resolved.session_id
     assert bool(snapshot_id) != bool(session_id), 'getSnapshotData step requires exactly one of snapshotId or sessionId'
 
-    if 'expectError' in resolved:
-        expect_err = _require_lookup_expect_error(value=resolved['expectError'])
+    if field_was_set(model=resolved, name='expect_error'):
+        expect_err = resolved.expect_error or ''
         try:
             snap = await agent.get_snapshot_data(snapshot_id=snapshot_id, session_id=session_id)
         except Exception as e:  # noqa: BLE001 - spec asserts on the raised error
@@ -640,46 +759,47 @@ async def execute_get_snapshot_data(*, agent: Agent, step: dict[str, Any], captu
     snap = await agent.get_snapshot_data(snapshot_id=snapshot_id, session_id=session_id)
     assert snap is not None, f'Snapshot not found for snapshotId={snapshot_id!r} sessionId={session_id!r}'
 
-    if resolved.get('expectSnapshot') is not None:
-        assert_snapshot(snap=dump(model=snap), expect=resolved['expectSnapshot'])
+    if resolved.expect_snapshot is not None:
+        assert_snapshot(snap=snap, expect=resolved.expect_snapshot)
 
 
-async def execute_abort(*, agent: Agent, step: dict[str, Any], captures: dict[str, Any]) -> None:
-    resolved = resolve_templates(value=step, captures=captures)
-    snapshot_id = resolved.get('snapshotId')
-    assert snapshot_id, 'abort step requires snapshotId'
+async def execute_abort(*, agent: Agent, step: AbortStep, captures: dict[str, Any]) -> None:
+    resolved = resolve_step(step=step, captures=captures)
+    assert isinstance(resolved, AbortStep)
+    assert resolved.snapshot_id, 'abort step requires snapshotId'
 
-    previous = await agent.abort_snapshot_data(snapshot_id)
+    previous = await agent.abort_snapshot_data(resolved.snapshot_id)
     previous_str = previous.value if previous is not None else None
 
     # The key being present (even as YAML ~ / null) means we should assert.
-    if 'expectPreviousStatus' in resolved:
-        expected = resolved['expectPreviousStatus']
-        assert previous_str == expected, f'Expected previous status {expected!r}, got {previous_str!r}'
+    if field_was_set(model=resolved, name='expect_previous_status'):
+        assert previous_str == resolved.expect_previous_status, (
+            f'Expected previous status {resolved.expect_previous_status!r}, got {previous_str!r}'
+        )
 
 
-async def execute_wait_until_completed(*, agent: Agent, step: dict[str, Any], captures: dict[str, Any]) -> None:
-    resolved = resolve_templates(value=step, captures=captures)
-    snapshot_id = resolved.get('snapshotId')
-    assert snapshot_id, 'waitUntilCompleted step requires snapshotId'
-    timeout_s = (resolved.get('timeoutMs') or 5000) / 1000.0
+async def execute_wait_until_completed(*, agent: Agent, step: WaitUntilCompletedStep, captures: dict[str, Any]) -> None:
+    resolved = resolve_step(step=step, captures=captures)
+    assert isinstance(resolved, WaitUntilCompletedStep)
+    assert resolved.snapshot_id, 'waitUntilCompleted step requires snapshotId'
+    timeout_s = (resolved.timeout_ms or 5000) / 1000.0
 
     deadline = time.monotonic() + timeout_s
     snap = None
     while time.monotonic() < deadline:
-        snap = await agent.get_snapshot_data(snapshot_id=snapshot_id)
+        snap = await agent.get_snapshot_data(snapshot_id=resolved.snapshot_id)
         if snap is not None and snap.status is not None and snap.status.value in TERMINAL_STATUSES:
             break
         await asyncio.sleep(0.1)
 
-    assert snap is not None, f'Snapshot {snapshot_id!r} not found after waiting'
+    assert snap is not None, f'Snapshot {resolved.snapshot_id!r} not found after waiting'
     status = snap.status.value if snap.status is not None else None
     assert status in TERMINAL_STATUSES, (
-        f'Snapshot {snapshot_id!r} did not reach terminal status within {timeout_s}s. Status: {status!r}'
+        f'Snapshot {resolved.snapshot_id!r} did not reach terminal status within {timeout_s}s. Status: {status!r}'
     )
 
-    if resolved.get('expectSnapshot') is not None:
-        assert_snapshot(snap=dump(model=snap), expect=resolved['expectSnapshot'])
+    if resolved.expect_snapshot is not None:
+        assert_snapshot(snap=snap, expect=resolved.expect_snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -688,53 +808,57 @@ async def execute_wait_until_completed(*, agent: Agent, step: dict[str, Any], ca
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('spec_test', SPEC_TESTS, ids=[t['name'] for t in SPEC_TESTS])
-async def test_agent_conformance(spec_test: dict[str, Any]) -> None:
+@pytest.mark.parametrize('spec_test', SPEC_TESTS, ids=[t.name for t in SPEC_TESTS])
+async def test_agent_conformance(spec_test: SpecTest) -> None:
     harness = setup_harness()
-    agent = harness.agents.get(spec_test['agent'])
-    assert agent is not None, f'Unknown agent {spec_test["agent"]!r} in test {spec_test["name"]!r}'
+    agent = harness.agents.get(spec_test.agent)
+    assert agent is not None, f'Unknown agent {spec_test.agent!r} in test {spec_test.name!r}'
 
     captures: dict[str, Any] = {}
 
-    for i, step in enumerate(spec_test['steps']):
-        label = f'step[{i}]'
+    for i, step in enumerate(spec_test.steps):
+        label = f'step[{i}] ({step.type})'
         try:
-            if not isinstance(step, dict):
-                raise AssertionError(f'step must be a mapping, got {type(step).__name__}')
-            step_type = step.get('type')
-            label = f'step[{i}] ({step_type})'
-            if step_type == 'send':
+            if isinstance(step, SendStep):
                 await execute_send(agent=agent, pm=harness.pm, step=step, captures=captures)
-            elif step_type == 'getSnapshotData':
+            elif isinstance(step, GetSnapshotDataStep):
                 await execute_get_snapshot_data(agent=agent, step=step, captures=captures)
-            elif step_type == 'abort':
+            elif isinstance(step, AbortStep):
                 await execute_abort(agent=agent, step=step, captures=captures)
-            elif step_type == 'waitUntilCompleted':
+            elif isinstance(step, WaitUntilCompletedStep):
                 await execute_wait_until_completed(agent=agent, step=step, captures=captures)
             else:
-                raise AssertionError(f'Unknown step type: {step_type!r}')
+                raise AssertionError(f'Unknown step type: {type(step).__name__}')
         except Exception as e:
-            raise AssertionError(f'{label} in test {spec_test["name"]!r} failed: {e}') from e
+            raise AssertionError(f'{label} in test {spec_test.name!r} failed: {e}') from e
 
 
 def test_assert_contains_none_is_noop() -> None:
-    """A null expected value means "not specified", matching the other harnesses."""
+    """A null expected value means the spec did not pin that field."""
     assert_contains(actual={'x': 1}, expected=None)
     assert_contains(actual=None, expected=None)
     assert_contains(actual=[1, 2], expected=None)
 
 
-def test_tests_from_suite_rejects_non_mapping() -> None:
-    with pytest.raises(AssertionError, match='must be a mapping, got list'):
-        _tests_from_suite(suite=['foo'])
-    with pytest.raises(AssertionError, match='must be a mapping, got bool'):
-        _tests_from_suite(suite=False)
-    with pytest.raises(AssertionError, match='contains no tests'):
-        _tests_from_suite(suite={})
-    with pytest.raises(AssertionError, match=r'tests\[0\] must be a mapping'):
-        _tests_from_suite(suite={'tests': ['foo']})
-    with pytest.raises(AssertionError, match=r'steps\[0\] must be a mapping'):
-        _tests_from_suite(suite={'tests': [{'name': 't', 'agent': 'a', 'steps': ['send']}]})
+def test_spec_suite_rejects_unknown_step_type() -> None:
+    with pytest.raises(ValidationError):
+        SpecSuite.model_validate({'tests': [{'name': 't', 'agent': 'a', 'steps': [{'type': 'nope'}]}]})
+    with pytest.raises(ValidationError):
+        SpecSuite.model_validate({'tests': [{'name': 't', 'agent': 'a', 'steps': ['send']}]})
+    with pytest.raises(ValidationError):
+        SpecSuite.model_validate({'tests': ['foo']})
+
+
+def test_abort_keeps_explicit_null_previous_status() -> None:
+    step = AbortStep.model_validate({'type': 'abort', 'snapshotId': 'x', 'expectPreviousStatus': None})
+    assert field_was_set(model=step, name='expect_previous_status')
+    assert step.expect_previous_status is None
+    dumped = step.model_dump(by_alias=True, exclude_unset=True)
+    assert 'expectPreviousStatus' in dumped
+    assert dumped['expectPreviousStatus'] is None
+    resolved = resolve_step(step=step, captures={})
+    assert field_was_set(model=resolved, name='expect_previous_status')
+    assert resolved.expect_previous_status is None
 
 
 def test_resolve_templates_inline_object_is_json() -> None:
@@ -745,48 +869,67 @@ def test_resolve_templates_inline_object_is_json() -> None:
     assert got == 'seeded-{"sessionId":"abc","custom":{"counter":1}}'
 
 
-def test_assert_expect_error_matches_message_not_status_prefix() -> None:
+def test_assert_expect_error_matches_status_prefixed_message() -> None:
     err = GenkitError(status='FAILED_PRECONDITION', message="Cannot send 'state' to agent")
     _assert_expect_error(
         thrown=err,
-        expect_err={'status': 'FAILED_PRECONDITION', 'message': "Cannot send 'state'"},
+        expect_err=SendExpectError(status='FAILED_PRECONDITION', message="Cannot send 'state'"),
     )
+    # The status name is in the string the caller sees, so a spec can search for it.
+    _assert_expect_error(thrown=err, expect_err=SendExpectError(message='FAILED_PRECONDITION'))
     with pytest.raises(AssertionError, match='error.message'):
-        _assert_expect_error(thrown=err, expect_err={'message': 'FAILED_PRECONDITION'})
+        _assert_expect_error(thrown=err, expect_err=SendExpectError(message='NOT_THIS'))
 
 
 def test_send_expect_error_rejects_string() -> None:
-    with pytest.raises(AssertionError, match='must be a mapping'):
-        _require_send_expect_error(value="Cannot send 'state' to agent")
-    with pytest.raises(AssertionError, match='must include status and/or message'):
-        _require_send_expect_error(value={})
-    with pytest.raises(AssertionError, match='status must be a string'):
-        _require_send_expect_error(value={'status': None})
+    with pytest.raises(ValidationError):
+        SendStep.model_validate({'type': 'send', 'expectError': "Cannot send 'state' to agent"})
 
 
 def test_lookup_expect_error_rejects_mapping() -> None:
-    with pytest.raises(AssertionError, match='must be a non-empty string'):
-        _require_lookup_expect_error(value={'status': 'NOT_FOUND', 'message': 'not found'})
-    with pytest.raises(AssertionError, match='must be a non-empty string'):
-        _require_lookup_expect_error(value='')
+    with pytest.raises(ValidationError):
+        GetSnapshotDataStep.model_validate({
+            'type': 'getSnapshotData',
+            'snapshotId': 's',
+            'expectError': {'status': 'NOT_FOUND', 'message': 'not found'},
+        })
 
 
-def test_thrown_message_skips_status_prefix() -> None:
+def test_thrown_message_includes_status_prefix() -> None:
     err = GenkitError(status='NOT_FOUND', message='branching session')
-    assert _thrown_message(thrown=err) == 'branching session'
-    assert 'NOT_FOUND' not in _thrown_message(thrown=err)
+    assert _thrown_message(thrown=err) == 'NOT_FOUND: branching session'
+
+
+def test_dump_keeps_explicit_null_and_drops_unset() -> None:
+    pinned = SessionSnapshotSchema(snapshot_id='s', created_at='t', finish_reason=None)
+    dumped = dump(model=pinned)
+    assert 'finishReason' in dumped
+    assert dumped['finishReason'] is None
+    omitted = SessionSnapshotSchema(snapshot_id='s', created_at='t')
+    assert 'finishReason' not in dump(model=omitted)
 
 
 def test_snapshot_error_contains_is_exact_message() -> None:
     """Snapshot errorContains uses subset matching; a string field is exact."""
-    wrapped = {'error': {'message': 'background: intentional failure (wrapped)'}}
+
+    def snap(*, message: str, status: str | None = None) -> SessionSnapshotSchema:
+        return SessionSnapshotSchema(
+            snapshot_id='s',
+            created_at='t',
+            error=GenkitRuntimeError(status=status, message=message),
+        )
+
+    wrapped = snap(message='background: intentional failure (wrapped)')
+    expect_partial = SnapshotAssertions.model_validate({'errorContains': {'message': 'intentional failure'}})
     with pytest.raises(AssertionError, match='snapshot.error.message'):
-        assert_snapshot(snap=wrapped, expect={'errorContains': {'message': 'intentional failure'}})
+        assert_snapshot(snap=wrapped, expect=expect_partial)
     assert_snapshot(
         snap=wrapped,
-        expect={'errorContains': {'message': 'background: intentional failure (wrapped)'}},
+        expect=SnapshotAssertions.model_validate({
+            'errorContains': {'message': 'background: intentional failure (wrapped)'}
+        }),
     )
     assert_snapshot(
-        snap={'error': {'status': 'INTERNAL', 'message': 'intentional failure'}},
-        expect={'errorContains': {'message': 'intentional failure'}},
+        snap=snap(message='intentional failure', status='INTERNAL'),
+        expect=SnapshotAssertions.model_validate({'errorContains': {'message': 'intentional failure'}}),
     )
