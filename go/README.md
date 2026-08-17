@@ -1278,7 +1278,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Anthropic** | `anthropic.Anthropic` | Claude Opus 5, Claude Sonnet 5, Claude Fable 5, Claude Haiku 4.5 |
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
-| **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, and any OpenAI-compatible API |
+| **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
 
 ```go
 // Google AI

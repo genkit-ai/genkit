@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
+	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
 )
@@ -59,34 +60,44 @@ func TestConfigSchemaConformance(t *testing.T) {
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("XAI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
 
-	g := genkit.Init(context.Background(), genkit.WithPlugins(
-		&anthropic.Anthropic{},
-		&dashscope.DashScope{},
-		&deepseek.DeepSeek{},
-		&kimi.Kimi{},
-		&xai.XAI{},
-		&zai.ZAI{},
-	))
-
-	models := []string{
-		"anthropic/claude-sonnet-4-5-20250929",
-		"dashscope/qwen-plus",
-		"deepseek/deepseek-v4-pro",
-		"kimi/kimi-k3",
-		"xai/grok-4.5",
-		"zai/glm-5.1",
+	// Every plugin here resolves a model on demand, so each one is fetched the
+	// same way rather than looked up in the registry. Most also register a
+	// catalog at Init and would be there to look up, but OpenRouter fronts a
+	// gateway whose catalog is too large to enumerate and registers nothing.
+	// Resolving covers all of them, and the config a model advertises is the
+	// same either way; TestModelsOverrideConformance is where registration is
+	// pinned.
+	plugins := []struct {
+		plugin api.DynamicPlugin
+		id     string
+	}{
+		{&anthropic.Anthropic{}, "claude-sonnet-4-5-20250929"},
+		{&dashscope.DashScope{}, "qwen-plus"},
+		{&deepseek.DeepSeek{}, "deepseek-v4-pro"},
+		{&kimi.Kimi{}, "kimi-k3"},
+		{&openrouter.OpenRouter{}, "openai/gpt-5"},
+		{&xai.XAI{}, "grok-4.5"},
+		{&zai.ZAI{}, "glm-5.1"},
 	}
 
-	for _, name := range models {
+	all := make([]api.Plugin, len(plugins))
+	for i, p := range plugins {
+		all[i] = p.plugin
+	}
+	genkit.Init(context.Background(), genkit.WithPlugins(all...))
+
+	for _, tc := range plugins {
+		name := api.NewName(tc.plugin.Name(), tc.id)
 		t.Run(name, func(t *testing.T) {
-			m := genkit.LookupModel(g, name)
-			if m == nil {
-				t.Fatalf("%s not registered by Init", name)
+			action := tc.plugin.ResolveAction(api.ActionTypeModel, tc.id)
+			if action == nil {
+				t.Fatalf("%s did not resolve", name)
 			}
-			model, ok := m.(api.Action).Desc().Metadata["model"].(map[string]any)
+			model, ok := action.Desc().Metadata["model"].(map[string]any)
 			if !ok {
 				t.Fatalf("model metadata missing for %s", name)
 			}
@@ -219,12 +230,13 @@ func TestModelsOverrideConformance(t *testing.T) {
 // Each new plugin adds its config here.
 func TestClosedEnumsUseNamedTypes(t *testing.T) {
 	configs := map[string]any{
-		"anthropic": anthropic.ChatConfig{},
-		"dashscope": dashscope.ChatConfig{},
-		"deepseek":  deepseek.ChatConfig{},
-		"kimi":      kimi.ChatConfig{},
-		"xai":       xai.ChatConfig{},
-		"zai":       zai.ChatConfig{},
+		"anthropic":  anthropic.ChatConfig{},
+		"dashscope":  dashscope.ChatConfig{},
+		"deepseek":   deepseek.ChatConfig{},
+		"kimi":       kimi.ChatConfig{},
+		"openrouter": openrouter.ChatConfig{},
+		"xai":        xai.ChatConfig{},
+		"zai":        zai.ChatConfig{},
 	}
 	for name, config := range configs {
 		t.Run(name, func(t *testing.T) {

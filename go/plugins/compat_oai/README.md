@@ -189,8 +189,17 @@ providers and `max_completion_tokens` on others. Use the same camelCase name
 other plugins use for the same setting; `conformance_test.go` enforces that
 across the package.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `xai`, and
-`zai` directories for complete implementations.
+Not every provider is a model vendor. `openrouter` fronts a gateway serving
+hundreds of models from dozens of vendors, so it curates no `supportedModels`
+map at all: it registers nothing at `Init`, returns no descriptors from
+`ListActions` (a descriptor carries full request and response schemas, so
+listing that catalog would put megabytes on every reflection poll), and
+describes every model it resolves with one permissive capability set. `Models`
+is how a caller narrows one. Follow that shape for a gateway, and the curated
+shape above for a vendor.
+
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
+`xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -203,6 +212,7 @@ export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
 export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
+export OPENROUTER_API_KEY=<your-openrouter-key>
 ```
 
 Run all tests:
@@ -232,6 +242,9 @@ go test -v ./xai
 
 # DeepSeek tests
 go test -v ./deepseek
+
+# OpenRouter tests
+go test -v ./openrouter
 ```
 
 Note: Tests will be skipped if the required API keys are not set.

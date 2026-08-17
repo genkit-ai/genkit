@@ -12,16 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates the base compat_oai plugin pointed at a custom
-// OpenAI-compatible provider, here OpenRouter: a streaming flow that generates
-// a joke with a model that resolves dynamically by name and takes the OpenAI
-// SDK's own request type as its config.
-//
-// This is the shape for a provider with no plugin of its own. OpenRouter has
-// one, in plugins/compat_oai/openrouter, and it is the better way to reach
-// OpenRouter: the SDK request type has no home for the routing, fallback, and
-// reasoning fields that are the reason to use the gateway, and the config
-// schema rejects them. See samples/compat_oai/openrouter.
+// This sample demonstrates the OpenRouter plugin: a streaming flow that
+// generates a joke through a model named with its upstream vendor's prefix,
+// routed to the cheapest provider serving it, with a second model to fall
+// back to.
 //
 // Run it:
 //
@@ -46,13 +40,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
 	"github.com/firebase/genkit/go/plugins/server"
-	"github.com/openai/openai-go"
 )
 
 // JokeRequest is what the flow takes. A struct rather than a bare string lets
@@ -64,32 +56,28 @@ type JokeRequest struct {
 }
 
 // model pins the model and its config in one place, so switching either is a
-// one-line change. The base plugin ships no typed ModelRef helper, since it
-// knows nothing about the provider it is pointed at, so ai.NewModelRef pins any
-// model the provider serves by name under the plugin's provider prefix.
-//
-// The name after the prefix is OpenRouter's, not Genkit's, and OpenRouter
-// retires models on its own schedule; a 404 saying "no endpoints found" means
-// this one is gone. The current catalog is at https://openrouter.ai/models.
-var model = ai.NewModelRef("openrouter/deepseek/deepseek-chat", &openai.ChatCompletionNewParams{
-	Temperature: openai.Float(0.7),
-	MaxTokens:   openai.Int(1024),
+// one-line change. The ID keeps its upstream vendor's prefix, and no model is
+// registered up front: any model OpenRouter serves resolves by name.
+var model = openrouter.ModelRef("openai/gpt-5-mini", &openrouter.ChatConfig{
+	// Route to the cheapest provider serving the model, and skip any that
+	// would keep the request.
+	Provider: &openrouter.ProviderRouting{
+		Sort:           openrouter.ProviderSortPrice,
+		DataCollection: openrouter.DataCollectionDeny,
+	},
+	// If that model is unavailable or rate-limited, serve the request with
+	// this one instead.
+	Models: []string{"anthropic/claude-haiku-4.5"},
 })
 
 func main() {
 	ctx := context.Background()
 
-	// A custom provider has no environment variable of its own, so the plugin
-	// takes the key, the provider prefix, and the endpoint as fields.
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENROUTER_API_KEY environment variable not set")
-	}
-
-	g := genkit.Init(ctx, genkit.WithPlugins(&compat_oai.OpenAICompatible{
-		Provider: "openrouter",
-		APIKey:   apiKey,
-		BaseURL:  "https://openrouter.ai/api/v1",
+	// The plugin reads the API key from the OPENROUTER_API_KEY environment
+	// variable. SiteURL and AppName are optional: they name the application on
+	// OpenRouter's public rankings and change nothing else.
+	g := genkit.Init(ctx, genkit.WithPlugins(&openrouter.OpenRouter{
+		AppName: "Genkit OpenRouter sample",
 	}))
 
 	// Passing sendChunk straight to WithStreaming forwards the model's chunks
