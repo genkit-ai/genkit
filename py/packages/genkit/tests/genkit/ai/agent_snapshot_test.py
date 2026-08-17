@@ -81,6 +81,38 @@ async def test_resolve_snapshot_applies_client_transform() -> None:
     assert 'secret' not in (result.state.custom or {})
 
 
+@pytest.mark.asyncio
+async def test_resolve_snapshot_by_session_returns_failed_leaf() -> None:
+    """Inspect by sessionId returns the stored leaf, even when it isn't resumable.
+
+    A failed leaf has to stay visible so you can see why the last turn died.
+    Resume walks back separately.
+    """
+    store = InMemorySessionStore()
+    completed = SessionSnapshot(
+        snapshot_id='snap-ok',
+        session_id='sess',
+        created_at='2026-01-01T00:00:00Z',
+        status=SnapshotStatus.COMPLETED,
+        state=SessionState(session_id='sess'),
+    )
+    failed = SessionSnapshot(
+        snapshot_id='snap-fail',
+        session_id='sess',
+        parent_id='snap-ok',
+        created_at='2026-01-01T00:01:00Z',
+        status=SnapshotStatus.FAILED,
+        state=SessionState(session_id='sess'),
+    )
+    await store.save_snapshot(completed.snapshot_id, lambda _: completed)
+    await store.save_snapshot(failed.snapshot_id, lambda _: failed)
+
+    inspected = await resolve_snapshot(store=store, session_id='sess')
+    assert inspected is not None
+    assert inspected.snapshot_id == 'snap-fail'
+    assert inspected.status == SnapshotStatus.FAILED
+
+
 def test_is_heartbeat_expired_pending_with_stale_heartbeat() -> None:
     old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     snap = SessionSnapshot(
@@ -276,6 +308,11 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     task = await chat.detach('slow background work')
     assert await task.abort() == SnapshotStatus.PENDING  # previous status
     await asyncio.sleep(1.1)  # let the aborted background turn unwind
+
+    inspected = await agent.get_snapshot(session_id=session_id)
+    assert inspected is not None
+    assert inspected.snapshot_id == task.snapshot_id
+    assert inspected.status == SnapshotStatus.ABORTED
 
     reloaded = await agent.load_chat(session_id=session_id)
     # Landed on the last completed turn, not the aborted leaf.

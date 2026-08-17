@@ -633,10 +633,37 @@ class AgentClient(Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> AgentChat[StateT]:
-        """Loads a server snapshot and returns a chat with history restored."""
+        """Loads a server snapshot and returns a chat with history restored.
+
+        ``snapshot_id`` is an exact row. ``session_id`` is "pick this
+        conversation back up", so a failed / aborted / pending leaf walks its
+        parent chain to the last completed turn — same as ``chat(session_id=)``.
+        """
         snapshot = await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot is None:
             raise ValueError(f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.')
+        # Session resume has to skip a dead leaf, so walk parents after reading
+        # the stored one. snapshot_id stays an exact row.
+        if session_id is not None and snapshot_id is None:
+            visited: set[str] = set()
+            while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
+                if snapshot.snapshot_id in visited:
+                    raise GenkitError(
+                        status='FAILED_PRECONDITION',
+                        message=(
+                            f'Snapshot parent chain for {snapshot.snapshot_id!r} is cyclic '
+                            '(a snapshot was visited twice). Resume by snapshot_id instead.'
+                        ),
+                    )
+                visited.add(snapshot.snapshot_id)
+                if not snapshot.parent_id:
+                    snapshot = None
+                    break
+                snapshot = await self._transport.get_snapshot(snapshot_id=snapshot.parent_id)
+            if snapshot is None:
+                raise ValueError(
+                    f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.'
+                )
         session_transport = copy.copy(self._transport)
         session_transport.state_management = 'server'
         chat = AgentChat(session_transport, state_schema=self._state_schema)
@@ -649,7 +676,11 @@ class AgentClient(Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshotSchema | None:
-        """Reads a snapshot without starting a session."""
+        """Reads the stored snapshot without starting a session.
+
+        A session lookup returns the newest leaf even if it isn't resumable.
+        Use ``load_chat(session_id=…)`` to land on the last completed turn.
+        """
         return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:

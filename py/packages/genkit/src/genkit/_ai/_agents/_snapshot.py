@@ -149,10 +149,10 @@ async def resolve_snapshot(
         snapshot = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     else:
         assert session_id is not None
-        # Resolving a session means "where do I continue from", so skip a
-        # failed/aborted/pending leaf back to the last resumable turn.
+        # Inspect returns the stored leaf as-is — including a failed, aborted,
+        # or still-pending turn — so you can see why the last turn died.
+        # Resume (chat / load_chat / load_session) walks back separately.
         snapshot = await store.get_snapshot(session_id=session_id, context=context)
-        snapshot = await walk_back_to_resumable(store=store, snapshot=snapshot)
     if snapshot is None:
         return None
     effective = (
