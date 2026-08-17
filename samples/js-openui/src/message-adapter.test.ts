@@ -52,4 +52,25 @@ describe('toGenkitContent', () => {
       })
     ).toBe('root = Card([title])\ntitle = TextContent("Ready")');
   });
+
+  it('parses compact content and context markers without newlines', () => {
+    expect(
+      toGenkitContent({
+        role: 'user',
+        content:
+          ']]>openui:contentCompare Q1\nand Q4]]>openui:context["User clicked: Compare Q1 and Q4"]',
+      })
+    ).toBe(
+      'Compare Q1\nand Q4\n\nOpenUI action context:\n["User clicked: Compare Q1 and Q4"]'
+    );
+  });
+
+  it('parses a compact content marker without context', () => {
+    expect(
+      toGenkitContent({
+        role: 'user',
+        content: ']]>openui:contentShow revenue by quarter',
+      })
+    ).toBe('Show revenue by quarter');
+  });
 });

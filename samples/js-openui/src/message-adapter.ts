@@ -27,6 +27,18 @@ interface InlineMessage {
   context: unknown | null;
 }
 
+function markerPayloadStart(
+  raw: string,
+  marker: string,
+  markerIndex: number
+): number {
+  const markerEnd = markerIndex + marker.length;
+  if (raw.startsWith('\r\n', markerEnd)) {
+    return markerEnd + 2;
+  }
+  return raw[markerEnd] === '\n' ? markerEnd + 1 : markerEnd;
+}
+
 /** Separates AgentInterface's display content from its action/form context. */
 function parseInlineMessage(raw: string): InlineMessage {
   const contentIndex = raw.lastIndexOf(contentMarker);
@@ -37,7 +49,9 @@ function parseInlineMessage(raw: string): InlineMessage {
   }
 
   const contentStart =
-    contentIndex === -1 ? 0 : raw.indexOf('\n', contentIndex) + 1;
+    contentIndex === -1
+      ? 0
+      : markerPayloadStart(raw, contentMarker, contentIndex);
   const contentEnd = contextIndex === -1 ? raw.length : contextIndex;
   const content = raw.slice(contentStart, contentEnd).trimEnd();
 
@@ -45,7 +59,7 @@ function parseInlineMessage(raw: string): InlineMessage {
     return { content, context: null };
   }
 
-  const contextStart = raw.indexOf('\n', contextIndex) + 1;
+  const contextStart = markerPayloadStart(raw, contextMarker, contextIndex);
   try {
     return { content, context: JSON.parse(raw.slice(contextStart)) };
   } catch {
