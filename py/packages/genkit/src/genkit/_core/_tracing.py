@@ -98,9 +98,8 @@ def init_provider() -> TracerProvider:
     if tracer_provider is None or not isinstance(tracer_provider, TracerProvider):  # pyright: ignore[reportUnnecessaryComparison]
         tracer_provider = TracerProvider()
         trace_api.set_tracer_provider(tracer_provider)
-        # Correlate logs with spans when someone opts into debug, but don't rewrite
-        # the global log format — that turns every httpx/uvicorn line into a wall
-        # of trace_id/span_id noise in the shared genkit start terminal.
+        # Rewriting the process log format stamps every library line with
+        # trace_id/span_id and turns the shared genkit start terminal into a wall.
         # pyrefly: ignore[missing-attribute] - LoggingInstrumentor has instrument() method
         LoggingInstrumentor().instrument(set_logging_format=False)
         logger.debug('Creating a new global tracer provider for telemetry.')
