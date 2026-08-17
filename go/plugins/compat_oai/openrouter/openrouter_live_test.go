@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
@@ -86,6 +87,77 @@ func TestCostReportedLive(t *testing.T) {
 	if cost := resp.Usage.Custom["cost"]; cost <= 0 {
 		t.Errorf("Usage.Custom[\"cost\"] = %v, want the price OpenRouter charged (usage %+v)",
 			cost, resp.Usage)
+	}
+}
+
+// TestErrorStatusClassifiedLive pins that a request the gateway refuses reaches
+// the caller as a classified status rather than an opaque error, on both
+// transports. Two refusals are checked rather than one, so the assertion is
+// that they are told apart rather than merely classified: middleware routes
+// around a failure by status, and one that collapses every refusal into the
+// same value is no better than none.
+//
+// Streaming is the half worth spending a live check on. NewStreaming returns
+// before the response arrives, so a refusal surfaces at the stream rather than
+// at the call, and only the real gateway says whether that assumption holds.
+//
+// A provider dying part-way through a generation is the other source of a
+// stream error and is deliberately not here: it needs an upstream to fail
+// mid-response, which no request can provoke. That path is pinned against the
+// documented shape in TestGenerateStreamTopLevelFailureEndsStream.
+func TestErrorStatusClassifiedLive(t *testing.T) {
+	if os.Getenv("OPENROUTER_API_KEY") == "" {
+		t.Skip("OPENROUTER_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	keyed := genkit.Init(ctx, genkit.WithPlugins(&openrouter.OpenRouter{}))
+	// Deliberately not shaped like a key. OpenRouter rejects any bearer token
+	// it does not recognize, and a realistic-looking placeholder only trips
+	// secret scanning on the way to the same 401.
+	rejected := genkit.Init(ctx, genkit.WithPlugins(&openrouter.OpenRouter{APIKey: "invalid"}))
+
+	for name, tc := range map[string]struct {
+		g     *genkit.Genkit
+		model ai.ModelRef
+		want  status.Name
+	}{
+		"rejected key": {
+			g:     rejected,
+			model: openrouter.ModelRef(chatModel, nil),
+			want:  status.Unauthenticated,
+		},
+		"no provider serves the model": {
+			g: keyed,
+			model: openrouter.ModelRef(chatModel, &openrouter.ChatConfig{
+				Provider: &openrouter.ProviderRouting{Only: []string{"not-a-provider"}},
+			}),
+			want: status.NotFound,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, streaming := range []string{"call", "stream"} {
+				t.Run(streaming, func(t *testing.T) {
+					opts := []ai.GenerateOption{
+						ai.WithModel(tc.model),
+						ai.WithPrompt("Name one primary color. Answer with the word alone."),
+					}
+					if streaming == "stream" {
+						opts = append(opts, ai.WithStreaming(
+							func(context.Context, *ai.ModelResponseChunk) error { return nil }))
+					}
+
+					resp, err := genkit.Generate(ctx, tc.g, opts...)
+					if err == nil {
+						t.Fatalf("Generate() error = nil, want the request refused (response %+v)", resp)
+					}
+					got, classified := status.Classified(err)
+					if !classified || got != tc.want {
+						t.Errorf("status = %q (classified %v), want %q: %v", got, classified, tc.want, err)
+					}
+				})
+			}
+		})
 	}
 }
 
