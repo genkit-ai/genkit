@@ -175,46 +175,11 @@ def test_connect_init_rejects_multiple_resume_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_detached_task_abort_rolls_back_once() -> None:
-    rolls = 0
-
-    def rollback() -> None:
-        nonlocal rolls
-        rolls += 1
-
-    task = DetachedTask(
-        snapshot_id='snap-1',
-        transport=MockAgentTransport(),
-        on_abort_rollback=rollback,
-    )
-    assert await task.abort() == SnapshotStatus.PENDING
-    assert await task.abort() == SnapshotStatus.PENDING
-    assert rolls == 1
-
-
-@pytest.mark.asyncio
-async def test_detached_task_abort_rolls_back_on_after_status_aborted() -> None:
-    """Some servers return the status after cancel; still treat that as a stop."""
-    rolls = 0
-
-    def rollback() -> None:
-        nonlocal rolls
-        rolls += 1
-
+async def test_detached_task_abort_returns_previous_status() -> None:
     transport = MockAgentTransport()
-
-    async def abort_as_aborted(snapshot_id: str) -> SnapshotStatus | None:
-        transport.abort_snapshot_id = snapshot_id
-        return SnapshotStatus.ABORTED
-
-    transport.abort_snapshot = abort_as_aborted  # type: ignore[method-assign]
-    task = DetachedTask(
-        snapshot_id='snap-1',
-        transport=transport,
-        on_abort_rollback=rollback,
-    )
-    assert await task.abort() == SnapshotStatus.ABORTED
-    assert rolls == 1
+    task = DetachedTask(snapshot_id='snap-1', transport=transport)
+    assert await task.abort() == SnapshotStatus.PENDING
+    assert transport.abort_snapshot_id == 'snap-1'
 
 
 def test_connect_init_allows_snapshot_id_and_session_id() -> None:

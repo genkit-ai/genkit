@@ -90,9 +90,9 @@ async def main() -> None:
     await asyncio.sleep(2.0)  # let the tool start churning
 
     # chat.abort() fires abort_signal inside slowWork. The call returns the
-    # previous status (PENDING) — not ABORTED. It does not roll back local
-    # history (DetachedTask.abort does). Reload before the next send() so
-    # you are not still pointed at the aborted leaf.
+    # previous status (PENDING) — not ABORTED. The prompt stays in history;
+    # it was still asked. Reload before the next send() so you are not still
+    # pointed at the aborted leaf.
     status = await worker_chat.abort()
     assert status == SnapshotStatus.PENDING
     await asyncio.sleep(0.5)  # let the background task unwind

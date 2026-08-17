@@ -29,10 +29,10 @@ store, which is the source of truth:
   2. task.abort() — a *server-side* cancel of a detached turn. The snapshot
      settles ABORTED and never becomes the session's resume point. abort()
      returns the snapshot's status from *before* this call (``pending`` when
-     it cancelled in-flight work) and rolls back the optimistic prompt on
-     the in-memory chat. The live chat still points at that aborted leaf, so
-     send() is rejected. chat(session_id=) continues from the last completed
-     turn. load_chat(session_id=) would show the aborted row.
+     it cancelled in-flight work). The in-memory chat keeps the prompt (it
+     was still asked) and still points at that aborted leaf, so send() is
+     rejected. chat(session_id=) continues from the last completed turn.
+     load_chat(session_id=) would show the aborted row.
 
   3. a real server error (e.g. the model is exhausted) — the chat client raises
      AgentError, the optimistic prompt is rolled back, and the resume handle stays
@@ -131,9 +131,9 @@ async def server_side_task_abort() -> None:
     status = await task.abort()
     # abort() returns the *previous* status: pending, because the turn was still running.
     assert status == SnapshotStatus.PENDING
-    # Aborting drops the optimistic 'slow a2' prompt the chat was holding for the
-    # killed turn, so the local view rolls back to the last completed turn.
-    assert turns(chat) == ['a1/user', 'reply/model']
+    # The prompt stays — it was still asked. The chat still points at the
+    # aborted leaf, so send() is rejected until you reload.
+    assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
     # The live chat still points at the aborted leaf, so send() is rejected.
     # The store's session leaf is that aborted row; chat(session_id=) is how

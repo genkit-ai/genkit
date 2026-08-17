@@ -269,9 +269,9 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     status = await task.abort()
     # abort() returns the previous status: pending while the turn was running.
     assert status == SnapshotStatus.PENDING
-    # Aborting drops the optimistic prompt; the resume id still names the aborted
-    # snapshot, so a bare send keeps failing until we reload.
-    assert chat.messages == history_before_detach
+    # The prompt stays — it was still asked. The resume id still names the
+    # aborted snapshot, so a bare send keeps failing until we reload.
+    assert chat.messages != history_before_detach
     with pytest.raises(AgentError, match='not resumable'):
         await chat.send('still stranded')
 

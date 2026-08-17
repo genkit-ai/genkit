@@ -1218,8 +1218,9 @@ class AgentChat(Generic[StateT]):
         raw_output = await output_awaitable
         # Point the chat at the pending detached snapshot. A send() while it is
         # still pending is rejected; after it completes, send continues from
-        # that snapshot. Abort rolls back the optimistic prompt — use
-        # chat(session_id=...) to resume from the last completed turn.
+        # that snapshot. Abort stops the server turn but keeps the prompt —
+        # it was still asked. Use chat(session_id=...) to resume from the last
+        # completed turn.
         self._update_from_output(raw=raw_output, message_count_before=message_count_before)
 
         if not raw_output.snapshot_id:
@@ -1228,7 +1229,6 @@ class AgentChat(Generic[StateT]):
             snapshot_id=raw_output.snapshot_id,
             transport=self._transport,
             state_schema=self._state_schema,
-            on_abort_rollback=lambda: self._rollback_optimistic(message_count_before),
         )
 
     async def abort(self) -> SnapshotStatus | None:
@@ -1241,8 +1241,8 @@ class AgentChat(Generic[StateT]):
 
         Against this SDK the return is always the previous status. After abort
         the chat still points at the aborted leaf — ``chat(session_id=…)``
-        before the next ``send()``. This does not roll back the local
-        transcript; ``DetachedTask.abort`` does.
+        before the next ``send()``. The local transcript keeps the prompt;
+        it was still asked.
 
         Raises:
             ValueError: if there's no snapshot to abort — the agent is
@@ -1448,12 +1448,10 @@ class DetachedTask(Generic[StateT]):
         snapshot_id: str,
         transport: AgentTransport[StateT],
         state_schema: type[StateT] | None = None,
-        on_abort_rollback: Callable[[], None] | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self._transport = transport
         self._state_schema = state_schema
-        self._on_abort_rollback = on_abort_rollback
 
     def _parse_snapshot(self, raw: SessionSnapshotSchema | None) -> SessionSnapshot[StateT] | None:
         if raw is None:
@@ -1501,19 +1499,11 @@ class DetachedTask(Generic[StateT]):
         now ``aborted``). A terminal status means the turn had already
         finished. ``None`` means nothing was observed.
 
-        If this call cancelled a running turn, the originating chat drops the
-        optimistic prompt it added when detach started. That rollback runs at
-        most once. Some servers report ``aborted`` (status after the cancel)
-        instead of ``pending`` (status before); either one is treated as "this
-        call stopped in-flight work" so the prompt is still dropped. A later
-        abort is a no-op.
+        This does not edit the originating chat's transcript. The prompt was
+        still asked; reload via ``chat(session_id=...)`` before the next send
+        so you are not still pointed at the aborted leaf.
         """
-        status = await self._transport.abort_snapshot(self.snapshot_id)
-        if status in (SnapshotStatus.PENDING, SnapshotStatus.ABORTED) and self._on_abort_rollback is not None:
-            rollback = self._on_abort_rollback
-            self._on_abort_rollback = None
-            rollback()
-        return status
+        return await self._transport.abort_snapshot(self.snapshot_id)
 
 
 # ===========================================================================
