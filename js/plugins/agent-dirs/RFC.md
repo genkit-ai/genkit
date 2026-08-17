@@ -208,7 +208,7 @@ what we think closes the biggest gaps:
 - Watch mode. Skill and knowledge bodies are already re-read per turn;
   prompts and tools need a restart.
 - Typegen for `directoryAgent(ai, 'name')` state types.
-- Whether `input` / `output` dotprompt frontmatter should apply to agents
-  (currently warned and ignored).
+- Whether `input` / `output` prompt-style frontmatter should apply to
+  agents (currently unknown keys: warned and ignored).
 - Channel adapters (Slack, cron). Out of scope here; `serveAgents`' `app`
   option is the seam.

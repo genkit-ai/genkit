@@ -11,6 +11,14 @@ anything it produces can be written by hand (see
 
 The minimum viable agent is one file. Create `agents/helper/instructions.md`:
 
+```markdown
+You are a helpful, concise assistant.
+```
+
+Frontmatter is optional - without a `model` key the agent uses the plugin's
+`defaultModel` option (default: `vertexai/gemini-3.5-flash`). To pick a
+model per agent:
+
 ```yaml
 ---
 description: A helpful assistant.
@@ -120,7 +128,7 @@ work with no extra wiring:
 | Key | Type | Notes |
 | --- | ---- | ----- |
 | `description` | string | shown in Dev UI / delegation tool descriptions |
-| `model` | string | e.g. `vertexai/gemini-2.5-flash` |
+| `model` | string | e.g. `vertexai/gemini-2.5-flash`; defaults to the plugin's `defaultModel` option (built-in default `vertexai/gemini-3.5-flash`) |
 | `config` | object | model config (temperature, ...) |
 | `tools` | string[] | names of tools registered elsewhere |
 | `delegates` | string[] | other agent directory names; validated |
@@ -221,7 +229,8 @@ the entry as stale. Exported standalone; upstream candidate for
 
 ## API summary
 
-- `agentDirs(options)` - the plugin. `dir`, `store`, `snapshotDir`, `strict`.
+- `agentDirs(options)` - the plugin. `dir`, `store`, `snapshotDir`,
+  `strict`, `defaultModel`.
 - `directoryAgent(ai, name)` - resolve a registered agent (the `remoteAgent`
   naming idiom: a factory for an Agent handle named for where it lives).
 - `listAgents(ai)` - every registered agent by name (not only directory
@@ -233,7 +242,7 @@ the entry as stale. Exported standalone; upstream candidate for
 ## Prototype status / not yet done
 
 - `state:` schema in frontmatter (picoschema) → `stateSchema`
-- `input`/`output` frontmatter (parsed but ignored, with a warning)
+- `input`/`output` frontmatter (warned as unknown keys and ignored)
 - watch mode / hot re-registration on directory changes
 - typegen for a typed `directoryAgent(ai, 'name')`
 - lazy plugin action listing (`listActionsFn`) - agents resolve eagerly

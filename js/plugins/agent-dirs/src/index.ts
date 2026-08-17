@@ -28,9 +28,10 @@
  *
  * Every sub-directory of `dir` compiles to one `ai.defineAgent(...)` call:
  * `instructions.md` (YAML frontmatter + markdown system prompt) supplies
- * model/config/system prompt, `tools/*.ts`
- * supply tools, `skills/*.md` supply progressively-disclosed instructions, and
- * an optional `agent.ts` can amend the compiled config in code.
+ * model/config/system prompt, `tools/*.ts` supply tools,
+ * `skills/<name>/SKILL.md` supply progressively-disclosed instructions,
+ * `knowledge/` is an OKF bundle, frontmatter `delegates:` wires delegation,
+ * and an optional `agent.ts` can amend the compiled config in code.
  *
  * @module @genkit-ai/agent-dirs
  */
@@ -49,7 +50,7 @@ export {
   type AgentDirToolFactory,
   type CompiledAgentConfig,
 } from './authoring.js';
-export { type AgentDirsOptions } from './compiler.js';
+export { DEFAULT_MODEL, type AgentDirsOptions } from './compiler.js';
 export { directoryAgent, listAgents } from './lookup.js';
 export {
   serveAgents,

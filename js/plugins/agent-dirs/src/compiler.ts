@@ -42,10 +42,23 @@ import type { CompiledAgentConfig } from './authoring.js';
 import { loadOverride, loadTools, type RegisteredTool } from './loaders.js';
 import { okfKnowledge } from './okf.js';
 
+/**
+ * Model used when an agent's `instructions.md` frontmatter has no `model`
+ * key and the plugin's `defaultModel` option is unset. Frontmatter always
+ * wins over any default.
+ */
+export const DEFAULT_MODEL = 'vertexai/gemini-3.5-flash';
+
 /** Options for the `agentDirs` plugin. */
 export interface AgentDirsOptions {
   /** Directory containing one sub-directory per agent. Default `./agents`. */
   dir?: string;
+  /**
+   * Model for agents whose frontmatter has no `model` key.
+   * Default {@link DEFAULT_MODEL}. This is applied at compile time, so it
+   * takes precedence over a `genkit({ model })` instance default.
+   */
+  defaultModel?: string;
   /**
    * Session store factory, called once per agent. Defaults to a
    * {@link FileSessionStore} under `snapshotDir`.
@@ -225,6 +238,7 @@ async function compileAgentDir(
     tools,
     use: contributed.map((c) => c.middleware),
     store: resolveStore(agentName, ctx.options),
+    defaultModel: ctx.options.defaultModel ?? DEFAULT_MODEL,
   });
 
   const override = await loadOverride(agentPath);
@@ -358,23 +372,18 @@ function assembleConfig(
     tools: RegisteredTool[];
     use: MiddlewareEntry[];
     store: SessionStore<unknown>;
+    defaultModel: string;
   }
 ): CompiledAgentConfig {
   const modelConfig =
     parsed.config && typeof parsed.config === 'object'
       ? (parsed.config as Record<string, unknown>)
       : undefined;
-  if (parsed.input || parsed.output) {
-    logger.warn(
-      `[agent-dirs] agent '${compiled.agentName}': 'input'/'output' ` +
-        `frontmatter is not yet supported by agent-dirs and is ignored`
-    );
-  }
   const system = parsed.template.trim();
   return {
     name: compiled.agentName,
     ...(parsed.description && { description: parsed.description }),
-    ...(parsed.model && { model: parsed.model }),
+    model: parsed.model ?? compiled.defaultModel,
     ...(modelConfig && { config: modelConfig }),
     // An empty template (frontmatter-only file) means "no system prompt",
     // typically because an agent.ts override supplies one.

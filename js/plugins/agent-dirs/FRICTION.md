@@ -139,9 +139,11 @@ against changed agent code unguarded.
 `tool`/`model` hooks are the natural seam), durable resume triggers, version
 stamp on snapshots.
 
-## 8. `.prompt` parsing: three routes, none blessed
+## 8. Frontmatter parsing: three routes, none blessed
 
-An external plugin wanting dotprompt-compatible files can (a) use
+This plugin parses `instructions.md` (YAML frontmatter + markdown body)
+with dotprompt's splitter. An external plugin wanting to parse
+frontmatter-bearing files that way can (a) use
 `registry.dotprompt.parse()` - a public readonly field
 (`js/core/src/registry.ts:164`) whose value over a fresh instance is the
 registry-wired schema resolver; (b) use `loadPromptFolder`, publicly exported
