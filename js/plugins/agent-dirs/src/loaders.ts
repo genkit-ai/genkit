@@ -38,20 +38,83 @@ export type RegisteredTool = ReturnType<GenkitBeta['defineTool']>;
 const TOOL_FILE_EXTENSIONS = ['.ts', '.mts', '.js', '.mjs'];
 
 /**
- * Dynamic import that survives CJS transpilation. esbuild rewrites `import()`
- * to `require()` in the CJS build, which would lose the ability to load ESM
- * tool files; indirecting through `Function` keeps it a native import in both
- * builds.
+ * Dynamic import kept opaque to the bundler. Some transpile configs rewrite
+ * `import()` to `require()` in CJS output (our current tsup setup does not,
+ * but that is a build detail, not a contract); indirecting through `Function`
+ * guarantees a native import in every build, which ESM tool files need.
  */
 const dynamicImport = new Function('m', 'return import(m)') as (
   m: string
 ) => Promise<Record<string, unknown>>;
+
+type TsImport = (
+  specifier: string,
+  parentURL: string
+) => Promise<Record<string, unknown>>;
+
+let tsImportPromise: Promise<TsImport | undefined> | undefined;
+
+/** Resolves tsx's `tsImport` once, or undefined when tsx isn't installed. */
+function resolveTsImport(): Promise<TsImport | undefined> {
+  return (tsImportPromise ??= dynamicImport('tsx/esm/api').then(
+    (mod) => mod.tsImport as TsImport,
+    () => undefined
+  ));
+}
+
+/**
+ * Imports a directory module. TypeScript sources need tsx's `tsImport`: a
+ * registered loader hook is not enough, because `.ts` files under a CJS (or
+ * typeless) package scope are classified as CommonJS and a native `import()`
+ * of them dies with a require/import cycle error. `tsImport` side-steps the
+ * package scope entirely. Compiled `.js`/`.mjs` files import natively.
+ */
+async function importModule(file: string): Promise<Record<string, unknown>> {
+  const url = pathToFileURL(file).href;
+  if (/\.[cm]?ts$/.test(file)) {
+    const tsImport = await resolveTsImport();
+    if (tsImport) return tsImport(url, url);
+    // No tsx (it is an optional peer): a native import still works when the
+    // whole process runs under a TS-capable loader (`tsx src/index.ts`).
+  }
+  return dynamicImport(url);
+}
 
 function isLoadableModule(file: string): boolean {
   return (
     TOOL_FILE_EXTENSIONS.includes(path.extname(file)) &&
     !/\.d\.[cm]?ts$/.test(file)
   );
+}
+
+/**
+ * Collapses `foo.ts` + `foo.mjs` (etc.) to one file per basename, preferring
+ * {@link TOOL_FILE_EXTENSIONS} order - the same rule `loadOverride` applies
+ * to `agent.*`. Without this, a precompiled tool next to its source would
+ * register twice and clobber the registry entry.
+ */
+function dedupeByBasename(files: string[], agentName: string): string[] {
+  const byBase = new Map<string, string[]>();
+  for (const file of files) {
+    const base = path.basename(file, path.extname(file));
+    byBase.set(base, [...(byBase.get(base) ?? []), file]);
+  }
+  const picked: string[] = [];
+  for (const [base, candidates] of byBase) {
+    candidates.sort(
+      (a, b) =>
+        TOOL_FILE_EXTENSIONS.indexOf(path.extname(a)) -
+        TOOL_FILE_EXTENSIONS.indexOf(path.extname(b))
+    );
+    if (candidates.length > 1) {
+      logger.warn(
+        `[agent-dirs] agent '${agentName}': multiple tool files named ` +
+          `'${base}' (${candidates.join(', ')}) - using ${candidates[0]}`
+      );
+    }
+    picked.push(candidates[0]);
+  }
+  return picked.sort();
 }
 
 /**
@@ -84,13 +147,19 @@ export async function loadTools(
   };
 
   const actions: RegisteredTool[] = [];
-  for (const file of readdirSync(toolsDir).sort()) {
-    if (!isLoadableModule(file)) continue;
+  const files = dedupeByBasename(
+    readdirSync(toolsDir).filter(isLoadableModule),
+    agentName
+  );
+  for (const file of files) {
     let mod: Record<string, unknown>;
     try {
-      mod = await dynamicImport(pathToFileURL(path.join(toolsDir, file)).href);
+      mod = await importModule(path.join(toolsDir, file));
     } catch (e) {
-      return fail(`failed to load tools/${file}: ${e}`);
+      const hint = /\.[cm]?ts$/.test(file)
+        ? ' (TypeScript tools need tsx installed, or precompile to .mjs)'
+        : '';
+      return fail(`failed to load tools/${file}: ${e}${hint}`);
     }
     // Factory form: `export default (ai) => ai.defineTool({...}, fn)` -
     // native API escape hatch; the factory owns naming.
@@ -155,7 +224,7 @@ export async function loadOverride(
   const overrideFile = candidates[0];
   let mod: Record<string, unknown>;
   try {
-    mod = await dynamicImport(pathToFileURL(overrideFile).href);
+    mod = await importModule(overrideFile);
   } catch (e) {
     logger.warn(
       `[agent-dirs] failed to load override ${overrideFile}: ${e}; ignoring`

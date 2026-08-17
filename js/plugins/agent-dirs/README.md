@@ -30,12 +30,18 @@ You are a helpful, concise assistant.
 No host code is needed - the runner serves every agent directory:
 
 ```sh
-npx agent-dirs serve ./agents   # POST /api/helper (+ /getSnapshot, /abort)
+agent-dirs serve ./agents   # POST /api/helper (+ /getSnapshot, /abort)
 ```
 
-The runner uses Vertex AI via ADC and the built-in defaults; per-project
-choices (provider, session store) are platform configuration
-(firebase.json), not project code. To embed in your own app instead:
+(The package is unpublished, so `npx agent-dirs` does not resolve yet;
+inside this workspace, build the plugin once and use
+`pnpm exec agent-dirs serve` from a package that depends on it.)
+
+The runner binds `127.0.0.1` - the endpoints carry no auth. Pass
+`--host 0.0.0.0` only behind a platform ingress (e.g. in a container).
+It uses Vertex AI via ADC and the built-in defaults; per-project choices
+(provider, session store) are platform configuration (firebase.json), not
+project code. To embed in your own app instead:
 
 ```ts
 import { agentDirs, serveAgents } from '@genkit-ai/agent-dirs';
@@ -136,7 +142,7 @@ work with no extra wiring:
 | Key | Type | Notes |
 | --- | ---- | ----- |
 | `description` | string | shown in Dev UI / delegation tool descriptions |
-| `model` | string | e.g. `vertexai/gemini-2.5-flash`; defaults to the plugin's `defaultModel` option (built-in default `vertexai/gemini-3.5-flash`) |
+| `model` | string | e.g. `vertexai/gemini-2.5-flash`; when omitted: the plugin's `defaultModel` option, else the `genkit({ model })` instance default, else `vertexai/gemini-3.5-flash` |
 | `config` | object | model config (temperature, ...) |
 | `tools` | string[] | names of tools registered elsewhere |
 | `delegates` | string[] | other agent directory names; validated |
@@ -237,8 +243,8 @@ the entry as stale. Exported standalone; upstream candidate for
 
 ## API summary
 
-- `agent-dirs serve [dir] [--port <n>]` - zero-code CLI runner (see
-  Quickstart).
+- `agent-dirs serve [dir] [--port <n>] [--host <h>]` - zero-code CLI runner
+  (see Quickstart).
 - `agentDirs(options)` - the plugin. `dir`, `store`, `snapshotDir`,
   `strict`, `defaultModel`.
 - `directoryAgent(ai, name)` - resolve a registered agent (the `remoteAgent`
@@ -257,5 +263,8 @@ the entry as stale. Exported standalone; upstream candidate for
 - typegen for a typed `directoryAgent(ai, 'name')`
 - lazy plugin action listing (`listActionsFn`) - agents resolve eagerly
 - channel adapters (Slack/cron); OKF attested computations
-- loading `tools/*.ts` requires a TS-capable runtime (tsx) - fine for dev;
+- loading `tools/*.ts` requires tsx (optional peer) - fine for dev;
   production builds should precompile to `.mjs`
+- the CLI lives in-package, which makes `@genkit-ai/google-genai` a hard
+  dependency of the library; a real release would split the runner into its
+  own package (also giving `npx` a public entry point)

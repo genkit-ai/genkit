@@ -43,9 +43,9 @@ import { loadOverride, loadTools, type RegisteredTool } from './loaders.js';
 import { okfKnowledge } from './okf.js';
 
 /**
- * Model used when an agent's `instructions.md` frontmatter has no `model`
- * key and the plugin's `defaultModel` option is unset. Frontmatter always
- * wins over any default.
+ * Last-resort model, used only when nothing else names one: frontmatter
+ * `model`, then the plugin's `defaultModel` option, then a `genkit({ model })`
+ * instance default all take precedence.
  */
 export const DEFAULT_MODEL = 'vertexai/gemini-3.5-flash';
 
@@ -54,9 +54,10 @@ export interface AgentDirsOptions {
   /** Directory containing one sub-directory per agent. Default `./agents`. */
   dir?: string;
   /**
-   * Model for agents whose frontmatter has no `model` key.
-   * Default {@link DEFAULT_MODEL}. This is applied at compile time, so it
-   * takes precedence over a `genkit({ model })` instance default.
+   * Model for agents whose frontmatter has no `model` key. Setting this
+   * pins the model at compile time, overriding any `genkit({ model })`
+   * instance default; leaving it unset lets the instance default apply,
+   * with {@link DEFAULT_MODEL} as the final fallback.
    */
   defaultModel?: string;
   /**
@@ -233,12 +234,20 @@ async function compileAgentDir(
     capability(agentPath, frontmatter)
   ).filter((c): c is CapabilityContribution => c !== undefined);
 
+  // Model precedence: frontmatter > plugin defaultModel > genkit({ model })
+  // instance default (left to apply at generate time by omitting the field)
+  // > DEFAULT_MODEL.
+  const model =
+    parsed.model ??
+    ctx.options.defaultModel ??
+    (ai.options.model ? undefined : DEFAULT_MODEL);
+
   let config = assembleConfig(parsed, {
     agentName,
     tools,
     use: contributed.map((c) => c.middleware),
     store: resolveStore(agentName, ctx.options),
-    defaultModel: ctx.options.defaultModel ?? DEFAULT_MODEL,
+    model,
   });
 
   const override = await loadOverride(agentPath);
@@ -372,7 +381,7 @@ function assembleConfig(
     tools: RegisteredTool[];
     use: MiddlewareEntry[];
     store: SessionStore<unknown>;
-    defaultModel: string;
+    model: string | undefined;
   }
 ): CompiledAgentConfig {
   const modelConfig =
@@ -383,7 +392,7 @@ function assembleConfig(
   return {
     name: compiled.agentName,
     ...(parsed.description && { description: parsed.description }),
-    model: parsed.model ?? compiled.defaultModel,
+    ...(compiled.model && { model: compiled.model }),
     ...(modelConfig && { config: modelConfig }),
     // An empty template (frontmatter-only file) means "no system prompt",
     // typically because an agent.ts override supplies one.
@@ -423,12 +432,35 @@ function resolveStore(
   agentName: string,
   options: AgentDirsOptions
 ): SessionStore<unknown> {
+  // The default store is lazy: FileSessionStore mkdirs at construction, and
+  // registering an agent must not litter the cwd with snapshot directories
+  // before any session exists.
   return (
     options.store?.(agentName) ??
-    new FileSessionStore(
-      path.join(options.snapshotDir ?? './.genkit/agent-snapshots', agentName)
+    lazySessionStore(
+      () =>
+        new FileSessionStore(
+          path.join(
+            options.snapshotDir ?? './.genkit/agent-snapshots',
+            agentName
+          )
+        )
     )
   );
+}
+
+function lazySessionStore(
+  make: () => SessionStore<unknown>
+): SessionStore<unknown> {
+  let store: SessionStore<unknown> | undefined;
+  const resolved = () => (store ??= make());
+  return {
+    getSnapshot: (opts) => resolved().getSnapshot(opts),
+    saveSnapshot: (snapshotId, mutator, opts) =>
+      resolved().saveSnapshot(snapshotId, mutator, opts),
+    onSnapshotStateChange: (snapshotId, callback, opts) =>
+      resolved().onSnapshotStateChange?.(snapshotId, callback, opts),
+  };
 }
 
 /**

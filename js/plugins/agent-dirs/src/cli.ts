@@ -19,7 +19,7 @@
  * Zero-code runner: `agent-dirs serve [dir]` serves every agent directory
  * without a host `index.ts`. The agent folder is the only user input.
  *
- * Everything variable here - model provider, session store, port - is
+ * Everything variable here - model provider, session store, host/port - is
  * deliberately NOT read from a project config file. In the product this
  * configuration belongs to the platform (a `firebase.json` block / the
  * hosting service), which hands it to the runner already resolved; a config
@@ -36,56 +36,49 @@ import * as path from 'node:path';
 import { agentDirs } from './index.js';
 import { serveAgents } from './server.js';
 
-const USAGE = `Usage: agent-dirs serve [dir] [--port <n>]
+const USAGE = `Usage: agent-dirs serve [dir] [--port <n>] [--host <h>]
 
   dir     agents directory (default ./agents)
-  --port  listen port (default PORT env or 8080)`;
+  --port  listen port (default PORT env or 8080)
+  --host  interface to bind (default 127.0.0.1; the endpoints carry no
+          auth, so pass --host 0.0.0.0 only behind a platform ingress,
+          e.g. in a container)`;
 
 interface ServeArgs {
-  dir: string;
+  dir?: string;
   port?: number;
+  host?: string;
 }
 
 function parseArgs(argv: string[]): ServeArgs | undefined {
   const [command, ...rest] = argv;
   if (command !== 'serve') return undefined;
-  const args: ServeArgs = { dir: './agents' };
+  const args: ServeArgs = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--port') {
       args.port = Number(rest[++i]);
     } else if (arg.startsWith('--port=')) {
       args.port = Number(arg.slice('--port='.length));
+    } else if (arg === '--host') {
+      args.host = rest[++i];
+    } else if (arg.startsWith('--host=')) {
+      args.host = arg.slice('--host='.length);
     } else if (!arg.startsWith('-')) {
+      if (args.dir !== undefined) return undefined; // one dir only
       args.dir = arg;
     } else {
       return undefined;
     }
-    if (args.port !== undefined && !Number.isInteger(args.port)) {
-      return undefined;
-    }
   }
+  if (
+    args.port !== undefined &&
+    (!Number.isInteger(args.port) || args.port < 0 || args.port > 65535)
+  ) {
+    return undefined;
+  }
+  if (args.host !== undefined && !args.host) return undefined;
   return args;
-}
-
-/**
- * Tool files are TypeScript; plain `node` cannot import them. Locally, tsx
- * (an optional peer) is registered as a module loader. A production image
- * should instead precompile `tools/*.ts` to `.mjs` at build time - the
- * loader accepts both - so tsx never ships to prod.
- */
-async function registerTsLoader(): Promise<void> {
-  try {
-    const tsx = (await import('tsx/esm/api')) as {
-      register: () => unknown;
-    };
-    tsx.register();
-  } catch {
-    logger.warn(
-      '[agent-dirs] tsx is not installed - TypeScript tool files will fail ' +
-        'to load. Install tsx, or precompile tools to .mjs.'
-    );
-  }
 }
 
 async function main(): Promise<void> {
@@ -94,29 +87,48 @@ async function main(): Promise<void> {
     console.error(USAGE);
     process.exit(1);
   }
-  await registerTsLoader();
+  const dir = args.dir ?? './agents';
 
   // Default provider and store. Platform-resolved config (firebase.json /
   // the hosting service) should select these per project: provider from the
   // project's enabled AI backend, store from an environment-aware default
   // (file locally, Firestore on GCP).
   const ai = genkit({
-    plugins: [vertexAI(), agentDirs({ dir: args.dir })],
+    plugins: [vertexAI(), agentDirs({ dir })],
   });
 
   const { agents, server } = await serveAgents(ai, {
     ...(args.port !== undefined && { port: args.port }),
+    // Loopback unless told otherwise: the endpoints are unauthenticated.
+    host: args.host ?? process.env.HOST ?? '127.0.0.1',
   });
   if (agents.length === 0) {
-    logger.warn(
-      `[agent-dirs] no agents found under ${path.resolve(args.dir)}`
-    );
+    logger.warn(`[agent-dirs] no agents found under ${path.resolve(dir)}`);
   }
-  const shutdown = () => {
-    server?.close(() => process.exit(0));
+
+  let closing = false;
+  const shutdown = (signal: NodeJS.Signals) => {
+    // Graceful close waits on open connections (a streaming turn is the
+    // normal case), so a second signal - or a 5s timeout, matching typical
+    // container grace periods - must force-exit or Ctrl-C becomes inert.
+    if (closing) process.exit(signal === 'SIGINT' ? 130 : 143);
+    closing = true;
+    setTimeout(() => process.exit(0), 5000).unref();
+    if (!server) process.exit(0);
+    server.close(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }
 
-void main();
+main().catch((e) => {
+  const err = e as NodeJS.ErrnoException;
+  if (err?.code === 'EADDRINUSE') {
+    console.error(`agent-dirs: port already in use (${err.message})`);
+  } else if (err?.code === 'ERR_SOCKET_BAD_PORT' || err?.code === 'EACCES') {
+    console.error(`agent-dirs: cannot bind requested port (${err.message})`);
+  } else {
+    console.error(`agent-dirs: ${err?.message ?? err}`);
+  }
+  process.exit(1);
+});

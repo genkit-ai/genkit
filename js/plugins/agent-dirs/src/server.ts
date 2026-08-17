@@ -40,6 +40,13 @@ import { listAgents } from './lookup.js';
 export interface ServeAgentsOptions {
   /** Port to listen on. Defaults to `PORT` env or 8080. */
   port?: number;
+  /**
+   * Host/interface to bind. Defaults to `HOST` env, else all interfaces.
+   * The endpoints carry no auth, so anything that can reach them can run
+   * turns on the server's credentials - bind `127.0.0.1` unless deploying
+   * behind a platform ingress.
+   */
+  host?: string;
   /** Route prefix for agent endpoints. Default `/api`. */
   pathPrefix?: string;
   /** CORS options (`cors` package). Default allows all origins. */
@@ -122,11 +129,26 @@ export async function serveAgents(
   let server: Server | undefined;
   if (!options.app) {
     const port = options.port ?? Number(process.env.PORT ?? 8080);
-    server = app.listen(port, () => {
-      logger.info(
-        `[agent-dirs] serving ${names.length} agent(s) on :${port} - ` +
-          names.map((n) => `${prefix}/${n}`).join(', ')
-      );
+    const host = options.host ?? process.env.HOST;
+    server = await new Promise<Server>((resolve, reject) => {
+      const s = host ? app.listen(port, host) : app.listen(port);
+      // Bind failures (EADDRINUSE, bad port) arrive as 'error' events after
+      // listen() returns; unhandled, they crash the process with a raw stack.
+      s.once('error', reject);
+      s.once('listening', () => {
+        s.removeListener('error', reject);
+        const address = s.address();
+        const bound =
+          typeof address === 'object' && address !== null
+            ? address.port
+            : port;
+        logger.info(
+          `[agent-dirs] serving ${names.length} agent(s) on ` +
+            `${host ?? ''}:${bound} - ` +
+            names.map((n) => `${prefix}/${n}`).join(', ')
+        );
+        resolve(s);
+      });
     });
   }
   return { app, server, agents: names };
