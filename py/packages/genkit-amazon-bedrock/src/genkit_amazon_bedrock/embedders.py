@@ -53,7 +53,7 @@ from genkit.embedder import (
     EmbedResponse,
 )
 from genkit.plugin_api import GenkitError
-from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
+from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
 
 # One call's result: a single vector per document, or a chunk of them for Cohere.
@@ -179,7 +179,7 @@ def get_embedder_options(model_id: str) -> EmbedderOptions:
         inputs = TEXT_ONLY
     return EmbedderOptions(
         # The label keeps the prefix: it names what the caller asked for.
-        label=model_id,
+        label=model_label(model_id),
         dimensions=info.dimensions if info is not None else None,
         supports=EmbedderSupports(input=list(inputs)),
     )

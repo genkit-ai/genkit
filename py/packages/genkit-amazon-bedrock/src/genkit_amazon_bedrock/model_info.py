@@ -139,6 +139,18 @@ def strip_inference_profile_prefix(model_id: str) -> str:
     return model_id
 
 
+def model_label(model_id: str) -> str:
+    """Formats the Dev UI label for a Bedrock model or embedder.
+
+    Args:
+        model_id: Bedrock model ID, inference-profile ID, or ARN, as given.
+
+    Returns:
+        The ID prefixed with the provider, as the Dev UI model picker expects.
+    """
+    return f'Amazon Bedrock - {model_id}'
+
+
 def get_model_info(
     model_name: str,
     model_type: Literal['chat', 'text', 'image'] = 'chat',
@@ -155,7 +167,7 @@ def get_model_info(
     """
     if model_type == 'image':
         return ModelInfo(
-            label=model_name,
+            label=model_label(model_name),
             stage=Stage.STABLE,
             supports=Supports(
                 multiturn=False,
@@ -175,7 +187,7 @@ def get_model_info(
         capability = ModelCapability(multimodal=True, tools=True)
 
     return ModelInfo(
-        label=model_name,
+        label=model_label(model_name),
         stage=stage,
         supports=Supports(
             multiturn=True,

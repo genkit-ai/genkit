@@ -74,7 +74,7 @@ def test_strip_lowercases_for_lookup() -> None:
 def test_a_mixed_case_id_still_finds_its_capabilities() -> None:
     info = get_model_info('US.Amazon.Nova-Lite-V1:0')
     assert info.stage == Stage.STABLE
-    assert info.label == 'US.Amazon.Nova-Lite-V1:0'
+    assert info.label == 'Amazon Bedrock - US.Amazon.Nova-Lite-V1:0'
 
 
 def test_us_gov_wins_over_us() -> None:
@@ -99,7 +99,7 @@ def test_inference_profile_id_resolves_registry_entry() -> None:
     assert info.stage == Stage.STABLE
     assert info.supports is not None
     assert info.supports.media is False
-    assert info.label == 'eu.amazon.nova-micro-v1:0'
+    assert info.label == 'Amazon Bedrock - eu.amazon.nova-micro-v1:0'
 
 
 @pytest.mark.parametrize(
@@ -152,6 +152,7 @@ def test_unknown_model_defaults_to_unstable_converse_capabilities() -> None:
 def test_image_model_supports_media_output_only() -> None:
     info = get_model_info('amazon.titan-image-generator-v1', model_type='image')
     assert info.stage == Stage.STABLE
+    assert info.label == 'Amazon Bedrock - amazon.titan-image-generator-v1'
     assert info.supports is not None
     assert info.supports.output == ['media']
     # media is Genkit's input flag, and these models take text prompts only.

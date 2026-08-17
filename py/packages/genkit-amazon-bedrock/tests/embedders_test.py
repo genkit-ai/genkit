@@ -679,7 +679,7 @@ def test_registry_dimensions_and_modalities(model_id: str, dimensions: int, inpu
     options = get_embedder_options(model_id)
     assert options.dimensions == dimensions
     assert options.supports is not None and options.supports.input == inputs
-    assert options.label == model_id
+    assert options.label == f'Amazon Bedrock - {model_id}'
 
 
 @pytest.mark.parametrize(
@@ -701,7 +701,7 @@ def test_unregistered_but_routable_model_falls_back_to_family_defaults(model_id:
 def test_profile_prefixed_lookup_strips_but_the_label_keeps_the_prefix() -> None:
     options = get_embedder_options(f'us.{TITAN_TEXT}')
     assert options.dimensions == 1024
-    assert options.label == f'us.{TITAN_TEXT}'
+    assert options.label == f'Amazon Bedrock - us.{TITAN_TEXT}'
 
 
 def test_all_registry_keys_are_base_ids() -> None:
