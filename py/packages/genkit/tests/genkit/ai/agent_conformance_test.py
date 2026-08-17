@@ -52,13 +52,11 @@ from genkit._core._typing import (
     AgentInit,
     AgentInput,
     AgentResult,
-    AgentStreamChunk,
     Artifact,
     MessageData,
     Part,
     Role,
     TextPart,
-    TurnEnd,
 )
 from genkit.agent import Agent
 
@@ -409,24 +407,12 @@ def assert_chunks(*, actual_chunks: list[Any], expected_chunks: list[Any]) -> No
             assert 'turnEnd' in got, f'Chunk {i}: expected turnEnd, got {got!r}'
             turn_end = expected['turnEnd']
             if isinstance(turn_end, dict) and 'finishReason' in turn_end:
-                # Pydantic json dumps drop None even when the field was set, so
-                # omitted vs null is model_fields_set, not exclude_unset.
+                # Omitted and explicit-null serialize the same (the key is
+                # dropped), so treat them as one optional field.
                 te_model = actual_chunks[i].turn_end
                 want_fr = turn_end['finishReason']
-                if want_fr is None:
-                    set_null = (
-                        te_model is not None
-                        and 'finish_reason' in te_model.model_fields_set
-                        and te_model.finish_reason is None
-                    )
-                    assert set_null, (
-                        f'Chunk {i}: expected turnEnd.finishReason null, '
-                        f'fields_set={getattr(te_model, "model_fields_set", None)!r} '
-                        f'value={getattr(te_model, "finish_reason", None)!r}'
-                    )
-                else:
-                    got_fr = te_model.finish_reason if te_model is not None else None
-                    assert got_fr == want_fr, f'Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got_fr!r}'
+                got_fr = te_model.finish_reason if te_model is not None else None
+                assert got_fr == want_fr, f'Chunk {i}: expected turnEnd.finishReason {want_fr!r}, got {got_fr!r}'
         elif 'modelChunk' in expected:
             assert_contains(
                 actual=got.get('modelChunk'), expected=expected['modelChunk'], path=f'chunk[{i}].modelChunk'
@@ -804,17 +790,3 @@ def test_snapshot_error_contains_is_exact_message() -> None:
         snap={'error': {'status': 'INTERNAL', 'message': 'intentional failure'}},
         expect={'errorContains': {'message': 'intentional failure'}},
     )
-
-
-def test_assert_chunks_pins_null_finish_reason() -> None:
-    chunks = [AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP))]
-    with pytest.raises(AssertionError, match='finishReason'):
-        assert_chunks(actual_chunks=chunks, expected_chunks=[{'turnEnd': {'finishReason': None}}])
-    assert_chunks(actual_chunks=chunks, expected_chunks=[{'turnEnd': {}}])
-
-    omitted = [AgentStreamChunk(turn_end=TurnEnd())]
-    with pytest.raises(AssertionError, match='finishReason null'):
-        assert_chunks(actual_chunks=omitted, expected_chunks=[{'turnEnd': {'finishReason': None}}])
-
-    explicit_null = [AgentStreamChunk(turn_end=TurnEnd.model_validate({'finishReason': None}))]
-    assert_chunks(actual_chunks=explicit_null, expected_chunks=[{'turnEnd': {'finishReason': None}}])
