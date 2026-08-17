@@ -204,9 +204,9 @@ def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401
         none was given.
 
     Raises:
-        GenkitError: INVALID_ARGUMENT for unsupported config types. Go silently
-            drops anything that is not a map; failing loudly beats sending a
-            body that quietly ignores the caller's settings.
+        GenkitError: INVALID_ARGUMENT for unsupported config types. Failing
+            loudly beats sending a body that quietly ignores the caller's
+            settings.
     """
     if config is None:
         return {}
