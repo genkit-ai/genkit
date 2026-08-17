@@ -1,0 +1,61 @@
+{
+  "name": "@genkit-ai/minimax",
+  "description": "Genkit AI framework plugin for MiniMax music generation APIs.",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "genkit-model",
+    "minimax",
+    "music",
+    "music-generation",
+    "text-to-music",
+    "ai"
+  ],
+  "version": "0.1.0",
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "tsx --test tests/*_test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/minimax"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "genkit": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "@types/sinon": "^17.0.4",
+    "genkit": "workspace:*",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "sinon": "^21.0.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "files": [
+    "lib"
+  ],
+  "publishConfig": {
+    "provenance": true,
+    "access": "public"
+  },
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "require": "./lib/index.js",
+      "import": "./lib/index.mjs",
+      "default": "./lib/index.js"
+    }
+  }
+}
