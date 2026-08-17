@@ -40,7 +40,7 @@ classifiers = [
 # botocore is imported directly (config, exceptions) and pins the floor that
 # keeps the manual AWS_REGION lookup in transport.py necessary: it did not read
 # AWS_REGION itself until 1.41.
-dependencies = ["genkit", "boto3>=1.37.24", "botocore>=1.37.24"]
+dependencies = ["genkit", "boto3>=1.37.24", "botocore>=1.37.24", "structlog>=25.2.0"]
 description = "Genkit Amazon Bedrock Plugin"
 keywords = [
   "genkit",

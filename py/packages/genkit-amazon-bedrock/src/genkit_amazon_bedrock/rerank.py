@@ -39,6 +39,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, Literal
 
+import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
@@ -51,6 +52,8 @@ from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.embedders import InvokeModelTransport, document_text
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+
+logger = structlog.get_logger(__name__)
 
 # The current Bedrock contract for the Cohere Rerank InvokeModel body.
 COHERE_RERANK_API_VERSION = 2
@@ -348,9 +351,19 @@ class BedrockReranker:
             top_n = options.top_n
 
         # Only the Amazon family drops api_version; an unknown ID takes Cohere's body.
-        include_api_version = _rerank_family(self._model_id) != 'amazon'
+        family = _rerank_family(self._model_id)
+        include_api_version = family != 'amazon'
+        logger.debug(
+            'Bedrock rerank request',
+            model=self._model_id,
+            family=family,
+            documents=len(texts),
+            top_n=top_n,
+        )
         payload = await self._invoke(build_rerank_body(query, texts, top_n, include_api_version=include_api_version))
-        return build_rerank_response(payload, request.documents)
+        response = build_rerank_response(payload, request.documents)
+        logger.debug('Bedrock rerank response', model=self._model_id, ranked=len(response.documents))
+        return response
 
     async def _invoke(self, body: dict[str, Any]) -> dict[str, Any]:
         try:

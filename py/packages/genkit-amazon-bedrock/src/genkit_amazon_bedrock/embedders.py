@@ -39,6 +39,7 @@ import json
 from collections.abc import Coroutine
 from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 
+import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
 from genkit import MediaPart, TextPart
@@ -55,6 +56,8 @@ from genkit.embedder import (
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+
+logger = structlog.get_logger(__name__)
 
 # One call's result: a single vector per document, or a chunk of them for Cohere.
 _T = TypeVar('_T')
@@ -384,6 +387,12 @@ class BedrockEmbedder:
                 status='UNIMPLEMENTED',
             )
 
+        logger.debug(
+            'Bedrock embed request',
+            model=self._model_id,
+            family=family,
+            documents=len(request.input),
+        )
         if family == 'titan_text':
             vectors = await self._embed_titan_text(request.input)
         elif family == 'titan_multimodal':
@@ -392,6 +401,12 @@ class BedrockEmbedder:
             vectors = await self._embed_cohere(request.input)
         else:
             vectors = await self._embed_nova(request.input)
+        logger.debug(
+            'Bedrock embed response',
+            model=self._model_id,
+            vectors=len(vectors),
+            dimensions=len(vectors[0]) if vectors else 0,
+        )
         return EmbedResponse(embeddings=[Embedding(embedding=vector) for vector in vectors])
 
     async def _embed_titan_text(self, documents: list[DocumentData]) -> list[list[float]]:

@@ -25,6 +25,8 @@ helper: Genkit Python has no reranker primitive to register an action against.
 
 from typing import TYPE_CHECKING, Any, Literal
 
+import structlog
+
 from genkit import Document, ModelRequest, ModelResponse
 
 # DocumentData has no public re-export yet; the rerank helper is built on it.
@@ -66,6 +68,8 @@ from genkit_amazon_bedrock.transport import BedrockTransport
 
 if TYPE_CHECKING:
     import boto3.session
+
+logger = structlog.get_logger(__name__)
 
 BEDROCK_PLUGIN_NAME = 'bedrock'
 
@@ -179,21 +183,28 @@ class Bedrock(Plugin):
         if action_type == ActionKind.EMBEDDER:
             # An unroutable embedding ID still resolves, so embed() can name it
             # as an unsupported embedder instead of the registry saying 404.
-            return self._create_embedder_action(model_id) if looks_like_embedding_model(model_id) else None
+            if not looks_like_embedding_model(model_id):
+                logger.debug('Bedrock resolve declined', model=model_id, kind='embedder', reason='not_an_embedder')
+                return None
+            return self._create_embedder_action(model_id)
         if action_type != ActionKind.MODEL:
+            logger.debug('Bedrock resolve declined', model=model_id, kind=str(action_type), reason='unsupported_kind')
             return None
         if looks_like_embedding_model(model_id):
             # Embedding models speak InvokeModel, not Converse; resolving one
             # as a chat model only defers the failure to call time.
+            logger.debug('Bedrock resolve declined', model=model_id, kind='model', reason='embedding_model')
             return None
         if is_rerank_model(model_id):
             # Same story for rerank models; reranking is the Bedrock.rerank helper.
+            logger.debug('Bedrock resolve declined', model=model_id, kind='model', reason='rerank_model')
             return None
         declared = self._declared_model_type(model_id)
         # Undeclared IDs are classified rather than assumed to be chat: resolve
         # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
         # Converse path and fail at call time. Embedders classify the same way.
         model_type = declared if declared is not None else ('image' if is_image_model(model_id) else 'chat')
+        logger.debug('Bedrock model resolved', model=model_id, model_type=model_type, declared=declared is not None)
         return self._create_model_action(model_id, model_type)
 
     def _declared_model_type(self, model_id: str) -> Literal['chat', 'text', 'image'] | None:
@@ -267,10 +278,18 @@ class Bedrock(Plugin):
             and not is_rerank_model(definition.name)
             and (definition.type != 'image' or is_image_model(definition.name))
         ]
+        models = len(actions)
         actions.extend(
             embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id))
             for model_id in self.embedders
             if is_embedding_model(model_id)
+        )
+        logger.debug(
+            'Bedrock actions listed',
+            models=models,
+            embedders=len(actions) - models,
+            models_configured=len(self.models),
+            embedders_configured=len(self.embedders),
         )
         return actions
 

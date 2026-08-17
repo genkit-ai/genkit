@@ -23,6 +23,7 @@ from contextlib import aclosing
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
+import structlog
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
@@ -37,8 +38,10 @@ from botocore.exceptions import (
 
 from genkit import ErrorResponseMetadata, ModelRequest, ModelResponse
 from genkit.plugin_api import ActionRunContext, GenkitError, StatusName
-from genkit_amazon_bedrock.converters import build_converse_request, to_model_response
+from genkit_amazon_bedrock.converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock.stream import consume_converse_stream
+
+logger = structlog.get_logger(__name__)
 
 
 class ConverseTransport(Protocol):
@@ -183,8 +186,16 @@ class BedrockModel:
         Returns:
             The converted model response.
         """
+        streaming = ctx is not None and ctx.is_streaming
         converse_kwargs = build_converse_request(self._model_id, request)
-        if ctx is not None and ctx.is_streaming:
+        logger.debug(
+            'Bedrock generate request',
+            model=self._model_id,
+            streaming=streaming,
+            messages=len(converse_kwargs.get('messages') or []),
+            tools=len((converse_kwargs.get('toolConfig') or {}).get('tools') or []),
+        )
+        if streaming and ctx is not None:
             return await self._generate_stream(converse_kwargs, request, ctx)
         try:
             response = await self._transport.converse(**converse_kwargs)
@@ -192,6 +203,15 @@ class BedrockModel:
             raise _from_client_error(e) from e
         except BotoCoreError as e:
             raise _from_botocore_error(e) from e
+        # Guarded so a transport returning None still reaches to_model_response,
+        # which reports it as INTERNAL rather than dying here on an attribute.
+        logged = response or {}
+        logger.debug(
+            'Bedrock generate response',
+            model=self._model_id,
+            stop_reason=logged.get('stopReason'),
+            **usage_log_fields(logged.get('usage')),
+        )
         return to_model_response(response, request)
 
     async def _generate_stream(
@@ -209,7 +229,7 @@ class BedrockModel:
         """
         try:
             async with aclosing(self._transport.converse_stream(**converse_kwargs)) as events:
-                return await consume_converse_stream(events, request, ctx)
+                return await consume_converse_stream(events, request, ctx, self._model_id)
         except ClientError as e:
             raise _from_client_error(e, 'converse stream') from e
         except BotoCoreError as e:

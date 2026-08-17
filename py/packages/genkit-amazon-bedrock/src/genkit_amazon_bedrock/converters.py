@@ -699,6 +699,22 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
     )
 
 
+def usage_log_fields(usage: dict[str, Any] | None) -> dict[str, Any]:  # noqa: ANN401
+    """Token counts as structlog keys; empty when the response reported none.
+
+    Cache writes are here but not on ``ModelUsage``, so the log is the only
+    place they surface.
+    """
+    if not usage:
+        return {}
+    return {
+        'input_tokens': usage.get('inputTokens'),
+        'output_tokens': usage.get('outputTokens'),
+        'cache_read_tokens': usage.get('cacheReadInputTokens'),
+        'cache_write_tokens': usage.get('cacheWriteInputTokens'),
+    }
+
+
 def to_model_response(response: dict[str, Any] | None, request: ModelRequest[Any]) -> ModelResponse:  # noqa: ANN401
     """Converts a raw Converse response to a Genkit ModelResponse."""
     if response is None:
