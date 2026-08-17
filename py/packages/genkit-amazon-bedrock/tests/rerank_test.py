@@ -320,7 +320,7 @@ def test_typed_options_are_passed_through_unchanged() -> None:
     [
         ({'topN': 7.0}, 7),
         ({'top_n': 7}, 7),
-        # Unknown keys are ignored, matching Go's json.Unmarshal.
+        # Unknown keys are ignored.
         ({'somethingElse': 1}, None),
     ],
 )
@@ -373,10 +373,6 @@ def test_an_out_of_range_index_is_internal(index: int) -> None:
     assert excinfo.value.status == 'INTERNAL'
 
 
-# Go's nil-document leg is dropped: a typed list[DocumentData] plus the
-# pre-call text validation make a nil document unreachable in Python.
-
-
 @pytest.mark.parametrize(
     ('payload', 'message'),
     [
@@ -420,9 +416,6 @@ async def test_botocore_errors_map_to_genkit_statuses() -> None:
 
 
 # ---- Plugin helper ----------------------------------------------------------
-
-# Go's nil-genkit, unregistered-plugin and uninitialized-plugin legs have no
-# Python analogue: rerank() is a method on the plugin instance itself.
 
 
 @pytest.mark.asyncio

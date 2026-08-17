@@ -287,8 +287,7 @@ class Bedrock(Plugin):
 
         A helper rather than a registered action: Genkit Python has no
         first-class reranker primitive, so there is nothing to register
-        against. The Go plugin's ``Rerank`` is a standalone function for the
-        same reason. Both the Cohere and Amazon rerank families are supported,
+        against. Both the Cohere and Amazon rerank families are supported,
         and the request body is built from the model ID because they disagree
         over ``api_version``. The ID itself is sent to the service verbatim.
 

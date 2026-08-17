@@ -19,20 +19,17 @@
 Reranking is a helper, ``Bedrock.rerank()``, not a registered action: Genkit
 Python carries only the bare ``ActionKind.RERANKER`` enum member, and the
 reranker schema types sit on the codegen denylist (``py/scripts/schema_to_typing.py``),
-so there is no primitive to register against. The Go plugin's ``rerank.go``
-reaches the same conclusion about Go for the same reason. The four types below
-mirror ``genkit-tools/genkit-schema.json`` field for field, so call sites
-survive if core ever re-adds the primitive.
+so there is no primitive to register against. The four types below mirror
+``genkit-tools/genkit-schema.json`` field for field, so call sites survive if
+core ever re-adds the primitive.
 
-Ported from the Go plugin's ``rerank.go``, with two deviations. A malformed
-result entry is an error, where Go's ``json.Unmarshal`` zero-fills it and a
-result with no ``index`` silently scores the first document. And the
+A malformed result entry is an error rather than a zero-filled document, so a
+result with no ``index`` never silently scores the first document. The
 ``amazon.rerank-*`` family is supported by omitting ``api_version``: the Amazon
 schema rejects the key (``extraneous key [api_version] is not permitted``) as
-firmly as the Cohere schema requires it, and Go's request struct carries the
-field with no ``omitempty``, so Go cannot call the Amazon model at all.
+firmly as the Cohere schema requires it.
 
-Two parity notes worth stating, because both are visible to callers: results
+Two behaviours worth stating, because both are visible to callers: results
 come back in the service's order, never re-sorted and never truncated
 client-side (``top_n`` only caps what the service returns), and a ranked
 document carries its score alone, dropping the original document's metadata.
@@ -128,7 +125,7 @@ class RerankerResponse(BaseModel):
 class BedrockRerankOptions(BaseModel):
     """Per-call options for a Bedrock rerank call."""
 
-    # Unknown keys are ignored rather than forbidden: Go's json.Unmarshal drops them.
+    # Unknown keys are ignored rather than forbidden.
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     top_n: int | None = None
@@ -172,8 +169,7 @@ def coerce_rerank_options(options: Any) -> BedrockRerankOptions | None:  # noqa:
     """Coerces a request's raw options into ``BedrockRerankOptions``.
 
     Accepts the typed value or a mapping, keyed by either ``topN`` or
-    ``top_n``. Unknown keys are ignored, matching the Go plugin's
-    ``json.Unmarshal``.
+    ``top_n``. Unknown keys are ignored.
 
     Args:
         options: The raw ``RerankerRequest.options`` value.
@@ -341,7 +337,7 @@ class BedrockReranker:
                     status='INVALID_ARGUMENT',
                 )
             texts.append(text)
-        # Before options are coerced, as in Go: nothing to rank outranks bad options.
+        # Before options are coerced: nothing to rank outranks bad options.
         if not texts:
             return RerankerResponse(documents=[])
 

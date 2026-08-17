@@ -82,7 +82,7 @@ COHERE_RERANK = 'cohere.rerank-v3-5:0'
 AMAZON_RERANK = 'amazon.rerank-v1:0'
 AMAZON_RERANK_REGIONS = ('us-west-2', 'eu-central-1', 'ap-northeast-1', 'ca-central-1')
 
-# Smallest PNG Titan accepts, ported from the Go plugin's live tests.
+# Smallest PNG Titan accepts.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
 PNG_1X1_DATA_URL = f'data:image/png;base64,{PNG_1X1}'
 
@@ -105,9 +105,9 @@ def make_image_model(model_id: str) -> BedrockImageModel:
     return BedrockImageModel(model_id=model_id, transport=make_transport())
 
 
-# Bedrock refusing the model itself, rather than the request, ported from the Go
-# plugin's skipIfModelUnavailable. Model access is per account: a Legacy model
-# also drops out after 30 days of disuse, which no test can control.
+# Bedrock refusing the model itself, rather than the request. Model access is
+# per account: a Legacy model also drops out after 30 days of disuse, which no
+# test can control.
 _UNAVAILABLE_MARKERS = (
     'AccessDeniedException',
     'ResourceNotFoundException',

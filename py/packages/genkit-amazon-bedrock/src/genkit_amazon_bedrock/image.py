@@ -21,12 +21,10 @@ families nest their options under ``imageGenerationConfig`` while the modern
 Stability models take flat top-level fields, so routing by model ID is
 unavoidable.
 
-Ported from the Go plugin's ``image.go``, with three deviations. Go's legacy
-SDXL builder (``stable-diffusion``, ``text_prompts``/``artifacts``) is dropped
-because every model of that shape is end-of-life on Bedrock. The Stability
-family patterns are narrower than Go's bare ``stable-image``. And the response
-MIME type follows the requested ``output_format`` instead of Go's hardcoded
-``image/png``, which mislabels a jpeg or webp response.
+The legacy SDXL shape (``stable-diffusion``, ``text_prompts``/``artifacts``) is
+not supported, because every model of that shape is end-of-life on Bedrock. The
+response MIME type follows the requested ``output_format`` rather than a
+hardcoded ``image/png``, which would mislabel a jpeg or webp response.
 """
 
 import json
@@ -101,9 +99,9 @@ def is_image_model(model_id: str) -> bool:
 def image_prompt(request: ModelRequest[Any]) -> str:
     """Extracts the image prompt from the most recent user message.
 
-    Ported from the Go plugin's ``imagePrompt``: messages are scanned newest
-    first, only user messages count, and their text parts are concatenated
-    without a separator. A user message with no text is skipped rather than
+    Messages are scanned newest first, only user messages count, and their text
+    parts are concatenated without a separator. A user message with no text is
+    skipped rather than
     ending the scan. Non-text parts are ignored; these models are text-to-image
     only.
 
@@ -126,7 +124,7 @@ def build_amazon_image_body(prompt: str, config: dict[str, Any], *, include_qual
     """Builds the InvokeModel body for Titan Image and Nova Canvas.
 
     Only ``imageGenerationConfig`` is honoured, and only when it is a mapping;
-    every other config key is dropped, matching the Go plugin. Its entries are
+    every other config key is dropped. Its entries are
     merged key-by-key over the defaults. ``image_generation_config`` is accepted
     as an alternative spelling, as BedrockConfig accepts both casings, and the
     camelCase key wins when a caller passes both.
@@ -167,8 +165,8 @@ def build_stability_image_body(prompt: str, config: dict[str, Any]) -> dict[str,
 
     The whole config is merged over the defaults at the top level, so a caller
     can override ``prompt`` and ``output_format`` as well as add flat fields
-    like ``aspect_ratio`` or ``seed``. Matches the Go plugin. Genkit's generic
-    generation knobs are already gone by here; see ``_normalize_image_config``.
+    like ``aspect_ratio`` or ``seed``. Genkit's generic generation knobs are
+    already gone by here; see ``_normalize_image_config``.
 
     Args:
         prompt: The text prompt.
@@ -329,8 +327,8 @@ class BedrockImageModel:
         """Reads the images off a modern Stability response.
 
         ``seeds`` is ignored. ``finish_reasons`` is checked before the images,
-        as in the Go plugin, so a refusal is reported by its reason rather than
-        as a missing image. JSON ``null`` is the success value on that field.
+        so a refusal is reported by its reason rather than as a missing image.
+        JSON ``null`` is the success value on that field.
 
         Raises:
             GenkitError: INTERNAL for a non-success finish reason, or when no

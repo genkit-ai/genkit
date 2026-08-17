@@ -271,8 +271,7 @@ for document in response.documents:
 
 Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare
 enum member, and the request and response types are not generated, so there is
-nothing to register an action against. The Go plugin's `Rerank` is a standalone
-function for the same reason. The types this plugin exports
+nothing to register an action against. The types this plugin exports
 (`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
 `RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
 names.
