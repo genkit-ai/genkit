@@ -222,8 +222,8 @@ Generate structured data that conforms to Go types using [GenerateData] or
 constraints that help the model understand the expected output:
 
 	type Joke struct {
-		Joke     string `json:"joke" jsonschema:"description=The joke text"`
-		Category string `json:"category" jsonschema:"description=The joke category"`
+		Joke     string `json:"joke" jsonschema_description:"The joke text"`
+		Category string `json:"category" jsonschema_description:"The joke category"`
 	}
 
 	joke, resp, err := genkit.GenerateData[*Joke](ctx, g,

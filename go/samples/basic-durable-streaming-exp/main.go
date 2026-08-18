@@ -74,7 +74,7 @@ type (
 	// pre-fills its form from. The default is not applied in transit, and a
 	// field without omitempty is required.
 	CountdownRequest struct {
-		Count int `json:"count" jsonschema:"description=How many seconds to count down from,default=5"`
+		Count int `json:"count" jsonschema:"default=5" jsonschema_description:"How many seconds to count down from"`
 	}
 
 	// CountdownChunk is one tick of the countdown. Chunks are what the manager

@@ -97,7 +97,7 @@ func (a *Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
 }
 
 type readArtifactInput struct {
-	Name string `json:"name" jsonschema:"description=The name of the artifact to read."`
+	Name string `json:"name" jsonschema_description:"The name of the artifact to read."`
 }
 
 type readArtifactOutput struct {
@@ -125,8 +125,8 @@ func newReadArtifactTool() ai.Tool {
 }
 
 type writeArtifactInput struct {
-	Name    string `json:"name" jsonschema:"description=A unique name for the artifact (e.g. a filename like report.md)."`
-	Content string `json:"content" jsonschema:"description=The full text content of the artifact."`
+	Name    string `json:"name" jsonschema_description:"A unique name for the artifact (e.g. a filename like report.md)."`
+	Content string `json:"content" jsonschema_description:"The full text content of the artifact."`
 }
 
 type writeArtifactOutput struct {

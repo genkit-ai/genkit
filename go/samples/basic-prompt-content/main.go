@@ -68,18 +68,18 @@ const maxHistoryMessages = 6
 // SupportRequest is the prompt's input: the app's own shape, not a map. Every
 // content function below receives exactly this type, however it was called.
 type SupportRequest struct {
-	Area           string `json:"area" jsonschema:"description=The product area the question is about,enum=billing,enum=setup,enum=api,default=api"`
-	Tier           string `json:"tier" jsonschema:"description=The customer's support tier,enum=free,enum=pro,enum=enterprise,default=free"`
-	Question       string `json:"question" jsonschema:"description=The customer's question in their own words,default=Why was I charged twice this month?"`
-	Screenshot     string `json:"screenshot,omitempty" jsonschema:"description=Optional data: or https: URL of a screenshot the customer attached"`
-	ScreenshotType string `json:"screenshotType,omitempty" jsonschema:"description=Media type of the screenshot for example image/png"`
+	Area           string `json:"area" jsonschema:"enum=billing,enum=setup,enum=api,default=api" jsonschema_description:"The product area the question is about"`
+	Tier           string `json:"tier" jsonschema:"enum=free,enum=pro,enum=enterprise,default=free" jsonschema_description:"The customer's support tier"`
+	Question       string `json:"question" jsonschema:"default=Why was I charged twice this month?" jsonschema_description:"The customer's question in their own words"`
+	Screenshot     string `json:"screenshot,omitempty" jsonschema_description:"Optional data: or https: URL of a screenshot the customer attached"`
+	ScreenshotType string `json:"screenshotType,omitempty" jsonschema_description:"Media type of the screenshot for example image/png"`
 }
 
 // Turn is one exchange in the conversation the client keeps. A real app would
 // read these from a session or a database.
 type Turn struct {
-	Role string `json:"role" jsonschema:"description=Who said it,enum=user,enum=model"`
-	Text string `json:"text" jsonschema:"description=What was said"`
+	Role string `json:"role" jsonschema:"enum=user,enum=model" jsonschema_description:"Who said it"`
+	Text string `json:"text" jsonschema_description:"What was said"`
 }
 
 // SupportTicket is what the flows receive. The conversation is separate from
@@ -87,14 +87,14 @@ type Turn struct {
 // {{history}} in a template or through [ai.HistoryFromContext] in a function.
 type SupportTicket struct {
 	Request SupportRequest `json:"request"`
-	History []Turn         `json:"history,omitempty" jsonschema:"description=The conversation so far oldest first"`
+	History []Turn         `json:"history,omitempty" jsonschema_description:"The conversation so far oldest first"`
 }
 
 // Triage is the structured verdict the triage prompt returns.
 type Triage struct {
 	Category string `json:"category" jsonschema:"enum=bug,enum=how-to,enum=billing,enum=other"`
 	Urgency  string `json:"urgency" jsonschema:"enum=low,enum=medium,enum=high"`
-	Summary  string `json:"summary" jsonschema:"description=One sentence restating the customer's problem"`
+	Summary  string `json:"summary" jsonschema_description:"One sentence restating the customer's problem"`
 }
 
 // knowledgeBase stands in for a retriever.

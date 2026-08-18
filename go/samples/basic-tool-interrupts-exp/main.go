@@ -97,14 +97,14 @@ var accountBalance = 150.00
 type (
 	// TransferInput is what the model fills in to call the tool.
 	TransferInput struct {
-		ToAccount string  `json:"toAccount" jsonschema:"description=The destination account"`
-		Amount    float64 `json:"amount" jsonschema:"description=The amount in dollars"`
+		ToAccount string  `json:"toAccount" jsonschema_description:"The destination account"`
+		Amount    float64 `json:"amount" jsonschema_description:"The amount in dollars"`
 	}
 
 	// TransferResult is what the tool answers with.
 	TransferResult struct {
 		Status  string  `json:"status" jsonschema:"enum=completed,enum=declined,enum=rejected"`
-		Balance float64 `json:"balance" jsonschema:"description=The balance after the transfer"`
+		Balance float64 `json:"balance" jsonschema_description:"The balance after the transfer"`
 	}
 
 	// Approval is the answer carried back into the tool when it is resumed. It
@@ -123,8 +123,8 @@ type (
 
 	// TransferRequest is what the flow takes.
 	TransferRequest struct {
-		Request string `json:"request" jsonschema:"description=What to do with the money,default=Send $120 to bob"`
-		Approve bool   `json:"approve,omitempty" jsonschema:"description=Whether to approve a transfer that needs it,default=true"`
+		Request string `json:"request" jsonschema:"default=Send $120 to bob" jsonschema_description:"What to do with the money"`
+		Approve bool   `json:"approve,omitempty" jsonschema:"default=true" jsonschema_description:"Whether to approve a transfer that needs it"`
 	}
 
 	// Transfer is what the flow returns.

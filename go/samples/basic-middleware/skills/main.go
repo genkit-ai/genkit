@@ -66,7 +66,7 @@ const skillsDir = "./skills"
 // AskRequest is what the flow takes. A jsonschema tag is comma-delimited, so
 // the default holds no comma: one would silently truncate the value.
 type AskRequest struct {
-	Question string `json:"question" jsonschema:"description=What to ask,default=Explain how a rainbow forms in the voice of a pirate."`
+	Question string `json:"question" jsonschema:"default=Explain how a rainbow forms in the voice of a pirate." jsonschema_description:"What to ask"`
 }
 
 // model is shared by every flow below, so switching models or thinking levels

@@ -59,7 +59,7 @@ import (
 // form from. The default is not applied in transit, and a field without
 // omitempty is required.
 type JokeRequest struct {
-	Topic string `json:"topic" jsonschema:"description=What the joke should be about,default=airplane food"`
+	Topic string `json:"topic" jsonschema:"default=airplane food" jsonschema_description:"What the joke should be about"`
 }
 
 // model pins the model and its config in one place, so switching either is a

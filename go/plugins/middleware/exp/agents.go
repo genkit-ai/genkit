@@ -205,7 +205,7 @@ func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
 
 // delegateInput is the input schema for a delegation tool.
 type delegateInput struct {
-	Task string `json:"task" jsonschema:"description=A clear, self-contained description of the task to delegate."`
+	Task string `json:"task" jsonschema_description:"A clear, self-contained description of the task to delegate."`
 }
 
 // delegationResult is the output of a delegation tool.

@@ -59,36 +59,36 @@ import (
 )
 
 type JokeRequest struct {
-	Topic string `json:"topic" jsonschema:"description=What the joke should be about,default=airplane food"`
+	Topic string `json:"topic" jsonschema:"default=airplane food" jsonschema_description:"What the joke should be about"`
 }
 
 type Joke struct {
-	Joke     string `json:"joke" jsonschema:"description=The joke text"`
-	Category string `json:"category" jsonschema:"description=The joke category"`
+	Joke     string `json:"joke" jsonschema_description:"The joke text"`
+	Category string `json:"category" jsonschema_description:"The joke category"`
 }
 
 // A jsonschema "default" is form fill for the Dev UI, not a value applied on
 // the way through: every field here without omitempty is required.
 type RecipeRequest struct {
-	Dish                string   `json:"dish" jsonschema:"description=The dish to cook,default=pasta"`
-	Cuisine             string   `json:"cuisine" jsonschema:"description=The cuisine to cook it in,default=Italian"`
-	ServingSize         int      `json:"servingSize" jsonschema:"description=How many people it should feed,default=4"`
-	MaxPrepMinutes      int      `json:"maxPrepMinutes" jsonschema:"description=The longest the recipe may take to prepare,default=30"`
-	DietaryRestrictions []string `json:"dietaryRestrictions,omitempty" jsonschema:"description=Any dietary restrictions to respect"`
+	Dish                string   `json:"dish" jsonschema:"default=pasta" jsonschema_description:"The dish to cook"`
+	Cuisine             string   `json:"cuisine" jsonschema:"default=Italian" jsonschema_description:"The cuisine to cook it in"`
+	ServingSize         int      `json:"servingSize" jsonschema:"default=4" jsonschema_description:"How many people it should feed"`
+	MaxPrepMinutes      int      `json:"maxPrepMinutes" jsonschema:"default=30" jsonschema_description:"The longest the recipe may take to prepare"`
+	DietaryRestrictions []string `json:"dietaryRestrictions,omitempty" jsonschema_description:"Any dietary restrictions to respect"`
 }
 
 type Ingredient struct {
-	Name     string `json:"name" jsonschema:"description=The ingredient name"`
-	Amount   string `json:"amount" jsonschema:"description=The ingredient amount (e.g. 1 cup, 2 tablespoons, etc.)"`
-	Optional bool   `json:"optional,omitempty" jsonschema:"description=Whether the ingredient is optional in the recipe"`
+	Name     string `json:"name" jsonschema_description:"The ingredient name"`
+	Amount   string `json:"amount" jsonschema_description:"The ingredient amount (e.g. 1 cup, 2 tablespoons, etc.)"`
+	Optional bool   `json:"optional,omitempty" jsonschema_description:"Whether the ingredient is optional in the recipe"`
 }
 
 type Recipe struct {
-	Title        string       `json:"title" jsonschema:"description=The recipe title (e.g. 'Spicy Chicken Tacos')"`
-	Description  string       `json:"description,omitempty" jsonschema:"description=The recipe description (under 100 characters)"`
-	Ingredients  []Ingredient `json:"ingredients" jsonschema:"description=The recipe ingredients (order by type first and then importance)"`
-	Instructions []string     `json:"instructions" jsonschema:"description=The recipe instructions (step by step)"`
-	PrepTime     string       `json:"prepTime" jsonschema:"description=The recipe preparation time (e.g. 10 minutes, 30 minutes, etc.)"`
+	Title        string       `json:"title" jsonschema_description:"The recipe title (e.g. 'Spicy Chicken Tacos')"`
+	Description  string       `json:"description,omitempty" jsonschema_description:"The recipe description (under 100 characters)"`
+	Ingredients  []Ingredient `json:"ingredients" jsonschema_description:"The recipe ingredients (order by type first and then importance)"`
+	Instructions []string     `json:"instructions" jsonschema_description:"The recipe instructions (step by step)"`
+	PrepTime     string       `json:"prepTime" jsonschema_description:"The recipe preparation time (e.g. 10 minutes, 30 minutes, etc.)"`
 	Difficulty   string       `json:"difficulty" jsonschema:"enum=easy,enum=medium,enum=hard"`
 }
 

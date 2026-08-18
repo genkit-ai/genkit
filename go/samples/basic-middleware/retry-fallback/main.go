@@ -63,7 +63,7 @@ import (
 // TopicRequest is what the flow takes. The field carries a description and a
 // default, which the Dev UI pre-fills its form from.
 type TopicRequest struct {
-	Topic string `json:"topic" jsonschema:"description=What to explain,default=photosynthesis"`
+	Topic string `json:"topic" jsonschema:"default=photosynthesis" jsonschema_description:"What to explain"`
 }
 
 // model is the working model this sample falls back to. The primary model in

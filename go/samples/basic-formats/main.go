@@ -66,16 +66,16 @@ import (
 // StoryRequest is the input every flow here takes, so the format stays the
 // only difference between them.
 type StoryRequest struct {
-	Premise string `json:"premise" jsonschema:"description=The premise of the story,default=a lighthouse keeper who befriends a whale"`
+	Premise string `json:"premise" jsonschema:"default=a lighthouse keeper who befriends a whale" jsonschema_description:"The premise of the story"`
 }
 
 // Character is one invented character. The jsonschema tags describe the fields
 // to the model, which is what makes the generated values sensible.
 type Character struct {
-	Name       string `json:"name" jsonschema:"description=The character's name"`
-	Age        int    `json:"age" jsonschema:"description=The character's age in years"`
-	Hometown   string `json:"hometown" jsonschema:"description=Where the character grew up"`
-	Profession string `json:"profession" jsonschema:"description=What the character does for a living"`
+	Name       string `json:"name" jsonschema_description:"The character's name"`
+	Age        int    `json:"age" jsonschema_description:"The character's age in years"`
+	Hometown   string `json:"hometown" jsonschema_description:"Where the character grew up"`
+	Profession string `json:"profession" jsonschema_description:"What the character does for a living"`
 }
 
 // Rating is the set of labels the rating flow may answer with. Any string

@@ -142,22 +142,22 @@ const pollInterval = 5 * time.Second
 type (
 	// DescribeRequest asks something about the picture.
 	DescribeRequest struct {
-		Question string `json:"question" jsonschema:"description=What to ask about the picture,default=What is in this picture?"`
+		Question string `json:"question" jsonschema:"default=What is in this picture?" jsonschema_description:"What to ask about the picture"`
 	}
 
 	// EditRequest says how to redraw the picture.
 	EditRequest struct {
-		Instruction string `json:"instruction" jsonschema:"description=How the picture should be changed,default=Redraw this as a watercolor painting."`
+		Instruction string `json:"instruction" jsonschema:"default=Redraw this as a watercolor painting." jsonschema_description:"How the picture should be changed"`
 	}
 
 	// DrawRequest describes a picture to make from nothing.
 	DrawRequest struct {
-		Description string `json:"description" jsonschema:"description=What to draw,default=a red panda reading a book in a library"`
+		Description string `json:"description" jsonschema:"default=a red panda reading a book in a library" jsonschema_description:"What to draw"`
 	}
 
 	// AnimateRequest says how the picture should move.
 	AnimateRequest struct {
-		Motion string `json:"motion" jsonschema:"description=How the picture should move,default=a slow drone push toward the ridge as clouds drift past"`
+		Motion string `json:"motion" jsonschema:"default=a slow drone push toward the ridge as clouds drift past" jsonschema_description:"How the picture should move"`
 	}
 )
 

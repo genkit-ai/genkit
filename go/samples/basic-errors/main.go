@@ -86,12 +86,12 @@ type (
 	// empty string satisfies that, which is how the INVALID_ARGUMENT branch
 	// below is reached.
 	CookbookRequest struct {
-		Dish string `json:"dish" jsonschema:"description=A dish to look up in the cookbook,default=pancakes"`
+		Dish string `json:"dish" jsonschema:"default=pancakes" jsonschema_description:"A dish to look up in the cookbook"`
 	}
 
 	// ImproviseRequest is what improviseFlow takes.
 	ImproviseRequest struct {
-		Dish string `json:"dish" jsonschema:"description=The dish to cook,default=lasagna"`
+		Dish string `json:"dish" jsonschema:"default=lasagna" jsonschema_description:"The dish to cook"`
 	}
 )
 

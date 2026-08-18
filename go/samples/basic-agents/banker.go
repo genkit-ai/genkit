@@ -45,8 +45,8 @@ import (
 // TransferInput and TransferOutput are the tool's contract: the JSON
 // schemas inferred from these field names are what the model sees.
 type TransferInput struct {
-	ToAccount string  `json:"toAccount" jsonschema:"description=destination account ID"`
-	Amount    float64 `json:"amount" jsonschema:"description=amount in dollars (e.g. 50.00 for $50)"`
+	ToAccount string  `json:"toAccount" jsonschema_description:"destination account ID"`
+	Amount    float64 `json:"amount" jsonschema_description:"amount in dollars (e.g. 50.00 for $50)"`
 }
 
 type TransferOutput struct {

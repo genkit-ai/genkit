@@ -104,7 +104,7 @@ func (s *Skills) New(ctx context.Context) (*ai.Hooks, error) {
 		useSkillToolName,
 		"Use a skill by its name.",
 		func(_ *ai.ToolContext, in struct {
-			SkillName string `json:"skillName" jsonschema:"description=The name of the skill to use."`
+			SkillName string `json:"skillName" jsonschema_description:"The name of the skill to use."`
 		}) (string, error) {
 			si, ok := info[in.SkillName]
 			if !ok {

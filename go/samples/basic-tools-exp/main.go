@@ -81,8 +81,8 @@ type (
 	// from this type, so a field's jsonschema tag is how the model learns
 	// what may go in it.
 	Deploy struct {
-		Service     string `json:"service" jsonschema:"description=The service to deploy"`
-		Environment string `json:"environment" jsonschema:"description=Where to deploy it,enum=staging,enum=production"`
+		Service     string `json:"service" jsonschema_description:"The service to deploy"`
+		Environment string `json:"environment" jsonschema:"enum=staging,enum=production" jsonschema_description:"Where to deploy it"`
 	}
 
 	// Rollout is the tool's answer, and the whole of its return type: the
@@ -91,7 +91,7 @@ type (
 		Service  string  `json:"service"`
 		Revision string  `json:"revision"`
 		Healthy  bool    `json:"healthy"`
-		P95Ms    float64 `json:"p95Ms" jsonschema:"description=The p95 latency after the rollout, in milliseconds"`
+		P95Ms    float64 `json:"p95Ms" jsonschema_description:"The p95 latency after the rollout, in milliseconds"`
 	}
 
 	// Progress is what tool.SendPartial sends. It is the tool's own shape, not
@@ -103,7 +103,7 @@ type (
 
 	// DeployRequest is what the flow takes.
 	DeployRequest struct {
-		Request string `json:"request" jsonschema:"description=What to deploy and where,default=Ship checkout-api to production."`
+		Request string `json:"request" jsonschema:"default=Ship checkout-api to production." jsonschema_description:"What to deploy and where"`
 	}
 )
 

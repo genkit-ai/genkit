@@ -66,12 +66,12 @@ const workspaceDir = "./workspace"
 type (
 	// ExploreRequest asks a question about the workspace.
 	ExploreRequest struct {
-		Question string `json:"question" jsonschema:"description=A question about the project in workspace/,default=Summarise what this project does and what is still pending."`
+		Question string `json:"question" jsonschema:"default=Summarise what this project does and what is still pending." jsonschema_description:"A question about the project in workspace/"`
 	}
 
 	// EditRequest asks for a change to a file in the workspace.
 	EditRequest struct {
-		Instruction string `json:"instruction" jsonschema:"description=A change to make to a file in workspace/,default=Mark the in-memory response cache TODO as done."`
+		Instruction string `json:"instruction" jsonschema:"default=Mark the in-memory response cache TODO as done." jsonschema_description:"A change to make to a file in workspace/"`
 	}
 )
 
