@@ -325,12 +325,12 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
       return manager.processManager.status();
     }),
 
-    restartAppProcess: t.procedure.query(async () => {
+    restartAppProcess: t.procedure.mutation(async () => {
       await manager.processManager?.restart();
       return true;
     }),
 
-    killAppProcess: t.procedure.query(async () => {
+    killAppProcess: t.procedure.mutation(async () => {
       await manager.processManager?.kill();
       return true;
     }),
