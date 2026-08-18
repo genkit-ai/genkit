@@ -35,7 +35,8 @@
     "@genkit-ai/express": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "cors": "^2.8.5",
-    "express": "^4.21.1"
+    "express": "^4.21.1",
+    "yaml": "^2.7.0"
   },
   "peerDependencies": {
     "genkit": "workspace:^",

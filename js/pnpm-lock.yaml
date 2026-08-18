@@ -292,6 +292,9 @@ importers:
       genkit:
         specifier: workspace:^
         version: link:../../genkit
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.2
     devDependencies:
       '@types/cors':
         specifier: ^2.8.17
@@ -21351,7 +21354,7 @@ snapshots:
   dotprompt@1.1.2:
     dependencies:
       handlebars: 4.7.8
-      yaml: 2.8.0
+      yaml: 2.8.2
 
   dunder-proto@1.0.1:
     dependencies:
@@ -22390,7 +22393,7 @@ snapshots:
       winston: 3.19.0
       winston-transport: 4.9.0
       ws: 7.5.10
-      yaml: 2.8.0
+      yaml: 2.8.2
     transitivePeerDependencies:
       - '@types/node'
       - bare-abort-controller
@@ -24075,7 +24078,7 @@ snapshots:
       openapi-types: 12.1.3
       p-retry: 4.6.2
       uuid: 9.0.1
-      yaml: 2.8.0
+      yaml: 2.8.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
@@ -25501,7 +25504,7 @@ snapshots:
 
   openapi3-ts@3.2.0:
     dependencies:
-      yaml: 2.8.0
+      yaml: 2.8.2
 
   optionator@0.9.4:
     dependencies:

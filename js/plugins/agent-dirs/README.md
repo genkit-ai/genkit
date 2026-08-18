@@ -148,9 +148,9 @@ work with no extra wiring:
 | `delegates` | string[] | other agent directory names; validated |
 | `requireApproval` | string[] | model-visible tool names to gate; validated, fail-closed |
 
-The markdown body is the agent's **system prompt**. It still flows through
-Genkit's prompt templating, so multi-message directives (`{{role}}`,
-`{{history}}`) are rejected at compile time. An empty
+The markdown body is the agent's **system prompt**, passed to the model
+verbatim - no templating is applied, so `{{...}}` stays literal text (and
+warns, since it usually means the author expected templating). An empty
 body means "no system prompt" (e.g. an `agent.ts` override supplies one).
 Unknown frontmatter keys warn. `skills/<name>/SKILL.md` takes optional
 `name`/`description` frontmatter (the *directory* name is authoritative);

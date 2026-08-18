@@ -141,8 +141,8 @@ stamp on snapshots.
 
 ## 8. Frontmatter parsing: three routes, none blessed
 
-This plugin parses `instructions.md` (YAML frontmatter + markdown body)
-with dotprompt's splitter. An external plugin wanting to parse
+This plugin originally parsed `instructions.md` (YAML frontmatter +
+markdown body) with dotprompt's splitter. An external plugin wanting to parse
 frontmatter-bearing files that way can (a) use
 `registry.dotprompt.parse()` - a public readonly field
 (`js/core/src/registry.ts:164`) whose value over a fresh instance is the
@@ -151,11 +151,15 @@ from `@genkit-ai/ai` (`js/ai/src/index.ts:106`) but register-only - it
 doesn't return parsed frontmatter; or (c) depend on the standalone
 `dotprompt` npm package directly (where `ParsedPrompt.raw` is documented).
 Nothing says which is the supported path, and the `genkit` package itself
-re-exports none of it. This plugin uses (a) and reads custom frontmatter
-keys (`delegates`, `requireApproval`) from `parsed.raw`.
+re-exports none of it. This plugin used (a) and read custom frontmatter
+keys (`delegates`, `requireApproval`) from `parsed.raw` - and eventually
+gave up and wrote its own ~40-line splitter over the `yaml` package
+(`src/frontmatter.ts`), which also removed the templating semantics
+dotprompt imposed on the body.
 
 **Fix:** document the blessed path (and an extension-keys convention for
-frontmatter).
+frontmatter). That the path of least resistance was "vendor your own
+splitter" is itself the friction data point.
 
 ## 9. Sub-agent delegation is one-shot; interrupted sub-agents can't resume
 

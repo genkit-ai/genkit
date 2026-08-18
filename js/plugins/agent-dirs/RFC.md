@@ -92,13 +92,13 @@ and addressed in priority order under "Possible upstreaming."
    names, so adding a capability cannot silently gate its own tools.
 3. **Native surfaces only.** Registration goes through the ordinary
    registry, so Dev UI, `remoteAgent`, evals and tracing work unchanged.
-   Instructions are markdown with YAML frontmatter, parsed with dotprompt's
-   splitter and compiled to `definePrompt` fields.
-4. **Authoring errors fail loudly by default.** Broken frontmatter YAML
-   (including dotprompt's silent fallback, where the unparsed file becomes
-   the template), unknown `requireApproval` or `delegates` names, broken
-   tool files and agent-name collisions all throw at startup with named
-   errors, and each registration logs a summary of what compiled. The
+   Instructions are markdown with YAML frontmatter, split by the
+   convention's own parser (no dotprompt involvement) and compiled to
+   `definePrompt` fields; the body reaches the model verbatim.
+4. **Authoring errors fail loudly by default.** Broken frontmatter YAML,
+   mistyped frontmatter values, unknown `requireApproval` or `delegates`
+   names, broken tool files and agent-name collisions all throw at startup
+   with named errors, and each registration logs a summary of what compiled. The
    audience this convention targets is exactly the one silent degradation
    hurts most, and approval gating in particular has to be fail-closed: a
    misspelled tool name that silently disables a gate is worse than no gate.
@@ -146,14 +146,16 @@ name both abort startup with specific errors.
 
 ## Costs and open risks
 
-- **Template semantics.** The `instructions.md` body becomes the system
-  prompt (single message) but still flows through Genkit's prompt
-  templating, so `{{...}}` is live in what looks like plain markdown. The
-  compiler rejects `{{role}}` / `{{history}}` with a clear error;
-  whether templating should be disabled entirely for `.md` instructions is
-  open. (An earlier revision reused the `.prompt` extension; we moved to
-  `instructions.md` so the file renders in review and matches the SKILL.md /
-  OKF authoring shape.)
+- **Template semantics: resolved by removal.** The `instructions.md` body
+  is the system prompt verbatim - the compiler passes it as a `Part`, which
+  bypasses the dotprompt templating that `definePrompt` applies to string
+  systems, so `{{...}}` is inert (and warns, as it usually signals an
+  author expecting templating). Parameterized prompts stay a code feature
+  (`agent.ts` override / plain `defineAgent`). (An earlier revision reused
+  the `.prompt` extension and dotprompt's parser; we moved to
+  `instructions.md` with our own frontmatter splitter so the file renders
+  in review, matches the SKILL.md / OKF authoring shape, and cannot change
+  meaning under it via live templates.)
 - **Beta-API surface.** Everything sits on `GenkitBeta`. `AgentConfig` is
   not exported from `genkit/beta`, so the plugin derives it via
   `Parameters<GenkitBeta['defineAgent']>[0]`, which collapses the generics
@@ -168,9 +170,9 @@ name both abort startup with specific errors.
 - Pure code-first (status quo): kept as the escape hatch at every level
   rather than the default DX.
 - `ext`-namespaced frontmatter keys (`agentDirs.delegates:`): more
-  collision-proof per the dotprompt spec. We chose bare keys for authoring
-  ergonomics, with unknown-key warnings as the guardrail; worth revisiting
-  if dotprompt reserves new keys.
+  collision-proof per the dotprompt spec. Moot since the convention now
+  owns the frontmatter format outright; bare keys with unknown-key
+  warnings remain the guardrail.
 - Nested sub-agent directories (`agents/x/subagents/y`): rejected. Flat
   directories plus explicit `delegates:` keeps every agent addressable,
   reusable and individually servable.

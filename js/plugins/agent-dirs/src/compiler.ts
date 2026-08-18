@@ -39,6 +39,10 @@ import { logger } from 'genkit/logging';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import type { CompiledAgentConfig } from './authoring.js';
+import {
+  parseInstructionsSource,
+  type ParsedInstructions,
+} from './frontmatter.js';
 import { loadOverride, loadTools, type RegisteredTool } from './loaders.js';
 import { okfKnowledge } from './okf.js';
 
@@ -78,9 +82,6 @@ export interface AgentDirsOptions {
    */
   strict?: boolean;
 }
-
-/** A parsed `instructions.md` file (YAML frontmatter + markdown body). */
-type ParsedPrompt = ReturnType<GenkitBeta['registry']['dotprompt']['parse']>;
 
 /** Raw frontmatter of an `instructions.md`, for convention-specific keys. */
 type Frontmatter = Record<string, unknown>;
@@ -207,22 +208,22 @@ async function compileAgentDir(
     return false;
   };
 
-  const parsed = parseInstructions(ai, agentPath, agentName, fail);
+  const parsed = parseInstructions(agentPath, agentName, fail);
   if (!parsed) return;
 
   const frontmatter = validateFrontmatter(
-    (parsed.raw ?? {}) as Frontmatter,
+    parsed.frontmatter,
     ctx.siblingAgents,
     fail
   );
   if (!frontmatter) return;
 
-  if (/\{\{\s*(role|history)\b/.test(parsed.template)) {
-    fail(
-      `instructions.md is used as the agent's system prompt; ` +
-        `multi-message templates ({{role}}/{{history}}) are not supported here`
+  if (/\{\{/.test(parsed.body)) {
+    logger.warn(
+      `[agent-dirs] agent '${agentName}': instructions.md body contains ` +
+        `'{{' - the body is the agent's system prompt verbatim; no ` +
+        `templating is applied, so this will reach the model as literal text`
     );
-    return;
   }
 
   const tools = await loadTools(ai, path.join(agentPath, 'tools'), agentName, {
@@ -238,11 +239,11 @@ async function compileAgentDir(
   // instance default (left to apply at generate time by omitting the field)
   // > DEFAULT_MODEL.
   const model =
-    parsed.model ??
+    (frontmatter.model as string | undefined) ??
     ctx.options.defaultModel ??
     (ai.options.model ? undefined : DEFAULT_MODEL);
 
-  let config = assembleConfig(parsed, {
+  let config = assembleConfig(frontmatter, parsed.body, {
     agentName,
     tools,
     use: contributed.map((c) => c.middleware),
@@ -293,46 +294,33 @@ async function compileAgentDir(
 }
 
 /**
- * Reads and parses `instructions.md` (YAML frontmatter + markdown body,
- * parsed with dotprompt's splitter). Detects dotprompt's silent YAML-error
- * fallback (it logs to console and returns the whole file - fence included -
- * as the template with empty metadata), which would otherwise become a
- * garbage system prompt.
+ * Reads and parses `instructions.md` (YAML frontmatter + markdown body) with
+ * the convention's own splitter - see `frontmatter.ts`. Parse failures are
+ * hard authoring errors.
  */
 function parseInstructions(
-  ai: GenkitBeta,
   agentPath: string,
   agentName: string,
   fail: (message: string) => false
-): ParsedPrompt | undefined {
+): ParsedInstructions | undefined {
   const promptFile = path.join(agentPath, 'instructions.md');
   if (!existsSync(promptFile)) {
     fail(`no instructions.md in ${agentPath}`);
     return undefined;
   }
   const source = readFileSync(promptFile, 'utf8');
-  let parsed: ParsedPrompt;
   try {
-    parsed = ai.registry.dotprompt.parse(source);
+    return parseInstructionsSource(source);
   } catch (e) {
-    fail(`failed to parse ${promptFile}: ${e}`);
+    fail(`failed to parse ${promptFile}: ${(e as Error).message}`);
     return undefined;
   }
-  if (parsed.template.trimStart().startsWith('---')) {
-    fail(
-      `frontmatter in ${promptFile} failed to parse (invalid YAML?) - ` +
-        `dotprompt fell back to treating the whole file as the template`
-    );
-    return undefined;
-  }
-  return parsed;
 }
 
 /**
- * Validates the convention's custom frontmatter keys (types and referenced
- * names) and warns on unknown bare keys, which dotprompt never diagnoses.
- * Returns the frontmatter with `delegates`/`requireApproval` normalized to
- * string arrays, or undefined if validation failed.
+ * Validates every frontmatter key the convention accepts (types and
+ * referenced names) and warns on unknown keys. Returns the validated
+ * frontmatter, or undefined if validation failed.
  */
 function validateFrontmatter(
   frontmatter: Frontmatter,
@@ -347,7 +335,23 @@ function validateFrontmatter(
       );
     }
   }
-  for (const key of ['delegates', 'requireApproval'] as const) {
+  for (const key of ['description', 'model'] as const) {
+    const value = frontmatter[key];
+    if (value !== undefined && typeof value !== 'string') {
+      fail(`frontmatter '${key}' must be a string`);
+      return undefined;
+    }
+  }
+  if (
+    frontmatter.config !== undefined &&
+    (typeof frontmatter.config !== 'object' ||
+      frontmatter.config === null ||
+      Array.isArray(frontmatter.config))
+  ) {
+    fail(`frontmatter 'config' must be a mapping (key: value pairs)`);
+    return undefined;
+  }
+  for (const key of ['tools', 'delegates', 'requireApproval'] as const) {
     const value = frontmatter[key];
     if (value === undefined) continue;
     if (
@@ -375,7 +379,8 @@ function validateFrontmatter(
 }
 
 function assembleConfig(
-  parsed: ParsedPrompt,
+  frontmatter: Frontmatter,
+  body: string,
   compiled: {
     agentName: string;
     tools: RegisteredTool[];
@@ -384,20 +389,24 @@ function assembleConfig(
     model: string | undefined;
   }
 ): CompiledAgentConfig {
-  const modelConfig =
-    parsed.config && typeof parsed.config === 'object'
-      ? (parsed.config as Record<string, unknown>)
-      : undefined;
-  const system = parsed.template.trim();
+  const description = frontmatter.description as string | undefined;
+  const modelConfig = frontmatter.config as
+    | Record<string, unknown>
+    | undefined;
   return {
     name: compiled.agentName,
-    ...(parsed.description && { description: parsed.description }),
+    ...(description && { description }),
     ...(compiled.model && { model: compiled.model }),
     ...(modelConfig && { config: modelConfig }),
-    // An empty template (frontmatter-only file) means "no system prompt",
-    // typically because an agent.ts override supplies one.
-    ...(system && { system }),
-    tools: [...compiled.tools, ...(parsed.tools ?? [])],
+    // Passed as a Part, not a string: definePrompt runs string systems
+    // through dotprompt templating, and the body must reach the model
+    // verbatim. An empty body (frontmatter-only file) means "no system
+    // prompt", typically because an agent.ts override supplies one.
+    ...(body && { system: { text: body } }),
+    tools: [
+      ...compiled.tools,
+      ...((frontmatter.tools as string[] | undefined) ?? []),
+    ],
     ...(compiled.use.length > 0 ? { use: compiled.use } : {}),
     store: compiled.store,
   };
