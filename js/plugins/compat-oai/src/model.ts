@@ -83,6 +83,11 @@ export const ChatCompletionCommonConfigSchema =
     logProbs: z.boolean().optional(),
     presencePenalty: z.number().min(-2).max(2).optional(),
     topLogProbs: z.number().int().min(0).max(20).optional(),
+    visualDetailLevel: VisualDetailLevelSchema.describe(
+      'Controls the `detail` level used for image content parts ' +
+        '(see OpenAI vision docs). Consumed when building messages and ' +
+        'never sent as a top-level request parameter.'
+    ),
   });
 
 export function toOpenAIRole(role: Role): ChatCompletionRole {
@@ -561,10 +566,6 @@ export function toOpenAIRequestBody(
   request: GenerateRequest,
   requestBuilder?: ModelRequestBuilder
 ) {
-  const messages = toOpenAIMessages(
-    request.messages,
-    request.config?.visualDetailLevel
-  );
   const {
     temperature,
     maxOutputTokens, // unused
@@ -578,8 +579,10 @@ export function toOpenAIRequestBody(
     version: modelVersion,
     tools: toolsFromConfig,
     apiKey,
+    visualDetailLevel, // consumed below; not a top-level OpenAI request param
     ...restOfConfig
   } = request.config ?? {};
+  const messages = toOpenAIMessages(request.messages, visualDetailLevel);
 
   const tools: ChatCompletionTool[] = request.tools?.map(toOpenAITool) ?? [];
   if (toolsFromConfig) {
