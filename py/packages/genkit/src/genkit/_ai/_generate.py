@@ -62,6 +62,7 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
+    GenerationResponseError,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -553,6 +554,11 @@ async def generate_with_request(
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
+    if not raw_request.messages:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='at least one message is required in generate request',
+        )
     registry = registry if registry.is_child else registry.new_child()
 
     if raw_request.tools:
@@ -1214,7 +1220,10 @@ async def resolve_parameters(
     if request.output and request.output.format:
         looked_up_format = registry.lookup_value('format', request.output.format)
         if looked_up_format is None:
-            raise ValueError(f'Unable to resolve format {request.output.format}')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Unable to resolve format {request.output.format}',
+            )
         format_def = cast(FormatDef, looked_up_format)
 
     return (model_action, tools, format_def)
@@ -1709,23 +1718,3 @@ def _find_corresponding_tool_response(
         if p.tool_response.name == request.tool_request.name and p.tool_response.ref == request.tool_request.ref:
             return p
     return None
-
-
-# TODO(#4336): extend GenkitError
-class GenerationResponseError(Exception):
-    # TODO(#4337): use status enum
-    """Error raised when a generation request fails."""
-
-    def __init__(
-        self,
-        response: ModelResponse,
-        message: str,
-        status: str,
-        details: dict[str, Any],
-    ) -> None:
-        """Initialize with the failed response and error details."""
-        super().__init__(message)
-        self.response: ModelResponse = response
-        self.message: str = message
-        self.status: str = status
-        self.details: dict[str, Any] = details

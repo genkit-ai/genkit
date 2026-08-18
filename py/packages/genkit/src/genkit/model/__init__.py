@@ -24,6 +24,8 @@ from genkit._ai._model import (
 from genkit._core._background import BackgroundAction
 from genkit._core._model import (
     GenerateActionOptions,
+    GenerationBlockedError,
+    GenerationResponseError,
     Message,
     ModelRef,
     ModelRequest,
@@ -59,6 +61,8 @@ __all__ = [
     'GenerateActionOptions',
     # Error and operation
     'Error',
+    'GenerationBlockedError',
+    'GenerationResponseError',
     'Operation',
     # Tool types
     'ToolRequest',

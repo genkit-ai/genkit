@@ -115,6 +115,24 @@ async def test_simple_text_generate_request(
 
 
 @pytest.mark.asyncio
+async def test_generate_requires_at_least_one_message(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """ai.generate() rejects an empty conversation before calling the model."""
+    ai, _pm = setup_test
+
+    with pytest.raises(GenkitError, match='at least one message is required') as exc_info:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[],
+            ),
+        )
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
 async def test_simulates_doc_grounding(
     setup_test: tuple[Genkit, ProgrammableModel],
 ) -> None:
@@ -2425,3 +2443,81 @@ async def test_wrap_generate_middleware_injects_dynamic_tool() -> None:
     )
     assert response.text == '[ECHO] user: "hi" tools=dynamic_mw_tool'
     assert captured_tool_names == [['dynamic_mw_tool']]
+
+
+@pytest.mark.asyncio
+async def test_generate_throws_on_blocked_finish() -> None:
+    """Blocked is a refusal: generate() raises; unknown still returns."""
+    from genkit import GenerationBlockedError
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.UNKNOWN,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='ok'))]),
+        ),
+    ]
+
+    with pytest.raises(GenerationBlockedError, match='Generation blocked: safety'):
+        await ai.generate(prompt='hi')
+
+    response = await ai.generate(prompt='hi')
+    assert response.text == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_generate_throws_when_output_does_not_match_schema() -> None:
+    """A caller who asked for Recipe JSON should not get a free-form reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='not json'))]),
+        )
+    ]
+
+    with pytest.raises(GenkitError, match='not valid JSON|Schema validation') as raised:
+        await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_typed_output_when_schema_matches() -> None:
+    """Matching JSON is parsed and handed back as the schema type."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.output.title == 'Soup'
+
+
+@pytest.mark.asyncio
+async def test_generate_unknown_format_is_invalid_argument() -> None:
+    """An unresolved output format fails before the model is called."""
+    ai = Genkit(model='programmableModel')
+    define_programmable_model(ai)
+
+    with pytest.raises(GenkitError, match='Unable to resolve format') as raised:
+        await ai.generate(prompt='hi', output_format='no-such-format')
+    assert raised.value.status == 'INVALID_ARGUMENT'

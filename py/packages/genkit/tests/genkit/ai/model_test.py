@@ -6,8 +6,20 @@
 """Tests for the action module."""
 
 import pytest
+from pydantic import BaseModel
 
-from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
+from genkit import (
+    FinishReason,
+    GenerationBlockedError,
+    GenerationResponseError,
+    GenkitError,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    ModelUsage,
+    Role,
+)
 from genkit._ai._model import text_from_content
 from genkit._core._typing import (
     ActionMetadata,
@@ -15,6 +27,7 @@ from genkit._core._typing import (
     Media,
     MediaPart,
     Part,
+    ReasoningPart,
     TextPart,
     ToolRequest,
     ToolRequestPart,
@@ -376,3 +389,91 @@ def test_text_from_content_with_none_text() -> None:
         Part(root=TextPart(text=' world')),
     ]
     assert text_from_content(content) == 'hello world'
+
+
+def test_text_from_content_skips_thoughts() -> None:
+    """Thoughts are scratch work — they do not show up on ``.text``."""
+    content = [
+        Part(root=ReasoningPart(reasoning='let me think', text='secret thought')),
+        Part(root=TextPart(text='hello')),
+    ]
+    assert text_from_content(content) == 'hello'
+
+
+def test_assert_valid_throws_on_blocked() -> None:
+    """Blocked finish is a refusal, not a usable reply."""
+    response = ModelResponse(
+        finish_reason=FinishReason.BLOCKED,
+        finish_message='Content was blocked',
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+    )
+
+    with pytest.raises(GenerationBlockedError, match='Generation blocked: Content was blocked') as raised:
+        response.assert_valid()
+    assert isinstance(raised.value.details['response'], dict)
+    assert raised.value.response.finish_reason == FinishReason.BLOCKED
+
+
+def test_assert_valid_throws_when_no_message() -> None:
+    """A length stop with no message has nothing to return."""
+    response = ModelResponse(finish_reason=FinishReason.LENGTH, finish_message='Reached max tokens')
+
+    with pytest.raises(GenerationResponseError, match='Model did not generate a message'):
+        response.assert_valid()
+
+
+def test_assert_valid_schema_throws_when_output_does_not_conform() -> None:
+    """Structured output that is the wrong shape fails generate()."""
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"name": "John", "age": "30"}'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(
+        messages=[],
+        output_schema=Person.model_json_schema(),
+    )
+    response._schema_type = Person
+
+    with pytest.raises(GenkitError, match='must be integer|age') as raised:
+        response.assert_valid_schema()
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+def test_assert_valid_schema_passes_when_output_conforms() -> None:
+    """Structured output that matches the schema is a usable reply."""
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"name": "John", "age": 30}'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(
+        messages=[],
+        output_schema=Person.model_json_schema(),
+    )
+    response._schema_type = Person
+
+    response.assert_valid_schema()
+    assert response.output.name == 'John'
+    assert response.output.age == 30
+
+
+def test_assert_valid_schema_names_non_json_output() -> None:
+    """A leftover echo string is a schema miss, not a json5 column error."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='[ECHO] hi'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(messages=[], output_schema={'type': 'object'})
+
+    with pytest.raises(GenkitError, match='not valid JSON for the requested schema') as raised:
+        response.assert_valid_schema()
+    assert raised.value.status == 'INVALID_ARGUMENT'
