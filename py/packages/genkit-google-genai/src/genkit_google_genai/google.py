@@ -61,6 +61,7 @@ import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._typing import Operation
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, model_action_metadata
@@ -77,6 +78,7 @@ from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
+from genkit_google_genai.models._routing import is_unroutable_model_id
 from genkit_google_genai.models.embedder import (
     VERTEX_KNOWN_EMBEDDERS,
     Embedder,
@@ -94,6 +96,8 @@ from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfigSchema,
     ImagenModel,
+    is_imagen_model_name,
+    is_unsupported_image_model_name,
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.veo import (
@@ -141,15 +145,18 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     - Google AI populates each model's ``supported_actions`` field, so models
       are categorized by action:
         - 'embedContent' action → embedders
-        - 'predict' + 'imagen' in name → imagen
-        - 'generateVideos' or 'veo' in name → veo
+        - 'predict' + Imagen name (``imagen-``) → imagen
+        - 'generateVideos' or Veo name (``veo-``) → veo
         - 'generateContent' + 'gemini'/'gemma' in name → gemini
     - Vertex AI returns ``supported_actions = None`` for every publisher model,
       so categorizing by action would skip them all. The Vertex path instead
-      categorizes by model name (mirroring the JS plugin's ``listActions``):
-        - 'imagen' in name → imagen
-        - 'veo' in name → veo
+      categorizes by model name:
+        - Imagen name (``imagen-``) → imagen
+        - Veo name (``veo-``) → veo
         - 'gemini'/'gemma' in name (and not an embedding) → gemini
+      Ids with no working generate path here (``imagegeneration@*``,
+      ``virtual-try-on-*``) are not categorized at all, so they are never
+      advertised or registered.
       Embedders are intentionally NOT discovered here. The Vertex catalog
       over-lists embedders that are published but not callable, so they
       are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
@@ -192,9 +199,11 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
             lower_name = name.lower()
             if 'embedding' in lower_name:
                 continue
-            elif 'imagen' in lower_name:
+            elif is_unsupported_image_model_name(name):
+                continue
+            elif is_imagen_model_name(name):
                 models.imagen.append(name)
-            elif 'veo' in lower_name:
+            elif is_veo_model(name):
                 models.veo.append(name)
             elif 'gemini' in lower_name or 'gemma' in lower_name:
                 models.gemini.append(name)
@@ -207,12 +216,12 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
         if 'embedContent' in m.supported_actions:
             models.embedders.append(name)
 
-        # Imagen (Vertex mostly)
-        if 'predict' in m.supported_actions and 'imagen' in name.lower():
+        # Imagen (imagen- prefix, not a bare "image" substring)
+        if 'predict' in m.supported_actions and is_imagen_model_name(name):
             models.imagen.append(name)
 
         # Veo
-        if 'generateVideos' in m.supported_actions or 'veo' in name.lower():
+        if 'generateVideos' in m.supported_actions or is_veo_model(name):
             models.veo.append(name)
 
         # Gemini / Gemma
@@ -304,6 +313,84 @@ def _create_embedder_action(
     action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
 
     return action
+
+
+def _create_veo_background_action(
+    name: str,
+    client_getter: Callable[[], genai.Client],
+    plugin_name: str,
+) -> BackgroundAction:
+    """Create the start/check action pair for a Veo video generation model.
+
+    Veo runs as a background operation: callers start a generation and poll
+    it, they never block a generate call on a multi-minute video render. Both
+    plugins therefore expose Veo only as BACKGROUND_MODEL + CHECK_OPERATION,
+    never as a blocking MODEL.
+
+    Args:
+        name: The namespaced name of the model.
+        client_getter: Function returning the loop-local Google GenAI client.
+        plugin_name: The name of the plugin (googleai or vertexai).
+
+    Returns:
+        BackgroundAction pairing the start and check actions.
+    """
+    prefix = f'{plugin_name}/'
+    clean_name = name.removeprefix(prefix)
+    full_name = f'{prefix}{clean_name}'
+
+    async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
+        veo = VeoModel(clean_name, client_getter())
+        return await veo.start(request, ctx)
+
+    async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
+        veo = VeoModel(clean_name, client_getter())
+        return await veo.check(op)
+
+    info = veo_model_info(clean_name).model_dump(by_alias=True)
+
+    start_action = Action(
+        kind=ActionKind.BACKGROUND_MODEL,
+        name=full_name,
+        fn=_start,
+        metadata={
+            'model': {**info, 'customOptions': to_json_schema(VeoConfigSchema)},
+            'type': 'background-model',
+        },
+    )
+
+    check_action = Action(
+        kind=ActionKind.CHECK_OPERATION,
+        name=f'{full_name}/check',
+        fn=_check,
+        metadata={'type': 'check-operation'},
+    )
+
+    return BackgroundAction(
+        start_action=start_action,
+        check_action=check_action,
+        cancel_action=None,
+    )
+
+
+def _veo_background_action_metadata(name: str) -> ActionMetadata:
+    """Build list_actions metadata for a Veo model as a background model.
+
+    The kind advertised here has to match what resolve() will actually hand
+    back, otherwise the Dev UI and registry offer a generate model that does
+    not exist.
+    """
+    local = name.split('/')[-1]
+    return ActionMetadata(
+        action_type=ActionKind.BACKGROUND_MODEL,
+        name=name,
+        input_json_schema=to_json_schema(ModelRequest),
+        output_json_schema=to_json_schema(Operation),
+        metadata={
+            'model': {**veo_model_info(local).model_dump(by_alias=True), 'customOptions': to_json_schema(VeoConfigSchema)},
+            'type': 'background-model',
+        },
+    )
 
 
 class GoogleAI(Plugin):
@@ -415,11 +502,13 @@ class GoogleAI(Plugin):
         actions: list[Action] = []
         # Gemini Models
         for name in genai_models.gemini:
-            actions.append(self._resolve_model(googleai_name(name)))
+            if action := self._resolve_model(googleai_name(name)):
+                actions.append(action)
 
         # Imagen Models
         for name in genai_models.imagen:
-            actions.append(self._resolve_model(googleai_name(name)))
+            if action := self._resolve_model(googleai_name(name)):
+                actions.append(action)
 
         # Veo Models (background models)
         for name in genai_models.veo:
@@ -434,20 +523,15 @@ class GoogleAI(Plugin):
         return actions
 
     def _list_known_models(self) -> list[Action]:
-        """List known models as Action objects.
-
-        Deprecated: Used only for internal testing if needed, but 'init' should be source of truth.
-        Keeping for compatibility but redirecting to dynamic list logic if accessed directly?
-        The interface defines init(), this helper was internal.
-        """
-        # Re-use init logic synchronously? init is async.
-        # Let's implementation just mimic init logic but sync call to client.models.list is fine (it is iterator)
+        """List known Gemini and Imagen models as Action objects."""
         genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
         actions = []
         for name in genai_models.gemini:
-            actions.append(self._resolve_model(googleai_name(name)))
+            if action := self._resolve_model(googleai_name(name)):
+                actions.append(action)
         for name in genai_models.imagen:
-            actions.append(self._resolve_model(googleai_name(name)))
+            if action := self._resolve_model(googleai_name(name)):
+                actions.append(action)
         return actions
 
     def _list_known_veo_models(self) -> list[Action]:
@@ -516,59 +600,27 @@ class GoogleAI(Plugin):
         Returns:
             BackgroundAction for the Veo model.
         """
-        clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
+        return _create_veo_background_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME)
 
-        # Create actions manually since we don't have registry access here
-
-        async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
-            veo = VeoModel(clean_name, self._runtime_client())
-            return await veo.start(request, ctx)
-
-        async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
-            veo = VeoModel(clean_name, self._runtime_client())
-            return await veo.check(op)
-
-        # Prepare metadata matching model_action_metadata structure
-        info = veo_model_info(clean_name).model_dump(by_alias=True)
-        config_schema = VeoConfigSchema
-
-        start_action = Action(
-            kind=ActionKind.BACKGROUND_MODEL,
-            name=name,
-            fn=_start,
-            metadata={
-                'model': {**info, 'customOptions': to_json_schema(config_schema)},
-                'type': 'background-model',
-            },
-        )
-
-        check_action = Action(
-            kind=ActionKind.CHECK_OPERATION,
-            name=f'{name}/check',
-            fn=_check,
-            metadata={'type': 'check-operation'},
-        )
-
-        return BackgroundAction(
-            start_action=start_action,
-            check_action=check_action,
-            cancel_action=None,
-        )
-
-    def _resolve_model(self, name: str) -> Action:
+    def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Google AI model.
 
         Args:
             name: The namespaced name of the model.
 
         Returns:
-            Action object for the model.
+            Action object for the model, or None if this id has no generate
+            path here (Veo is background-only; retired/unimplemented image
+            ids fail closed instead of defaulting to Gemini).
         """
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
 
+        if is_unroutable_model_id(clean_name):
+            return None
+
         # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        if is_imagen_model_name(clean_name):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfigSchema
@@ -578,7 +630,7 @@ class GoogleAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_imagen_model_name(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
                 model = GeminiModel(
@@ -645,13 +697,7 @@ class GoogleAI(Plugin):
             )
 
         for name in genai_models.veo:
-            actions_list.append(
-                model_action_metadata(
-                    name=googleai_name(name),
-                    info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
-                )
-            )
+            actions_list.append(_veo_background_action_metadata(googleai_name(name)))
 
         for name in genai_models.embedders:
             actions_list.append(
@@ -688,7 +734,7 @@ class VertexAI(Plugin):
         |---|---|---|
         | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
         | Imagen | MODEL | ``vertexai/imagen-3.0-generate-002`` |
-        | Veo (Video) | MODEL | ``vertexai/veo-2.0-generate-001`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-2.0-generate-001`` |
         | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
@@ -814,13 +860,18 @@ class VertexAI(Plugin):
         actions: list[Action] = []
 
         for name in genai_models.gemini:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            if action := self._resolve_model(vertexai_name(name)):
+                actions.append(action)
 
         for name in genai_models.imagen:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            if action := self._resolve_model(vertexai_name(name)):
+                actions.append(action)
 
+        # Veo Models (background models)
         for name in genai_models.veo:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            bg_action = self._resolve_veo_model(vertexai_name(name))
+            actions.append(bg_action.start_action)
+            actions.append(bg_action.check_action)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
@@ -851,11 +902,21 @@ class VertexAI(Plugin):
         genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
         actions = []
         for name in genai_models.gemini:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            if action := self._resolve_model(vertexai_name(name)):
+                actions.append(action)
         for name in genai_models.imagen:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            if action := self._resolve_model(vertexai_name(name)):
+                actions.append(action)
+        return actions
+
+    def _list_known_veo_models(self) -> list[Action]:
+        """List known Veo models as background model Action objects."""
+        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
+        actions = []
         for name in genai_models.veo:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            bg_action = self._resolve_veo_model(vertexai_name(name))
+            actions.append(bg_action.start_action)
+            actions.append(bg_action.check_action)
         return actions
 
     def _list_known_embedders(self) -> list[Action]:
@@ -882,11 +943,41 @@ class VertexAI(Plugin):
         """
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
+        elif action_type == ActionKind.BACKGROUND_MODEL:
+            # For Veo models, return the start action
+            prefix = VERTEXAI_PLUGIN_NAME + '/'
+            clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
+            if is_veo_model(clean_name):
+                bg_action = self._resolve_veo_model(name)
+                return bg_action.start_action
+            return None
+        elif action_type == ActionKind.CHECK_OPERATION:
+            # Check action names are in format {model_name}/check
+            # Extract the model name and resolve if it's a Veo model
+            if name.endswith('/check'):
+                model_name = name[:-6]  # Remove '/check' suffix
+                prefix = VERTEXAI_PLUGIN_NAME + '/'
+                clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
+                if is_veo_model(clean_name):
+                    bg_action = self._resolve_veo_model(model_name)
+                    return bg_action.check_action
+            return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
         elif action_type == ActionKind.EVALUATOR:
             return self._resolve_evaluator(name)
         return None
+
+    def _resolve_veo_model(self, name: str) -> BackgroundAction:
+        """Create a BackgroundAction for a Veo video generation model.
+
+        Args:
+            name: The namespaced name of the model.
+
+        Returns:
+            BackgroundAction for the Veo model.
+        """
+        return _create_veo_background_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME)
 
     def _resolve_evaluator(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI evaluator.
@@ -922,17 +1013,22 @@ class VertexAI(Plugin):
         )
         return actions[0] if actions else None
 
-    def _resolve_model(self, name: str) -> Action:
+    def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI model.
 
         Args:
             name: The namespaced name of the model.
 
         Returns:
-            Action object for the model.
+            Action object for the model, or None if this id has no generate
+            path here (Veo is background-only; retired/unimplemented image
+            ids fail closed instead of defaulting to Gemini).
         """
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
+
+        if is_unroutable_model_id(clean_name):
+            return None
 
         # Determine model type and create model metadata/config schema.
         # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
@@ -943,13 +1039,10 @@ class VertexAI(Plugin):
                 supports=google_model_info('gemini').supports,
             )
             config_schema = GeminiConfigSchema
-        elif clean_name.lower().startswith('image'):
+        elif is_imagen_model_name(clean_name):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfigSchema
-        elif is_veo_model(clean_name):
-            model_ref = veo_model_info(clean_name)
-            config_schema = VeoConfigSchema
         else:
             model_ref = google_model_info(clean_name)
             SUPPORTED_MODELS[clean_name] = model_ref
@@ -963,10 +1056,8 @@ class VertexAI(Plugin):
                     client_kwargs=self._client_kwargs,
                     base_url_pinned=self._base_url_pinned,
                 )
-            elif clean_name.lower().startswith('image'):
+            elif is_imagen_model_name(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
-            elif is_veo_model(clean_name):
-                model = VeoModel(clean_name, self._runtime_client())
             else:
                 model = GeminiModel(
                     clean_name,
@@ -1032,13 +1123,7 @@ class VertexAI(Plugin):
             )
 
         for name in genai_models.veo:
-            actions_list.append(
-                model_action_metadata(
-                    name=vertexai_name(name),
-                    info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
-                )
-            )
+            actions_list.append(_veo_background_action_metadata(vertexai_name(name)))
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions_list.append(

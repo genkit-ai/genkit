@@ -47,6 +47,14 @@ class TestIsVeoModel:
         """Non-Veo model names are rejected."""
         assert is_veo_model('gemini-2.0-flash') is False
 
+    def test_namespaced_veo_model(self) -> None:
+        """Plugin prefixes are stripped before the ``veo-`` check."""
+        assert is_veo_model('googleai/veo-3.0-generate-001') is True
+
+    def test_substring_veo_is_rejected(self) -> None:
+        """A bare ``veo`` substring is not enough; the id has to start with ``veo-``."""
+        assert is_veo_model('devotional-hymn') is False
+
 
 class TestVeoVersion:
     """Tests for VeoVersion enum convenience constants."""

@@ -872,13 +872,15 @@ def is_gemini_model(name: str) -> bool:
         >>> is_gemini_model('gemini-2.5-flash-preview-tts')
         False
     """
-    return name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and not is_tts_model(local) and not is_image_model(local)
 
 
 def is_tts_model(name: str) -> bool:
-    """Check if the model is a text-to-speech (TTS) model.
+    """Check if the model is a Gemini text-to-speech (TTS) model.
 
-    TTS models output audio instead of text and use GeminiTtsConfigSchema.
+    TTS is a ``gemini-`` name that contains ``-tts``. Strip the plugin /
+    ``models/`` prefix first so ``googleai/gemini-…-tts`` still routes here.
 
     Args:
         name: The model name to check.
@@ -890,13 +892,16 @@ def is_tts_model(name: str) -> bool:
         >>> is_tts_model('gemini-2.5-flash-preview-tts')
         True
     """
-    return (name.startswith('gemini-') and name.endswith('-tts')) or 'tts' in name
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-tts' in local
 
 
 def is_image_model(name: str) -> bool:
-    """Check if the model is a Gemini image generation model.
+    """Check if the model is a Gemini native image generation model.
 
-    Image models output images instead of text and use GeminiImageConfigSchema.
+    Native image is a ``gemini-`` name that contains ``-image``. Imagen
+    (``imagen-…``) is a different family — a bare ``image`` substring
+    would catch both.
 
     Args:
         name: The model name to check.
@@ -908,13 +913,15 @@ def is_image_model(name: str) -> bool:
         >>> is_image_model('gemini-2.0-flash-preview-image-generation')
         True
     """
-    return (name.startswith('gemini-') and '-image' in name) or 'image' in name
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-image' in local
 
 
 def is_gemma_model(name: str) -> bool:
     """Check if the model is a Gemma open model.
 
-    Gemma models are Google's open-weight models with different configuration.
+    Gemma is the ``gemma-`` prefix on the local name after stripping the
+    plugin / ``models/`` prefix.
 
     Args:
         name: The model name to check.
@@ -926,7 +933,7 @@ def is_gemma_model(name: str) -> bool:
         >>> is_gemma_model('gemma-2-27b-it')
         True
     """
-    return name.startswith('gemma-')
+    return name.split('/')[-1].lower().startswith('gemma-')
 
 
 def is_tuned_gemini_name(name: str) -> bool:
