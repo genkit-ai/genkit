@@ -907,6 +907,7 @@ def test_abort_keeps_explicit_null_previous_status() -> None:
     assert 'expectPreviousStatus' in dumped
     assert dumped['expectPreviousStatus'] is None
     resolved = resolve_step(step=step, captures={})
+    assert isinstance(resolved, AbortStep)
     assert field_was_set(model=resolved, name='expect_previous_status')
     assert resolved.expect_previous_status is None
 
