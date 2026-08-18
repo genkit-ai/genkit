@@ -88,7 +88,6 @@ describe('TraceServerExporter', () => {
         }
       );
     });
-    await new Promise(setImmediate);
 
     assert.deepStrictEqual(postedTraceIds, [TRACE_A, TRACE_B]);
     assert.deepStrictEqual(results, [{ code: ExportResultCode.SUCCESS }]);
@@ -120,7 +119,6 @@ describe('TraceServerExporter', () => {
         }
       );
     });
-    await new Promise(setImmediate);
 
     assert.deepStrictEqual(postedTraceIds, [TRACE_A, TRACE_B]);
     assert.deepStrictEqual(results, [{ code: ExportResultCode.FAILED }]);
