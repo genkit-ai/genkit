@@ -522,9 +522,17 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
     tool_choice = _requested_tool_choice(request, config) if tools else ''
     # "none" means omit toolConfig entirely — Bedrock has no none mode.
     send_tool_config = bool(tools) and tool_choice != 'none'
-    # Bedrock rejects a trailing assistant message only when a toolConfig is sent.
+    # Bedrock rejects a trailing assistant message only when a toolConfig is
+    # sent. Refusing here, with the constraint named, beats both the opaque
+    # ValidationException and silently dropping the caller's prefill.
     if send_tool_config and messages and messages[-1]['role'] == 'assistant':
-        messages = messages[:-1]
+        raise GenkitError(
+            message=(
+                'bedrock: the Converse API rejects a conversation ending with an assistant message when tools '
+                "are configured; end with a user or tool message, or set tool_choice='none'"
+            ),
+            status='INVALID_ARGUMENT',
+        )
 
     kwargs: dict[str, Any] = {'modelId': model_id, 'messages': messages}
     if system:

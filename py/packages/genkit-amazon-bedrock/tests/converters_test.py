@@ -539,7 +539,9 @@ def test_tool_choice_without_tools_is_ignored() -> None:
     assert 'toolConfig' not in kwargs
 
 
-def test_trailing_assistant_message_dropped_when_tools_present() -> None:
+def test_trailing_assistant_message_rejected_when_tools_present() -> None:
+    # Bedrock would reject this request anyway; failing here names the
+    # constraint instead of silently dropping the caller's prefill.
     request = ModelRequest(
         messages=[
             Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
@@ -547,8 +549,9 @@ def test_trailing_assistant_message_dropped_when_tools_present() -> None:
         ],
         tools=[WEATHER_TOOL],
     )
-    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
-    assert [m['role'] for m in kwargs['messages']] == ['user']
+    with pytest.raises(GenkitError, match='ending with an assistant message') as excinfo:
+        build_converse_request('amazon.nova-lite-v1:0', request)
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
 
 
 def test_trailing_assistant_message_kept_without_tools() -> None:
