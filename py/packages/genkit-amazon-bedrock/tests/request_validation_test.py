@@ -20,6 +20,10 @@ Several Converse fields are ``NonEmptyString`` (``min: 1``) and botocore
 enforces that client-side, so an empty value fails the call before it reaches
 AWS. These tests run the real validator over the request builder's output, which
 catches that whole class of defect without credentials or network access.
+
+Every request is validated against both Converse and ConverseStream: one
+builder feeds both operations, so a field that only one of them models would
+otherwise fail client-side on the streaming path alone.
 """
 
 import base64
@@ -40,18 +44,25 @@ from genkit import (
     ToolDefinition,
 )
 
-CONVERSE_INPUT_SHAPE = (
-    botocore.session.get_session().get_service_model('bedrock-runtime').operation_model('Converse').input_shape
-)
+_SERVICE_MODEL = botocore.session.get_session().get_service_model('bedrock-runtime')
+CONVERSE_INPUT_SHAPES = {
+    operation: _SERVICE_MODEL.operation_model(operation).input_shape for operation in ('Converse', 'ConverseStream')
+}
 
 PNG_B64 = base64.b64encode(b'\x89PNG\r\n\x1a\nfakeimagedata').decode()
+
+
+def assert_valid_request(kwargs: dict) -> None:
+    """Asserts botocore accepts every parameter, for both operations."""
+    for operation, shape in CONVERSE_INPUT_SHAPES.items():
+        report = ParamValidator().validate(kwargs, shape)
+        assert not report.has_errors(), f'{operation}: {report.generate_report()}'
 
 
 def assert_valid_converse_request(request: ModelRequest) -> dict:
     """Builds the request and asserts botocore accepts every parameter."""
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
-    report = ParamValidator().validate(kwargs, CONVERSE_INPUT_SHAPE)
-    assert not report.has_errors(), report.generate_report()
+    assert_valid_request(kwargs)
     return kwargs
 
 
@@ -165,6 +176,4 @@ def test_inference_config_passes_validation(model_id: str) -> None:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
         config=BedrockConfig(temperature=0.0, top_p=0.9, max_output_tokens=256, stop_sequences=['STOP']),
     )
-    kwargs = build_converse_request(model_id, request)
-    report = ParamValidator().validate(kwargs, CONVERSE_INPUT_SHAPE)
-    assert not report.has_errors(), report.generate_report()
+    assert_valid_request(build_converse_request(model_id, request))

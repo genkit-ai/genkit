@@ -33,6 +33,7 @@ from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit import FinishReason, Message, ModelRequest, Part, Role, TextPart, ToolDefinition
+from genkit.plugin_api import ActionRunContext
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -65,6 +66,11 @@ def text_request(text: str, **kwargs) -> ModelRequest:
     )
 
 
+def streaming_ctx() -> tuple[ActionRunContext, list]:
+    chunks: list = []
+    return ActionRunContext(streaming_callback=chunks.append), chunks
+
+
 def undocumented_weather_tool() -> ToolDefinition:
     # No description on purpose: Bedrock rejects an empty one, and a Genkit
     # tool declared without a docstring arrives that way.
@@ -86,6 +92,20 @@ async def test_nova_sync() -> None:
     assert response.message.content[0].root.text
     assert response.usage is not None
     assert response.usage.input_tokens is not None and response.usage.input_tokens > 0
+
+
+async def test_nova_stream() -> None:
+    ctx, chunks = streaming_ctx()
+    response = await make_model(NOVA).generate(text_request('Count from 1 to 5, one number per line.'), ctx)
+
+    assert len(chunks) > 1, 'expected the response to arrive as multiple deltas'
+    streamed = ''.join(chunk.content[0].root.text or '' for chunk in chunks)
+    assert response.message is not None
+    # Deltas, not snapshots: concatenating them must reproduce the final text.
+    assert streamed == response.message.content[0].root.text
+    assert response.finish_reason == FinishReason.STOP
+    assert response.usage is not None
+    assert response.usage.output_tokens is not None and response.usage.output_tokens > 0
 
 
 async def test_undocumented_tool_round_trip() -> None:
@@ -124,6 +144,32 @@ async def test_undocumented_tool_round_trip() -> None:
         tools=[weather],
     )
     assert (await make_model(NOVA).generate(follow_up)).message is not None
+
+
+async def test_undocumented_tool_stream() -> None:
+    weather = undocumented_weather_tool()
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='What is the weather in Lagos?'))])],
+        tools=[weather],
+        config=BedrockConfig(tool_choice='get_weather'),
+    )
+    ctx, chunks = streaming_ctx()
+    response = await make_model(NOVA).generate(request, ctx)
+
+    # Tool input arrives as JSON fragments, so it is held back and emitted
+    # once, whole, when the content block closes.
+    tool_chunks = [
+        chunk.content[0].root.tool_request for chunk in chunks if chunk.content[0].root.tool_request is not None
+    ]
+    assert len(tool_chunks) == 1
+    assert tool_chunks[0].name == 'get_weather'
+    assert tool_chunks[0].ref
+    assert isinstance(tool_chunks[0].input, dict) and tool_chunks[0].input.get('city')
+
+    assert response.message is not None
+    final = [part.root.tool_request for part in response.message.content if part.root.tool_request is not None]
+    assert len(final) == 1
+    assert final[0].input == tool_chunks[0].input
 
 
 async def test_claude_sync_without_config() -> None:
@@ -166,6 +212,45 @@ async def test_claude_reasoning_signature_round_trip() -> None:
     )
     follow_up_response = await model.generate(follow_up)
     assert follow_up_response.finish_reason == FinishReason.STOP
+
+
+async def test_claude_thinking_stream() -> None:
+    config = BedrockConfig(
+        max_output_tokens=4096,
+        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+    )
+    ctx, chunks = streaming_ctx()
+    response = await make_model(CLAUDE).generate(text_request('What is 17 * 23? Think it through.', config=config), ctx)
+
+    assert any(getattr(chunk.content[0].root, 'reasoning', None) for chunk in chunks), (
+        'expected reasoning deltas on a thinking-enabled stream'
+    )
+    assert response.message is not None
+    reasoning_parts = [
+        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
+    ]
+    assert reasoning_parts
+    assert reasoning_parts[0].metadata is not None
+    # The signature arrives in its own delta, which streams nothing, so this
+    # only passes if reassembly kept it.
+    assert reasoning_parts[0].metadata.get(REASONING_SIGNATURE_METADATA_KEY)
+
+
+async def test_deepseek_reasoning_stream() -> None:
+    ctx, chunks = streaming_ctx()
+    response = await make_model(DEEPSEEK).generate(
+        text_request('What is 17 * 23? Think it through.', config=BedrockConfig(max_output_tokens=2048)), ctx
+    )
+
+    assert any(getattr(chunk.content[0].root, 'reasoning', None) for chunk in chunks)
+    assert response.message is not None
+    reasoning_parts = [
+        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
+    ]
+    assert reasoning_parts
+    # Unsigned reasoning: this model sends no signature delta at all.
+    metadata = reasoning_parts[0].metadata
+    assert metadata is None or not metadata.get(REASONING_SIGNATURE_METADATA_KEY)
 
 
 async def test_deepseek_reasoning_sync_and_round_trip() -> None:
