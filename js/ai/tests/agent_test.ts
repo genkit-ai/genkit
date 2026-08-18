@@ -31,6 +31,7 @@ import {
   defineCustomAgent,
   definePromptAgent,
 } from '../src/agent.js';
+import { configureFormats } from '../src/formats/index.js';
 import { definePrompt } from '../src/prompt.js';
 import { InMemorySessionStore } from '../src/session-stores.js';
 import {
@@ -987,6 +988,38 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.strictEqual(output.message?.role, 'model');
+    });
+
+    it('supports a prompt output schema with a persistent store (#5712)', async () => {
+      // Regression test: a prompt agent whose prompt declares an `output`
+      // schema attaches a non-cloneable `parser` function to the response
+      // message. Persisting that message into session state used to throw
+      // `DataCloneError: ... could not be cloned` when the store snapshotted
+      // the state via `structuredClone`.
+      const registry = new Registry();
+      configureFormats(registry);
+      const pm = defineProgrammableModel(registry);
+      pm.handleResponse = async () => ({
+        message: { role: 'model', content: [{ text: '{"answer":"hello"}' }] },
+        finishReason: 'stop',
+      });
+      definePrompt(registry, {
+        name: 'structuredPrompt',
+        model: 'programmableModel',
+        system: 'You are a test assistant.',
+        output: { schema: z.object({ answer: z.string() }) },
+      });
+
+      const agent = definePromptAgent<unknown, z.ZodTypeAny>(registry, {
+        promptName: 'structuredPrompt',
+        store: new InMemorySessionStore(),
+      });
+
+      const chat = agent.chat({ sessionId: 'structured-output' });
+      const res = await chat.send('hi');
+
+      assert.strictEqual(res.finishReason, 'stop');
+      assert.strictEqual(res.text, '{"answer":"hello"}');
     });
 
     it('should pass promptInput to the prompt template', async () => {

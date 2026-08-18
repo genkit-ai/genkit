@@ -1560,11 +1560,15 @@ export function definePromptAgent<
           (m) => !m.metadata?.[promptTag]
         );
         if (res.message) {
-          msgs.push(res.message);
+          // Persist the serializable message data, not the `Message` instance:
+          // when the prompt declares an `output` schema the response message
+          // carries a non-cloneable `parser` function, which would break
+          // `structuredClone` when the session state is snapshotted (#5712).
+          msgs.push(res.message.toJSON());
         }
         sess.setMessages(msgs);
       } else if (res.message) {
-        sess.addMessages([res.message]);
+        sess.addMessages([res.message.toJSON()]);
       }
 
       if (res.finishReason === 'interrupted') {
