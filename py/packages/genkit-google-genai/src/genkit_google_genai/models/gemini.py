@@ -36,7 +36,7 @@ else:
     from enum import StrEnum
 
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, cast
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
 
 from google import genai
 from google.auth import default as google_auth_default
@@ -818,6 +818,50 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
 
 
+# Quote autocomplete needs a Literal. The version enums above and the
+# ``_add_model`` names below are the catalog; a test requires each family
+# Literal to equal that catalog filtered by family.
+KnownGemini: TypeAlias = Literal[
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-flash-latest',
+    'gemini-pro-latest',
+    'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-pro-preview-customtools',
+    'gemini-3.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-2.5-flash-preview-04-17',
+    'gemini-2.5-pro-exp-03-25',
+    'gemini-2.5-pro-preview-03-25',
+    'gemini-2.5-pro-preview-05-06',
+]
+KnownGeminiTts: TypeAlias = Literal[
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+]
+KnownGeminiImage: TypeAlias = Literal[
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash-image-preview',
+    'gemini-3-pro-image',
+    'gemini-3-pro-image-preview',
+    'gemini-3.1-flash-image',
+    'gemini-3.1-flash-image-preview',
+]
+KnownGemma: TypeAlias = Literal[
+    'gemma-3-1b-it',
+    'gemma-3-4b-it',
+    'gemma-3-12b-it',
+    'gemma-3-27b-it',
+    'gemma-3n-e4b-it',
+]
+
+
 SUPPORTED_MODELS = {}
 
 
@@ -849,6 +893,10 @@ _add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
 _add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
+
+# Frozen at import so quote-autocomplete tests do not see ids that
+# resolve() writes into SUPPORTED_MODELS later.
+GEMINI_CATALOG_IDS = frozenset(SUPPORTED_MODELS)
 
 
 DEFAULT_SUPPORTS_MODEL = Supports(

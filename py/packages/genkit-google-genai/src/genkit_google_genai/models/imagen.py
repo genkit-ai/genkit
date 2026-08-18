@@ -26,7 +26,7 @@ else:
 
 import json
 from functools import cached_property
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 from google import genai
 from google.genai import types as genai_types
@@ -63,6 +63,14 @@ class ImagenVersion(StrEnum):
 
     IMAGEN3 = 'imagen-3.0-generate-002'
     IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
+
+
+# Quote autocomplete needs a Literal. The enum above is the catalog; a test
+# requires these members and the enum values to be the same set.
+KnownImagen: TypeAlias = Literal[
+    'imagen-3.0-generate-002',
+    'imagen-3.0-fast-generate-001',
+]
 
 
 SUPPORTED_MODELS = {

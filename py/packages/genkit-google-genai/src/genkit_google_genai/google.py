@@ -63,9 +63,9 @@ import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit.embedder import embedder_action_metadata
+from genkit.embedder import EmbedderRef, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
-from genkit.model import BackgroundAction, Operation, model_action_metadata
+from genkit.model import BackgroundAction, ModelRef, Operation, model_action_metadata
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
@@ -78,6 +78,10 @@ from genkit.plugin_api import (
 from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
+)
+from genkit_google_genai.models._model_refs import (
+    family_embedder_ref,
+    family_model_ref,
 )
 from genkit_google_genai.models._routing import is_unroutable_model_id
 from genkit_google_genai.models.embedder import (
@@ -92,6 +96,10 @@ from genkit_google_genai.models.gemini import (
     GeminiModel,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
+    KnownGemini,
+    KnownGeminiImage,
+    KnownGeminiTts,
+    KnownGemma,
     get_model_config_schema,
     google_model_info,
     is_gemma_model,
@@ -103,6 +111,7 @@ from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfigSchema,
     ImagenModel,
+    KnownImagen,
     is_imagen_model_name,
     is_unsupported_image_model_name,
     vertexai_image_model_info,
@@ -409,6 +418,108 @@ def _create_veo_background_action(
     )
 
 
+class GoogleFamilyRefs:
+    """Typed ref constructors shared by GoogleAI and VertexAI.
+
+    One constructor per config family, because the function name is what
+    picks the return type. Each constructor strips pasted prefixes, stamps
+    this plugin's namespace, and refuses ids whose runtime action validates
+    a different schema.
+    """
+
+    name: str  # plugin namespace ('googleai' or 'vertexai')
+
+    @classmethod
+    def gemini_model(
+        cls, name: KnownGemini | str, *, config: GeminiConfigSchema | None = None
+    ) -> ModelRef[GeminiConfigSchema]:
+        """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini_model('gemini-2.5-flash')``.
+
+        Unknown ids are allowed so a brand-new Gemini release works before
+        this plugin learns its name; ids from other families are refused.
+        """
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemini',
+            method='gemini_model',
+            config_schema=GeminiConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def gemini_tts_model(
+        cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfigSchema | None = None
+    ) -> ModelRef[GeminiTtsConfigSchema]:
+        """Typed ref for a Gemini TTS model (``gemini-…-tts``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='tts',
+            method='gemini_tts_model',
+            config_schema=GeminiTtsConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def gemini_image_model(
+        cls, name: KnownGeminiImage | str, *, config: GeminiImageConfigSchema | None = None
+    ) -> ModelRef[GeminiImageConfigSchema]:
+        """Typed ref for a Gemini native-image model (``gemini-…-image``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='image',
+            method='gemini_image_model',
+            config_schema=GeminiImageConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def gemma_model(
+        cls, name: KnownGemma | str, *, config: GemmaConfigSchema | None = None
+    ) -> ModelRef[GemmaConfigSchema]:
+        """Typed ref for a Gemma open model (``gemma-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemma',
+            method='gemma_model',
+            config_schema=GemmaConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def imagen_model(
+        cls, name: KnownImagen | str, *, config: ImagenConfigSchema | None = None
+    ) -> ModelRef[ImagenConfigSchema]:
+        """Typed ref for an Imagen model (``imagen-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='imagen',
+            method='imagen_model',
+            config_schema=ImagenConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def embedding(
+        cls, name: str, *, config: dict[str, object] | None = None, version: str | None = None
+    ) -> EmbedderRef:
+        """EmbedderRef for ``ai.embed()``, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
+
+        Returns an EmbedderRef, not a ModelRef: an embedder id must never
+        end up in ``generate(model=...)``.
+        """
+        return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config, version=version)
+
+
 def _veo_background_action_metadata(name: str) -> ActionMetadata:
     """Build list_actions metadata for a Veo model as a background model.
 
@@ -432,7 +543,7 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
     )
 
 
-class GoogleAI(Plugin):
+class GoogleAI(GoogleFamilyRefs, Plugin):
     """GoogleAI plugin for Genkit with dynamic model discovery.
 
     This plugin provides access to Google AI models (Gemini, embedders, Veo)
@@ -649,8 +760,9 @@ class GoogleAI(Plugin):
 
         Returns:
             Action object for the model, or None if this id has no generate
-            path here (Veo is background-only; retired/unimplemented image
-            ids fail closed instead of defaulting to Gemini).
+            path here (Veo runs as a background model, embedders are
+            EMBEDDER actions, and retired/unimplemented ids fail closed
+            instead of defaulting to Gemini).
         """
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
@@ -761,7 +873,7 @@ class GoogleAI(Plugin):
         return actions_list
 
 
-class VertexAI(Plugin):
+class VertexAI(GoogleFamilyRefs, Plugin):
     """Vertex AI plugin for Genkit with dynamic model discovery.
 
     This plugin provides access to Google Cloud Vertex AI models including
@@ -1068,8 +1180,9 @@ class VertexAI(Plugin):
 
         Returns:
             Action object for the model, or None if this id has no generate
-            path here (Veo is background-only; retired/unimplemented image
-            ids fail closed instead of defaulting to Gemini).
+            path here (Veo runs as a background model, embedders are
+            EMBEDDER actions, and retired/unimplemented ids fail closed
+            instead of defaulting to Gemini).
         """
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
