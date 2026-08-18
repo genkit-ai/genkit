@@ -6,14 +6,74 @@ Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
 embeddings, image generation, and reranking through InvokeModel.
 
 > Status: text generation (streaming and non-streaming), embedders, image
-> generation, and reranking are available. The work left is sample app and
-> docsite coverage, not plugin surfaces.
+> generation, and reranking are available. A runnable sample app covers all of
+> it, so the work left is docsite coverage, not plugin surfaces.
 
 ## Installation
 
 ```bash
 pip install genkit-amazon-bedrock
 ```
+
+## AWS setup
+
+### Model access
+
+Model access is granted per AWS account and per region, in the Bedrock console
+under Model access, and most models cannot be called until it is: a grant in
+`us-east-1` says nothing about `us-west-2`, so a working setup can break purely
+by changing region.
+
+The Anthropic models additionally need the account's one-time use-case
+agreement (Bedrock console, Model access, Anthropic use case details). Until it
+is accepted, Claude calls fail with `ResourceNotFoundException`, which reads
+like a mistyped model ID rather than a missing agreement.
+
+### IAM
+
+The minimal policy covering everything this plugin does:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
+    }
+  ]
+}
+```
+
+Converse is authorized by `bedrock:InvokeModel` and ConverseStream by
+`bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to
+grant. Embedding, image generation and reranking all go through InvokeModel, so
+they need only the first.
+
+The inference-profile resource is the part that is easy to leave out.
+Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+are account-scoped inference-profile ARNs rather than foundation-model ARNs, so
+a policy limited to `foundation-model/*` refuses them with
+`AccessDeniedException` even when model access is granted.
+
+### Credentials
+
+Credentials resolve through the standard AWS SDK chain, so any of these work:
+
+- environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+  `AWS_SESSION_TOKEN` for temporary credentials)
+- the shared config and credentials files under `~/.aws`, selected with
+  `AWS_PROFILE`
+- IAM roles attached to EC2, ECS, or Lambda, supplied by the platform at runtime
+- SSO profiles, after `aws sso login`
+
+Anything the chain does not cover goes through `session=`, which takes a
+pre-configured `boto3.session.Session`. Region resolution is separate from
+credentials and is described under [Usage](#usage).
 
 ## Usage
 
@@ -25,10 +85,10 @@ ai = Genkit(
     plugins=[
         Bedrock(
             region='us-east-1',
-            models=[ModelDefinition(name='anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
         )
     ],
-    model='bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
 )
 ```
 
@@ -38,30 +98,54 @@ Credentials resolve through the standard AWS SDK chain (environment,
 from `region=` or the SDK chain (`AWS_REGION`, `AWS_DEFAULT_REGION`,
 `~/.aws/config`); there is deliberately no default region.
 
-### Client tuning
+### Plugin options
 
-`max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections`
-are unset by default, so your own AWS configuration wins and the package
-defaults (3 retries in standard mode, a 3600s read timeout, a 60s connect
-timeout and a pool of 50) fill in only where it is silent. Passing an argument
-explicitly overrides both.
+Every `Bedrock()` parameter, with its default:
+
+| Option                 | Default  | Meaning                                                                                                                     |
+| ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `region`               | unset    | AWS region. Falls back to the SDK chain; initialization fails when nothing resolves.                                        |
+| `max_retries`          | unset    | Retries after the initial attempt. Falls back to `3`, in botocore's `standard` mode, where your AWS configuration is silent. |
+| `read_timeout`         | unset    | Socket read timeout in seconds. Falls back to `3600.0`.                                                                     |
+| `connect_timeout`      | unset    | Socket connect timeout in seconds, covering the TCP handshake only. Falls back to `60.0`.                                   |
+| `max_pool_connections` | unset    | HTTP connection pool size. Falls back to `50`, raised off botocore's default of 10.                                         |
+| `total_timeout`        | `3600.0` | Whole-call deadline in seconds for a non-streaming generation, retries included. `None` removes it.                         |
+| `session`              | unset    | Pre-configured `boto3.session.Session` for custom credentials or SDK wiring.                                                |
+| `models`               | `[]`     | `ModelDefinition` entries to register. Unlisted IDs still resolve on demand.                                                |
+| `embedders`            | `[]`     | Embedding model IDs to register. Unlisted IDs still resolve on demand.                                                      |
+
+`max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections` are
+unset by default, so your own AWS configuration wins and the fallbacks above
+fill in only where it is silent. Passing an argument explicitly overrides both.
 
 Which sources apply differs by knob, because botocore only reads some of them:
 
 - Retries come from `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`, the `max_attempts`
   and `retry_mode` keys in `~/.aws/config`, or a session's default client
   config. The attempt count and the mode are resolved separately, so setting
-  just one of them leaves the other at the package default.
+  just one of them leaves the other at the package fallback, and passing
+  `max_retries` tunes the count without dragging you off `adaptive`.
 - The two timeouts and the pool size have no environment or config-file
   equivalent in botocore. Their only external source is a `botocore.config.Config`
   installed on a session you pass via `session=`.
 
-`total_timeout` (3600s, `None` to disable) is separate: it caps the whole
-call, including retries. The read timeout only bounds silence between two
-reads, so a connection that dribbles bytes never trips it. When the deadline
-fires the caller gets a `DEADLINE_EXCEEDED` error, though the boto3 call
-itself cannot be aborted and its worker thread runs until the socket timeouts
-end it.
+**`read_timeout` is a socket read timeout, not a whole-call deadline.** It
+bounds the wait for the next byte off the socket, not the length of the call,
+which is why its fallback is a full hour: a generation can legitimately run for
+many minutes (Nova allows 60-minute inference). Because it resets on every byte
+received, a connection that dribbles bytes never trips it.
+
+`total_timeout` is the wall-clock limit that does. It caps a non-streaming
+generation end to end, retries included, and is on by default at 3600s; pass
+`None` to remove it and leave only the socket timeouts. When the deadline fires
+the caller gets a `DEADLINE_EXCEEDED` error, though the boto3 call itself cannot
+be aborted and its worker thread runs until the socket timeouts end it.
+Streaming generations, embeddings, image generation and reranking are bounded
+by the socket timeouts alone.
+
+`max_pool_connections` falls back to 50 rather than botocore's 10 so the pool is
+never the bottleneck; concurrency is bounded first by the event loop's default
+thread pool, which the boto3 calls are dispatched to.
 
 ### Config fields that are ignored
 
@@ -73,6 +157,72 @@ through `additionalModelRequestFields` instead:
 ```python
 BedrockConfig(additional_model_request_fields={'top_k': 40})
 ```
+
+### Inference profiles
+
+Model IDs carrying one of the prefixes `global.`, `us-gov.`, `us.`, `eu.`,
+`jp.`, `apac.`, or `au.` are cross-region inference profiles, which route a call
+to whichever region in the geography has capacity:
+
+```python
+ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')
+```
+
+The full ID is always sent to Bedrock verbatim. The prefix is stripped only for
+the local capability lookup, so a profile inherits its base model's declared
+capabilities instead of falling back to the unknown-model defaults. Several of
+the newer models are only invocable through a profile, never by bare
+foundation-model ID, so this is the normal form rather than an advanced option.
+Any profile ID or full ARN is accepted, across the `arn:aws:`, `arn:aws-us-gov:`
+and `arn:aws-cn:` partitions.
+
+## Prompt caching
+
+Bedrock can cache a prompt prefix and reuse it across calls, which is worth
+doing whenever a large static system prompt is sent repeatedly.
+`cache_point_part()` marks where the cacheable prefix ends:
+
+```python
+from genkit import Part, TextPart
+from genkit_amazon_bedrock import cache_point_part
+
+CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+
+# The cache point goes after the content it should cache.
+system = [Part(root=TextPart(text=LONG_STATIC_PROMPT)), cache_point_part()]
+
+first = await ai.generate(model=CLAUDE, system=system, prompt='What are the delivery tiers?')
+second = await ai.generate(model=CLAUDE, system=system, prompt='Which tier needs a signature?')
+
+print(second.usage.cached_content_tokens)
+```
+
+Notes:
+
+- The cache point goes **after** the content it should cache, never before.
+- Cache points work in the system prompt and in ordinary user and model
+  messages. System messages keep only text and cache points; every other part
+  kind is dropped there.
+- The cached prefix must be byte-identical across calls to hit, so build it from
+  a constant rather than reassembling it per request.
+- A prefix below the model's minimum cacheable size (roughly 1,000 tokens for
+  Claude Sonnet, higher for the smaller models) is silently not cached. There is
+  no error and no warning, so a short prompt just quietly never hits.
+- The cache lives for a few minutes, which also means a re-run inside that
+  window can read a cache the previous run wrote.
+- On usage, `cacheReadInputTokens` surfaces as `usage.cached_content_tokens`.
+  `cacheWriteInputTokens` is deliberately dropped, so a cache write is
+  invisible: the second call reporting cached tokens the first did not is the
+  only evidence you get.
+- Bedrock counts cached tokens **outside** `inputTokens`, not within it, so
+  `usage.input_tokens` is only the uncached remainder and stays small however
+  well the cache works. The cached prefix appears in `usage.total_tokens`. Do
+  not treat a small `input_tokens` as a cache failure, and do not assert on it
+  to prove a cache hit.
+- Passing a plain string as `system` sends it through Genkit's dotprompt
+  templating, which rewrites the text and cannot express a cache point. A list
+  of parts is what you want here, both to hold the cache point and to keep the
+  cached prefix byte-identical.
 
 ## Embedders
 
@@ -312,6 +462,56 @@ being the only shape AWS documents for InvokeModel reranking.
 
 Any model ID is passed to InvokeModel verbatim, so inference profiles and ARNs
 work too.
+
+## Troubleshooting
+
+The plugin maps Bedrock error codes onto Genkit error statuses, so these arrive as typed `GenkitError` (`PERMISSION_DENIED`, `NOT_FOUND`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`, and the rest) with the service's own message preserved. The AWS code is the useful part, and each one means something specific:
+
+**No region resolved.** The plugin fails at initialization rather than on the
+first call, and deliberately does not default to a region: a silent `us-east-1`
+fallback would send traffic and data somewhere you never chose. Set `region=`,
+`AWS_REGION`, `AWS_DEFAULT_REGION`, or a region on the active profile.
+
+**`AccessDeniedException`.** Either model access has not been granted for that
+model in that region, or the IAM policy is missing the inference-profile
+resource. Both are covered under [AWS setup](#aws-setup); check the policy first
+if the model ID carries a cross-region prefix, because that failure looks
+identical to a missing grant.
+
+**`ResourceNotFoundException`.** The model exists but this account cannot use
+it there: an Anthropic model whose use-case agreement has not been accepted, or
+a Legacy model. The Nova Canvas case is its own trap and is described under
+[Availability](#availability). A model that plainly is not offered in the
+region reports as a `ValidationException` instead, below.
+
+**`ValidationException` reading "The provided model identifier is invalid".**
+The ID is mistyped, or the model is not offered in the region the call went to.
+Both Converse and InvokeModel report a missing model this way, verified live,
+so it is what a region mistake actually looks like: calling
+`stability.sd3-5-large-v1:0` (us-west-2 only) from a session whose default
+region is `us-east-1` produces exactly this. Check the region before doubting
+the ID.
+
+**Any other `ValidationException`.** The request or config is malformed for
+that particular model: a thinking budget outside the bounds the model allows,
+or an image config field the family does not accept (the whole config dict
+reaches Stability, and everything inside `imageGenerationConfig` reaches the
+Amazon family). Bedrock validates per model, so a config that works on one
+model can be rejected by the next.
+
+**`ThrottlingException`.** The on-demand capacity limit for that model and
+region. The plugin retries automatically with exponential backoff, up to
+`max_retries` retries after the initial attempt, and surfaces the error once
+those are exhausted. Raise `max_retries`, spread the load, or move to
+provisioned throughput.
+
+## Examples
+
+See [`py/samples/amazon-bedrock-sample`](../../samples/amazon-bedrock-sample)
+for a runnable sample covering every surface here: text generation and
+streaming, structured output, tool calling, reasoning and extended thinking,
+embedders, prompt caching, image and document input, image generation, and
+reranking. Each one is a flow, so they can be run individually in the Dev UI.
 
 ## License
 

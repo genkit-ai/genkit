@@ -26,12 +26,14 @@ the chat models and from each other.
 
 import contextlib
 import os
+import re
 from collections.abc import Iterator
 
 import pytest
 from genkit_amazon_bedrock.config import BedrockConfig
 from genkit_amazon_bedrock.converters import (
     REASONING_SIGNATURE_METADATA_KEY,
+    cache_point_part,
 )
 from genkit_amazon_bedrock.embedders import BedrockEmbedder
 from genkit_amazon_bedrock.image import BedrockImageModel
@@ -85,6 +87,30 @@ AMAZON_RERANK_REGIONS = ('us-west-2', 'eu-central-1', 'ap-northeast-1', 'ca-cent
 # Smallest PNG Titan accepts.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
 PNG_1X1_DATA_URL = f'data:image/png;base64,{PNG_1X1}'
+
+# A 64x48 PNG of three horizontal bands (red, white, blue). The 1x1 pixel above
+# is too small to ask a model about; these bands give a checkable answer.
+STRIPES_PNG_DATA_URL = (
+    'data:image/png;base64,'
+    'iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAATklEQVR42u3PMQ0AMAwEsWAKksIOiNLoXg7ZXvLpCLhud/QFAAAAAAAA'
+    'AAAAALAGvPAAAAAAAAAAAAAAAPaAPhM9AAAAAAAAAAAAAMD6DyqspTygWsHeAAAAAElFTkSuQmCC'
+)
+
+# A one-page PDF reading "Genkit Bedrock sample memo / The office kettle is
+# broken. / Tea service resumes on Friday."
+MEMO_PDF_DATA_URL = (
+    'data:application/pdf;base64,'
+    'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1Bh'
+    'Z2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVk'
+    'aWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4K'
+    'ZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNTAgPj4Kc3RyZWFtCkJUCi9GMSAxNCBUZgoxIDAgMCAxIDcyIDcyMCBUbQoxOCBUTAoo'
+    'R2Vua2l0IEJlZHJvY2sgc2FtcGxlIG1lbW8pIFRqClQqCihUaGUgb2ZmaWNlIGtldHRsZSBpcyBicm9rZW4uKSBUagpUKgooVGVhIHNl'
+    'cnZpY2UgcmVzdW1lcyBvbiBGcmlkYXkuKSBUagpUKgpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1'
+    'YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iagp4cmVmCjAg'
+    'NgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAw'
+    'IG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4K'
+    'c3RhcnR4cmVmCjUzOQolJUVPRgo='
+)
 
 
 def make_transport() -> BedrockTransport:
@@ -159,6 +185,69 @@ def text_request(text: str, **kwargs) -> ModelRequest:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])],
         **kwargs,
     )
+
+
+def media_request(data_url: str, text: str, **kwargs) -> ModelRequest:
+    """A user message carrying media plus the text Converse requires with it."""
+    return ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[Part(root=MediaPart(media=Media(url=data_url))), Part(root=TextPart(text=text))],
+            )
+        ],
+        **kwargs,
+    )
+
+
+_HANDBOOK_TOPICS = [
+    ('Returns', 'fulfilment', 'three business days'),
+    ('Shipping', 'logistics', 'one business day'),
+    ('Warranty', 'aftercare', 'five business days'),
+    ('Billing', 'finance', 'two business days'),
+    ('Accounts', 'identity', 'one business day'),
+    ('Privacy', 'legal', 'ten business days'),
+    ('Accessibility', 'design', 'four business days'),
+    ('Recycling', 'sustainability', 'six business days'),
+]
+
+_HANDBOOK_REGIONS = ['North America', 'Ireland', 'Germany', 'Japan']
+
+
+def mentions_any(text: str | None, *words: str) -> bool:
+    """Whether the text contains any of the words as whole words.
+
+    Substring matching would pass on 'coloured' for 'red' and 'instead' for
+    'tea', which a refusal could satisfy without ever reading the attachment.
+    """
+    haystack = (text or '').lower()
+    return any(re.search(rf'\b{re.escape(word)}\b', haystack) for word in words)
+
+
+def cacheable_prefix() -> str:
+    """A system prompt long enough to be cacheable, at roughly 3,500 tokens.
+
+    Claude will not cache a prefix below about 1,000 tokens, and reports no
+    error when it declines.
+    """
+    articles = []
+    for number, (topic, team, window) in enumerate(_HANDBOOK_TOPICS, start=1):
+        articles.append(
+            f'Article {number}. {topic}\n'
+            f'{topic} requests are handled by the {team} team in {window}. Escalations go to the duty manager, '
+            f'who answers within one business day. Records are retained for seven years and can be exported on '
+            f'request. This article is reviewed every quarter and supersedes any earlier guidance on {topic}.'
+        )
+        for section, region in enumerate(_HANDBOOK_REGIONS, start=1):
+            articles.append(
+                f'Article {number}.{section} {topic} in {region}\n'
+                f'In {region}, {topic.lower()} follows the same {window} target, measured in local business '
+                f'hours and excluding public holidays. The {team} team keeps a regional queue, and a request '
+                f'that misses its target is reported in the weekly service review. Customers are notified by '
+                f'email at intake and again at resolution, and may ask for a written summary of the decision '
+                f'at any point without charge.'
+            )
+    return 'Answer only from this handbook.\n\n' + '\n\n'.join(articles)
 
 
 def streaming_ctx() -> tuple[ActionRunContext, list]:
@@ -372,6 +461,59 @@ async def test_deepseek_reasoning_sync_and_round_trip() -> None:
         config=config,
     )
     assert (await model.generate(follow_up)).finish_reason == FinishReason.STOP
+
+
+async def test_nova_image_input() -> None:
+    # An image block Bedrock cannot parse fails the call outright, so reaching a
+    # normal stop is itself the assertion that the media round-tripped; the
+    # colour check is the evidence the pixels reached the model.
+    request = media_request(STRIPES_PNG_DATA_URL, 'What colours are the bands in this image?')
+    response = await make_model(NOVA).generate(request)
+    assert response.finish_reason == FinishReason.STOP
+    assert mentions_any(response.text, 'red', 'white', 'blue'), response.text
+
+
+async def test_claude_document_input() -> None:
+    # Bedrock parses the PDF server-side, so a malformed document block or a
+    # double-encoded payload fails the call rather than degrading quietly.
+    # Claude, not Nova: document support is per model.
+    request = media_request(
+        MEMO_PDF_DATA_URL, 'What does this document say?', config=BedrockConfig(max_output_tokens=512)
+    )
+    response = await make_model(CLAUDE).generate(request)
+    assert response.finish_reason == FinishReason.STOP
+    assert mentions_any(response.text, 'kettle', 'tea', 'friday'), response.text
+
+
+async def test_claude_prompt_cache_read() -> None:
+    # Two calls sharing a byte-identical cached prefix: the first writes the
+    # cache, the second reads it. Only reads surface, since the plugin drops
+    # cacheWriteInputTokens, so the second call carries the evidence.
+    model = make_model(CLAUDE)
+    system = Message(
+        role=Role.SYSTEM,
+        content=[Part(root=TextPart(text=cacheable_prefix())), cache_point_part()],
+    )
+    config = BedrockConfig(max_output_tokens=512)
+
+    def ask(question: str) -> ModelRequest:
+        return ModelRequest(
+            messages=[system, Message(role=Role.USER, content=[Part(root=TextPart(text=question))])],
+            config=config,
+        )
+
+    first = await model.generate(ask('Which article covers returns? Answer with its number.'))
+    assert first.finish_reason == FinishReason.STOP
+
+    second = await model.generate(ask('Which article covers shipping? Answer with its number.'))
+    assert second.finish_reason == FinishReason.STOP
+    assert second.usage is not None
+    cached = second.usage.cached_content_tokens
+    # Above the minimum, not merely above zero: that also catches the prefix
+    # being shrunk under it, which Bedrock answers by quietly not caching.
+    # Do not assert on input_tokens; it excludes cached tokens, so it stays
+    # small on both calls however well the cache works.
+    assert cached is not None and cached > 1024, f'expected a cache read over the minimum, got {cached!r}'
 
 
 async def test_embed_titan_text_v1() -> None:
