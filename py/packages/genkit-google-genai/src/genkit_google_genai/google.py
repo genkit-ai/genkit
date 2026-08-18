@@ -46,6 +46,8 @@ Example:
     ```
 """
 
+from __future__ import annotations
+
 import os
 from collections.abc import Callable
 from typing import Any
@@ -61,10 +63,9 @@ import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._typing import Operation
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
-from genkit.model import BackgroundAction, model_action_metadata
+from genkit.model import BackgroundAction, Operation, model_action_metadata
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
@@ -87,9 +88,15 @@ from genkit_google_genai.models.embedder import (
 from genkit_google_genai.models.gemini import (
     SUPPORTED_MODELS,
     GeminiConfigSchema,
+    GeminiImageConfigSchema,
     GeminiModel,
+    GeminiTtsConfigSchema,
+    GemmaConfigSchema,
     get_model_config_schema,
     google_model_info,
+    is_gemma_model,
+    is_image_model,
+    is_tts_model,
     is_tuned_gemini_name,
 )
 from genkit_google_genai.models.imagen import (
@@ -242,6 +249,30 @@ PLUGIN_DISPLAY_NAME: dict[str, str] = {
 }
 
 
+def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
+    """Construct a GeminiModel using the plugin's loop-local client."""
+    return GeminiModel(
+        clean_name,
+        plugin._runtime_client(),
+        client_kwargs=plugin._client_kwargs,
+        base_url_pinned=plugin._base_url_pinned,
+    )
+
+
+def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type) -> Action:
+    """Build a MODEL Action with family-specific request typing on ``fn``."""
+    return Action(
+        kind=ActionKind.MODEL,
+        name=name,
+        fn=fn,
+        metadata=model_action_metadata(
+            name=name,
+            info=model_info.model_dump(by_alias=True),
+            config_schema=config_schema,
+        ).metadata,
+    )
+
+
 def googleai_name(name: str) -> str:
     """Create a GoogleAI action name.
 
@@ -340,7 +371,10 @@ def _create_veo_background_action(
     full_name = f'{prefix}{clean_name}'
     action_key = f'/background-model/{full_name}'
 
-    async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
+    # Deliberately not ModelRequest[VeoConfigSchema]: VeoModel.start only
+    # forwards dict configs, so coercing to an instance here would silently
+    # drop aspectRatio/durationSeconds on the way to the SDK.
+    async def _start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
         op = await veo.start(request, ctx)
         op.action = action_key
@@ -627,38 +661,47 @@ class GoogleAI(Plugin):
         if is_unroutable_model_id(clean_name):
             return None
 
-        # Determine model type and create model metadata/config schema
+        # One annotated closure per family. Action validates request.config
+        # from the fn annotation; a single _run cannot switch schemas at runtime.
         if is_imagen_model_name(clean_name):
-            model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
-            config_schema = ImagenConfigSchema
-        else:
-            model_ref = google_model_info(clean_name)
-            SUPPORTED_MODELS[clean_name] = model_ref
-            config_schema = get_model_config_schema(clean_name)
+            model_info = vertexai_image_model_info(clean_name)
+            IMAGE_SUPPORTED_MODELS[clean_name] = model_info  # pyright: ignore[reportArgumentType]
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if is_imagen_model_name(clean_name):
-                model = ImagenModel(clean_name, self._runtime_client())
-            else:
-                model = GeminiModel(
-                    clean_name,
-                    self._runtime_client(),
-                    client_kwargs=self._client_kwargs,
-                    base_url_pinned=self._base_url_pinned,
-                )
-            return await model.generate(request, ctx)
+            async def _run_imagen(request: ModelRequest[ImagenConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await ImagenModel(clean_name, self._runtime_client()).generate(request, ctx)
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_run,
-            metadata=model_action_metadata(
-                name=name,
-                info=model_ref.model_dump(by_alias=True),
-                config_schema=config_schema,
-            ).metadata,
-        )
+            return _model_action(name, _run_imagen, model_info, ImagenConfigSchema)
+
+        model_info = google_model_info(clean_name)
+        SUPPORTED_MODELS[clean_name] = model_info
+
+        if is_tts_model(clean_name):
+
+            async def _run_tts(request: ModelRequest[GeminiTtsConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_tts, model_info, GeminiTtsConfigSchema)
+
+        if is_image_model(clean_name):
+
+            async def _run_image(
+                request: ModelRequest[GeminiImageConfigSchema], ctx: ActionRunContext
+            ) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_image, model_info, GeminiImageConfigSchema)
+
+        if is_gemma_model(clean_name):
+
+            async def _run_gemma(request: ModelRequest[GemmaConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_gemma, model_info, GemmaConfigSchema)
+
+        async def _run(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            return await _new_gemini(self, clean_name).generate(request, ctx)
+
+        return _model_action(name, _run, model_info, GeminiConfigSchema)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Google AI embedder.
@@ -1038,53 +1081,60 @@ class VertexAI(Plugin):
         if is_unroutable_model_id(clean_name):
             return None
 
-        # Determine model type and create model metadata/config schema.
+        # One annotated closure per family. Action validates request.config
+        # from the fn annotation; a single _run cannot switch schemas at runtime.
         # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
         # route through GeminiModel with the standard Gemini config schema.
         if is_tuned_gemini_name(clean_name):
-            model_ref = ModelInfo(
+            model_info = ModelInfo(
                 label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {clean_name}',
                 supports=google_model_info('gemini').supports,
             )
-            config_schema = GeminiConfigSchema
-        elif is_imagen_model_name(clean_name):
-            model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
-            config_schema = ImagenConfigSchema
-        else:
-            model_ref = google_model_info(clean_name)
-            SUPPORTED_MODELS[clean_name] = model_ref
-            config_schema = get_model_config_schema(clean_name)
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if is_tuned_gemini_name(clean_name):
-                model = GeminiModel(
-                    clean_name,
-                    self._runtime_client(),
-                    client_kwargs=self._client_kwargs,
-                    base_url_pinned=self._base_url_pinned,
-                )
-            elif is_imagen_model_name(clean_name):
-                model = ImagenModel(clean_name, self._runtime_client())
-            else:
-                model = GeminiModel(
-                    clean_name,
-                    self._runtime_client(),
-                    client_kwargs=self._client_kwargs,
-                    base_url_pinned=self._base_url_pinned,
-                )
-            return await model.generate(request, ctx)
+            async def _run_tuned(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_run,
-            metadata=model_action_metadata(
-                name=name,
-                info=model_ref.model_dump(by_alias=True),
-                config_schema=config_schema,
-            ).metadata,
-        )
+            return _model_action(name, _run_tuned, model_info, GeminiConfigSchema)
+
+        if is_imagen_model_name(clean_name):
+            model_info = vertexai_image_model_info(clean_name)
+            IMAGE_SUPPORTED_MODELS[clean_name] = model_info  # pyright: ignore[reportArgumentType]
+
+            async def _run_imagen(request: ModelRequest[ImagenConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await ImagenModel(clean_name, self._runtime_client()).generate(request, ctx)
+
+            return _model_action(name, _run_imagen, model_info, ImagenConfigSchema)
+
+        model_info = google_model_info(clean_name)
+        SUPPORTED_MODELS[clean_name] = model_info
+
+        if is_tts_model(clean_name):
+
+            async def _run_tts(request: ModelRequest[GeminiTtsConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_tts, model_info, GeminiTtsConfigSchema)
+
+        if is_image_model(clean_name):
+
+            async def _run_image(
+                request: ModelRequest[GeminiImageConfigSchema], ctx: ActionRunContext
+            ) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_image, model_info, GeminiImageConfigSchema)
+
+        if is_gemma_model(clean_name):
+
+            async def _run_gemma(request: ModelRequest[GemmaConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+                return await _new_gemini(self, clean_name).generate(request, ctx)
+
+            return _model_action(name, _run_gemma, model_info, GemmaConfigSchema)
+
+        async def _run(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            return await _new_gemini(self, clean_name).generate(request, ctx)
+
+        return _model_action(name, _run, model_info, GeminiConfigSchema)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Vertex AI embedder.

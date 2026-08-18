@@ -30,7 +30,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import (
     Media,
@@ -45,6 +45,7 @@ from genkit import (
     TextPart,
 )
 from genkit.plugin_api import ActionRunContext, tracer
+from genkit_google_genai.models._sdk_config import sdk_config_error
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -208,19 +209,21 @@ class ImagenModel:
         )
 
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
-        cfg = None
+        if not request.config:
+            return None
 
-        if request.config:
-            request_config = request.config
-            ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
-            try:
-                cfg = ta.validate_python(request_config)
-            except ValidationError as e:
-                raise ValueError(
-                    'The configuration dictionary is invalid. Refer the documentation for available fields'
-                ) from e
+        dumped = (
+            request.config.model_dump(exclude_none=True, by_alias=False)
+            if isinstance(request.config, BaseModel)
+            else None
+        )
+        if not dumped:
+            return None
 
-        return cfg
+        try:
+            return genai_types.GenerateImagesConfig(**dumped)
+        except ValidationError as e:
+            raise sdk_config_error(action_name=self._version, error=e) from e
 
     def _contents_from_response(self, response: genai_types.GenerateImagesResponse) -> list:
         """Retrieve contents from google-genai response.

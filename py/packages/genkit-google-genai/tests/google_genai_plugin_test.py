@@ -20,7 +20,7 @@ import asyncio
 import os
 import queue
 import threading
-from typing import cast
+from typing import cast, get_args, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -42,9 +42,13 @@ from genkit_google_genai.google import (
     googleai_name,
     vertexai_name,
 )
-from genkit_google_genai.models.gemini import GeminiImageConfigSchema
+from genkit_google_genai.models.gemini import (
+    GeminiImageConfigSchema,
+    GeminiTtsConfigSchema,
+    GemmaConfigSchema,
+)
 from genkit_google_genai.models.imagen import ImagenConfigSchema
-from genkit_google_genai.models.veo import VeoModel
+from genkit_google_genai.models.veo import VeoConfigSchema, VeoModel
 
 from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
@@ -55,6 +59,19 @@ def _custom_options(action: Action) -> object:
     """Return the advertised config schema from an action's model metadata."""
     model_meta = cast('dict[str, object]', action.metadata['model'])
     return model_meta['customOptions']
+
+
+def _request_config_type(action: Action) -> type:
+    """Return the ModelRequest[T] config parameter from an action fn."""
+    hints = get_type_hints(action._fn)  # noqa: SLF001
+    request_type = hints['request']
+    args = get_args(request_type)
+    if args:
+        return args[0]
+    metadata = getattr(request_type, '__pydantic_generic_metadata__', None) or {}
+    args = metadata.get('args') or ()
+    assert args, f'expected ModelRequest[T], got {request_type!r}'
+    return args[0]
 
 
 def test_googleai_name() -> None:
@@ -210,6 +227,57 @@ async def test_googleai_resolve_gemini_image_is_not_imagen(mock_list_models: Mag
 
     assert action is not None
     assert _custom_options(action) == to_json_schema(GeminiImageConfigSchema)
+    assert _request_config_type(action) is GeminiImageConfigSchema
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model_name', 'config_type'),
+    [
+        ('googleai/gemini-2.0-flash', GeminiConfigSchema),
+        ('googleai/gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
+        ('googleai/gemini-2.5-flash-image', GeminiImageConfigSchema),
+        ('googleai/gemma-3-12b-it', GemmaConfigSchema),
+        ('googleai/imagen-3.0-generate-002', ImagenConfigSchema),
+    ],
+)
+async def test_googleai_resolve_types_family_config(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    model_name: str,
+    config_type: type,
+) -> None:
+    """Each family action opts into ModelRequest[FamilyConfig]."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.MODEL, model_name)
+
+    assert action is not None
+    assert _request_config_type(action) is config_type
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_start_stays_untyped(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Veo start must not coerce config: VeoModel.start only forwards dicts,
+    so a typed request would silently drop aspectRatio/durationSeconds."""
+    mock_list_models.return_value = GenaiModels()
+
+    for plugin, name in (
+        (GoogleAI(api_key='test-key'), 'googleai/veo-3.0-generate-001'),
+        (VertexAI(project='test-project'), 'vertexai/veo-3.0-generate-001'),
+    ):
+        action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, name)
+        assert action is not None
+        request_type = get_type_hints(action._fn)['request']  # noqa: SLF001
+        args = get_args(request_type) or (getattr(request_type, '__pydantic_generic_metadata__', None) or {}).get(
+            'args', ()
+        )
+        assert VeoConfigSchema not in tuple(args)
 
 
 @patch('genkit_google_genai.google.genai.client.Client')

@@ -40,7 +40,7 @@ US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
-def _text_request(config: dict[str, Any] | None = None) -> ModelRequest[Any]:
+def _text_request(config: GeminiConfigSchema | dict[str, Any] | None = None) -> ModelRequest[Any]:
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
         config=config,
@@ -782,9 +782,13 @@ class TestLocationConfigThroughPipeline:
 
     @pytest.mark.asyncio
     async def test_location_stripped_from_generate_content_config(self) -> None:
-        """A config with location converts to GenerateContentConfig without error."""
+        """A config with location converts to GenerateContentConfig without error.
+
+        By the time the model runs, Action has validated the caller's dict into
+        the family schema, so the pipeline is exercised with that instance.
+        """
         model = _vertex_model()
-        request = _text_request({'location': 'eu', 'temperature': 0.5})
+        request = _text_request(GeminiConfigSchema.model_validate({'location': 'eu', 'temperature': 0.5}))
         cfg = await model._genkit_to_googleai_cfg(request=request)
         assert cfg is not None
         assert cfg.temperature == 0.5
