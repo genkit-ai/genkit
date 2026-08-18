@@ -74,7 +74,7 @@ def test_strip_lowercases_for_lookup() -> None:
 def test_a_mixed_case_id_still_finds_its_capabilities() -> None:
     info = get_model_info('US.Amazon.Nova-Lite-V1:0')
     assert info.stage == Stage.STABLE
-    assert info.label == 'US.Amazon.Nova-Lite-V1:0'
+    assert info.label == 'Amazon Bedrock - US.Amazon.Nova-Lite-V1:0'
 
 
 def test_us_gov_wins_over_us() -> None:
@@ -99,7 +99,45 @@ def test_inference_profile_id_resolves_registry_entry() -> None:
     assert info.stage == Stage.STABLE
     assert info.supports is not None
     assert info.supports.media is False
-    assert info.label == 'eu.amazon.nova-micro-v1:0'
+    assert info.label == 'Amazon Bedrock - eu.amazon.nova-micro-v1:0'
+
+
+@pytest.mark.parametrize(
+    'model_id',
+    [
+        'anthropic.claude-sonnet-4-6',
+        'anthropic.claude-opus-4-6-v1',
+        'anthropic.claude-opus-4-7',
+        'anthropic.claude-opus-4-8',
+        'anthropic.claude-sonnet-5',
+        'anthropic.claude-opus-5',
+        'anthropic.claude-fable-5',
+    ],
+)
+def test_current_claude_models_are_stable_and_multimodal(model_id: str) -> None:
+    info = get_model_info(model_id)
+    assert info.stage == Stage.STABLE
+    assert info.supports is not None
+    assert info.supports.media is True
+    assert info.supports.tools is True
+
+
+@pytest.mark.parametrize(
+    'model_id',
+    ['us.anthropic.claude-opus-5', 'global.anthropic.claude-fable-5', 'eu.anthropic.claude-opus-4-7'],
+)
+def test_current_claude_profile_ids_resolve_to_their_registry_entry(model_id: str) -> None:
+    info = get_model_info(model_id)
+    assert info.stage == Stage.STABLE
+    assert info.supports is not None
+    assert info.supports.media is True
+
+
+def test_messages_only_model_is_not_registered() -> None:
+    # Claude Mythos 5 is ACTIVE on Bedrock but has no Converse support, so it
+    # must not claim a stable capability entry on the Converse path.
+    info = get_model_info('anthropic.claude-mythos-5')
+    assert info.stage == Stage.UNSTABLE
 
 
 def test_unknown_model_defaults_to_unstable_converse_capabilities() -> None:
@@ -114,6 +152,7 @@ def test_unknown_model_defaults_to_unstable_converse_capabilities() -> None:
 def test_image_model_supports_media_output_only() -> None:
     info = get_model_info('amazon.titan-image-generator-v1', model_type='image')
     assert info.stage == Stage.STABLE
+    assert info.label == 'Amazon Bedrock - amazon.titan-image-generator-v1'
     assert info.supports is not None
     assert info.supports.output == ['media']
     # media is Genkit's input flag, and these models take text prompts only.
@@ -123,8 +162,8 @@ def test_image_model_supports_media_output_only() -> None:
     assert info.supports.system_role is False
 
 
-def test_registry_matches_go_plugin_size() -> None:
-    assert len(MODEL_CAPABILITIES) == 47
+def test_registry_size() -> None:
+    assert len(MODEL_CAPABILITIES) == 52
 
 
 def test_all_registry_keys_are_base_ids() -> None:

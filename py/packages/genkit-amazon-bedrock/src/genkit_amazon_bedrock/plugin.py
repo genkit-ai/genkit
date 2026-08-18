@@ -190,10 +190,9 @@ class Bedrock(Plugin):
             # Same story for rerank models; reranking is the Bedrock.rerank helper.
             return None
         declared = self._declared_model_type(model_id)
-        # Classifying undeclared IDs diverges from Go, which routes on the
-        # declared type alone: this plugin resolves lazily, so without it
-        # bedrock/amazon.nova-canvas-v1:0 would take the Converse path and fail
-        # at call time. Embedders already classify by ID the same way.
+        # Undeclared IDs are classified rather than assumed to be chat: resolve
+        # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
+        # Converse path and fail at call time. Embedders classify the same way.
         model_type = declared if declared is not None else ('image' if is_image_model(model_id) else 'chat')
         return self._create_model_action(model_id, model_type)
 

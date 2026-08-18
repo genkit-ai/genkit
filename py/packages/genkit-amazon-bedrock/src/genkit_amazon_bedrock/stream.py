@@ -223,8 +223,8 @@ def _tool_block_to_part(index: int, block: _StreamBlock, tools: list[ToolDefinit
 def _decode_tool_input(index: int, raw: str) -> Any:  # noqa: ANN401
     """Decodes accumulated tool-input fragments; None when none were sent.
 
-    ``json.loads`` rejects trailing data after the JSON value, which is the
-    check Go spells out by hand.
+    ``json.loads`` rejects trailing data after the JSON value, so a doubled or
+    truncated fragment raises instead of decoding halfway.
     """
     if not raw.strip():
         return None
