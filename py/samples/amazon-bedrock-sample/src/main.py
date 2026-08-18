@@ -14,25 +14,49 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Amazon Bedrock samples for the Converse and ConverseStream paths.
+"""Amazon Bedrock samples for the Converse, ConverseStream, and embedding paths.
 
 Needs AWS credentials and a region (``AWS_REGION`` or ``~/.aws/config``) with
 model access granted for the models below. The flows named ``*_stream`` go
-through ConverseStream; the rest are a single Converse call.
+through ConverseStream; the ``embed_*`` flows go through InvokeModel; the rest
+are a single Converse call.
 """
+
+import math
 
 from genkit_amazon_bedrock import Bedrock, ModelDefinition
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit, ModelResponse, ReasoningPart
+from genkit import (
+    ActionRunContext,
+    Document,
+    DocumentPart,
+    Genkit,
+    Media,
+    MediaPart,
+    ModelResponse,
+    ReasoningPart,
+    TextPart,
+)
 
 NOVA = 'bedrock/us.amazon.nova-lite-v1:0'
 LLAMA = 'bedrock/us.meta.llama3-3-70b-instruct-v1:0'
 DEEPSEEK = 'bedrock/us.deepseek.r1-v1:0'
 CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+TITAN_EMBED = 'amazon.titan-embed-text-v2:0'
+TITAN_EMBED_IMAGE = 'amazon.titan-embed-image-v1'
+COHERE_EMBED = 'cohere.embed-english-v3'
+NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 
-# Declaring models is optional — resolve() serves any Bedrock model ID or ARN
-# on demand — but declared ones show up in the Dev UI model list.
+# The smallest PNG Titan accepts (1x1 pixel), inline so the multimodal flow
+# needs no asset file. Titan wants raw base64 in the request body; the plugin
+# strips this data URL's prefix before the call.
+PNG_1X1_DATA_URL = (
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
+)
+
+# Declaring an embedder costs nothing at startup: no AWS call happens until a flow runs one,
+# so a missing model-access grant only surfaces when you use it.
 ai = Genkit(
     plugins=[
         Bedrock(
@@ -41,7 +65,8 @@ ai = Genkit(
                 ModelDefinition(name='us.meta.llama3-3-70b-instruct-v1:0'),
                 ModelDefinition(name='us.deepseek.r1-v1:0'),
                 ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
-            ]
+            ],
+            embedders=[TITAN_EMBED, TITAN_EMBED_IMAGE, COHERE_EMBED, NOVA_EMBED],
         )
     ],
     model=NOVA,
@@ -73,6 +98,48 @@ class CityInput(BaseModel):
     """Input for the weather tool."""
 
     city: str = Field(default='Lagos', description='City to look up')
+
+
+class EmbedInput(BaseModel):
+    """Input for the embedding flow."""
+
+    text: str = Field(default='Bedrock hosts models from several providers.', description='Text to embed')
+
+
+class EmbedBatchInput(BaseModel):
+    """Input for the batch embedding flow."""
+
+    embedder: str = Field(default=TITAN_EMBED, description='Bedrock embedding model ID to use')
+    texts: list[str] = Field(
+        default=[
+            'Bedrock hosts models from several providers.',
+            'A tabby cat naps on the windowsill.',
+            'Rust and Go both compile to native binaries.',
+            'Bedrock hosts models from several providers.',
+        ],
+        description='Documents to embed in one call; the last repeats the first on purpose',
+    )
+
+
+class SimilarityInput(BaseModel):
+    """Input for the semantic-similarity flow."""
+
+    query: str = Field(default='How do I deploy a machine learning model?', description='Query text')
+    candidates: list[str] = Field(
+        default=[
+            'Serving a trained model behind an HTTP endpoint in production.',
+            'Sourdough needs a starter fed for several days before it can leaven bread.',
+            'The tabby cat sleeps in the afternoon sun.',
+        ],
+        description='Candidate texts to rank against the query',
+    )
+
+
+class MultimodalEmbedInput(BaseModel):
+    """Input for the Titan multimodal embedding flow."""
+
+    text: str = Field(default='a white square', description='Caption embedded alongside the image')
+    image_data_url: str = Field(default=PNG_1X1_DATA_URL, description='PNG or JPEG image as a data URL')
 
 
 @ai.tool()
@@ -224,6 +291,144 @@ async def thinking(data: TopicInput) -> dict[str, object]:
     return _reasoning_summary(response)
 
 
+@ai.flow()
+async def embed_text(data: EmbedInput) -> dict[str, object]:
+    """Embed one document with Titan Text v2 through InvokeModel.
+
+    Titan text embeds one document per call, so this is the plain single-call
+    path. Only the head of the vector is returned: 1024 floats are unreadable
+    in the Dev UI. Titan v2 normalizes its output, so the magnitude is ~1.0.
+    """
+    embeddings = await ai.embed(embedder=f'bedrock/{TITAN_EMBED}', content=data.text)
+    if not embeddings:
+        raise RuntimeError('Bedrock embedder returned no embeddings for a non-empty input.')
+    vector = embeddings[0].embedding
+    return {
+        'model': TITAN_EMBED,
+        'dimensions': len(vector),
+        'first_values': [round(value, 5) for value in vector[:5]],
+        'magnitude': round(_magnitude(vector), 5),
+    }
+
+
+@ai.flow()
+async def embed_batch(data: EmbedBatchInput) -> dict[str, object]:
+    """Embed several documents in one ``embed_many`` call.
+
+    Titan text has no batch API, so the plugin fans the documents out into
+    concurrent InvokeModel calls capped by a semaphore and reassembles them by
+    index; Cohere instead sends up to 96 texts in a single call. Either way the
+    results come back aligned to their inputs, which is what the repeated text
+    shows: its similarity to its own copy is 1.0, at both ends of the list.
+
+    Switch ``embedder`` to ``cohere.embed-english-v3`` for the single-call batch
+    path, or to ``amazon.nova-2-multimodal-embeddings-v1:0`` (us-east-1 only)
+    for 3072 dimensions.
+    """
+    embeddings = await ai.embed_many(embedder=f'bedrock/{data.embedder}', content=data.texts)
+    if len(embeddings) != len(data.texts):
+        raise RuntimeError(f'Expected {len(data.texts)} embeddings, got {len(embeddings)}.')
+    vectors = [embedding.embedding for embedding in embeddings]
+    return {
+        'model': data.embedder,
+        'count': len(vectors),
+        'documents': [
+            {'index': index, 'text': text, 'dimensions': len(vector), 'first_value': round(vector[0], 5)}
+            for index, (text, vector) in enumerate(zip(data.texts, vectors, strict=True))
+        ],
+        'repeated_text_pairs': [
+            {'a': first, 'b': second, 'similarity': round(_cosine_similarity(vectors[first], vectors[second]), 5)}
+            for first, second in _repeated_pairs(data.texts)
+        ],
+    }
+
+
+@ai.flow()
+async def embed_similarity(data: SimilarityInput) -> dict[str, object]:
+    """Rank candidate texts against a query by cosine similarity.
+
+    A dimension count only proves the vector is well shaped. Ranking proves the
+    numbers carry meaning: the candidate on the query's subject scores well
+    above the unrelated ones. Titan is used rather than Cohere because Cohere
+    requests are pinned to ``input_type: search_document`` for now, which is the
+    wrong side of the asymmetry for a query.
+    """
+    query_embeddings = await ai.embed(embedder=f'bedrock/{TITAN_EMBED}', content=data.query)
+    if not query_embeddings:
+        raise RuntimeError('Bedrock embedder returned no embeddings for the query.')
+    candidate_embeddings = await ai.embed_many(embedder=f'bedrock/{TITAN_EMBED}', content=data.candidates)
+    query_vector = query_embeddings[0].embedding
+    scored = [
+        (text, _cosine_similarity(query_vector, embedding.embedding))
+        for text, embedding in zip(data.candidates, candidate_embeddings, strict=True)
+    ]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return {
+        'model': TITAN_EMBED,
+        'query': data.query,
+        'dimensions': len(query_vector),
+        'best_match': scored[0][0] if scored else None,
+        'ranked': [{'text': text, 'similarity': round(similarity, 5)} for text, similarity in scored],
+    }
+
+
+@ai.flow()
+async def embed_image(data: MultimodalEmbedInput) -> dict[str, object]:
+    """Embed a caption and an image together with Titan Multimodal.
+
+    One document carrying both a text part and a media part becomes one joint
+    1024-float vector; this is the only flow that exercises the media path. The
+    caption is also embedded on its own, so the output shows the image really
+    reached the model: the two vectors are not the same.
+    """
+    joint_document = Document(
+        content=[
+            DocumentPart(root=TextPart(text=data.text)),
+            DocumentPart(root=MediaPart(media=Media(url=data.image_data_url, content_type='image/png'))),
+        ]
+    )
+    embeddings = await ai.embed_many(
+        embedder=f'bedrock/{TITAN_EMBED_IMAGE}',
+        content=[joint_document, Document.from_text(data.text)],
+    )
+    if len(embeddings) != 2:
+        raise RuntimeError(f'Expected 2 embeddings, got {len(embeddings)}.')
+    joint = embeddings[0].embedding
+    text_only = embeddings[1].embedding
+    return {
+        'model': TITAN_EMBED_IMAGE,
+        'dimensions': len(joint),
+        'first_values': [round(value, 5) for value in joint[:5]],
+        'text_only_dimensions': len(text_only),
+        'similarity_to_caption_alone': round(_cosine_similarity(joint, text_only), 5),
+    }
+
+
+def _magnitude(vector: list[float]) -> float:
+    """Euclidean length of a vector; stdlib math only, the sample has no numpy."""
+    return math.sqrt(math.fsum(value * value for value in vector))
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Cosine similarity of two vectors, in [-1.0, 1.0] for non-zero inputs."""
+    if len(left) != len(right):
+        raise ValueError(f'Vectors must be the same length, got {len(left)} and {len(right)}.')
+    dot = math.fsum(a * b for a, b in zip(left, right, strict=True))
+    scale = _magnitude(left) * _magnitude(right)
+    return dot / scale if scale else 0.0
+
+
+def _repeated_pairs(texts: list[str]) -> list[tuple[int, int]]:
+    """Index pairs of identical texts, so per-document alignment can be checked."""
+    seen: dict[str, int] = {}
+    pairs: list[tuple[int, int]] = []
+    for index, text in enumerate(texts):
+        first = seen.setdefault(text, index)
+        if first != index:
+            pairs.append((first, index))
+    return pairs
+
+
 def _reasoning_summary(response: ModelResponse) -> dict[str, object]:
     """Summarize the reasoning parts on a response."""
     reasoning_text: list[str] = []
@@ -248,11 +453,13 @@ async def main() -> None:
         print(await haiku(TopicInput()))  # noqa: T201
         print(await haiku_stream(TopicInput()))  # noqa: T201
         print(await weather_report(CityInput()))  # noqa: T201
+        print(await embed_text(EmbedInput()))  # noqa: T201
+        print(await embed_similarity(SimilarityInput()))  # noqa: T201
     except Exception as error:
         # Printed, not raised: in dev mode the Dev UI stays up either way.
         print(  # noqa: T201
-            f'Set AWS credentials and a region, and grant model access for {NOVA}, {LLAMA}, and {DEEPSEEK}, '
-            f'before running this sample.\n{error}'
+            f'Set AWS credentials and a region, and grant model access for {NOVA}, {LLAMA}, {DEEPSEEK}, and '
+            f'{TITAN_EMBED}, before running this sample.\n{error}'
         )
 
 

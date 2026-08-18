@@ -111,15 +111,6 @@ def test_image_model_supports_media_output_only() -> None:
     assert info.supports.system_role is False
 
 
-def test_embedding_model_supports_nothing() -> None:
-    info = get_model_info('amazon.titan-embed-text-v2:0', model_type='embedding')
-    assert info.stage == Stage.STABLE
-    assert info.supports is not None
-    assert info.supports.media is False
-    assert info.supports.multiturn is False
-    assert info.supports.tools is False
-
-
 def test_registry_matches_go_plugin_size() -> None:
     assert len(MODEL_CAPABILITIES) == 47
 

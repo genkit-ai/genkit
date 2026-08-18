@@ -2,10 +2,11 @@
 
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
-Cohere, and others) through the Bedrock Converse and ConverseStream APIs.
+Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
+embeddings through InvokeModel.
 
-> Status: in progress. Text generation is available, streaming and
-> non-streaming. Embedders, image generation, and reranking are still to come.
+> Status: in progress. Text generation (streaming and non-streaming) and
+> embedders are available. Image generation and reranking are still to come.
 
 ## Installation
 
@@ -71,6 +72,51 @@ through `additionalModelRequestFields` instead:
 ```python
 BedrockConfig(additional_model_request_fields={'top_k': 40})
 ```
+
+## Embedders
+
+Embedding models are listed separately from chat models, by bare model ID:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+ai = Genkit(plugins=[Bedrock(embedders=['amazon.titan-embed-text-v2:0'])])
+
+embeddings = await ai.embed(
+    embedder='bedrock/amazon.titan-embed-text-v2:0',
+    content='Bedrock hosts models from several providers.',
+)
+```
+
+| Model                                      | Dimensions | Modalities   |
+| ------------------------------------------ | ---------- | ------------ |
+| `amazon.titan-embed-text-v1`               | 1536       | text         |
+| `amazon.titan-embed-text-v2:0`             | 1024       | text         |
+| `amazon.titan-embed-image-v1`              | 1024       | text, image  |
+| `cohere.embed-english-v3`                  | 1024       | text         |
+| `cohere.embed-multilingual-v3`             | 1024       | text         |
+| `amazon.nova-2-multimodal-embeddings-v1:0` | 3072       | text         |
+
+Notes:
+
+- As with models, listing is optional: any routable embedding model ID
+  resolves on demand, including inference-profile and ARN forms. Listing one
+  only adds it to the Dev UI.
+- `amazon.titan-embed-image-v1` is the only image embedder here. It accepts
+  JPEG and PNG, one image per document, and averages the two vectors when a
+  document carries text as well.
+- **Cohere embedding is text-only on Bedrock.** The AWS parameters page
+  documents an `images` field for Embed v3, but `aws bedrock
+  get-foundation-model` reports `inputModalities: [TEXT]` for both v3 model IDs
+  and a live image request is refused. A document with no text is rejected
+  rather than sent; a media part alongside text is ignored.
+- `cohere.embed-v4` is not supported yet -- it uses a different request schema and fails with `UNIMPLEMENTED`. It is also where Cohere image embedding will arrive.
+- Per-request options are not honoured yet. Cohere requests are pinned to
+  `input_type: search_document`, so these embedders are for indexing
+  documents, not for embedding queries.
+- `amazon.nova-2-multimodal-embeddings-v1:0` is offered in `us-east-1` only,
+  and is text-only here; its image, audio, and video inputs are not ported.
 
 ## License
 
