@@ -17,27 +17,31 @@
 """Amazon Bedrock plugin for Genkit.
 
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
-Mistral, Cohere, and others), embedders (Titan, Cohere, Nova), image
-generators, and the Cohere reranker as Genkit actions. Text generation uses
-the Bedrock Converse and ConverseStream APIs; embeddings, image generation,
-and reranking use InvokeModel.
-
-Ported from the Go plugin (genkit-ai/aws-bedrock-go-plugin).
+Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
+Bedrock Converse API, non-streaming; streaming, embedders, image generation,
+and reranking are not supported yet.
 """
 
 from typing import TYPE_CHECKING
 
+from genkit import ModelRequest, ModelResponse
+from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
+    ActionRunContext,
     Plugin,
+    to_json_schema,
 )
 from genkit_amazon_bedrock.config import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_TOTAL_TIMEOUT,
+    BedrockConfig,
     ModelDefinition,
 )
+from genkit_amazon_bedrock.model_info import get_model_info
+from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock.transport import BedrockTransport
 
 if TYPE_CHECKING:
     import boto3.session
@@ -65,42 +69,74 @@ class Bedrock(Plugin):
     def __init__(
         self,
         region: str | None = None,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        max_retries: int | None = None,
+        read_timeout: float | None = None,
+        connect_timeout: float | None = None,
+        max_pool_connections: int | None = None,
+        total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
         session: 'boto3.session.Session | None' = None,
         models: list[ModelDefinition] | None = None,
-        embedders: list[str] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
 
+        The AWS client knobs all default to None, meaning "use the ambient AWS
+        configuration" (``AWS_MAX_ATTEMPTS``, ``AWS_RETRY_MODE``,
+        ``~/.aws/config``, a session's default client config), and fall back to
+        the package defaults only when that configuration says nothing.
+
         Args:
             region: AWS region. Defaults to the SDK resolution chain
-                (``AWS_REGION``, ``AWS_DEFAULT_REGION``, ``~/.aws/config``).
+                (``AWS_REGION``, ``AWS_DEFAULT_REGION``, ``~/.aws/config``);
+                initialization fails loudly when no region resolves rather
+                than silently picking one.
             max_retries: Retry limit for Bedrock API calls.
-            request_timeout: Per-call timeout in seconds.
+            read_timeout: Socket read timeout in seconds. Resets on every byte
+                received, so it caps silence, not the call.
+            connect_timeout: Socket connect timeout in seconds.
+            max_pool_connections: HTTP connection pool size.
+            total_timeout: Whole-call deadline in seconds, covering retries and
+                the slow-dribble case the read timeout cannot see. None removes
+                the deadline, leaving only the socket timeouts.
             session: Optional pre-configured ``boto3.session.Session`` for custom
                 credentials or advanced SDK wiring.
             models: Bedrock models to register. Models not listed can still be
                 resolved dynamically by namespaced name.
-            embedders: Embedding model IDs to register (Titan, Cohere, Nova).
         """
         self.region = region
         self.max_retries = max_retries
-        self.request_timeout = request_timeout
+        self.read_timeout = read_timeout
+        self.connect_timeout = connect_timeout
+        self.max_pool_connections = max_pool_connections
+        self.total_timeout = total_timeout
         self._session = session
         self.models = models or []
-        self.embedders = embedders or []
+        self._transport = BedrockTransport(
+            region=region,
+            max_retries=max_retries,
+            read_timeout=read_timeout,
+            connect_timeout=connect_timeout,
+            max_pool_connections=max_pool_connections,
+            total_timeout=total_timeout,
+            session=session,
+        )
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
 
+        Builds the shared client so misconfiguration (e.g. no resolvable AWS
+        region) fails at startup instead of on the first model call.
+
         Returns:
             Empty list (actions are lazily created via ``resolve``).
         """
+        await self._transport.ensure_client()
         return []
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by namespaced name.
+
+        Any model ID resolves — the Bedrock catalogue includes arbitrary
+        inference profiles and ARNs and can never be fully enumerated.
 
         Args:
             action_type: The kind of action to resolve.
@@ -109,12 +145,63 @@ class Bedrock(Plugin):
         Returns:
             Action object if resolvable, None otherwise.
         """
-        return None
+        if action_type != ActionKind.MODEL:
+            return None
+        prefix = f'{BEDROCK_PLUGIN_NAME}/'
+        # Direct plugin.model() calls can pass any namespace; only ours resolves.
+        if not name.startswith(prefix):
+            return None
+        model_id = name.removeprefix(prefix)
+        model_type = self._configured_model_type(model_id)
+        if model_type not in ('chat', 'text'):
+            # Image generation lands in a later slice.
+            return None
+        return self._create_model_action(model_id)
+
+    def _configured_model_type(self, model_id: str) -> str:
+        for definition in self.models:
+            if definition.name == model_id:
+                return definition.type
+        return 'chat'
+
+    def _create_model_action(self, model_id: str) -> Action:
+        model_info = get_model_info(model_id)
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            model = BedrockModel(model_id=model_id, transport=self._transport)
+            return await model.generate(request, ctx)
+
+        return Action(
+            kind=ActionKind.MODEL,
+            name=bedrock_name(model_id),
+            fn=_generate,
+            metadata={
+                'model': {
+                    'label': model_info.label,
+                    'stage': model_info.stage.value if model_info.stage else None,
+                    'supports': (
+                        model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
+                    ),
+                    'customOptions': to_json_schema(BedrockConfig),
+                },
+            },
+        )
 
     async def list_actions(self) -> list[ActionMetadata]:
-        """List available Bedrock models and embedders.
+        """List configured Bedrock models.
+
+        Only explicitly configured models are listed; the catalogue itself is
+        open-ended, and any model ID still resolves on demand.
 
         Returns:
-            ActionMetadata for each configured model and embedder.
+            ActionMetadata for each configured chat model.
         """
-        return []
+        return [
+            model_action_metadata(
+                name=bedrock_name(definition.name),
+                info=get_model_info(definition.name, definition.type).model_dump(by_alias=True, exclude_none=True),
+                config_schema=BedrockConfig,
+            )
+            for definition in self.models
+            if definition.type in ('chat', 'text')
+        ]

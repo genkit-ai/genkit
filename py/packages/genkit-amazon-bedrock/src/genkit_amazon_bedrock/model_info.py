@@ -16,9 +16,9 @@
 
 """Model capability registry for the Amazon Bedrock plugin.
 
-Ported from the Go plugin's ``models.go``. Capabilities are keyed by base
-Bedrock model ID; cross-region inference-profile prefixes are stripped for
-lookup only - the full original model ID is always sent to Bedrock untouched.
+Capabilities are keyed by base Bedrock model ID; cross-region inference-profile
+prefixes are stripped for lookup only - the full original model ID is always
+sent to Bedrock untouched.
 Unknown chat/text models fall back to modern Converse defaults (multimodal +
 tools) at the unstable stage, so newer or inference-profile-only models remain
 callable without a plugin release.
@@ -132,7 +132,7 @@ def strip_inference_profile_prefix(model_id: str) -> str:
 
 def get_model_info(
     model_name: str,
-    model_type: Literal['chat', 'image', 'embedding'] = 'chat',
+    model_type: Literal['chat', 'text', 'image', 'embedding'] = 'chat',
 ) -> ModelInfo:
     """Infers Genkit model info for a Bedrock model.
 

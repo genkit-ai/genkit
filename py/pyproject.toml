@@ -137,6 +137,7 @@ default = true
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
 agents               = { workspace = true }
+amazon-bedrock-sample = { workspace = true }
 anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }

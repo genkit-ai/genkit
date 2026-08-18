@@ -24,15 +24,23 @@ from pydantic.alias_generators import to_camel
 from genkit import ModelConfig
 
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_REQUEST_TIMEOUT = 30.0
+# Socket read timeout: the gap botocore tolerates between two reads, which
+# resets on every byte received. Generous because Bedrock generations can
+# legitimately run for many minutes (Nova allows 60-minute inference).
+DEFAULT_READ_TIMEOUT = 3600.0
+DEFAULT_CONNECT_TIMEOUT = 60.0
+# Whole-call deadline. Unlike the read timeout this does not reset, so a
+# connection that dribbles a byte at a time still ends.
+DEFAULT_TOTAL_TIMEOUT = 3600.0
+# The botocore default of 10 pooled connections throttles LLM concurrency.
+DEFAULT_MAX_POOL_CONNECTIONS = 50
 
 
 class BedrockConfig(ModelConfig):
     """Per-call configuration for Bedrock models.
 
-    Mirrors the Go plugin's ``Config`` surface. Unknown keys are allowed and
-    forwarded so callers can use provider-specific options without a plugin
-    release.
+    Unknown keys are tolerated for forward compatibility, but only the declared
+    fields (and ``additional_model_request_fields``) reach the Converse API.
     """
 
     model_config = ConfigDict(
@@ -58,5 +66,5 @@ class ModelDefinition(BaseModel):
     name: str
     """Bedrock model ID, e.g. ``anthropic.claude-sonnet-4-5-20250929-v1:0``."""
 
-    type: Literal['chat', 'image', 'embedding'] = 'chat'
+    type: Literal['chat', 'text', 'image', 'embedding'] = 'chat'
     """Routes generate calls: chat/text via Converse, image via InvokeModel."""
