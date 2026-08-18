@@ -20,7 +20,7 @@ import asyncio
 import json
 from asyncio import AbstractEventLoop
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, Protocol, TypeAlias, TypeVar
 
 from flask import Response, request
 from pydantic import BaseModel
@@ -46,14 +46,43 @@ T = TypeVar('T')
 
 
 def _create_loop() -> AbstractEventLoop:
-    """Creates a new asyncio event loop or returns the current one."""
+    """Return a live asyncio event loop for sync Flask streaming bridges.
+
+    Never reuse a closed loop: warm Cloud Run / sync hosts often close the
+    previous request's loop (#4925), and ``asyncio.get_event_loop()`` can still
+    return that closed object.
+    """
     try:
-        return asyncio.get_event_loop()
-    except Exception:
-        return asyncio.new_event_loop()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
 
 
-def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable[T]:
+class _LoopRunner(Protocol):
+    def run_until_complete(self, coro: Awaitable[Any]) -> Any: ...
+
+
+class _LazyLoop:
+    """Resolve a live event loop when sync streaming iteration actually starts.
+
+    Flask may run the async ``handler`` on a temporary loop (e.g. asgiref
+    ``async_to_sync``) that is closed as soon as ``handler()`` returns — before
+    the returned streaming iterable is consumed. Resolving the loop lazily
+    avoids ``RuntimeError: Event loop is closed`` (#4925).
+    """
+
+    def run_until_complete(self, coro: Awaitable[Any]) -> Any:
+        return _create_loop().run_until_complete(coro)
+
+
+def _iter_over_async(ait: AsyncIterable[T], loop: _LoopRunner) -> Iterable[T]:
     """Synchronously iterates over an AsyncIterable using a specified event loop."""
     ait_iter = ait.__aiter__()
 
@@ -112,7 +141,6 @@ def genkit_flask_handler(
     ```
 
     """
-    loop = _create_loop()
 
     def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, Action):
@@ -153,7 +181,9 @@ def genkit_flask_handler(
                             ex = ex.cause
                         yield f'data: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
 
-                iter = _iter_over_async(async_gen(), loop)
+                # Lazily resolve the loop at iteration time — Flask may close the
+                # temporary async-runner loop before consuming this iterable (#4925).
+                iter = _iter_over_async(async_gen(), _LazyLoop())
                 return iter
             else:
                 try:
