@@ -1,0 +1,26 @@
+{
+  "name": "a2a-testapp",
+  "version": "1.0.0",
+  "description": "Testapp demonstrating @genkit-ai/a2a — a Genkit agent exposed over the A2A protocol",
+  "private": true,
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "server": "npx tsx src/server.ts",
+    "client": "npx tsx src/client.ts",
+    "genkit:dev": "genkit start -- npx tsx --watch src/server.ts"
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "^0.3.14",
+    "@genkit-ai/a2a": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "express": "^4.20.0",
+    "genkit": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.16",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}
