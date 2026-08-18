@@ -21,15 +21,22 @@ start path) and Pydantic GenerateVideosResponse objects (from the check
 path where the SDK returns a model instance).
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
+    VeoModel,
     VeoVersion,
     _from_veo_operation,
     _to_veo_parameters,
     is_veo_model,
 )
 from google.genai import types as genai_types
+from google.genai.errors import APIError
+
+from genkit import GenkitError
+from genkit.model import Operation
 
 
 class TestIsVeoModel:
@@ -216,3 +223,15 @@ class TestFromVeoOperation:
         })
         assert op.done is True
         assert op.output is None
+
+
+@pytest.mark.asyncio
+async def test_check_classifies_503_as_unavailable() -> None:
+    """A 503 on the poll must stay retryable, not collapse to INTERNAL."""
+    client = MagicMock()
+    client.aio.operations.get = AsyncMock(side_effect=APIError(503, {'error': {'message': 'overloaded'}}))
+    model = VeoModel('veo-3.0-generate-001', client)
+
+    with pytest.raises(GenkitError) as raised:
+        await model.check(Operation(id='operations/abc'))
+    assert raised.value.status == 'UNAVAILABLE'

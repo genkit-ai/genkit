@@ -30,9 +30,11 @@ else:
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -45,7 +47,7 @@ from genkit import (
     TextPart,
 )
 from genkit.model import Error, Operation
-from genkit.plugin_api import ActionRunContext, tracer
+from genkit.plugin_api import ActionRunContext, tracer, wrap_http_error
 
 
 class VeoVersion(StrEnum):
@@ -266,13 +268,19 @@ class VeoModel:
             The model's response.
         """
         if request.tools:
-            raise ValueError('Tools are not supported for this model.')
+            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
         prompt = self._build_prompt(request)
         config = self._get_config(request)
 
         with tracer.start_as_current_span('generate_videos'):
-            operation = await self._client.aio.models.generate_videos(model=self._version, prompt=prompt, config=config)
+            try:
+                operation = await self._client.aio.models.generate_videos(
+                    model=self._version, prompt=prompt, config=config
+                )
+            except APIError as e:
+                code = e.code if isinstance(e.code, int) else 0
+                raise wrap_http_error(e, status_code=code, message=e.message or str(e)) from e
 
             # Handling LRO. Using cast(Any) to avoid strict type definition issues for operation.result()
             op = cast(Any, operation)
@@ -306,19 +314,22 @@ class VeoModel:
             An Operation with the job ID.
         """
         if request.tools:
-            raise ValueError('Tools are not supported for this model.')
+            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
         prompt = _extract_text(request)
         if not prompt:
-            raise ValueError('Veo requires a text prompt')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Veo requires a text prompt')
 
-        # Call the generateVideos API
-        response = await self._client.aio.models.generate_videos(
-            model=self._version,
-            prompt=prompt,
-            # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
-        )
+        try:
+            response = await self._client.aio.models.generate_videos(
+                model=self._version,
+                prompt=prompt,
+                # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
+                config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
+            )
+        except APIError as e:
+            code = e.code if isinstance(e.code, int) else 0
+            raise wrap_http_error(e, status_code=code, message=e.message or str(e)) from e
 
         # Convert to Operation
         return _from_veo_operation({
@@ -339,7 +350,11 @@ class VeoModel:
         # See: https://ai.google.dev/gemini-api/docs/video
         # Create a GenerateVideosOperation object from the operation ID
         op_request = genai_types.GenerateVideosOperation.model_validate({'name': operation.id})
-        response = await self._client.aio.operations.get(operation=op_request)
+        try:
+            response = await self._client.aio.operations.get(operation=op_request)
+        except APIError as e:
+            code = e.code if isinstance(e.code, int) else 0
+            raise wrap_http_error(e, status_code=code, message=e.message or str(e)) from e
 
         # Convert response to dict for processing
         op_dict = {

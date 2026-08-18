@@ -69,7 +69,7 @@ def _model_failing_with(error: Exception) -> AnthropicModel:
         (500, 'INTERNAL'),
         (503, 'UNAVAILABLE'),
         (529, 'UNAVAILABLE'),
-        (404, 'UNKNOWN'),
+        (404, 'NOT_FOUND'),
     ],
 )
 async def test_generate_maps_anthropic_status_errors(status_code: int, expected_status: StatusName) -> None:
