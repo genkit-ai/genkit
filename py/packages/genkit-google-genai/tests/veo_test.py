@@ -18,18 +18,25 @@
 
 Verifies _from_veo_operation handles both dict-based responses (from the
 start path) and Pydantic GenerateVideosResponse objects (from the check
-path where the SDK returns a model instance).
+path where the SDK returns a model instance). Also covers image-to-video
+extraction into GenerateVideosSource.
 """
+
+import base64
 
 import pytest
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoVersion,
+    _build_veo_source,
+    _extract_veo_image,
     _from_veo_operation,
     _to_veo_parameters,
     is_veo_model,
 )
 from google.genai import types as genai_types
+
+from genkit import Media, MediaPart, Message, ModelRequest, Part, Role, TextPart
 
 
 class TestIsVeoModel:
@@ -216,3 +223,115 @@ class TestFromVeoOperation:
         })
         assert op.done is True
         assert op.output is None
+
+
+class TestExtractVeoImage:
+    """Tests for _extract_veo_image / _build_veo_source (image-to-video)."""
+
+    def test_extracts_data_url_image(self) -> None:
+        """Base64 data: URL image becomes Image with image_bytes."""
+        raw = b'\x89PNG\r\n\x1a\n'
+        data_url = f'data:image/png;base64,{base64.b64encode(raw).decode()}'
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(root=TextPart(text='Animate this')),
+                        Part(root=MediaPart(media=Media(url=data_url, content_type='image/png'))),
+                    ],
+                )
+            ]
+        )
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.mime_type == 'image/png'
+        assert image.image_bytes == raw
+
+        source = _build_veo_source(request)
+        assert source.prompt == 'Animate this'
+        assert source.image is not None
+        assert source.image.image_bytes == raw
+
+    def test_extracts_gcs_image(self) -> None:
+        """gs:// image URIs map to Image.gcs_uri."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[Part(root=MediaPart(media=Media(url='gs://bucket/frame.png', content_type='image/png')))],
+                )
+            ]
+        )
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.gcs_uri == 'gs://bucket/frame.png'
+        assert image.mime_type == 'image/png'
+
+    def test_ignores_video_media(self) -> None:
+        """Video media parts are not treated as image-to-video input."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(root=MediaPart(media=Media(url='data:video/mp4;base64,AAAA', content_type='video/mp4')))
+                    ],
+                )
+            ]
+        )
+        assert _extract_veo_image(request) is None
+
+    def test_uses_last_message_only(self) -> None:
+        """Only the last message is scanned for an image, matching JS."""
+        raw = b'img'
+        data_url = f'data:image/jpeg;base64,{base64.b64encode(raw).decode()}'
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[Part(root=MediaPart(media=Media(url=data_url, content_type='image/jpeg')))],
+                ),
+                Message(
+                    role=Role.USER,
+                    content=[Part(root=TextPart(text='no image here'))],
+                ),
+            ]
+        )
+        assert _extract_veo_image(request) is None
+
+    def test_image_only_source(self) -> None:
+        """Image without text prompt is a valid source."""
+        raw = b'frame'
+        data_url = f'data:image/jpeg;base64,{base64.b64encode(raw).decode()}'
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[Part(root=MediaPart(media=Media(url=data_url, content_type='image/jpeg')))],
+                )
+            ]
+        )
+        source = _build_veo_source(request)
+        assert source.prompt is None
+        assert source.image is not None
+        assert source.image.image_bytes == raw
+
+    def test_skips_unsupported_url_and_uses_later_image(self) -> None:
+        """Unsupported http(s) image parts do not block a later supported image."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(
+                            root=MediaPart(media=Media(url='https://example.com/frame.png', content_type='image/png'))
+                        ),
+                        Part(root=MediaPart(media=Media(url='gs://bucket/frame.png', content_type='image/png'))),
+                    ],
+                )
+            ]
+        )
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.gcs_uri == 'gs://bucket/frame.png'
