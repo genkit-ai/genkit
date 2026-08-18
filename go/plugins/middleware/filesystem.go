@@ -154,13 +154,13 @@ func (p *pathLocks) lock(path string) func() {
 //	)
 type Filesystem struct {
 	// RootDir is the directory that all operations are confined to.
-	RootDir string `json:"rootDirectory,omitempty"`
+	RootDir string `json:"rootDirectory,omitempty" jsonschema_description:"Directory that all file operations are confined to. Required."`
 	// AllowWriteAccess adds write_file and edit_file.
-	AllowWriteAccess bool `json:"allowWriteAccess,omitempty"`
+	AllowWriteAccess bool `json:"allowWriteAccess,omitempty" jsonschema_description:"Adds the write_file and edit_file tools. Defaults to false."`
 	// ToolNamePrefix is prepended to each tool name. Use distinct prefixes
 	// when attaching multiple Filesystem middlewares to one call so their
 	// tool names don't collide.
-	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty" jsonschema_description:"Prepended to each tool name. Use distinct prefixes when attaching multiple filesystem middlewares to one call, so their tool names do not collide."`
 }
 
 // Name implements [ai.Middleware].

@@ -68,7 +68,7 @@ const artifactsMarker = "artifacts-listing"
 type Artifacts struct {
 	// Readonly, when true, provides only the read_artifact tool; the model
 	// cannot create or update artifacts. Defaults to false.
-	Readonly bool `json:"readonly,omitempty"`
+	Readonly bool `json:"readonly,omitempty" jsonschema_description:"Provides only the read_artifact tool so the model cannot create or update artifacts. Defaults to false."`
 }
 
 func (a Artifacts) Name() string { return provider + "/artifacts" }

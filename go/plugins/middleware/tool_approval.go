@@ -51,7 +51,7 @@ type ToolApproval struct {
 	// AllowedTools is the list of tool names pre-approved to run without
 	// interruption. Tools not in this list trigger an interrupt. An empty
 	// list interrupts all tools.
-	AllowedTools []string `json:"allowedTools,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty" jsonschema_description:"Tool names pre-approved to run without interruption. Any tool not in this list triggers an interrupt. An empty list interrupts every tool."`
 }
 
 // Name implements [ai.Middleware].

@@ -16,7 +16,10 @@
 
 package status
 
-import "net/http"
+import (
+	"net/http"
+	"slices"
+)
 
 // Name is a canonical status name, drawn from the gRPC status codes. It is the
 // value Genkit puts on the wire, shared by the Go, JS, and Python runtimes.
@@ -95,6 +98,30 @@ var codeToName = func() map[int]Name {
 	}
 	return m
 }()
+
+// names lists the canonical status names in gRPC code order. It is derived
+// from [statuses] rather than restated, so a name added there cannot go
+// missing here.
+var names = func() []Name {
+	ns := make([]Name, 0, len(statuses))
+	for n := range statuses {
+		ns = append(ns, n)
+	}
+	slices.SortFunc(ns, func(a, b Name) int { return statuses[a].code - statuses[b].code })
+	return ns
+}()
+
+// Names returns the canonical status names, in gRPC code order.
+//
+// It is the Go counterpart of the JS StatusNameSchema, and is intended for
+// consumers that enumerate the statuses rather than test one: a config schema
+// offering them as an enum, say, or a plugin mapping a provider's error space
+// onto them. Use [Name.IsValid] to test a single name.
+//
+// The result is a fresh slice the caller may retain and modify.
+func Names() []Name {
+	return slices.Clone(names)
+}
 
 // IsValid reports whether n is one of the canonical status names.
 func (n Name) IsValid() bool {

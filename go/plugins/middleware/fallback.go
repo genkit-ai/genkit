@@ -61,11 +61,11 @@ type Fallback struct {
 	// These are tried in order after the primary model fails. Each ref's
 	// Config is used verbatim for that model -- the original request's
 	// Config is not inherited. Use [ai.NewModelRef] to attach config.
-	Models []ai.ModelRef `json:"models,omitempty"`
+	Models []ai.ModelRef `json:"models,omitempty" jsonschema_description:"Ordered list of fallback models to try after the primary model fails. Each ref's config is used verbatim for that model, and the original request's config is not inherited."`
 	// Statuses is the set of status codes that trigger a fallback for
 	// classified errors; unclassified errors propagate immediately and never
 	// trigger one. Defaults to [defaultFallbackStatuses].
-	Statuses []status.Name `json:"statuses,omitempty"`
+	Statuses []status.Name `json:"statuses,omitempty" jsonschema_description:"Status codes that trigger a fallback for classified errors. Unclassified errors propagate immediately and never trigger one. Defaults to UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, INTERNAL, NOT_FOUND and UNIMPLEMENTED." jsonschema:"enum=OK,enum=CANCELLED,enum=UNKNOWN,enum=INVALID_ARGUMENT,enum=DEADLINE_EXCEEDED,enum=NOT_FOUND,enum=ALREADY_EXISTS,enum=PERMISSION_DENIED,enum=UNAUTHENTICATED,enum=RESOURCE_EXHAUSTED,enum=FAILED_PRECONDITION,enum=ABORTED,enum=OUT_OF_RANGE,enum=UNIMPLEMENTED,enum=INTERNAL,enum=UNAVAILABLE,enum=DATA_LOSS"`
 }
 
 // Name implements [ai.Middleware].

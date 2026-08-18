@@ -67,7 +67,7 @@ type Skills struct {
 	// SkillPaths lists directories that are scanned for skills. Each direct
 	// subdirectory containing a SKILL.md file is exposed as a skill.
 	// Defaults to []string{"skills"}.
-	SkillPaths []string `json:"skillPaths,omitempty"`
+	SkillPaths []string `json:"skillPaths,omitempty" jsonschema_description:"Directories that are scanned for skills. Each direct subdirectory containing a SKILL.md file is exposed as a skill. Defaults to the \"skills\" directory."`
 }
 
 // skillInfo records where a skill's SKILL.md lives and its description.
