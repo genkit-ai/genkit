@@ -16,13 +16,14 @@
 
 """Amazon Bedrock plugin for Genkit."""
 
-from genkit_amazon_bedrock.config import BedrockConfig, ModelDefinition
+from genkit_amazon_bedrock.config import BedrockConfig, BedrockImageConfig, ModelDefinition
 from genkit_amazon_bedrock.converters import cache_point_part
 from genkit_amazon_bedrock.plugin import Bedrock, bedrock_name
 
 __all__ = [
     'Bedrock',
     'BedrockConfig',
+    'BedrockImageConfig',
     'ModelDefinition',
     'bedrock_name',
     'cache_point_part',

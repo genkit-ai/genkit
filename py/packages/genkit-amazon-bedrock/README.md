@@ -3,10 +3,10 @@
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
-embeddings through InvokeModel.
+embeddings and image generation through InvokeModel.
 
-> Status: in progress. Text generation (streaming and non-streaming) and
-> embedders are available. Image generation and reranking are still to come.
+> Status: in progress. Text generation (streaming and non-streaming),
+> embedders, and image generation are available. Reranking is still to come.
 
 ## Installation
 
@@ -117,6 +117,128 @@ Notes:
   documents, not for embedding queries.
 - `amazon.nova-2-multimodal-embeddings-v1:0` is offered in `us-east-1` only,
   and is text-only here; its image, audio, and video inputs are not ported.
+
+## Image generation
+
+Image models go through InvokeModel rather than Converse, but they are ordinary
+Genkit model actions: `ai.generate` returns the result as media parts carrying
+data URLs. Declare one with `type='image'`:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock, ModelDefinition
+
+ai = Genkit(
+    plugins=[
+        Bedrock(
+            # us-west-2: the active text-to-image models are offered there only.
+            region='us-west-2',
+            models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+        )
+    ]
+)
+
+response = await ai.generate(
+    model='bedrock/stability.sd3-5-large-v1:0',
+    prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
+)
+image = response.media[0].url  # data:image/png;base64,...
+```
+
+Declaring is optional here too. An undeclared ID in one of the two families
+below is classified as an image model on the spot, so a bare
+`ai.generate(model='bedrock/<id>')` resolves and takes the InvokeModel path;
+declaring adds the model to the Dev UI and pins the routing. The prompt is the
+text of the most recent user message, concatenated across its text parts; other
+parts are ignored, as these models are text-to-image only.
+
+Streaming callbacks are never invoked for image models. There is nothing to
+stream, so `generate_stream` yields no chunks and the images arrive on the
+final response.
+
+### Request shapes
+
+The two families take incompatible bodies, so the request is built from the
+model ID.
+
+Amazon (IDs containing `titan-image` or `nova-canvas`) nests its options under
+`imageGenerationConfig`, and that is the only config key read: any other
+top-level key is dropped. Your entries are merged key by key over these
+defaults:
+
+```python
+config={
+    'imageGenerationConfig': {
+        'numberOfImages': 1,
+        'height': 1024,
+        'width': 1024,
+        'cfgScale': 8.0,
+        'seed': 0,
+        'quality': 'standard',  # Nova Canvas only, not sent for Titan Image
+    }
+}
+```
+
+Output is always `image/png`.
+
+Stability (IDs containing `sd3-`, `stable-image-core`, or `stable-image-ultra`)
+takes flat top-level fields, and the whole config dict is merged over the
+defaults (`{'prompt': ..., 'output_format': 'png'}`), so `aspect_ratio`,
+`seed`, `negative_prompt`, `output_format` and the rest all apply:
+
+```python
+config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
+```
+
+The media part's MIME type follows `output_format`.
+
+`BedrockImageConfig` is the exported config type for these calls. It declares
+no fields and rejects nothing, on purpose: the two families take disjoint keys,
+and `BedrockConfig` describes Converse parameters, so it would reject every
+family-specific key here.
+
+Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
+`apiKey`, and the rest of the common config) are not forwarded to image models,
+since Bedrock's image APIs do not accept them.
+
+### Availability
+
+Verified against `aws bedrock get-foundation-model` on 2026-08-11:
+
+| Model                               | Status                         | Regions                                    |
+| ----------------------------------- | ------------------------------ | ------------------------------------------ |
+| `stability.sd3-5-large-v1:0`        | Active                         | `us-west-2`                                |
+| `stability.stable-image-core-v1:1`  | Active                         | `us-west-2`                                |
+| `stability.stable-image-ultra-v1:1` | Active                         | `us-west-2`                                |
+| `amazon.nova-canvas-v1:0`           | Legacy, end of life 2026-09-30 | `us-east-1`, `eu-west-1`, `ap-northeast-1` |
+
+**The active text-to-image models are offered in `us-west-2` only.** Every image
+model on offer in `us-east-1` is an editing service (inpaint, upscale, and the
+rest), not text-to-image, so a text-to-image call needs `us-west-2`.
+
+`amazon.nova-canvas-v1:0` is the one Amazon option and it is Legacy, which is a
+stronger restriction than the end-of-life date suggests: new accounts cannot
+enable it at all, and an account that has enabled it loses access after 30 days
+of disuse. Bedrock reports both as `ResourceNotFoundException`, which the plugin
+surfaces verbatim, so a working integration can start failing without any change
+on your side. Prefer a Stability model unless you specifically need Canvas.
+
+Notes:
+
+- Amazon Titan Image Generator (v1 and v2), Stable Diffusion XL, and the `v1:0`
+  Stability SKUs (`sd3-large-v1:0`, `stable-image-core-v1:0`,
+  `stable-image-ultra-v1:0`) are end of life on Bedrock and no longer callable.
+- The `titan-image` family is still recognised, since it shares its request
+  shape with Nova Canvas. The legacy Stable Diffusion XL schema
+  (`text_prompts`/`artifacts`) is deliberately not ported.
+- `amazon.nova-canvas-v1:0` has no `us.` cross-region inference profile, so
+  those three regions are the whole of it.
+- Stability's `stable-image-*` editing services (inpaint, erase object, search
+  and replace, background removal, style guide, control sketch) are not
+  text-to-image and are out of scope.
+- Nova Canvas may return fewer images than `numberOfImages` asked for.
+  Individually content-filtered images are dropped silently, and the plugin
+  returns whatever arrived.
 
 ## License
 

@@ -109,19 +109,21 @@ MODEL_CAPABILITIES: dict[str, ModelCapability] = {
 
 
 def strip_inference_profile_prefix(model_id: str) -> str:
-    """Strips a cross-region inference-profile prefix from a model ID.
+    """Reduces a model ID to the lowercase base ID used for lookup.
 
-    Used for capability lookup only; requests always carry the original ID.
-    Full Bedrock ARNs (foundation-model, inference-profile) are reduced to
-    their resource ID first, across all partitions (``arn:aws:``,
-    ``arn:aws-us-gov:``, ``arn:aws-cn:``).
+    Used for capability lookup and family routing only; requests always carry
+    the original ID. Full Bedrock ARNs (foundation-model, inference-profile)
+    are reduced to their resource ID first, across all partitions
+    (``arn:aws:``, ``arn:aws-us-gov:``, ``arn:aws-cn:``).
 
     Args:
         model_id: Bedrock model ID, inference-profile ID, or full ARN.
 
     Returns:
-        The base model ID without the inference-profile prefix.
+        The base model ID, lowercased, without the inference-profile prefix.
     """
+    # Bedrock's own IDs are lowercase; a custom-model ARN's resource name is not.
+    model_id = model_id.lower()
     if model_id.startswith('arn:'):
         model_id = model_id.rsplit('/', 1)[-1]
     for prefix in INFERENCE_PROFILE_PREFIXES:
@@ -153,7 +155,9 @@ def get_model_info(
                 tools=False,
                 tool_choice=False,
                 system_role=False,
-                media=True,
+                # Genkit reads media as an input capability; these take text only.
+                media=False,
+                output=['media'],
                 constrained=Constrained.NONE,
             ),
         )

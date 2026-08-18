@@ -20,10 +20,13 @@ Opt-in: set ``BEDROCK_LIVE_TESTS=1`` plus working AWS credentials and a
 region (``AWS_REGION`` or ``~/.aws/config``). These call real models and
 incur cost. The Anthropic models additionally need the account's one-time
 use-case agreement (Bedrock console -> Model access); the embedding models
-each need their own model-access grant, separate from the chat models.
+and the image models each need their own model-access grant, separate from
+the chat models and from each other.
 """
 
+import contextlib
 import os
+from collections.abc import Iterator
 
 import pytest
 from genkit_amazon_bedrock.config import BedrockConfig
@@ -31,6 +34,7 @@ from genkit_amazon_bedrock.converters import (
     REASONING_SIGNATURE_METADATA_KEY,
 )
 from genkit_amazon_bedrock.embedders import BedrockEmbedder
+from genkit_amazon_bedrock.image import BedrockImageModel
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
 
@@ -41,6 +45,7 @@ from genkit import (
     MediaPart,
     Message,
     ModelRequest,
+    ModelResponse,
     Part,
     Role,
     TextPart,
@@ -69,6 +74,9 @@ COHERE_EMBED = 'cohere.embed-english-v3'
 COHERE_EMBED_MULTI = 'cohere.embed-multilingual-v3'
 NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 
+NOVA_CANVAS = 'amazon.nova-canvas-v1:0'
+SD3 = 'stability.sd3-5-large-v1:0'
+
 # Smallest PNG Titan accepts, ported from the Go plugin's live tests.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
 PNG_1X1_DATA_URL = f'data:image/png;base64,{PNG_1X1}'
@@ -86,6 +94,45 @@ def make_transport() -> BedrockTransport:
 
 def make_model(model_id: str) -> BedrockModel:
     return BedrockModel(model_id=model_id, transport=make_transport())
+
+
+def make_image_model(model_id: str) -> BedrockImageModel:
+    return BedrockImageModel(model_id=model_id, transport=make_transport())
+
+
+# Bedrock refusing the model itself, rather than the request, ported from the Go
+# plugin's skipIfModelUnavailable. Model access is per account: a Legacy model
+# also drops out after 30 days of disuse, which no test can control.
+_UNAVAILABLE_MARKERS = (
+    'AccessDeniedException',
+    'ResourceNotFoundException',
+    'marked by provider as Legacy',
+)
+
+
+@contextlib.contextmanager
+def skip_if_model_unavailable(model_id: str) -> Iterator[None]:
+    """Turns a model-access failure into a skip, keeping real bugs failing."""
+    try:
+        yield
+    except GenkitError as error:
+        message = str(error)
+        invalid_id = 'ValidationException' in message and 'model identifier is invalid' in message
+        if invalid_id or any(marker in message for marker in _UNAVAILABLE_MARKERS):
+            pytest.skip(f'{model_id} unavailable to this account or region: {message}')
+        raise
+
+
+def assert_image_response(response: ModelResponse, mime: str = 'image/png') -> None:
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    prefix = f'data:{mime};base64,'
+    media_parts = [part.root for part in response.message.content if isinstance(part.root, MediaPart)]
+    assert media_parts, 'expected at least one media part'
+    for part in media_parts:
+        assert part.media.content_type == mime
+        assert part.media.url.startswith(prefix)
+        assert part.media.url.removeprefix(prefix)
 
 
 async def embed(model_id: str, documents: list[DocumentData]) -> list[list[float]]:
@@ -381,3 +428,49 @@ async def test_embed_cohere_rejects_an_image() -> None:
 async def test_embed_nova_2() -> None:
     vectors = await embed(NOVA_EMBED, [text_doc('a red apple')])
     assert len(vectors[0]) == 3072
+
+
+@pytest.mark.skipif(
+    os.environ.get('AWS_REGION') != 'us-east-1',
+    reason=(
+        'amazon.nova-canvas-v1:0 is offered in us-east-1, eu-west-1 and ap-northeast-1 only, '
+        'and reaches end of life on 2026-09-30'
+    ),
+)
+async def test_image_nova_canvas() -> None:
+    # Legacy: new accounts cannot enable it at all, and an enabled one loses
+    # access after 30 days of disuse, so unavailability here is not a failure.
+    with skip_if_model_unavailable(NOVA_CANVAS):
+        response = await make_image_model(NOVA_CANVAS).generate(
+            text_request('A futuristic city skyline at dawn, digital art')
+        )
+        assert_image_response(response)
+
+
+@pytest.mark.skipif(
+    os.environ.get('AWS_REGION') != 'us-west-2',
+    reason='stability.sd3-5-large-v1:0 is only offered in us-west-2',
+)
+async def test_image_stability_sd3() -> None:
+    with skip_if_model_unavailable(SD3):
+        response = await make_image_model(SD3).generate(
+            text_request('A vibrant coral reef teeming with fish, photorealistic')
+        )
+        assert_image_response(response)
+
+
+@pytest.mark.skipif(
+    os.environ.get('AWS_REGION') != 'us-west-2',
+    reason='stability.sd3-5-large-v1:0 is only offered in us-west-2',
+)
+async def test_image_stability_sd3_with_config() -> None:
+    # Flat per-call overrides only reach the wire if nothing coerces them into
+    # the Converse config shape on the way in.
+    with skip_if_model_unavailable(SD3):
+        response = await make_image_model(SD3).generate(
+            text_request(
+                'A minimalist geometric pattern in blue and gold',
+                config={'aspect_ratio': '16:9', 'output_format': 'jpeg'},
+            )
+        )
+        assert_image_response(response, mime='image/jpeg')

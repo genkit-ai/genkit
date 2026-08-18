@@ -56,6 +56,20 @@ class BedrockConfig(ModelConfig):
     """Forwarded verbatim to the Converse API (e.g. Claude extended thinking)."""
 
 
+class BedrockImageConfig(BaseModel):
+    """Per-call configuration for Bedrock image models.
+
+    Deliberately declares no properties and rejects nothing. Image config
+    shapes vary per model family (Titan Image and Nova Canvas nest their
+    options under ``imageGenerationConfig``; the Stability models take flat
+    fields like ``aspect_ratio``, ``output_format``, and ``seed``), so any
+    strict schema would silently reject every family-specific override at
+    Genkit's request validation.
+    """
+
+    model_config = ConfigDict(extra='allow')
+
+
 class ModelDefinition(BaseModel):
     """A Bedrock model to register with Genkit.
 
