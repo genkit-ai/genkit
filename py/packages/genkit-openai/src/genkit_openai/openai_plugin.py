@@ -25,12 +25,13 @@ from openai.types import Model
 
 from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.model import ModelConfig, ModelRef, model_action_metadata, model_ref
+from genkit.model import ModelRef, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
     ActionRunContext,
+    ModelConfig,
     Plugin,
     loop_local_client,
     to_json_schema,

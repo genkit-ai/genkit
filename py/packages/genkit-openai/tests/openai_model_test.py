@@ -27,7 +27,6 @@ from genkit_openai.typing import OpenAIConfig
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -36,7 +35,7 @@ from genkit import (
     TextPart,
 )
 from genkit._core._model import OutputConfig
-from genkit.plugin_api import ActionRunContext
+from genkit.plugin_api import ActionRunContext, ModelConfig
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:

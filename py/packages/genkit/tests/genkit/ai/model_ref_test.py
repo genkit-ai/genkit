@@ -11,7 +11,8 @@ import pytest
 from pydantic import BaseModel
 
 from genkit._core._error import GenkitError
-from genkit.model import ModelConfig, ModelInfo, ModelRef, Supports, model_ref
+from genkit.model import ModelConfigDict, ModelInfo, ModelRef, Supports, model_ref
+from genkit.plugin_api import ModelConfig
 
 
 class CustomConfig(BaseModel):
@@ -163,6 +164,22 @@ def test_model_ref_preserves_version_and_info_metadata() -> None:
     assert ref.info is not None
     assert ref.info.supports is not None
     assert ref.info.supports.multiturn is True
+
+
+def test_model_config_dict_accepts_common_knobs() -> None:
+    """ModelConfigDict is the typed shape for config={...} literals."""
+    config: ModelConfigDict = {
+        'temperature': 0.5,
+        'max_output_tokens': 256,
+        'top_k': 40,
+        'top_p': 0.9,
+        'stop_sequences': ['END'],
+        'version': '001',
+        'api_key': 'test-key',
+    }
+
+    assert config['temperature'] == 0.5
+    assert config['max_output_tokens'] == 256
 
 
 def test_model_ref_isolates_caller_config_and_info() -> None:
