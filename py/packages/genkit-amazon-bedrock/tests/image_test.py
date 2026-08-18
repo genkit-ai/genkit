@@ -217,7 +217,7 @@ async def test_the_last_user_message_wins_and_its_text_parts_concatenate() -> No
     )
     await generate(TITAN_IMAGE, transport, request)
 
-    # Concatenated with no separator, as in the Go plugin.
+    # Concatenated with no separator.
     assert transport.bodies()[0]['textToImageParams'] == {'text': 'new prompt detail'}
 
 

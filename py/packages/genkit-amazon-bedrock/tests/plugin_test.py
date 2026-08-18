@@ -261,7 +261,17 @@ async def test_embedding_models_do_not_resolve_as_chat_models() -> None:
 async def test_the_cross_guard_leaves_cohere_chat_models_alone() -> None:
     plugin = Bedrock(region='us-east-1')
     assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.command-r-v1:0')) is not None
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.rerank-v3-5:0')) is not None
+
+
+@pytest.mark.asyncio
+async def test_rerank_models_do_not_resolve_as_chat_models() -> None:
+    # Neither rerank family has a Converse path, so resolving one as a chat
+    # model would only defer the failure to call time.
+    plugin = Bedrock(region='us-east-1')
+    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.rerank-v3-5:0')) is None
+    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.rerank-v1:0')) is None
+    assert await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('cohere.rerank-v3-5:0')) is None
+    assert await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('amazon.rerank-v1:0')) is None
 
 
 @pytest.mark.asyncio
@@ -330,6 +340,22 @@ async def test_everything_listed_can_actually_resolve() -> None:
     for metadata in listed:
         assert metadata.action_type is not None
         assert await plugin.resolve(ActionKind(metadata.action_type), metadata.name) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_declared_rerank_model_is_not_listed() -> None:
+    # The other side of the listed-can-resolve invariant: reranking is the
+    # Bedrock.rerank helper, so a rerank ID has no action to advertise.
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[
+            ModelDefinition(name='amazon.nova-lite-v1:0'),
+            ModelDefinition(name='cohere.rerank-v3-5:0'),
+            ModelDefinition(name='amazon.rerank-v1:0'),
+        ],
+    )
+    listed = await plugin.list_actions()
+    assert [a.name for a in listed] == ['bedrock/amazon.nova-lite-v1:0']
 
 
 @pytest.mark.asyncio

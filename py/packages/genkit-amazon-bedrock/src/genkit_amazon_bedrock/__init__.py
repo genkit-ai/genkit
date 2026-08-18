@@ -19,12 +19,24 @@
 from genkit_amazon_bedrock.config import BedrockConfig, BedrockImageConfig, ModelDefinition
 from genkit_amazon_bedrock.converters import cache_point_part
 from genkit_amazon_bedrock.plugin import Bedrock, bedrock_name
+from genkit_amazon_bedrock.rerank import (
+    BedrockRerankOptions,
+    RankedDocumentData,
+    RankedDocumentMetadata,
+    RerankerRequest,
+    RerankerResponse,
+)
 
 __all__ = [
     'Bedrock',
     'BedrockConfig',
     'BedrockImageConfig',
+    'BedrockRerankOptions',
     'ModelDefinition',
+    'RankedDocumentData',
+    'RankedDocumentMetadata',
+    'RerankerRequest',
+    'RerankerResponse',
     'bedrock_name',
     'cache_point_part',
 ]

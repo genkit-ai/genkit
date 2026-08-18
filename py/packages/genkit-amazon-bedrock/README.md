@@ -3,10 +3,11 @@
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
-embeddings and image generation through InvokeModel.
+embeddings, image generation, and reranking through InvokeModel.
 
-> Status: in progress. Text generation (streaming and non-streaming),
-> embedders, and image generation are available. Reranking is still to come.
+> Status: text generation (streaming and non-streaming), embedders, image
+> generation, and reranking are available. The work left is sample app and
+> docsite coverage, not plugin surfaces.
 
 ## Installation
 
@@ -239,6 +240,78 @@ Notes:
 - Nova Canvas may return fewer images than `numberOfImages` asked for.
   Individually content-filtered images are dropped silently, and the plugin
   returns whatever arrived.
+
+## Reranking
+
+Reranking scores documents against a query, so a retrieval step can return its
+hits in relevance order. It is a method on the plugin instance rather than a
+Genkit action, so keep a reference to the `Bedrock` you pass to `Genkit`:
+
+```python
+from genkit import Document, Genkit
+from genkit_amazon_bedrock import Bedrock, BedrockRerankOptions
+
+bedrock = Bedrock(region='us-east-1')
+ai = Genkit(plugins=[bedrock])
+
+response = await bedrock.rerank(
+    'cohere.rerank-v3-5:0',
+    query='How do I configure authentication for Bedrock?',
+    documents=[
+        Document.from_text('Configure AWS credentials with environment variables or AWS SSO.'),
+        Document.from_text('Nova Canvas returns generated images as base64-encoded PNG data.'),
+        Document.from_text('Model access is granted per account and region in the Bedrock console.'),
+    ],
+    options=BedrockRerankOptions(top_n=2),
+)
+
+for document in response.documents:
+    print(document.metadata.score, document.content[0].root.text)
+```
+
+Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare
+enum member, and the request and response types are not generated, so there is
+nothing to register an action against. The types this plugin exports
+(`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
+`RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
+names.
+
+Notes:
+
+- `top_n` (`topN` when the options are passed as a dict) is clamped down to the
+  number of documents sent, and `<= 0` or unset means all of them.
+- Results arrive in the service's descending-relevance order and are neither
+  re-sorted nor truncated client-side.
+- A ranked document carries the input document's content verbatim and fresh
+  `{score}` metadata. The input document's own metadata is not carried through.
+- Rerank models have no Converse path, so they never resolve as chat models.
+  Listing one in `models=` is ignored; pass the ID to `rerank()` instead.
+- Only `bedrock:InvokeModel` is required. `bedrock:Rerank` is not: that
+  permission belongs to the separate Bedrock Agent Runtime `Rerank` API, which
+  this plugin does not call.
+
+### Model support
+
+Verified against `aws bedrock get-foundation-model` on 2026-08-11, and matching
+AWS's [supported regions and models for reranking](https://docs.aws.amazon.com/bedrock/latest/userguide/rerank-supported.html):
+
+| Model                  | Status | Regions                                                                    |
+| ---------------------- | ------ | -------------------------------------------------------------------------- |
+| `cohere.rerank-v3-5:0` | Active | `us-east-1`, `us-west-2`, `eu-central-1`, `ap-northeast-1`, `ca-central-1` |
+| `amazon.rerank-v1:0`   | Active | `us-west-2`, `eu-central-1`, `ap-northeast-1`, `ca-central-1`              |
+
+**`amazon.rerank-v1:0` is not offered in `us-east-1`.** Only
+`cohere.rerank-v3-5:0` covers every region on the list, so a setup that defaults
+to `us-east-1` has one rerank model available, not two.
+
+The two families take different bodies, so the request is built from the model
+ID. Both send `query`, `documents` and `top_n`; only Cohere takes
+`api_version`, whose schema requires the key, while the Amazon schema rejects
+any body carrying it. An ID matching neither family gets the Cohere body, that
+being the only shape AWS documents for InvokeModel reranking.
+
+Any model ID is passed to InvokeModel verbatim, so inference profiles and ARNs
+work too.
 
 ## License
 

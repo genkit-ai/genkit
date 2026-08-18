@@ -16,7 +16,7 @@
 
 """ConverseStream event reassembly.
 
-Ported from the Go plugin's ``stream.go``. Bedrock streams a message as
+Bedrock streams a message as
 deltas tagged with a ``contentBlockIndex``; this module accumulates them per
 block, emits Genkit chunks as they arrive, and assembles the final message in
 block order. Request conversion is shared with the non-streaming path.
@@ -165,7 +165,7 @@ def _append_delta(block: _StreamBlock, delta: dict[str, Any]) -> Part | None:
     if (reasoning := delta.get('reasoningContent')) is not None:
         return _append_reasoning_delta(block, reasoning)
     # Unhandled variants (citation today) are dropped rather than raised on:
-    # Bedrock adds delta variants without notice, and Go's fail-loud default
+    # Bedrock adds delta variants without notice, and failing loud here
     # would kill any stream that used one. The sync path fails loud instead,
     # because dropping a whole content block would lose model output.
     return None

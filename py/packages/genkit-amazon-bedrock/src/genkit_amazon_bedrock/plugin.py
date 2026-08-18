@@ -19,12 +19,16 @@
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
 Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
 Bedrock Converse and ConverseStream APIs; embedders and image generation use
-InvokeModel. Reranking is not supported yet.
+InvokeModel. Reranking also uses InvokeModel but ships as the ``Bedrock.rerank``
+helper: Genkit Python has no reranker primitive to register an action against.
 """
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from genkit import ModelRequest, ModelResponse
+from genkit import Document, ModelRequest, ModelResponse
+
+# DocumentData has no public re-export yet; the rerank helper is built on it.
+from genkit._core._typing import DocumentData
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
@@ -32,6 +36,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     ActionRunContext,
+    GenkitError,
     Plugin,
     to_json_schema,
 )
@@ -50,6 +55,13 @@ from genkit_amazon_bedrock.embedders import (
 from genkit_amazon_bedrock.image import BedrockImageModel, is_image_model
 from genkit_amazon_bedrock.model_info import get_model_info
 from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock.rerank import (
+    BedrockReranker,
+    BedrockRerankOptions,
+    RerankerRequest,
+    RerankerResponse,
+    is_rerank_model,
+)
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 if TYPE_CHECKING:
@@ -174,6 +186,9 @@ class Bedrock(Plugin):
             # Embedding models speak InvokeModel, not Converse; resolving one
             # as a chat model only defers the failure to call time.
             return None
+        if is_rerank_model(model_id):
+            # Same story for rerank models; reranking is the Bedrock.rerank helper.
+            return None
         declared = self._declared_model_type(model_id)
         # Classifying undeclared IDs diverges from Go, which routes on the
         # declared type alone: this plugin resolves lazily, so without it
@@ -250,6 +265,7 @@ class Bedrock(Plugin):
             )
             for definition in self.models
             if not looks_like_embedding_model(definition.name)
+            and not is_rerank_model(definition.name)
             and (definition.type != 'image' or is_image_model(definition.name))
         ]
         actions.extend(
@@ -258,3 +274,46 @@ class Bedrock(Plugin):
             if is_embedding_model(model_id)
         )
         return actions
+
+    async def rerank(
+        self,
+        model_id: str,
+        *,
+        query: str | DocumentData,
+        documents: list[DocumentData],
+        options: BedrockRerankOptions | dict[str, Any] | None = None,
+    ) -> RerankerResponse:
+        """Rerank documents by relevance to a query.
+
+        A helper rather than a registered action: Genkit Python has no
+        first-class reranker primitive, so there is nothing to register
+        against. Both the Cohere and Amazon rerank families are supported,
+        and the request body is built from the model ID because they disagree
+        over ``api_version``. The ID itself is sent to the service verbatim.
+
+        Args:
+            model_id: Bedrock rerank model ID, e.g. ``cohere.rerank-v3-5:0``
+                or ``amazon.rerank-v1:0``.
+            query: The query to rank against, as text or as a document.
+            documents: The documents to rank.
+            options: Per-call options, as ``BedrockRerankOptions`` or a mapping.
+
+        Returns:
+            The ranked documents in the order the service returned them, each
+            carrying its relevance score.
+
+        Raises:
+            GenkitError: INVALID_ARGUMENT for a missing model ID or a query or
+                document with no text, INTERNAL for a malformed response, and
+                the mapped AWS status for a failed call.
+        """
+        if not model_id:
+            raise GenkitError(message='bedrock rerank: model ID required', status='INVALID_ARGUMENT')
+        reranker = BedrockReranker(model_id=model_id, transport=self._transport)
+        return await reranker.rerank(
+            RerankerRequest(
+                query=Document.from_text(query) if isinstance(query, str) else query,
+                documents=documents,
+                options=options,
+            )
+        )
