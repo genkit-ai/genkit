@@ -731,17 +731,18 @@ async def test_vertexai_resolve_action_embedder(
             'gemini-pro-deluxe-max',
             False,
         ),
+        # A bare "image" prefix is not Imagen; only imagen- ids route there.
         (
             'vertexai/image-gemini-pro-deluxe-max',
             'vertexai/image-gemini-pro-deluxe-max',
             'image-gemini-pro-deluxe-max',
-            True,
+            False,
         ),
         (
             'image-gemini-pro-deluxe-max',
             'vertexai/image-gemini-pro-deluxe-max',
             'image-gemini-pro-deluxe-max',
-            True,
+            False,
         ),
         (
             'gemini-pro-deluxe-max-image',
@@ -997,9 +998,11 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
     action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
     assert action3 is not None
 
-    # Verify Veo
-    action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
-    assert action4 is not None
+    # Veo is background-only, so it is not a known generate MODEL.
+    assert not any(a.name == vertexai_name('veo-2.0-generate-001') for a in result)
+
+    veo_actions = vertexai_plugin_instance._list_known_veo_models()
+    assert {a.kind for a in veo_actions} == {ActionKind.BACKGROUND_MODEL, ActionKind.CHECK_OPERATION}
 
 
 @pytest.mark.asyncio
