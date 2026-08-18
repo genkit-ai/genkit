@@ -27,6 +27,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import structlog
+
 from genkit import (
     FinishReason,
     Message,
@@ -46,7 +48,10 @@ from genkit_amazon_bedrock.converters import (
     coerce_tool_input,
     map_finish_reason,
     usage_from_response,
+    usage_log_fields,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -67,6 +72,7 @@ async def consume_converse_stream(
     events: AsyncIterator[dict[str, Any]],
     request: ModelRequest[Any],
     ctx: ActionRunContext | None = None,
+    model_id: str | None = None,
 ) -> ModelResponse:
     """Reassembles a ConverseStream into a ModelResponse, streaming chunks.
 
@@ -80,6 +86,7 @@ async def consume_converse_stream(
         request: The originating Genkit request; supplies tool schemas and is
             echoed on the response.
         ctx: Action run context; chunks are sent only when it is streaming.
+        model_id: Model the events came from, for the completion log line only.
 
     Returns:
         The assembled model response.
@@ -131,6 +138,14 @@ async def consume_converse_stream(
     # A stream that ends without messageStop stopped normally; the sync path's
     # mapping would call that OTHER.
     finish_reason = map_finish_reason(stop_reason) if stop_reason else FinishReason.STOP
+    logger.debug(
+        'Bedrock stream complete',
+        model=model_id,
+        stop_reason=stop_reason,
+        blocks=len(blocks),
+        tool_blocks=sum(1 for block in blocks.values() if block.is_tool),
+        **usage_log_fields(usage),
+    )
     return ModelResponse(
         message=Message(role=Role.MODEL, content=parts),
         finish_reason=finish_reason,

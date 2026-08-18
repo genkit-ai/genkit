@@ -30,6 +30,7 @@ hardcoded ``image/png``, which would mislabel a jpeg or webp response.
 import json
 from typing import Any, Literal, cast
 
+import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
 from genkit import (
@@ -48,6 +49,8 @@ from genkit.plugin_api import ActionRunContext, GenkitError
 from genkit_amazon_bedrock.embedders import InvokeModelTransport
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+
+logger = structlog.get_logger(__name__)
 
 ImageFamily = Literal['titan_image', 'nova_canvas', 'stability']
 
@@ -281,6 +284,7 @@ class BedrockImageModel:
                 status='INVALID_ARGUMENT',
             )
         config = _normalize_image_config(request.config)
+        logger.debug('Bedrock image request', model=self._model_id, family=family)
 
         if family == 'stability':
             body = build_stability_image_body(prompt, config)
@@ -298,6 +302,7 @@ class BedrockImageModel:
         parts = _media_parts(images, mime)
         if not parts:
             raise GenkitError(message=_NO_IMAGES_MESSAGE, status='INTERNAL')
+        logger.debug('Bedrock image response', model=self._model_id, images=len(parts), mime=mime)
         return ModelResponse(
             message=Message(role=Role.MODEL, content=parts),
             # Image generation always stops on its own and reports no tokens.

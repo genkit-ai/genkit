@@ -30,6 +30,8 @@ import threading
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.config import (
     DEFAULT_CONNECT_TIMEOUT,
@@ -41,6 +43,8 @@ from genkit_amazon_bedrock.config import (
 
 if TYPE_CHECKING:
     import boto3.session
+
+logger = structlog.get_logger(__name__)
 
 NO_REGION_MESSAGE = (
     'bedrock: no AWS region resolved; set Bedrock(region=...), AWS_REGION, '
@@ -347,4 +351,15 @@ class BedrockTransport:
 
         session = self._session or boto3.session.Session()
         region = self._resolve_region(session)
-        return session.client('bedrock-runtime', region_name=region, config=self._client_config(session))
+        config = self._client_config(session)
+        client = session.client('bedrock-runtime', region_name=region, config=config)
+        logger.debug(
+            'Bedrock client created',
+            region=region,
+            caller_session=self._session is not None,
+            read_timeout=config.read_timeout,
+            connect_timeout=config.connect_timeout,
+            max_pool_connections=config.max_pool_connections,
+            retries=config.retries,
+        )
+        return client

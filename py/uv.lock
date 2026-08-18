@@ -1692,6 +1692,7 @@ dependencies = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "genkit" },
+    { name = "structlog" },
 ]
 
 [package.metadata]
@@ -1699,6 +1700,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.37.24" },
     { name = "botocore", specifier = ">=1.37.24" },
     { name = "genkit", editable = "packages/genkit" },
+    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
