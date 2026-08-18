@@ -1141,12 +1141,16 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
 //
-// When generation ends abnormally (blocked, aborted, interrupted, other), the
-// output is the zero value of Out and no error is returned; check
-// resp.FinishReason and resp.FinishMessage to handle the outcome. This holds
-// for a string Out as well, whose text is on the response rather than the
-// returned value: text produced alongside an abnormal finish is a block
-// notice or a partial answer, not the completion the prompt asked for.
+// The output is the zero value of Out and no error is returned in two cases:
+// generation ended abnormally (blocked, aborted, interrupted, other), or the
+// response carried no text to parse, which is what a turn holding tool
+// requests, interrupts, or media looks like. Check resp.FinishReason,
+// resp.Interrupts(), and resp.ToolRequests() to handle them.
+//
+// The abnormal-finish rule holds for a string Out as well, whose text is on
+// the response rather than the returned value: text produced alongside an
+// abnormal finish is a block notice or a partial answer, not the completion
+// the prompt asked for.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
 		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
@@ -1158,11 +1162,12 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 		return base.Zero[Out](), nil, err
 	}
 
-	// A response that ended abnormally carries no conforming output, so return
-	// it unparsed rather than reporting a schema error that names the wrong
-	// cause. The caller should check resp.FinishReason and resp.FinishMessage.
-	// See [FinishReason.isAbnormal].
-	if resp.FinishReason.isAbnormal() {
+	// Two responses have no conforming output to extract: one that ended
+	// abnormally, whose FinishReason is the news the caller needs, and one with
+	// no text at all, which is what a turn holding tool requests, interrupts, or
+	// media looks like. Both hand the response back unparsed rather than report a
+	// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 		return base.Zero[Out](), resp, nil
 	}
 
@@ -1191,8 +1196,9 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 // [WithInput] passed in opts.
 //
 // Like [DataPrompt.Execute], a generation that ends abnormally (blocked,
-// aborted, interrupted, other) yields zero-value Output and no error; check
-// Response.FinishReason and Response.FinishMessage to handle the outcome.
+// aborted, interrupted, other) or carries no text to parse yields zero-value
+// Output and no error; check Response.FinishReason, Response.Interrupts(), and
+// Response.ToolRequests() to handle those.
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
@@ -1238,11 +1244,12 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return
 		}
 
-		// A response that ended abnormally carries no conforming output, so
-		// return it unparsed rather than reporting a schema error that names
-		// the wrong cause. The caller should check resp.FinishReason and
-		// resp.FinishMessage. See [FinishReason.isAbnormal].
-		if resp.FinishReason.isAbnormal() {
+		// Two responses have no conforming output to extract: one that ended
+		// abnormally, whose FinishReason is the news the caller needs, and one with
+		// no text at all, which is what a turn holding tool requests, interrupts, or
+		// media looks like. Both hand the response back unparsed rather than report a
+		// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
 		}
