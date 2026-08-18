@@ -39,6 +39,7 @@ from structlog.testing import capture_logs
 
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
 from genkit._core._trace._default_exporter import (
+    EXPORT_TIMEOUT_SECONDS,
     TraceServerExporter,
     create_span_processor,
     extract_span_data,
@@ -209,7 +210,7 @@ def test_telemetry_server_exporter_export_sends_http_post(mock_client_class: Mag
     # Verify
     assert result == SpanExportResult.SUCCESS
     mock_client.post.assert_called_once()
-    mock_client_class.assert_called_with(timeout=None)
+    mock_client_class.assert_called_with(timeout=EXPORT_TIMEOUT_SECONDS)
 
 
 @patch('genkit._core._trace._default_exporter.httpx.Client')

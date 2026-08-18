@@ -47,8 +47,12 @@ logger = get_logger(__name__)
 
 INSTRUMENTATION = {'name': 'genkit-tracer', 'version': 'v1'}
 TRACE_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-# Ctrl-C of a genkit start session shouldn't sit on a wedged collector. A couple
-# of seconds is enough for a healthy local Dev UI to take the last span.
+# Five minutes is long enough for a slow local Dev UI and short enough that a
+# wedged collector eventually gets a Failed to save trace line.
+EXPORT_TIMEOUT_SECONDS = 300
+# The export worker is a daemon: once the interpreter starts tearing down it
+# is killed, so we give the last span a couple of seconds to land. Ctrl-C of
+# a wedged collector still shouldn't sit for minutes.
 SHUTDOWN_FLUSH_TIMEOUT_MILLIS = 2_000
 
 
@@ -282,9 +286,8 @@ class TraceServerExporter(SpanExporter):
         """
         url = urljoin(self.telemetry_server_url, self.telemetry_server_endpoint)
         try:
-            # No timeout: a slow local collector must still get the span.
             # generate() already returned; this wait lives on the worker.
-            with httpx.Client(timeout=None) as client:  # noqa: S113
+            with httpx.Client(timeout=EXPORT_TIMEOUT_SECONDS) as client:
                 for trace_id, body in jobs:
                     try:
                         client.post(url, content=body, headers=TRACE_HEADERS)
