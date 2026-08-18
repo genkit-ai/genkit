@@ -24,7 +24,7 @@ import threading
 from collections.abc import Callable, Iterable, Sequence
 from queue import Queue
 from typing import Any, cast
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from opentelemetry import trace as trace_api
@@ -47,6 +47,22 @@ logger = get_logger(__name__)
 
 INSTRUMENTATION = {'name': 'genkit-tracer', 'version': 'v1'}
 TRACE_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+# Ctrl-C of a genkit start session shouldn't sit on a wedged collector. A couple
+# of seconds is enough for a healthy local Dev UI to take the last span.
+SHUTDOWN_FLUSH_TIMEOUT_MILLIS = 2_000
+
+
+def resolve_telemetry_server_url(*, telemetry_server_url: str, telemetry_server_endpoint: str) -> str:
+    """A typo'd collector URL should fail when tracing starts, not as missing Dev UI traces later."""
+    url = telemetry_server_url.strip()
+    try:
+        joined = urljoin(url, telemetry_server_endpoint)
+    except ValueError as error:
+        raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}') from error
+    parsed = urlparse(joined)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}')
+    return url
 
 
 def _ns_to_ms(ns: int | None) -> float:
@@ -216,7 +232,10 @@ class TraceServerExporter(SpanExporter):
         telemetry_server_endpoint: str = '/api/traces',
         filters: dict[str, str] | None = None,
     ) -> None:
-        self.telemetry_server_url = telemetry_server_url
+        self.telemetry_server_url = resolve_telemetry_server_url(
+            telemetry_server_url=telemetry_server_url,
+            telemetry_server_endpoint=telemetry_server_endpoint,
+        )
         self.telemetry_server_endpoint = telemetry_server_endpoint
         self.filters = filters if filters is not None else DEFAULT_SPAN_FILTERS
         self.last_result = SpanExportResult.SUCCESS
@@ -234,7 +253,13 @@ class TraceServerExporter(SpanExporter):
             try:
                 if item is None:
                     return
-                self.post_jobs(jobs=item)
+                try:
+                    self.post_jobs(jobs=item)
+                except Exception as error:
+                    # The worker has to survive a surprise exception or every
+                    # later trace is silently lost and generate() looks fine.
+                    trace_id = item[0][0] if item else 'unknown'
+                    self.note_transport_failure(trace_id=trace_id, error=error)
             finally:
                 self.queue.task_done()
 
@@ -249,6 +274,12 @@ class TraceServerExporter(SpanExporter):
         logger.error(f'Failed to save trace {trace_id}: {error}')
 
     def post_jobs(self, *, jobs: list[tuple[str, str]]) -> None:
+        """POST each serialized trace.
+
+        Saving is not atomic: a transport failure stops the rest of the
+        batch. Traces already sent stay sent; a down collector is one
+        error line, not a retry storm.
+        """
         url = urljoin(self.telemetry_server_url, self.telemetry_server_endpoint)
         try:
             # No timeout: a slow local collector must still get the span.
@@ -315,8 +346,8 @@ class TraceServerExporter(SpanExporter):
 
     @override
     def shutdown(self) -> None:
-        self.force_flush()
         self.stopped = True
+        self.force_flush(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MILLIS)
         self.queue.put(None)
 
 
@@ -328,7 +359,11 @@ def init_telemetry_server_exporter() -> SpanExporter | None:
             'GENKIT_TELEMETRY_SERVER is not set. If running with `genkit start`, make sure `genkit-cli` is up to date.'
         )
         return None
-    return TraceServerExporter(telemetry_server_url=url)
+    try:
+        return TraceServerExporter(telemetry_server_url=url)
+    except ValueError as error:
+        logger.error(f'GENKIT_TELEMETRY_SERVER is not a valid URL: {error}')
+        return None
 
 
 def create_span_processor(exporter: SpanExporter) -> SpanProcessor:
