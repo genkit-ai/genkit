@@ -2116,6 +2116,98 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 	})
 }
 
+// TestDataPromptNoTextOutput verifies that a normally-finished response with
+// no text to parse (a turn holding only tool requests, which is what
+// WithReturnToolRequests asks for) yields the zero value and no error, the same
+// answer GenerateData gives. Parsing it would report a schema failure for a
+// turn that succeeded.
+func TestDataPromptNoTextOutput(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(context.Background(), r)
+
+	type Query struct {
+		Topic string `json:"topic"`
+	}
+
+	type Report struct {
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+
+	tool := defineTool(r, "noTextTool", "returns a fact",
+		func(ctx *ToolContext, input struct{}) (string, error) { return "fact", nil })
+
+	model := defineModel(r, "test/promptNoText", &ModelOptions{
+		Supports: &ModelSupports{Multiturn: true, Tools: true, Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{
+			Request:      req,
+			FinishReason: FinishReasonStop,
+			Message: &Message{Role: RoleModel, Content: []*Part{
+				NewToolRequestPart(&ToolRequest{Name: "noTextTool", Input: map[string]any{}}),
+			}},
+		}, nil
+	})
+
+	dp := DefineDataPrompt[Query, Report](r, "noTextPrompt",
+		WithModel(model),
+		WithPrompt("Report on {{topic}}"),
+		WithTools(tool),
+		WithReturnToolRequests(true))
+	input := Query{Topic: "widgets"}
+
+	checkToolRequestOnly := func(t *testing.T, resp *ModelResponse) {
+		t.Helper()
+		if resp == nil {
+			t.Fatal("response = nil, want the model response")
+		}
+		if resp.Text() != "" {
+			t.Errorf("Text() = %q, want empty", resp.Text())
+		}
+		if len(resp.ToolRequests()) != 1 {
+			t.Errorf("ToolRequests() = %d, want 1", len(resp.ToolRequests()))
+		}
+	}
+
+	t.Run("Execute", func(t *testing.T) {
+		output, resp, err := dp.Execute(context.Background(), input)
+		if err != nil {
+			t.Fatalf("Execute() returned error: %v", err)
+		}
+		checkToolRequestOnly(t, resp)
+		if output != (Report{}) {
+			t.Errorf("Execute() output = %+v, want zero value", output)
+		}
+	})
+
+	t.Run("ExecuteStream", func(t *testing.T) {
+		var (
+			final *StreamValue[Report, Report]
+			err   error
+		)
+		for v, streamErr := range dp.ExecuteStream(context.Background(), input) {
+			if streamErr != nil {
+				err = streamErr
+				break
+			}
+			if v.Done {
+				final = v
+			}
+		}
+		if err != nil {
+			t.Fatalf("ExecuteStream() returned error: %v", err)
+		}
+		if final == nil {
+			t.Fatal("ExecuteStream() never yielded a done value")
+		}
+		checkToolRequestOnly(t, final.Response)
+		if final.Output != (Report{}) {
+			t.Errorf("ExecuteStream() output = %+v, want zero value", final.Output)
+		}
+	})
+}
+
 func TestDataPromptExecuteStream(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)

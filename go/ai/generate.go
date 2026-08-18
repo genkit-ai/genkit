@@ -1030,18 +1030,12 @@ func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...Generate
 		return nil, nil, err
 	}
 
-	// A response that ended abnormally carries no conforming output, so return
-	// it unparsed rather than reporting a schema error that names the wrong
-	// cause. The caller should check resp.FinishReason and resp.FinishMessage.
-	// See [FinishReason.isAbnormal].
-	if resp.FinishReason.isAbnormal() {
-		return nil, resp, nil
-	}
-
-	// If there's no text content to parse (e.g., the response contains tool
-	// requests or interrupts), return nil output. The caller should check
-	// resp.Interrupts() or resp.ToolRequests() to handle these cases.
-	if resp.Text() == "" {
+	// Two responses have no conforming output to extract: one that ended
+	// abnormally, whose FinishReason is the news the caller needs, and one with
+	// no text at all, which is what a turn holding tool requests, interrupts, or
+	// media looks like. Both hand the response back unparsed rather than report a
+	// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 		return nil, resp, nil
 	}
 
@@ -1173,14 +1167,11 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 
-		// A response that ended abnormally carries no conforming output, so
-		// return it unparsed rather than reporting a schema error that names
-		// the wrong cause. The caller should check resp.FinishReason and
-		// resp.FinishMessage. See [FinishReason.isAbnormal].
-		//
-		// If there's no text content to parse (e.g., the response contains tool
-		// requests or interrupts), return zero-value output. The caller should check
-		// resp.Interrupts() or resp.ToolRequests() to handle these cases.
+		// Two responses have no conforming output to extract: one that ended
+		// abnormally, whose FinishReason is the news the caller needs, and one with
+		// no text at all, which is what a turn holding tool requests, interrupts, or
+		// media looks like. Both hand the response back unparsed rather than report a
+		// schema error naming the wrong cause. See [FinishReason.isAbnormal].
 		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
