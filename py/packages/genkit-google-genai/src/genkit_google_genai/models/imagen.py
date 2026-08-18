@@ -57,7 +57,6 @@ class ImagenVersion(StrEnum):
 
     IMAGEN3 = 'imagen-3.0-generate-002'
     IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
-    IMAGEN2 = 'imagegeneration@006'
 
 
 SUPPORTED_MODELS = {
@@ -81,16 +80,6 @@ SUPPORTED_MODELS = {
             output=['media'],
         ),
     ),
-    ImagenVersion.IMAGEN2: ModelInfo(
-        label='Vertex AI - Imagen2',
-        supports=Supports(
-            media=False,
-            multiturn=False,
-            tools=False,
-            system_role=True,
-            output=['media'],
-        ),
-    ),
 }
 
 DEFAULT_IMAGE_SUPPORT = Supports(
@@ -100,6 +89,29 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     system_role=True,
     output=['media'],
 )
+
+
+def is_imagen_model_name(name: str) -> bool:
+    """Return True if ``name`` is an Imagen model.
+
+    Imagen ids start with ``imagen-`` on the local name after stripping the
+    plugin / ``models/`` prefix. Gemini native image (``gemini-…-image``) is
+    not Imagen.
+    """
+    return name.split('/')[-1].lower().startswith('imagen-')
+
+
+def is_unsupported_image_model_name(name: str) -> bool:
+    """Return True for image ids that must not route anywhere.
+
+    ``imagegeneration@*`` (Imagen 1/2) was shut down by Google in June 2026,
+    and ``virtual-try-on-*`` needs a person+product image request shape this
+    plugin does not implement. Letting either fall through to the Gemini
+    default would answer with the wrong model, so callers treat these ids as
+    not-a-model instead.
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith('imagegeneration@') or local.startswith('virtual-try-on-')
 
 
 def vertexai_image_model_info(

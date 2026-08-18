@@ -74,7 +74,7 @@ def is_veo_model(name: str) -> bool:
     Returns:
         True if this is a Veo model name.
     """
-    return name.lower().startswith('veo')
+    return name.split('/')[-1].lower().startswith('veo-')
 
 
 class VeoConfigSchema(BaseModel):

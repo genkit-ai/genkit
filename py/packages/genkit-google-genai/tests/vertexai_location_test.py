@@ -648,6 +648,7 @@ class TestPluginModelWiring:
         """The model action constructs GeminiModel with the plugin's kwargs."""
         plugin = _vertex_plugin(location='us')
         action = plugin._resolve_model('vertexai/gemini-2.5-flash')
+        assert action is not None
         with patch('genkit_google_genai.google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
@@ -663,6 +664,7 @@ class TestPluginModelWiring:
         with patch('genkit_google_genai.google.genai.client.Client'):
             plugin = GoogleAI(api_key='k')
         action = plugin._resolve_model('googleai/gemini-2.5-flash')
+        assert action is not None
         with patch('genkit_google_genai.google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
