@@ -82,13 +82,13 @@ type skillFrontmatter struct {
 	Description string `yaml:"description"`
 }
 
-func (s *Skills) Name() string { return provider + "/skills" }
+func (s Skills) Name() string { return provider + "/skills" }
 
 // New scans the configured skill paths and returns a [ai.Hooks] that injects
 // the skills system prompt and exposes the use_skill tool. Scanning happens
 // once per [ai.Generate] call; the result is captured in the returned hooks
 // so WrapGenerate and the use_skill tool agree on the same skill set.
-func (s *Skills) New(ctx context.Context) (*ai.Hooks, error) {
+func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 	info, err := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0)
 	if err != nil {
 		return nil, err

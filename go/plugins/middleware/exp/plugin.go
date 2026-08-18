@@ -43,7 +43,7 @@ func (p *Middleware) Init(ctx context.Context) []api.Action { return nil }
 
 func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, error) {
 	return []*ai.MiddlewareDesc{
-		ai.NewMiddleware("Delegate tasks to registered sub-agents via per-agent tools", &Agents{}),
-		ai.NewMiddleware("Provide read/write tools for session artifacts", &Artifacts{}),
+		ai.NewMiddleware("Delegate tasks to registered sub-agents via per-agent tools", Agents{}),
+		ai.NewMiddleware("Provide read/write tools for session artifacts", Artifacts{}),
 	}, nil
 }

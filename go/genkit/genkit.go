@@ -901,10 +901,10 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 //
 // The `description` is a human-readable explanation shown in the Dev UI. The
 // `prototype` is a value of a type that implements [ai.Middleware]. Its
-// [ai.Middleware.Name] method supplies the registered name, and its fields
-// (both exported JSON config and unexported plugin-level state) are captured
-// by a value-copy inside the descriptor so JSON-dispatched invocations
-// preserve prototype state across calls.
+// [ai.Middleware.Name] method supplies the registered name, and each
+// JSON-dispatched invocation copies it so unexported plugin-level state
+// carries into the call while the call's own config is unmarshalled over the
+// exported fields (see [ai.Middleware] for what belongs where).
 //
 // For pure Go use, registration is not strictly required: passing a middleware
 // config directly to [ai.WithUse] invokes its [ai.Middleware.New] method on

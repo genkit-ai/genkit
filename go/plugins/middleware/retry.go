@@ -89,10 +89,10 @@ type Retry struct {
 }
 
 // Name implements [ai.Middleware].
-func (r *Retry) Name() string { return provider + "/retry" }
+func (r Retry) Name() string { return provider + "/retry" }
 
 // New implements [ai.Middleware], hooking the model stage.
-func (r *Retry) New(ctx context.Context) (*ai.Hooks, error) {
+func (r Retry) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: r.wrapModel,
 	}, nil

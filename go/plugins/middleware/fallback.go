@@ -69,10 +69,10 @@ type Fallback struct {
 }
 
 // Name implements [ai.Middleware].
-func (f *Fallback) Name() string { return provider + "/fallback" }
+func (f Fallback) Name() string { return provider + "/fallback" }
 
 // New implements [ai.Middleware], hooking the model stage.
-func (f *Fallback) New(ctx context.Context) (*ai.Hooks, error) {
+func (f Fallback) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: f.wrapModel,
 	}, nil

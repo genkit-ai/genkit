@@ -71,11 +71,11 @@ type Artifacts struct {
 	Readonly bool `json:"readonly,omitempty"`
 }
 
-func (a *Artifacts) Name() string { return provider + "/artifacts" }
+func (a Artifacts) Name() string { return provider + "/artifacts" }
 
 // New returns the hooks that register the artifact tools and inject the
 // artifact listing into the system prompt on each turn.
-func (a *Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
+func (a Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
 	tools := []ai.Tool{newReadArtifactTool()}
 	if !a.Readonly {
 		tools = append(tools, newWriteArtifactTool())

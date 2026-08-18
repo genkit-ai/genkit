@@ -35,10 +35,10 @@ func (p *Middleware) Init(ctx context.Context) []api.Action { return nil }
 
 func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, error) {
 	return []*ai.MiddlewareDesc{
-		ai.NewMiddleware("Retry failed model calls with exponential backoff", &Retry{}),
-		ai.NewMiddleware("Try alternative models when the primary model fails", &Fallback{}),
-		ai.NewMiddleware("Require explicit approval before executing tools", &ToolApproval{}),
-		ai.NewMiddleware("Expose a local library of skills as loadable system instructions", &Skills{}),
-		ai.NewMiddleware("Grant the model file access scoped to a directory", &Filesystem{}),
+		ai.NewMiddleware("Retry failed model calls with exponential backoff", Retry{}),
+		ai.NewMiddleware("Try alternative models when the primary model fails", Fallback{}),
+		ai.NewMiddleware("Require explicit approval before executing tools", ToolApproval{}),
+		ai.NewMiddleware("Expose a local library of skills as loadable system instructions", Skills{}),
+		ai.NewMiddleware("Grant the model file access scoped to a directory", Filesystem{}),
 	}, nil
 }

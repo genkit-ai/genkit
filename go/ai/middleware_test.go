@@ -127,6 +127,133 @@ func TestPluginStateCarriedThroughPrototype(t *testing.T) {
 	}
 }
 
+// --- per-call isolation: JSON dispatch never writes through to the prototype ---
+
+// isolationLog records the config each New() was built with. Dispatches in
+// these tests are sequential, so no locking.
+type isolationLog struct {
+	seen []isolationConfig
+}
+
+func (l *isolationLog) at(t *testing.T, i int) isolationConfig {
+	t.Helper()
+	if i >= len(l.seen) {
+		t.Fatalf("wanted config %d, only %d recorded", i, len(l.seen))
+	}
+	return l.seen[i]
+}
+
+// isolationConfig mirrors the built-in middleware shape: exported fields are
+// per-call user config, unexported fields are plugin state.
+type isolationConfig struct {
+	Label    string            `json:"label,omitempty"`
+	Statuses []string          `json:"statuses,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+
+	log *isolationLog
+}
+
+func (isolationConfig) Name() string { return "test/isolation" }
+
+func (c isolationConfig) New(ctx context.Context) (*Hooks, error) {
+	if c.log != nil {
+		c.log.seen = append(c.log.seen, c)
+	}
+	return &Hooks{}, nil
+}
+
+// Registering by value is the documented shape, but [NewMiddleware] accepts
+// any [Middleware], so a pointer prototype has to isolate just the same.
+func forEachPrototypeShape(t *testing.T, run func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, snapshot func() isolationConfig)) {
+	t.Helper()
+	for _, tc := range []struct {
+		name  string
+		build func(isolationConfig) (*MiddlewareDesc, func() isolationConfig)
+	}{
+		{"value prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			return NewMiddleware("desc", p), func() isolationConfig { return p }
+		}},
+		{"pointer prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			ptr := &p
+			return NewMiddleware("desc", ptr), func() isolationConfig { return *ptr }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &isolationLog{}
+			desc, snapshot := tc.build(isolationConfig{log: log})
+			run(t, desc, log, snapshot)
+		})
+	}
+}
+
+func TestBuildFromJSON_ConfigDoesNotLeakBetweenCalls(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, _ func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+		buildOrFail(t, desc, `{}`)
+
+		second := log.at(t, 1)
+		if second.Label != "" {
+			t.Errorf("Label = %q, want empty (leaked from the previous call)", second.Label)
+		}
+		if second.Statuses != nil {
+			t.Errorf("Statuses = %v, want nil (leaked from the previous call)", second.Statuses)
+		}
+		if second.Tags != nil {
+			t.Errorf("Tags = %v, want nil (leaked from the previous call)", second.Tags)
+		}
+	})
+}
+
+func TestBuildFromJSON_PrototypeNotMutated(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, _ *isolationLog, snapshot func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+
+		got := snapshot()
+		if got.Label != "" || got.Statuses != nil || got.Tags != nil {
+			t.Errorf("prototype mutated by dispatch: %+v", got)
+		}
+	})
+}
+
+// ptrRecvConfig takes pointer receivers, so Name() survives being read off a
+// nil prototype during registration.
+type ptrRecvConfig struct {
+	Label string `json:"label,omitempty"`
+}
+
+func (*ptrRecvConfig) Name() string { return "test/ptr-recv" }
+
+func (c *ptrRecvConfig) New(context.Context) (*Hooks, error) {
+	return &Hooks{
+		WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+			_ = c.Label // A nil receiver surfaces here, not in New.
+			return next(ctx, p)
+		},
+	}, nil
+}
+
+// A nil pointer prototype is a programming error, but it must not panic the
+// process. A call that sends no config has nothing to unmarshal, so nothing
+// allocates through the pointer and New would otherwise get a nil receiver.
+func TestBuildFromJSON_NilPrototype(t *testing.T) {
+	desc := NewMiddleware("desc", (*ptrRecvConfig)(nil))
+	h, err := desc.buildFromJSON(testCtx, nil)
+	if err != nil {
+		t.Fatalf("buildFromJSON failed: %v", err)
+	}
+	next := func(context.Context, *ModelParams) (*ModelResponse, error) { return &ModelResponse{}, nil }
+	if _, err := h.WrapModel(testCtx, &ModelParams{}, next); err != nil {
+		t.Fatalf("WrapModel failed: %v", err)
+	}
+}
+
+func buildOrFail(t *testing.T, desc *MiddlewareDesc, configJSON string) {
+	t.Helper()
+	if _, err := desc.buildFromJSON(testCtx, []byte(configJSON)); err != nil {
+		t.Fatalf("buildFromJSON(%s) failed: %v", configJSON, err)
+	}
+}
+
 // --- call-level state: each Generate gets fresh BuildMiddleware scope ---
 
 type perCallConfig struct {

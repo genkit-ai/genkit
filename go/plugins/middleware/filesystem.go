@@ -164,12 +164,12 @@ type Filesystem struct {
 }
 
 // Name implements [ai.Middleware].
-func (f *Filesystem) Name() string { return provider + "/filesystem" }
+func (f Filesystem) Name() string { return provider + "/filesystem" }
 
 // New initializes a per-call instance: opens the [os.Root], builds the tool
 // set, and allocates the message queue used to bridge tool output back to the
 // model on the next turn.
-func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
+func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	if strings.TrimSpace(f.RootDir) == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: RootDir is required")
 	}

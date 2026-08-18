@@ -143,7 +143,7 @@ type Agents struct {
 	ArtifactStrategy ArtifactStrategy `json:"artifactStrategy,omitempty"`
 }
 
-func (a *Agents) Name() string { return provider + "/agents" }
+func (a Agents) Name() string { return provider + "/agents" }
 
 // agentsState is the per-generate mutable state shared by the delegation tools
 // and the generate hook. New allocates a fresh one per call, and a mutex guards
@@ -161,7 +161,7 @@ type agentsState struct {
 // New validates the configuration and returns the hooks: a delegation tool per
 // agent plus a generate hook that injects the <sub-agents> system prompt and
 // captures conversation history.
-func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
+func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	if len(a.Agents) == 0 {
 		return nil, fmt.Errorf("agents middleware requires at least one agent in the \"agents\" option")
 	}
