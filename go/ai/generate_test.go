@@ -2865,6 +2865,174 @@ func TestGenerateAbnormalFinishSkipsOutputParsing(t *testing.T) {
 	}
 }
 
+// TestGenerateDataAbnormalFinish verifies that GenerateData and
+// GenerateDataStream apply the same abnormal-finish rule as Generate: a
+// response that ended blocked, aborted, interrupted, or other is handed back
+// unparsed so the caller reads the finish reason, instead of being reported as
+// a schema mismatch that names the wrong cause.
+func TestGenerateDataAbnormalFinish(t *testing.T) {
+	r := childRegistry(t)
+
+	type Report struct {
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+
+	tests := []struct {
+		name     string
+		response *ModelResponse
+		wantData *Report
+		wantErr  error
+	}{
+		{
+			// The common path: a provider reports a safety block and returns
+			// prose explaining it, with no middleware involved.
+			name: "blocked with explanatory text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       NewModelTextMessage("Response was blocked for safety reasons."),
+			},
+		},
+		{
+			name: "blocked with no content",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+		},
+		{
+			// What a soft-failing middleware produces when the provider is
+			// unreachable: an aborted response carrying the failure text.
+			name: "aborted with failure text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonAborted,
+				FinishMessage: "provider down",
+				Message:       NewModelTextMessage("Error: provider down"),
+			},
+		},
+		{
+			name: "other with filter details",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonOther,
+				FinishMessage: "malformed function call",
+				Message:       NewModelTextMessage("filter details, not JSON"),
+			},
+		},
+		{
+			// A normal completion still validates: the fix must not turn every
+			// schema mismatch into a silent nil.
+			name: "stop with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			wantErr: status.ErrInvalidOutput,
+		},
+		{
+			name: "stop with conforming text parses",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage(`{"title":"ok","score":7}`),
+			},
+			wantData: &Report{Title: "ok", Score: 7},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/data-abnormal-finish-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					resp := *tt.response
+					resp.Request = req
+					return &resp, nil
+				})
+			opts := []GenerateOption{WithModel(model), WithPrompt("please respond")}
+
+			t.Run("GenerateData", func(t *testing.T) {
+				data, resp, err := GenerateData[Report](context.Background(), r, opts...)
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("GenerateData() err = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("GenerateData() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				checkResponse(t, resp, tt.response)
+				if tt.wantData == nil {
+					if data != nil {
+						t.Errorf("GenerateData() data = %+v, want nil", *data)
+					}
+					return
+				}
+				if data == nil {
+					t.Fatalf("GenerateData() data = nil, want %+v", *tt.wantData)
+				}
+				if *data != *tt.wantData {
+					t.Errorf("GenerateData() data = %+v, want %+v", *data, *tt.wantData)
+				}
+			})
+
+			t.Run("GenerateDataStream", func(t *testing.T) {
+				var (
+					final *StreamValue[Report, Report]
+					err   error
+				)
+				for v, streamErr := range GenerateDataStream[Report](context.Background(), r, opts...) {
+					if streamErr != nil {
+						err = streamErr
+						break
+					}
+					if v.Done {
+						final = v
+					}
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("GenerateDataStream() err = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("GenerateDataStream() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				if final == nil {
+					t.Fatal("GenerateDataStream() never yielded a done value")
+				}
+				checkResponse(t, final.Response, tt.response)
+				want := Report{}
+				if tt.wantData != nil {
+					want = *tt.wantData
+				}
+				if final.Output != want {
+					t.Errorf("GenerateDataStream() output = %+v, want %+v", final.Output, want)
+				}
+			})
+		})
+	}
+}
+
+// checkResponse asserts that the caller was handed the model's own finish
+// reason, message, and text rather than a rewritten or parsed stand-in.
+func checkResponse(t *testing.T, got, want *ModelResponse) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("response = nil, want the model response")
+	}
+	if got.FinishReason != want.FinishReason {
+		t.Errorf("FinishReason = %q, want %q", got.FinishReason, want.FinishReason)
+	}
+	if got.FinishMessage != want.FinishMessage {
+		t.Errorf("FinishMessage = %q, want %q", got.FinishMessage, want.FinishMessage)
+	}
+	if got.Text() != want.Text() {
+		t.Errorf("Text() = %q, want %q", got.Text(), want.Text())
+	}
+}
+
 func TestGenerateNoGoroutineLeak(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
