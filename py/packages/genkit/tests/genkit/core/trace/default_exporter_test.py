@@ -109,6 +109,18 @@ def test_init_telemetry_server_exporter_returns_none_when_url_not_set() -> None:
         assert exporter is None
 
 
+def test_init_telemetry_server_exporter_returns_none_when_url_is_invalid() -> None:
+    """A typo'd env var must not crash import — just skip the exporter."""
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_TELEMETRY_SERVER': 'http://[::1:4033'}),
+        capture_logs() as entries,
+    ):
+        exporter = init_telemetry_server_exporter()
+
+    assert exporter is None
+    assert any('GENKIT_TELEMETRY_SERVER is not a valid URL' in str(e.get('event', '')) for e in entries)
+
+
 # =============================================================================
 # Tests for TraceServerExporter
 # =============================================================================
@@ -120,6 +132,18 @@ def test_telemetry_server_exporter_init_default_endpoint() -> None:
 
     assert exporter.telemetry_server_url == 'http://localhost:4000'
     assert exporter.telemetry_server_endpoint == '/api/traces'
+
+
+def test_telemetry_server_exporter_rejects_malformed_url() -> None:
+    """A typo'd IPv6 URL must fail on the caller thread, not kill the worker later."""
+    with pytest.raises(ValueError, match='invalid telemetry server URL'):
+        TraceServerExporter(telemetry_server_url='http://[::1:4033')
+
+
+def test_telemetry_server_exporter_strips_url_whitespace() -> None:
+    """A trailing newline in the env var is a common copy-paste, not a bad URL."""
+    exporter = TraceServerExporter(telemetry_server_url='  http://localhost:4000\n')
+    assert exporter.telemetry_server_url == 'http://localhost:4000'
 
 
 def test_telemetry_server_exporter_init_custom_endpoint() -> None:
@@ -287,6 +311,94 @@ def test_export_does_not_stall_on_hung_collector() -> None:
         release.set()
         assert exporter.force_flush(timeout_millis=2000) is True
         assert exporter.last_result == SpanExportResult.FAILURE
+
+
+def test_shutdown_does_not_wait_out_hung_post() -> None:
+    """Process exit must not sit on the full flush timeout for a wedged collector."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_post(*_args: object, **_kwargs: object) -> MagicMock:
+        started.set()
+        release.wait(timeout=10)
+        return MagicMock()
+
+    with patch('genkit._core._trace._default_exporter.httpx.Client') as mock_client_class:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = blocking_post
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+        exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:9')
+        exporter.export([create_mock_span()])
+        assert started.wait(timeout=1)
+        t0 = time.perf_counter()
+        exporter.shutdown()
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 5
+        assert exporter.stopped
+        release.set()
+
+
+def test_batch_stops_after_first_trace_failure() -> None:
+    """A transport failure drops the rest of the batch — one error line, not a retry storm."""
+    posts = {'n': 0}
+
+    def flaky_post(*_args: object, **_kwargs: object) -> MagicMock:
+        posts['n'] += 1
+        if posts['n'] == 1:
+            raise httpx.ConnectError('reset by peer')
+        return MagicMock()
+
+    with patch('genkit._core._trace._default_exporter.httpx.Client') as mock_client_class:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = flaky_post
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+        exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+        with capture_logs() as entries:
+            exporter.export([
+                create_mock_span(trace_id=0xA, span_id=1),
+                create_mock_span(trace_id=0xB, span_id=2),
+            ])
+            assert exporter.force_flush(timeout_millis=2000) is True
+
+    assert posts['n'] == 1
+    errors = [e for e in entries if 'Failed to save trace' in str(e.get('event', ''))]
+    assert len(errors) == 1
+    assert format(0xA, '032x') in errors[0]['event']
+
+
+def test_worker_survives_unexpected_post_error() -> None:
+    """A non-transport exception must not kill the worker or swallow later traces."""
+    posts = {'n': 0}
+
+    def flaky_post(*_args: object, **_kwargs: object) -> MagicMock:
+        posts['n'] += 1
+        if posts['n'] == 1:
+            raise ValueError('not a transport error')
+        return MagicMock()
+
+    with patch('genkit._core._trace._default_exporter.httpx.Client') as mock_client_class:
+        mock_client = MagicMock()
+        mock_client.post.side_effect = flaky_post
+        mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
+
+        exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+        with capture_logs() as entries:
+            exporter.export([create_mock_span(trace_id=0xA)])
+            assert exporter.force_flush(timeout_millis=2000) is True
+            exporter.export([create_mock_span(trace_id=0xB)])
+            assert exporter.force_flush(timeout_millis=2000) is True
+
+    assert exporter.worker.is_alive()
+    assert posts['n'] == 2
+    assert exporter.last_result == SpanExportResult.SUCCESS
+    errors = [e for e in entries if 'Failed to save trace' in str(e.get('event', ''))]
+    assert len(errors) == 1
+    assert format(0xA, '032x') in errors[0]['event']
 
 
 def test_export_encode_bug_is_loud() -> None:
