@@ -25,6 +25,8 @@ import base64
 import json
 from typing import Any
 
+from pydantic import ValidationError
+
 from genkit import (
     FinishReason,
     Message,
@@ -172,21 +174,39 @@ def normalize_config(config: Any) -> BedrockConfig | None:  # noqa: ANN401
         A BedrockConfig, or None when no config was given.
 
     Raises:
-        GenkitError: INVALID_ARGUMENT for unsupported config types.
+        GenkitError: INVALID_ARGUMENT for unsupported config types, unknown
+            config keys, and values that fail validation.
     """
     if config is None:
         return None
     if isinstance(config, BedrockConfig):
         return config
     if isinstance(config, dict):
-        return BedrockConfig.model_validate(config)
-    dump = getattr(config, 'model_dump', None)
-    if callable(dump):
-        return BedrockConfig.model_validate(dump(exclude_none=True))
-    raise GenkitError(
-        message=f'bedrock: unexpected config type {type(config).__name__}, want BedrockConfig, ModelConfig, or dict',
-        status='INVALID_ARGUMENT',
-    )
+        payload = config
+    else:
+        dump = getattr(config, 'model_dump', None)
+        if not callable(dump):
+            raise GenkitError(
+                message=(
+                    f'bedrock: unexpected config type {type(config).__name__}, want BedrockConfig, ModelConfig, or dict'
+                ),
+                status='INVALID_ARGUMENT',
+            )
+        payload = dump(exclude_none=True)
+    try:
+        return BedrockConfig.model_validate(payload)
+    except ValidationError as e:
+        unknown = sorted({str(error['loc'][0]) for error in e.errors() if error['type'] == 'extra_forbidden'})
+        if unknown:
+            raise GenkitError(
+                message=(
+                    f'bedrock: unknown config key(s): {", ".join(unknown)}; only declared BedrockConfig '
+                    'fields (e.g. maxOutputTokens) are sent, model-specific options go in '
+                    'additionalModelRequestFields'
+                ),
+                status='INVALID_ARGUMENT',
+            ) from e
+        raise GenkitError(message=f'bedrock: invalid config: {e}', status='INVALID_ARGUMENT') from e
 
 
 def _effective_max_tokens(config: BedrockConfig | None) -> int | None:

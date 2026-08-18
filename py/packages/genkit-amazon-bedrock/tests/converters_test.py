@@ -142,6 +142,21 @@ def test_normalize_config_rejects_unsupported_type() -> None:
         normalize_config(42)
 
 
+def test_normalize_config_rejects_unknown_keys() -> None:
+    # 'maxTokens' is the Converse wire name, not a config field; tolerating it
+    # would run the call with no token cap at all.
+    with pytest.raises(GenkitError, match='unknown config key') as excinfo:
+        normalize_config({'maxTokens': 4096})
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+    assert 'maxTokens' in str(excinfo.value)
+
+
+def test_normalize_config_rejects_invalid_values() -> None:
+    with pytest.raises(GenkitError, match='invalid config') as excinfo:
+        normalize_config({'temperature': 'hot'})
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+
+
 def test_build_inference_config_empty_is_none() -> None:
     assert build_inference_config(None) is None
     assert build_inference_config(BedrockConfig()) is None
@@ -184,6 +199,13 @@ def test_configured_max_tokens_is_sent() -> None:
     request = user_text_request(config=BedrockConfig(max_output_tokens=32))
     kwargs = build_converse_request('anthropic.claude-3-haiku-20240307-v1:0', request)
     assert kwargs['inferenceConfig'] == {'maxTokens': 32}
+
+
+def test_dict_config_max_output_tokens_lands_in_inference_config() -> None:
+    # The shape the samples pass: a camelCase dict straight into generate().
+    request = user_text_request(config={'maxOutputTokens': 4096})
+    kwargs = build_converse_request('us.anthropic.claude-sonnet-4-5-20250929-v1:0', request)
+    assert kwargs['inferenceConfig'] == {'maxTokens': 4096}
 
 
 @pytest.mark.parametrize('model_id', ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'amazon.nova-lite-v1:0'])

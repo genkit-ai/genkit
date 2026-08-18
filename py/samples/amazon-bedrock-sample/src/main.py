@@ -370,7 +370,7 @@ async def thinking_stream(data: TopicInput, ctx: ActionRunContext) -> dict[str, 
         model=CLAUDE,
         prompt=f'What is 17 * 23? Think it through, then state the answer. Mention {data.topic} once.',
         config={
-            'maxTokens': 4096,
+            'maxOutputTokens': 4096,
             'additionalModelRequestFields': {'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
         },
     )
@@ -600,7 +600,7 @@ async def summarize_pdf(data: PdfInput) -> str:
             Part(root=MediaPart(media=Media(url=data.pdf_data_url))),
             Part(root=TextPart(text=data.question)),
         ],
-        config={'maxTokens': 512},
+        config={'maxOutputTokens': 512},
     )
     return response.text
 
@@ -619,8 +619,9 @@ async def prompt_caching(data: CacheInput) -> dict[str, object]:
     manual shows up in ``total_tokens`` instead.
     """
     system = [Part(root=TextPart(text=CACHED_SYSTEM_PROMPT)), cache_point_part()]
-    first = await ai.generate(model=CLAUDE, system=system, prompt=data.first_question, config={'maxTokens': 512})
-    second = await ai.generate(model=CLAUDE, system=system, prompt=data.second_question, config={'maxTokens': 512})
+    config = {'maxOutputTokens': 512}
+    first = await ai.generate(model=CLAUDE, system=system, prompt=data.first_question, config=config)
+    second = await ai.generate(model=CLAUDE, system=system, prompt=data.second_question, config=config)
     return {
         'model': CLAUDE,
         'system_prompt_chars': len(CACHED_SYSTEM_PROMPT),

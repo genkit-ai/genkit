@@ -39,14 +39,16 @@ DEFAULT_MAX_POOL_CONNECTIONS = 50
 class BedrockConfig(ModelConfig):
     """Per-call configuration for Bedrock models.
 
-    Unknown keys are tolerated for forward compatibility, but only the declared
-    fields (and ``additional_model_request_fields``) reach the Converse API.
+    Unknown keys are rejected: only the declared fields reach the Converse
+    API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
+    the call with the knob silently unset. Model-specific options travel
+    through ``additional_model_request_fields``.
     """
 
     model_config = ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,
-        extra='allow',
+        extra='forbid',
     )
 
     tool_choice: str | None = None

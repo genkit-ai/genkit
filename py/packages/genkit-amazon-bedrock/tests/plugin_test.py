@@ -24,6 +24,7 @@ import boto3.session
 import pytest
 from genkit_amazon_bedrock import Bedrock, BedrockConfig, ModelDefinition, bedrock_name
 from genkit_amazon_bedrock.transport import BedrockTransport
+from pydantic import ValidationError
 
 from genkit import Document, MediaPart, ModelRequest, ModelResponse
 from genkit.embedder import EmbedRequest
@@ -61,16 +62,19 @@ def test_model_definition_defaults_to_chat() -> None:
     assert model.type == 'chat'
 
 
-def test_config_accepts_camel_case_and_extra_fields() -> None:
+def test_config_accepts_camel_case_and_rejects_unknown_fields() -> None:
     config = BedrockConfig.model_validate({
         'toolChoice': 'auto',
         'maxOutputTokens': 128,
         'additionalModelRequestFields': {'thinking': {'type': 'enabled'}},
-        'someFutureKnob': True,
     })
     assert config.tool_choice == 'auto'
     assert config.max_output_tokens == 128
     assert config.additional_model_request_fields == {'thinking': {'type': 'enabled'}}
+    # An unknown key would validate and then silently never reach the wire;
+    # rejection turns that typo into an error at the call site.
+    with pytest.raises(ValidationError):
+        BedrockConfig.model_validate({'maxTokens': 128})
 
 
 @pytest.mark.asyncio
