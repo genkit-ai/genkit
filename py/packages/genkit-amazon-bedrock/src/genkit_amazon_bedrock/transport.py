@@ -27,7 +27,7 @@ import asyncio
 import json
 import os
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -205,6 +205,10 @@ class BedrockTransport:
         call and every ``next()`` cross the thread bridge — a stream idles for
         seconds between events and must not hold the event loop.
 
+        The total timeout is one deadline across the whole stream rather than
+        a per-event allowance: the read timeout already resets on every byte,
+        so the slow dribble it cannot see is exactly what the deadline ends.
+
         Args:
             kwargs: Keyword arguments passed verbatim to ``converse_stream``.
 
@@ -212,17 +216,19 @@ class BedrockTransport:
             One raw event dict per event, e.g. ``{'contentBlockDelta': {...}}``.
 
         Raises:
-            GenkitError: INTERNAL when the response carries no event stream.
+            GenkitError: INTERNAL when the response carries no event stream;
+                DEADLINE_EXCEEDED when the stream outruns the total timeout.
             botocore.exceptions.EventStreamError: For mid-stream failures; it
                 subclasses ``ClientError``, so callers map it like any other
                 AWS error.
         """
+        deadline = None if self._total_timeout is None else asyncio.get_running_loop().time() + self._total_timeout
         # Shielded so a cancellation here can still close the stream the
         # uninterruptible worker goes on to open.
         call = asyncio.ensure_future(asyncio.to_thread(self._converse_stream_sync, kwargs))
         try:
-            response = await asyncio.shield(call)
-        except asyncio.CancelledError:
+            response = await self._before_deadline(asyncio.shield(call), deadline)
+        except (asyncio.CancelledError, GenkitError):
             call.add_done_callback(_close_abandoned_stream)
             raise
         stream = response.get('stream')
@@ -231,14 +237,32 @@ class BedrockTransport:
         events = iter(stream)
         try:
             while True:
-                event: Any = await asyncio.to_thread(next, events, _STREAM_DONE)
+                event: Any = await self._before_deadline(asyncio.to_thread(next, events, _STREAM_DONE), deadline)
                 if event is _STREAM_DONE:
                     return
                 yield event
         finally:
             # Called inline rather than through the bridge: it is a socket
             # teardown, and awaiting here would be re-cancelled on cancellation.
+            # On a deadline this is also what frees the parked worker thread.
             stream.close()
+
+    async def _before_deadline(self, awaitable: Awaitable[Any], deadline: float | None) -> Any:  # noqa: ANN401
+        """Awaits with the budget remaining until ``deadline``; None waits freely.
+
+        Raises:
+            GenkitError: DEADLINE_EXCEEDED when the budget runs out first.
+        """
+        if deadline is None:
+            return await awaitable
+        remaining = deadline - asyncio.get_running_loop().time()
+        try:
+            return await asyncio.wait_for(awaitable, remaining)
+        except asyncio.TimeoutError as e:
+            raise GenkitError(
+                message=f'bedrock converse stream failed: stream exceeded the {self._total_timeout}s total timeout',
+                status='DEADLINE_EXCEEDED',
+            ) from e
 
     def _converse_stream_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
         return self.client().converse_stream(**kwargs)

@@ -359,10 +359,11 @@ def streaming_transport(
     error: Exception | None = None,
     with_stream: bool = True,
     gate: threading.Event | None = None,
+    **kwargs,
 ) -> tuple[BedrockTransport, FakeStreamClient, FakeEventStream | None]:
     fake_stream = FakeEventStream(events or [], error) if with_stream else None
     client = FakeStreamClient(fake_stream, gate)
-    transport = make_transport(region='eu-west-1')
+    transport = make_transport(region='eu-west-1', **kwargs)
     transport._client = client  # noqa: SLF001
     return transport, client, fake_stream
 
@@ -470,6 +471,59 @@ async def test_converse_stream_closes_when_cancelled_during_the_initial_call() -
 
     assert stream.close_calls == 1
     assert stream.iter_threads == [], 'no events should be consumed after cancellation'
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_gives_up_at_the_total_timeout_before_any_event() -> None:
+    # The deadline covers the initial call, and the stream that call goes on
+    # to open after the caller is gone still gets closed on their behalf.
+    released = threading.Event()
+    transport, _client, stream = streaming_transport([TEXT_EVENT], gate=released, total_timeout=0.05)
+    assert stream is not None
+
+    with pytest.raises(GenkitError, match='total timeout') as excinfo:
+        async for _event in transport.converse_stream(modelId='m'):
+            pass
+    assert excinfo.value.status == 'DEADLINE_EXCEEDED'
+    assert stream.close_calls == 0, 'the call has not returned yet'
+
+    released.set()
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if stream.close_calls:
+            break
+
+    assert stream.close_calls == 1
+    assert stream.iter_threads == [], 'no events should be consumed after the deadline'
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_gives_up_at_the_total_timeout_mid_stream() -> None:
+    # One deadline across the whole stream, not a per-event allowance: the
+    # budget keeps counting down between events, so a stalled stream ends.
+    transport, _client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT], total_timeout=0.1)
+    assert stream is not None
+    received = []
+
+    with pytest.raises(GenkitError, match='total timeout') as excinfo:
+        async for event in transport.converse_stream(modelId='m'):
+            received.append(event)
+            # Parks the next worker in next() until close() releases it.
+            stream.block()
+
+    assert excinfo.value.status == 'DEADLINE_EXCEEDED'
+    assert received == [TEXT_EVENT]
+    assert stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_without_a_total_timeout_streams_freely() -> None:
+    transport, _client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT], total_timeout=None)
+
+    received = [event async for event in transport.converse_stream(modelId='m')]
+
+    assert received == [TEXT_EVENT, STOP_EVENT]
+    assert stream is not None and stream.close_calls == 1
 
 
 @pytest.mark.asyncio
