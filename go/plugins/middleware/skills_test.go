@@ -47,6 +47,14 @@ func setupSkillsDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 
+	refsDir := filepath.Join(py, "references")
+	if err := os.Mkdir(refsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "PROCEDURE.md"), []byte("Step 1: do the thing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	js := filepath.Join(skillsDir, "javascript")
 	if err := os.Mkdir(js, 0o755); err != nil {
 		t.Fatal(err)
@@ -246,6 +254,118 @@ func TestSkillsNoopWhenNoSkillsFound(t *testing.T) {
 
 	if findSystem(*captured) != nil {
 		t.Error("did not expect a system message when no skills were found")
+	}
+}
+
+func TestSkillsReadSubFile(t *testing.T) {
+	r := newTestRegistry(t)
+	skillsDir := setupSkillsDir(t)
+
+	m := toolCallingModel(t, r, "test/subfile", useSkillToolName, map[string]any{
+		"skillName": "python",
+		"filePath":  "references/PROCEDURE.md",
+	})
+
+	s := &Skills{SkillPaths: []string{skillsDir}}
+	registerTestMiddleware(r, "skills-subfile", s)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("load procedure"), ai.WithUse(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	for _, msg := range resp.History() {
+		for _, part := range msg.Content {
+			if part.IsToolResponse() && part.ToolResponse.Name == useSkillToolName {
+				if out, ok := part.ToolResponse.Output.(string); ok {
+					got = out
+				}
+			}
+		}
+	}
+	if got == "" {
+		t.Fatalf("expected a tool response with sub-file content; history=%v", resp.History())
+	}
+	if !strings.Contains(got, "Step 1: do the thing") {
+		t.Errorf("tool response missing sub-file body: %q", got)
+	}
+}
+
+func TestSkillsReadSubFileTraversalBlocked(t *testing.T) {
+	r := newTestRegistry(t)
+	skillsDir := setupSkillsDir(t)
+
+	m := toolCallingModel(t, r, "test/traversal", useSkillToolName, map[string]any{
+		"skillName": "python",
+		"filePath":  "../../etc/passwd",
+	})
+
+	s := &Skills{SkillPaths: []string{skillsDir}}
+	registerTestMiddleware(r, "skills-traversal", s)
+
+	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("escape"), ai.WithUse(s))
+	if err == nil {
+		t.Fatal("expected an error for directory traversal attempt")
+	}
+	if !strings.Contains(err.Error(), "escapes skill directory") {
+		t.Errorf("expected 'escapes skill directory' in error, got %v", err)
+	}
+}
+
+func TestSkillsReadSubFileNotFound(t *testing.T) {
+	r := newTestRegistry(t)
+	skillsDir := setupSkillsDir(t)
+
+	m := toolCallingModel(t, r, "test/notfound", useSkillToolName, map[string]any{
+		"skillName": "python",
+		"filePath":  "references/NONEXISTENT.md",
+	})
+
+	s := &Skills{SkillPaths: []string{skillsDir}}
+	registerTestMiddleware(r, "skills-notfound", s)
+
+	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("missing"), ai.WithUse(s))
+	if err == nil {
+		t.Fatal("expected an error for missing sub-file")
+	}
+	if !strings.Contains(err.Error(), "failed to read") {
+		t.Errorf("expected 'failed to read' in error, got %v", err)
+	}
+}
+
+func TestSkillsReadSubFileEmptyPath(t *testing.T) {
+	r := newTestRegistry(t)
+	skillsDir := setupSkillsDir(t)
+
+	m := toolCallingModel(t, r, "test/emptypath", useSkillToolName, map[string]any{
+		"skillName": "python",
+		"filePath":  "",
+	})
+
+	s := &Skills{SkillPaths: []string{skillsDir}}
+	registerTestMiddleware(r, "skills-emptypath", s)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("use python"), ai.WithUse(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	for _, msg := range resp.History() {
+		for _, part := range msg.Content {
+			if part.IsToolResponse() && part.ToolResponse.Name == useSkillToolName {
+				if out, ok := part.ToolResponse.Output.(string); ok {
+					got = out
+				}
+			}
+		}
+	}
+	if got == "" {
+		t.Fatalf("expected a tool response with SKILL.md content; history=%v", resp.History())
+	}
+	if !strings.Contains(got, "Python prompt content") {
+		t.Errorf("empty filePath should return SKILL.md body: %q", got)
 	}
 }
 
