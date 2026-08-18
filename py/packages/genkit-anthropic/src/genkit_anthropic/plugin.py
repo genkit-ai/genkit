@@ -21,8 +21,8 @@ from typing import Any, Literal, cast
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ModelRequest, ModelResponse
-from genkit.model import model_action_metadata
+from genkit import GenkitError, ModelRequest, ModelResponse
+from genkit.model import ModelRef, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -33,7 +33,7 @@ from genkit.plugin_api import (
     to_json_schema,
 )
 from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, get_model_info
+from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
 from genkit_anthropic.models import AnthropicModel
 
 logger = structlog.get_logger(__name__)
@@ -60,6 +60,21 @@ class Anthropic(Plugin):
     """
 
     name = ANTHROPIC_PLUGIN_NAME
+
+    @classmethod
+    def claude_model(
+        cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None
+    ) -> ModelRef[AnthropicConfig]:
+        """Typed ref for a Claude model, e.g. ``Anthropic.claude_model('claude-sonnet-4-5')``.
+
+        Unknown ids are allowed so new Claude releases work before this
+        plugin learns their names; every Anthropic generate model takes
+        AnthropicConfig.
+        """
+        local = str(name).removeprefix(f'{ANTHROPIC_PLUGIN_NAME}/')
+        if not local:
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
+        return model_ref(local, config_schema=AnthropicConfig, namespace=ANTHROPIC_PLUGIN_NAME, config=config)
 
     def __init__(
         self,
@@ -129,7 +144,7 @@ class Anthropic(Plugin):
 
         model_info = get_model_info(clean_name)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
             model = AnthropicModel(
                 model_name=clean_name,
                 client=self._runtime_client(),

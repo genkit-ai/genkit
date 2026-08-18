@@ -37,7 +37,7 @@ from genkit import (
     ToolDefinition,
 )
 from genkit.plugin_api import ActionRunContext
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
+from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -167,7 +167,7 @@ class OpenAIModel:
                     },
                 }
 
-            model = SUPPORTED_OPENAI_MODELS[self._model]
+            model = SUPPORTED_OPENAI_MODELS[cast(KnownGpt, self._model)]
             if model.supports and model.supports.output and SupportedOutputFormat.JSON_MODE in model.supports.output:
                 return {'type': 'json_object'}
 
