@@ -30,15 +30,13 @@ import {
   GenerationCommonConfigSchema,
   GenkitError,
   Message,
-  StatusName,
   modelRef,
   z,
-  type ErrorResponseMetadata,
 } from 'genkit';
 import { parsePartialJson } from 'genkit/extract';
 import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
 import { model } from 'genkit/plugin';
-import OpenAI, { APIError } from 'openai';
+import OpenAI from 'openai';
 import type {
   ChatCompletion,
   ChatCompletionChunk,
@@ -52,20 +50,14 @@ import type {
   CompletionChoice,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
-import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
-
-/**
- * Parses a `Retry-After` header value into milliseconds.
- * Supports delay-seconds and HTTP-date formats (RFC 7231 §7.1.3).
- */
-function parseRetryAfterMs(value: string): number | undefined {
-  if (!value || !value.trim()) return undefined;
-  const seconds = Number(value);
-  if (!isNaN(seconds) && seconds >= 0) return seconds * 1000;
-  const date = new Date(value);
-  if (!isNaN(date.getTime())) return Math.max(0, date.getTime() - Date.now());
-  return undefined;
-}
+import {
+  extractDataFromBase64Url,
+  generateFilenameFromContentType,
+  isImageContentType,
+  maybeCreateRequestScopedOpenAIClient,
+  rethrowOpenAIError,
+  toModelName,
+} from './utils.js';
 
 const VisualDetailLevelSchema = z.enum(['auto', 'low', 'high']).optional();
 
@@ -113,56 +105,6 @@ export function toOpenAITool(tool: ToolDefinition): ChatCompletionTool {
       parameters: tool.inputSchema !== null ? tool.inputSchema : undefined,
     },
   };
-}
-
-/**
- * Checks if a content type is an image type.
- * @param contentType The content type to check.
- * @returns True if the content type is an image type.
- */
-function isImageContentType(contentType?: string): boolean {
-  if (!contentType) return false;
-  return contentType.startsWith('image/');
-}
-
-/**
- * Extracts the base64 data and content type from a data URL.
- * @param url The data URL to parse.
- * @returns The base64 data and content type, or null if invalid.
- */
-function extractDataFromBase64Url(url: string): {
-  data: string;
-  contentType: string;
-} | null {
-  const match = url.match(/^data:([^;]+);base64,(.+)$/);
-  return (
-    match && {
-      contentType: match[1],
-      data: match[2],
-    }
-  );
-}
-
-/**
- * Map of content types to file extensions.
- */
-const FILE_EXTENSIONS: Record<string, string> = {
-  'application/pdf': 'pdf',
-  'application/msword': 'doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-    'docx',
-  'text/plain': 'txt',
-  'text/csv': 'csv',
-};
-
-/**
- * Generates a filename from a content type.
- * @param contentType The content type.
- * @returns A filename with appropriate extension.
- */
-function generateFilenameFromContentType(contentType: string): string {
-  const ext = FILE_EXTENSIONS[contentType] || '';
-  return ext ? `file.${ext}` : 'file';
 }
 
 /**
@@ -578,8 +520,22 @@ export function toOpenAIRequestBody(
     version: modelVersion,
     tools: toolsFromConfig,
     apiKey,
+    // Selects the OpenAI transport; it is a plugin concept, and Chat
+    // Completions rejects unknown arguments, so it must never survive into the
+    // passthrough below.
+    transport,
     ...restOfConfig
   } = request.config ?? {};
+
+  // Silently ignoring the request would hand back a Chat Completions response
+  // to a caller who asked for something else. This builder is shared by every
+  // OpenAI-compatible provider, so the message stays provider-neutral.
+  if (transport === 'responses') {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `The 'responses' transport is not supported by ${modelVersion ?? modelName}; it is served over the Chat Completions API.`,
+    });
+  }
 
   const tools: ChatCompletionTool[] = request.tools?.map(toOpenAITool) ?? [];
   if (toolsFromConfig) {
@@ -716,43 +672,7 @@ export function openAIModelRunner(
         };
       }
     } catch (e) {
-      if (e instanceof APIError) {
-        let status: StatusName = 'UNKNOWN';
-        switch (e.status) {
-          case 429:
-            status = 'RESOURCE_EXHAUSTED';
-            break;
-          case 401:
-            status = 'PERMISSION_DENIED';
-            break;
-          case 403:
-            status = 'UNAUTHENTICATED';
-            break;
-          case 400:
-            status = 'INVALID_ARGUMENT';
-            break;
-          case 500:
-            status = 'INTERNAL';
-            break;
-          case 503:
-            status = 'UNAVAILABLE';
-            break;
-        }
-        const retryAfterHeader =
-          e.headers?.get?.('retry-after') ??
-          (e.headers as any)?.['retry-after'];
-        const retryAfterMs = retryAfterHeader
-          ? parseRetryAfterMs(retryAfterHeader)
-          : undefined;
-        const responseMetadata: ErrorResponseMetadata | undefined =
-          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
-        throw new GenkitError({
-          status,
-          message: e.message,
-          responseMetadata,
-        });
-      }
-      throw e;
+      rethrowOpenAIError(e);
     }
   };
 }

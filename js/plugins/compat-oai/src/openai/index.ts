@@ -40,6 +40,8 @@ import {
 } from '../image.js';
 import { openAICompatible, PluginOptions } from '../index.js';
 import { defineCompatOpenAIModel } from '../model.js';
+import { defineCompatOpenAIResponsesModel } from '../responses.js';
+import { toModelName } from '../utils.js';
 import {
   gptImage1RequestBuilder,
   openAIImageModelRef,
@@ -54,6 +56,13 @@ import {
   openAIModelRef,
   SUPPORTED_GPT_MODELS,
 } from './gpt.js';
+import {
+  isResponsesOnlyModelName,
+  OpenAIResponsesConfigSchema,
+  openAIResponsesModelRef,
+  SUPPORTED_RESPONSES_MODELS,
+  type ResponsesOnlyModelName,
+} from './responses.js';
 import { openAITranscriptionModelRef, SUPPORTED_STT_MODELS } from './stt.js';
 import { openAISpeechModelRef, SUPPORTED_TTS_MODELS } from './tts.js';
 import {
@@ -65,7 +74,15 @@ import {
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-const UNSUPPORTED_MODEL_MATCHERS = ['babbage', 'davinci', 'codex'];
+/**
+ * Model ids this plugin cannot serve: the legacy completion-only families,
+ * including the original `code-*` (codex) models.
+ *
+ * Anchored on the leading segment rather than matched as a bare substring so
+ * that current models whose names merely contain a legacy word - `gpt-5-codex`,
+ * `gpt-5.1-codex-max`, `codex-mini-latest` - stay listed.
+ */
+const UNSUPPORTED_MODEL_MATCHERS = [/babbage/, /davinci/, /^code-/];
 
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
@@ -112,6 +129,16 @@ function createResolver(pluginOptions: PluginOptions) {
         pluginOptions,
         modelRef,
       });
+    } else if (
+      isResponsesOnlyModelName(toModelName(actionName, pluginOptions.name))
+    ) {
+      const modelRef = openAIResponsesModelRef({ name: actionName });
+      return defineCompatOpenAIResponsesModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
     } else {
       const modelRef = openAIModelRef({ name: actionName });
       return defineCompatOpenAIModel({
@@ -125,7 +152,7 @@ function createResolver(pluginOptions: PluginOptions) {
 }
 
 function filterOpenAiModels(model: OpenAI.Model): boolean {
-  return !UNSUPPORTED_MODEL_MATCHERS.some((m) => model.id.includes(m));
+  return !UNSUPPORTED_MODEL_MATCHERS.some((m) => m.test(model.id));
 }
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
@@ -176,6 +203,15 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
+      } else if (isResponsesOnlyModelName(model.id)) {
+        const modelRef =
+          SUPPORTED_RESPONSES_MODELS[model.id] ??
+          openAIResponsesModelRef({ name: model.id });
+        return modelActionMetadata({
+          name: modelRef.name,
+          info: modelRef.info,
+          configSchema: modelRef.configSchema,
+        });
       } else {
         const modelRef =
           SUPPORTED_GPT_MODELS[model.id] ?? openAIModelRef({ name: model.id });
@@ -199,6 +235,16 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
       models.push(
         ...Object.values(SUPPORTED_GPT_MODELS).map((modelRef) =>
           defineCompatOpenAIModel({
+            name: modelRef.name,
+            client,
+            pluginOptions,
+            modelRef,
+          })
+        )
+      );
+      models.push(
+        ...Object.values(SUPPORTED_RESPONSES_MODELS).map((modelRef) =>
+          defineCompatOpenAIResponsesModel({
             name: modelRef.name,
             client,
             pluginOptions,
@@ -291,6 +337,10 @@ export type OpenAIPlugin = {
     config?: z.infer<typeof TranscriptionConfigSchema>
   ): ModelReference<typeof TranscriptionConfigSchema>;
   model(
+    name: ResponsesOnlyModelName,
+    config?: z.infer<typeof OpenAIResponsesConfigSchema>
+  ): ModelReference<typeof OpenAIResponsesConfigSchema>;
+  model(
     name:
       | keyof typeof SUPPORTED_GPT_MODELS
       | (`gpt-${string}` & {})
@@ -328,6 +378,12 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
   }
   if (name.includes('transcribe')) {
     return openAITranscriptionModelRef({
+      name,
+      config,
+    });
+  }
+  if (isResponsesOnlyModelName(toModelName(name, 'openai'))) {
+    return openAIResponsesModelRef({
       name,
       config,
     });
