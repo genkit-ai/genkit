@@ -1,3 +1,5 @@
+[![Listed on TakoAPI](https://takoapi.com/api/badge/genkit-ai-genkit)](https://takoapi.com/agents/genkit-ai-genkit)
+
 ![Genkit logo](docs/resources/genkit-logo-dark.png#gh-dark-mode-only 'Genkit')
 ![Genkit logo](docs/resources/genkit-logo.png#gh-light-mode-only 'Genkit')
 
