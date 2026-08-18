@@ -125,8 +125,10 @@ class SessionStore(Protocol, Generic[StateT_co]):
         """Atomically read-modify-write a snapshot under ``snapshot_id``.
 
         fn receives the existing snapshot (or None for new) and returns the
-        snapshot to persist, or None to skip. fn must be side-effect free —
-        stores may call it more than once under contention.
+        snapshot to persist, or None to skip. Stores may call fn more than
+        once under contention, so it must not mutate external state; recording
+        what it observed is fine as long as a retried call may overwrite the
+        record (last call wins).
 
         Callers reserve the id up front (``reserve_snapshot_id``) so it can be
         known before the write — e.g. handed to a turn handler via

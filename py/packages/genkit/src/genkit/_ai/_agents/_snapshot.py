@@ -163,6 +163,25 @@ def abort_if_pending(existing: SessionSnapshot | None) -> SessionSnapshot | None
     return existing.model_copy(update={'status': SnapshotStatus.ABORTED})
 
 
+class _AbortRecorder:
+    """save_snapshot mutator for abort that also records the row it saw.
+
+    Abort reports the turn's prior status (was it still running, or already
+    finished?), and the only trustworthy source for that is the row the winning
+    write actually observed — a separate read could see a newer state. Stores
+    may invoke the mutator more than once under contention; the last
+    observation wins, matching what got committed.
+    """
+
+    def __init__(self) -> None:
+        self.previous: SnapshotStatus | None = None
+
+    def __call__(self, existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        if existing is not None:
+            self.previous = existing.status
+        return abort_if_pending(existing)
+
+
 async def abort_snapshot_in_store(
     *,
     store: SessionStore,
@@ -180,20 +199,10 @@ async def abort_snapshot_in_store(
     Returns the last status the mutator saw on the existing row — typically
     ``pending`` when this call cancelled in-flight work, or the unchanged
     terminal status if the turn had already finished. ``None`` if the mutator
-    never ran (missing row, or the store skipped the write).
-
-    Stores may invoke the mutator more than once under contention. We keep the
-    last observation, not the first, so the return matches what the winning
-    write saw. We do not re-read the row afterward to invent a previous
-    status: if the mutator never ran, there is nothing to report.
+    never ran (missing row, or the store skipped the write). We do not re-read
+    the row afterward to invent a previous status: if the mutator never ran,
+    there is nothing to report.
     """
-    previous: SnapshotStatus | None = None
-
-    def capture_and_abort(existing: SessionSnapshot | None) -> SessionSnapshot | None:
-        nonlocal previous
-        if existing is not None:
-            previous = existing.status
-        return abort_if_pending(existing)
-
-    await store.save_snapshot(snapshot_id, capture_and_abort, context=context)
-    return previous
+    recorder = _AbortRecorder()
+    await store.save_snapshot(snapshot_id, recorder, context=context)
+    return recorder.previous
