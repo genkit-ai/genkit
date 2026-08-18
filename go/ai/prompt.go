@@ -1140,6 +1140,13 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// When generation ends abnormally (blocked, aborted, interrupted, other), the
+// output is the zero value of Out and no error is returned; check
+// resp.FinishReason and resp.FinishMessage to handle the outcome. This holds
+// for a string Out as well, whose text is on the response rather than the
+// returned value: text produced alongside an abnormal finish is a block
+// notice or a partial answer, not the completion the prompt asked for.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
 		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
@@ -1149,6 +1156,14 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 	resp, err := dp.prompt.Execute(ctx, allOpts...)
 	if err != nil {
 		return base.Zero[Out](), nil, err
+	}
+
+	// A response that ended abnormally carries no conforming output, so return
+	// it unparsed rather than reporting a schema error that names the wrong
+	// cause. The caller should check resp.FinishReason and resp.FinishMessage.
+	// See [FinishReason.isAbnormal].
+	if resp.FinishReason.isAbnormal() {
+		return base.Zero[Out](), resp, nil
 	}
 
 	output, err := extractTypedOutput[Out](resp)
@@ -1174,6 +1189,10 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// Like [DataPrompt.Execute], a generation that ends abnormally (blocked,
+// aborted, interrupted, other) yields zero-value Output and no error; check
+// Response.FinishReason and Response.FinishMessage to handle the outcome.
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
@@ -1216,6 +1235,15 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 		}
 		if err != nil {
 			yield(nil, err)
+			return
+		}
+
+		// A response that ended abnormally carries no conforming output, so
+		// return it unparsed rather than reporting a schema error that names
+		// the wrong cause. The caller should check resp.FinishReason and
+		// resp.FinishMessage. See [FinishReason.isAbnormal].
+		if resp.FinishReason.isAbnormal() {
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
 		}
 
