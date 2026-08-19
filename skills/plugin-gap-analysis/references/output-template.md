@@ -17,7 +17,8 @@ Then **one of the two headers below**, never neither.
 > tag and say what the original got wrong. <Which direction the wrong rows pointed, so the reader
 > knows which half of the list is least settled.>
 
-*If phase 6 did not run* - required wording, at the top, before any row:
+*If phase 6 did not run* - required wording, at the top, before any row. Write the rows first and
+backfill `<n>`:
 
 > **THIS LIST IS UNVERIFIED.** Phase 6 (adversarial verification) <and phase 7 (the open-PR
 > sweep)> did not run. Roughly half of an unverified first pass needs rework, and wrong rows skew
@@ -33,6 +34,11 @@ Severity: **X** = correctness bug (a valid provider response or documented confi
 **T** = table stakes; **C** = consistency/experience.
 Confidence: **confirmed** = both sides read; **needs-repro** = plausible from code, wants an E2E
 reproduction before filing; **not-audited** = deferred.
+
+Add `reverse-direction` to the tag of any row where the *reference* is the side that is missing
+something, and `corrected` to any row a verification pass rewrote. Prose is not enough: a reader
+scanning for "what do we fix in the target" should not have to read every row's evidence to find
+out which way it points.
 
 ## <plugin>: <reference> to <target>
 
@@ -55,7 +61,7 @@ there was none**; do not emit the heading with a disclaimer.
 <Reference behaviour with `path:line`. Target behaviour with `path:line`, or the exact grep that
 shows absence. Consequence for the user.>
 
-**ANT-2. <One-line claim.>**  `[X, confirmed, corrected]`
+**ANT-2. <One-line claim.>**  `[X, confirmed, reverse-direction]`
 
 <Originally stated as "<the wrong claim>". <What is actually true, with evidence.>>
 
@@ -66,6 +72,11 @@ shows absence. Consequence for the user.>
 - **API shape decisions (T/C):** row IDs — design decisions, not independent tickets.
 - **<reference>-side gaps (reverse direction):** row IDs — the reference is not a superset.
 - **Docs and samples (C):** row IDs.
+- **Framework, not plugin (fix once, lands everywhere):** row IDs, with the file each fix belongs
+  in. Without this bucket a reader files the row against one plugin and the fix lands in one
+  plugin's options while every other caller keeps the bug.
+- **Dissolved / recorded as no-gap:** row IDs — rows a check killed, kept so the question is not
+  re-asked. A negative finding earned by probing is worth as much as a positive one.
 
 ### Not audited
 
@@ -108,7 +119,7 @@ decisions distinct — do not fold a locally-fixable defect in because it touche
 - Absence is evidenced by a named grep, not by assertion.
 - A row whose fix is a design decision goes in the flat list *and* the design bucket, so it is
   not filed as an ordinary child issue by mistake.
-- Reverse-direction gaps stay in the same flat list, tagged in the text as reverse-direction.
+- Reverse-direction gaps stay in the same flat list, carrying `reverse-direction` in the tag.
   They are real parity gaps; they just point the other way.
 - A row that verification dissolved stays in the list, restated as "no gap here, and why".
   Deleting it invites the next run to re-file it.

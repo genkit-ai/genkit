@@ -37,6 +37,44 @@ Ask each checker for two extra sections: **where the audit understated a problem
 additional bug noticed while checking**. Both were high-yield - the verifiers surfaced better
 bugs than the audit itself.
 
+## Probe recipes
+
+The SDK-probing rule in SKILL.md is the highest-yield instruction in this skill, and every run so
+far had to rediscover how to satisfy it from a read-only repo. Both recipes go in a **uniquely named
+scratch directory outside the repo** - a shared scratchpad may already hold another run's `main.go`,
+which breaks the build confusingly.
+
+**Go.** Write a scratch module pinning the same version the repo pins, and resolve offline from the
+module cache so no network is needed:
+
+```
+mkdir -p /tmp/probe-<plugin>-<something-unique> && cd $_
+cat > go.mod <<'EOF'
+module probe
+go 1.24
+require <module> <version-from-go.mod>
+EOF
+# copy the matching require+sum lines out of the repo's go.mod / go.sum, then:
+GOFLAGS=-mod=mod GOPROXY=off go run .
+```
+
+Three probes pay for themselves every time:
+
+1. **Round-trip diff.** Marshal a Dev-UI-shaped JSON config, unmarshal into the params struct,
+   re-marshal, diff the keys. Dropped keys are silent defects. A clean result is a finding worth
+   recording too, so the next run does not re-ask.
+2. **Field enumeration.** Reflect over the params struct and print every field and type. This is how
+   you get the real list to diff a plugin's handled cases against - union variants, content-block
+   kinds, stop reasons - instead of trusting a switch to be exhaustive.
+3. **Response serialisation.** Populate a response struct and marshal what the plugin assigns to its
+   raw/custom field. A field that looks correct in source can serialise to empty stubs.
+
+**JS.** The curated-schema side deserves the same treatment and has not had it - all probes so far
+were Go, which is why several reference-side rows stayed `needs-repro` when an hour with `node`
+would have settled them. The analogue: import the schema, `safeParse` a config fragment, build the
+request body the runner would build, and diff against what you expected. Also worth executing rather
+than reading: whether a schema converter emits the construct you think it does for a given input.
+
 ## Traps that produced the wrong rows
 
 Every one of these caused at least one wrong or imprecise row. Check them by name.

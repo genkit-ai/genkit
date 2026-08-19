@@ -1,7 +1,7 @@
 # Where plugins live
 
-Layouts differ per language and per plugin. Verify with `ls` before reading - this table goes
-stale.
+Layouts differ per language and per plugin, and these tables go stale. Confirm everything against
+the tracked tree at your pinned commit, not against `ls` - see below.
 
 ## Scope: JS and Go only
 
@@ -70,28 +70,15 @@ Known cases for Claude in Go: `go/plugins/anthropic`,
 `go/plugins/compat_oai/anthropic`, `go/plugins/vertexai/modelgarden/anthropic.go`.
 The first and third share `go/plugins/internal/anthropic`, so a fix there lands in both.
 
-## File-role map
+## Do not assume a file layout
 
-Repo-relative, so a citation copied out of here resolves without guessing. `<plugin>` is the
-directory name from the table above; `<provider>` is the Go shared-package name.
+There was a file-role map here - which file holds the config schema, the catalog, the conversion
+layer - and it was wrong for the second plugin anyone audited, which keeps its whole implementation
+in the plugin package with no shared internal directory. A table that is wrong for the plugin in
+front of you, and carries a disclaimer saying it might be, is worse than no table: it invites a
+citation to a path that does not exist.
 
-| Role | JS | Go |
-|------|----|----|
-| Plugin entry, options, init | `js/plugins/<plugin>/src/index.ts` | `go/plugins/<plugin>/<plugin>.go` |
-| Config schema and types | `js/plugins/<plugin>/src/types.ts` | reflected from the SDK params struct in `go/plugins/internal/<provider>/<provider>.go`; presentation in `go/plugins/internal/<provider>/config_overrides.go` |
-| Model catalog, capabilities | `js/plugins/<plugin>/src/models.ts` | `go/plugins/<plugin>/models.go` |
-| Dynamic listing | `js/plugins/<plugin>/src/list.ts` | `ListActions` in `go/plugins/<plugin>/<plugin>.go`, `listModels` in `go/plugins/<plugin>/models.go` |
-| Request/response conversion | `js/plugins/<plugin>/src/runner/**` | `go/plugins/internal/<provider>/<provider>.go` |
-| Error classification | inline in `js/plugins/<plugin>/src/models.ts` | `go/plugins/<plugin>/errors.go` or `go/plugins/internal/<provider>/errors.go` |
-| Model reference helper | `js/plugins/<plugin>/src/index.ts` (`.model()`) | `go/plugins/<plugin>/refs.go` (`ModelRef`) |
-| Tests | `js/plugins/<plugin>/tests/*_test.ts` | `go/plugins/<plugin>/*_test.go`, `*_live_test.go` |
-| Samples | `js/testapps/<plugin>` | `go/samples/<plugin>` |
-
-**This is the single-family shape.** A plugin serving several model families splits these roles
-per family instead - google-genai has no `src/models.ts` or `src/types.ts` at the plugin root, and
-its catalog and config schemas live per family under `src/googleai/` and `src/vertexai/` with
-shared conversion in `src/common/`. Locate the roles before citing them rather than assuming this
-table's filenames exist.
+Two `git ls-tree` calls replace it. Locate the roles in the plugin you are auditing.
 
 ## Not in this repo
 

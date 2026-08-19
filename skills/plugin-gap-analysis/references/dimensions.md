@@ -3,9 +3,10 @@
 The frozen checklist. Walk it in order, once per plugin. Every dimension produces either a
 row in the gap list or nothing.
 
-Each dimension is a **question**, deliberately not an answer - prior findings live in the appendix
-at the end so an auditor can choose whether to be primed by them. Append to the checklist when a
-plugin forces a question these do not cover; never silently skip one.
+Each dimension is a **question**, deliberately not an answer. Prior findings live in
+`prior-findings.md`, which you should not open until your list is written - two independent runs
+reported that handed-over conclusions stopped rows from being real derivations. Append to the
+checklist when a plugin forces a question these do not cover; never silently skip one.
 
 ## Group 0. Coverage - do this first
 
@@ -20,9 +21,11 @@ these dimensions is a two-way convergence, not a catch-up.
 | 0.3 | Family-specific config and capabilities | Whether each family gets its own schema and capability set, or is folded into the generic one. Folding a restricted family (e.g. Gemma) into the general one makes the plugin advertise capabilities the model does not have - that is an **X**. |
 | 0.4 | Backend variants | Whether one plugin serves several backends (dev API vs enterprise), and how. Shared implementation with per-backend model lists vs duplicated per-backend trees. Duplicated trees drift from *each other* - a same-language parity audit worth its own run. |
 | 0.5 | Non-model plugin features | Context caching, code execution, batching, operation polling, file upload - features that are not a config field on a model action. |
-| 0.6 | Direction check | Tally which side leads per group. State the verdict at the top of the report. Do not assume the reference language leads. |
-| 0.7 | Pinned SDK versions | Record the provider SDK version each side pins (`go/go.mod`, the installed JS package). Skew is common and it reattributes gaps: one row blamed the target for a stale enum when the reference was rejecting a value its own newer SDK accepts. Any row citing an SDK capability must name the version. |
-| 0.8 | Pending dependency bumps | Check for an open dependency-bump PR against either SDK. A large version jump can invalidate a row's conclusion or trigger a fragility the audit only flagged as theoretical. |
+| 0.6 | Effort budget | Where LOC differs sharply, compute LOC per family on both sides and subtract the families the target does not serve *before* deciding where to go deep. Without this the shared path is invisible behind a headline ratio, and a run can spend its first third discovering that a 9000-line gap is three absent families. |
+| 0.7 | Direction check | Tally which side leads per group. State the verdict at the top of the report. Do not assume the reference language leads. |
+| 0.8 | Client provenance | Does each side wrap a vendored provider SDK, or hand-roll its own HTTP client? One of each is a real configuration, and it reframes several dimensions below - A4's escape hatches, C1's provenance, C7's type mapping and F1's classification all become "who wrote the client" questions. A hand-rolled client also has no SDK environment defaults to fall back on, which changes whether an absence claim is correct. |
+| 0.9 | Pinned SDK versions | Record the provider SDK version each side pins (`go/go.mod`, the installed JS package). Skew is common and it reattributes gaps: one row blamed the target for a stale enum when the reference was rejecting a value its own newer SDK accepts. Any row citing an SDK capability must name the version. |
+| 0.10 | Pending dependency bumps | Check for an open dependency-bump PR against either SDK. A large version jump can invalidate a row's conclusion or trigger a fragility the audit only flagged as theoretical. |
 
 ## A. Plugin surface and entry points
 
@@ -32,9 +35,9 @@ these dimensions is a two-way convergence, not a catch-up.
 | A2 | Plugin options | Field-by-field: what can be configured at construction time. |
 | A3 | Auth resolution | Order of precedence across request config, plugin option, env vars. Whether request-level keys exist. Whether auth can be deferred to request time. Whether a missing key panics, throws, or defers. |
 | A4 | Client escape hatch | Base URL override, custom transport/fetch, request options, middleware, timeouts, retries, extra headers, credentials objects. This is also how alternative routing (Bedrock, Vertex, Express Mode, a proxy) is reached - absence blocks whole deployment modes. Note whether supplying a custom client silently drops default instrumentation. |
-| A5 | Model reference helper | Name, signature, and config type of the "name a model and carry config" helper. |
-| A6 | Per-model capability override | Whether a caller can correct or extend what the plugin believes about a model, e.g. one released after the plugin version. |
-| A7 | Deprecated surface | Legacy define/lookup APIs present on one side only. Cleanup candidates, not parity gaps - tag **C** and say so. |
+| A5 | SDK defaults and environment variables | Before recording any client option as unreachable, check whether the provider SDK reads it from the environment or defaults it itself. A plugin that never passes a base URL may still honour a `*_BASE_URL` variable because the SDK constructor defaults from it. Two separate runs got this wrong on the same row. Scope the grep to plugin code to find what the *plugin* does, then check the SDK for what the user actually gets. |
+| A6 | Model reference helper | Name, signature, and config type of the "name a model and carry config" helper. |
+| A7 | Per-model capability override | Whether a caller can correct or extend what the plugin believes about a model, e.g. one released after the plugin version. |
 | A8 | Debug and compatibility valves | Raw-request tracing toggles, legacy-format switches, and anything else that exists to unblock a user on an older deployment. Easy to miss because they are not features. |
 
 ## B. Model catalog
@@ -125,39 +128,3 @@ Only applies when group 0.1 found a background-model or check-operation action.
 | H1 | Unit coverage | Which of the dimensions above have a test on each side. |
 | H2 | Live tests | Presence, and what they cover. |
 | H3 | Conformance tests | Whether the plugin participates in the shared conformance suite. |
-
----
-
-# Appendix: known findings from prior runs
-
-**Spoilers. Skip this section while auditing** if you want an independent result, and read it
-afterwards as a completeness check.
-
-The dimensions above are deliberately phrased as questions. Earlier drafts embedded the answers
-from prior runs, and an independent auditor reported that this stopped some rows from being real
-derivations - it confirmed conclusions it had been handed. The findings still have value as a
-coverage check, so they live here instead, separated from the checklist.
-
-Treat every entry as dated and possibly closed. Verify against the current commit before reusing.
-
-- **C7** - a Go plugin keyed its SDK wrapper-type remap on `reflect.Type.Name()` string literals,
-  which degrades silently on an SDK rename rather than failing at build time. A sibling plugin did
-  not share the problem, because its SDK uses plain pointer scalars with nothing to remap.
-- **C8** - a reference-side schema ending `.passthrough()` spread unknown keys into the nested
-  config object, so a field the provider places at the *request root* stayed unreachable while two
-  sibling fields did not. The same passthrough let config overwrite messages, model, system and
-  tools after the framework had built them.
-- **C10** - an inline union discriminator (`{"type":"adaptive"}`) failed to round-trip through
-  `map[string]any` into the SDK params struct, so the field vanished with no error on the untyped
-  path while the typed path worked. Reachable only through the Dev UI and invisible to source
-  reading.
-- **E1** - a Go response switch handled three of the SDK's twelve content-block variants and
-  returned an error for the rest, so a safety-redacted thinking block failed the whole request.
-- **E4** - a Go plugin assigned the SDK's field-presence bookkeeping struct to the raw response
-  field, which serialises to empty stubs; the intended value was the SDK's raw-JSON accessor.
-- **F1** - a provider's overload code (529) fell through a generic `>= 500 -> Internal` branch in
-  the framework's code table, landing the one retryable condition in the wrong retry class.
-- **G1/G2** - a target README asserted a capability that two correctness rows showed did not work
-  end-to-end. README claims are a docs dimension, never evidence of a feature.
-- **H1** - the language with no unit test for its response-conversion path was the language whose
-  response path carried five separate defects. Test-coverage gaps predict where the bugs are.

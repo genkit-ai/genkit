@@ -10,8 +10,9 @@ target language and the same plugin in a reference language, then **verify every
 handing it over**. Output is Markdown; a human reviews it before anything is filed.
 
 **Roughly half of an unverified first pass needs rework** - some rows factually wrong, more of
-them right about the fact and wrong about the detail or the consequence. Phase 6 is therefore not
-optional, and a list that has not been through it must be labelled as unverified.
+them right about the fact and wrong about the detail or the consequence. Run phase 6 whenever you
+can delegate; when you cannot, label the list unverified in the required wording rather than
+implying it was checked.
 
 ## Arguments
 
@@ -29,12 +30,11 @@ Python comparison, say it is out of scope and why rather than auditing a moving 
 Default: **JS is the reference, Go is the target** - JS is the reference implementation and Go
 plugins have had less focused attention.
 
-**Verify direction per plugin before scoping, and distrust any inherited verdict.** Every run so
-far has come out two-way. An early anthropic run was recorded as one-way with the target behind
-on nearly everything; an independent re-run of the same plugin found the target leading on
-catalog handling and plugin surface, with a third of all rows pointing at the *reference* -
-including two of its strongest correctness findings. The stale verdict measurably primed the
-second auditor in the wrong direction until the evidence overrode it.
+**Verify direction per plugin before scoping, and distrust any inherited verdict.** A recorded
+verdict for a plugin has twice been overturned by an independent re-run of that same plugin, and in
+both cases the auditor reported that the stale verdict primed them before they had read any code.
+Per-plugin verdicts are therefore kept out of this file - see `references/prior-findings.md`, after
+your own tally is written.
 
 Do dimension group 0 first, tally which side leads per group, and state the verdict at the top of
 the report. Where the target leads half the groups, this is a convergence, not a catch-up - and a
@@ -44,8 +44,9 @@ direction as an output of the audit, never an input to it.
 Record reverse-direction gaps in the same flat list either way. The goal is experience parity,
 not a one-way feature checklist.
 
-**Do not read LOC as depth.** google-genai was 13137 JS to 3916 Go, but most of the difference
-was three model families and an agents layer Go does not serve, not depth on the shared path.
+**Do not read LOC as depth**, and do not let a headline ratio set your expectations. A large
+difference is usually families and layers one side does not serve at all, not depth on the shared
+path - dimension 0.6 tells you how to subtract those before choosing where to go deep.
 
 ## Non-goals
 
@@ -95,14 +96,22 @@ Confidence is `confirmed` (read both sides), `needs-repro` (plausible from the c
 E2E reproduction first) or `not-audited` (deferred, say why). Never report `needs-repro` as
 fact.
 
-**6. Adversarially verify every row. Mandatory.** Follow `references/verification.md`. Split
-the rows across several independent checkers with **fresh context**, each given the claims
-alone and told to *refute* them. Reconcile the verdicts: rewrite wrong rows, tighten imprecise
-ones, and keep a `corrected` marker plus a sentence saying what the original got wrong, so the
-trail is auditable rather than quietly rewritten. Expect severity to move in both directions.
+**6. Adversarially verify every row.** Follow `references/verification.md`. Split the rows across
+several independent checkers with **fresh context**, each given the claims alone and told to
+*refute* them. Reconcile the verdicts: rewrite wrong rows, tighten imprecise ones, and keep a
+`corrected` marker plus a sentence saying what the original got wrong, so the trail is auditable
+rather than quietly rewritten. Expect severity to move in both directions.
+
+**If you cannot delegate, you cannot do this phase** - say so rather than claiming it. Use the
+unverified header from the output template, and spend the time re-deriving the reverse-direction
+rows from scratch, since those fail most often. Do not downgrade the phase to self-review and
+present the result as verified. The `corrected` machinery above applies only once this phase has
+run; ignore it otherwise.
 
 **7. Sweep for work already in flight.** Before anything is filed, check open PRs - see
-`references/in-flight.md`. Expect a meaningful share of rows to be covered already; one trial run
+`references/in-flight.md`. **This is a single-agent step**: it needs only `gh` and a shell, so run it
+even when phase 6 is out of reach. One run skipped it on the assumption it needed delegation and lost
+the second-highest-yield hour of the audit. Expect a meaningful share of rows to be covered already; one trial run
 found a PR containing the exact fix for a row the audit had recorded as an open bug. Also flag PRs
 that are a *sequencing hazard* for a row rather than a fix for it.
 
@@ -147,6 +156,13 @@ and rows covered by an open PR should not be filed at all.
   several plugins; note when a fix lands in more than one place. In JS, a plugin serving two
   backends from sibling trees can drift from *itself* - measure the overlap before calling it
   duplication, and defer it to its own same-language run.
+- **Separate framework findings from plugin findings.** A defect whose fix lands in the framework
+  rather than the plugin needs saying so explicitly, or it gets filed against one plugin and fixed
+  in one plugin's options while every other caller keeps the bug. `references/locators.md` lists the
+  hops where this happens.
+- **A missing family is one row, but a missing *prerequisite* is its own row.** When a family is
+  absent and the thing blocking it lives in a different tree - a framework hook, a shared transport
+  layer - split it out, because it survives the family landing and is owned by someone else.
 - **Watch for rows that recur across plugins.** Recurring rows are cross-plugin decisions; say
   so, so they are not filed as per-plugin issues.
 - **Keep distinct decisions distinct.** Do not fold a locally-fixable defect into a broad
@@ -174,23 +190,21 @@ These recur. File them once, at the API-design level, not per plugin.
    staleness: verification showed the reference already resolves unknown IDs and lists from the
    live models API, so the override is a user escape hatch, not a freshness mechanism.
 
-## Prior runs
+## What prior runs taught, without the spoilers
 
-- `anthropic` (JS -> Go), 2026-08-18. Recorded at the time as one-way with the target behind.
-  **Superseded - see the re-run below.**
-- `google-genai` (JS <-> Go), same date. Direction came out two-way, which is what forced dimension
-  group 0 and the direction-check step.
-- **Verification pass over both.** Wrong rows pointed at the *reference* far more often than the
-  target, so reverse-direction claims are the least reliable output of a first pass. Severity moved
-  substantially in both directions, and the verifiers surfaced better bugs than the audit had -
-  including a target-side raw-response field that serialised to empty stubs, breaking response
-  inspection entirely.
-- **Independent re-run of `anthropic`**, 2026-08-19, by an auditor given only this skill and no
-  prior findings. Reached **two-way, net reference ahead** - overturning the earlier verdict - and
-  found several defects both earlier passes missed: an untyped-config union that silently drops a
-  field, server-side tools unreachable from JSON config, a reference that curates three retired
-  model IDs, and a reference that advertises constrained generation then hard-fails it on its own
-  default surface. Two of the three errors this skill's traps were written to prevent did not recur;
-  the third did, and produced the SDK-environment-defaults trap in `verification.md`. Most of its
-  strongest rows came from compiling probes against the pinned SDK rather than reading it, which is
-  why that is now a rule.
+Per-plugin verdicts and specific findings live in `references/prior-findings.md`, unread until your
+list is written. What generalises:
+
+- Every plugin audited so far came out **two-way**, and two recorded verdicts were later overturned
+  by an independent re-run of the same plugin. Direction is an output.
+- Wrong rows point at the **reference** far more often than the target. Reverse-direction claims are
+  the least reliable output of a first pass, and absence claims about the reference are where they
+  fail - it has more escape hatches and more places to look.
+- The strongest rows in every run came from **probing the SDK by running it**, not from reading. A
+  probe that *disproves* an expected defect is worth as much as one that finds a real one.
+- Verifying the **consequence** rather than the fact repeatedly moved severity in both directions,
+  and killed several rows outright.
+- **Test-coverage gaps predict where the bugs are.** In two plugins, the untested conversion path
+  was the path carrying most of the correctness rows.
+- The open-PR sweep covered a meaningful share of rows every time it was run, and titles misled in
+  both plugins. Filter by files touched.
