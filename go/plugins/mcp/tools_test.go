@@ -243,8 +243,7 @@ func TestToolOutputSchema(t *testing.T) {
 		if result == nil {
 			t.Fatalf("RunRaw result is nil")
 		}
-		toolResult := ParseMapToStruct[mcp.CallToolResult](t, result)
-		toolResultOutput := ParseMapToStruct[OutputSchema](t, toolResult.StructuredContent)
+		toolResultOutput := parseMapToStruct[OutputSchema](t, result)
 		if toolResultOutput.Weather != "Sunny, 25°C" {
 			t.Fatalf("unexpected weather: %s", toolResultOutput.Weather)
 		}
@@ -332,13 +331,68 @@ func TestValidateMCPToolResultAllowsToolErrors(t *testing.T) {
 	}
 }
 
+func TestConvertMCPToolResultFallsBackToTextContent(t *testing.T) {
+	outputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Weather": map[string]any{"type": "string"},
+		},
+		"required": []string{"Weather"},
+	}
+
+	t.Run("JSON text is parsed and validated", func(t *testing.T) {
+		result := mcp.NewToolResultText(`{"Weather":"Sunny"}`)
+		response, err := convertMCPToolResult(t.Context(), result, outputSchema, true, "test_getWeather")
+		if err != nil {
+			t.Fatalf("convertMCPToolResult() error = %v", err)
+		}
+		output := asMap(t, response.Output, "response.Output")
+		if output["Weather"] != "Sunny" {
+			t.Fatalf("Weather = %#v, want Sunny", output["Weather"])
+		}
+	})
+
+	t.Run("plain text remains backward compatible", func(t *testing.T) {
+		result := mcp.NewToolResultText("Sunny")
+		response, err := convertMCPToolResult(t.Context(), result, outputSchema, true, "test_getWeather")
+		if err != nil {
+			t.Fatalf("convertMCPToolResult() error = %v", err)
+		}
+		if response.Output != "Sunny" {
+			t.Fatalf("Output = %#v, want Sunny", response.Output)
+		}
+	})
+}
+
+func TestConvertMCPToolResultPreservesContentParts(t *testing.T) {
+	result := mcp.NewToolResultStructuredOnly(map[string]any{"Weather": "Sunny"})
+	result.Content = append(result.Content,
+		mcp.NewImageContent("aW1hZ2U=", "image/png"),
+		mcp.NewResourceLink("https://example.com/report", "report", "", "text/plain"),
+	)
+
+	response, err := convertMCPToolResult(t.Context(), result, nil, false, "test_getWeather")
+	if err != nil {
+		t.Fatalf("convertMCPToolResult() error = %v", err)
+	}
+	if len(response.Content) != 2 {
+		t.Fatalf("Content length = %d, want 2", len(response.Content))
+	}
+	if !response.Content[0].IsMedia() {
+		t.Fatalf("Content[0] = %#v, want media part", response.Content[0])
+	}
+	if !response.Content[1].IsResource() {
+		t.Fatalf("Content[1] = %#v, want resource part", response.Content[1])
+	}
+}
+
 func TestToolWithRawOutputSchemaAcceptsUnionType(t *testing.T) {
 	data := []byte(`{
 		"name": "nullable",
 		"inputSchema": {"type": "object"},
 		"outputSchema": {"type": ["string", "null"]}
 	}`)
-	var decoded toolWithRawOutputSchema
+	var decoded toolWithRawSchemas
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
@@ -354,6 +408,38 @@ func TestToolWithRawOutputSchemaAcceptsUnionType(t *testing.T) {
 	types, ok := schema["type"].([]any)
 	if !ok || len(types) != 2 || types[0] != "string" || types[1] != "null" {
 		t.Fatalf("schema type = %#v, want [string null]", schema["type"])
+	}
+}
+
+func TestToolWithRawInputSchemaPreservesUnsupportedKeywords(t *testing.T) {
+	data := []byte(`{
+		"name": "complex-input",
+		"inputSchema": {
+			"type": ["object", "null"],
+			"description": "complex schema",
+			"additionalProperties": false,
+			"anyOf": [{"type": "object"}, {"type": "null"}]
+		}
+	}`)
+	var decoded toolWithRawSchemas
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	client := &GenkitMCPClient{}
+	schema, err := client.getInputSchema(decoded.Tool)
+	if err != nil {
+		t.Fatalf("getInputSchema() error = %v", err)
+	}
+	if schema["description"] != "complex schema" || schema["additionalProperties"] != false {
+		t.Fatalf("input schema lost keywords: %#v", schema)
+	}
+	types, ok := schema["type"].([]any)
+	if !ok || len(types) != 2 {
+		t.Fatalf("input schema type = %#v, want [object null]", schema["type"])
+	}
+	if _, ok := schema["anyOf"].([]any); !ok {
+		t.Fatalf("input schema anyOf = %#v, want array", schema["anyOf"])
 	}
 }
 
@@ -404,9 +490,19 @@ func TestFetchToolsPageWithoutInitializedClient(t *testing.T) {
 			t.Fatalf("fetchToolsPage() error = %v, want initialization error", err)
 		}
 	})
+
+	t.Run("disabled client", func(t *testing.T) {
+		client := &GenkitMCPClient{
+			options: MCPClientOptions{Disabled: true},
+		}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "client disabled") {
+			t.Fatalf("fetchToolsPage() error = %v, want client disabled", err)
+		}
+	})
 }
 
-func ParseMapToStruct[T any](t *testing.T, v any) T {
+func parseMapToStruct[T any](t *testing.T, v any) T {
 	t.Helper()
 	var result T
 	jsonBytes, err := json.Marshal(v)

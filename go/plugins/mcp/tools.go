@@ -20,9 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/mark3labs/mcp-go/client"
@@ -63,6 +65,16 @@ func (c *GenkitMCPClient) createTools(mcpTools []mcp.Tool) ([]ai.Tool, error) {
 
 // getInputSchema returns the MCP input schema as a generic map for Genkit
 func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (map[string]any, error) {
+	if mcpTool.RawInputSchema != nil {
+		var out map[string]any
+		if err := json.Unmarshal(mcpTool.RawInputSchema, &out); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal MCP input schema for tool %s: %w", mcpTool.Name, err)
+		}
+		if out == nil {
+			return nil, fmt.Errorf("MCP input schema for tool %s must be a JSON object", mcpTool.Name)
+		}
+		return out, nil
+	}
 	var out map[string]any
 	schemaBytes, err := json.Marshal(mcpTool.InputSchema)
 	if err != nil {
@@ -111,7 +123,6 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	// Use namespaced tool name
 	namespacedToolName := c.GetToolNameWithNamespace(mcpTool.Name)
 
-	toolFunc := c.createToolFunction(mcpTool)
 	inputSchema, err := c.getInputSchema(mcpTool)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get input schema for tool %s: %w", mcpTool.Name, err)
@@ -120,19 +131,7 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get output schema for tool %s: %w", mcpTool.Name, err)
 	}
-	if hasOutputSchema {
-		runTool := toolFunc
-		toolFunc = func(ctx *ai.ToolContext, input interface{}) (interface{}, error) {
-			output, err := runTool(ctx, input)
-			if err != nil {
-				return output, err
-			}
-			if err := validateMCPToolResult(output, outputSchema); err != nil {
-				return nil, core.NewError(core.INTERNAL, "invalid output from tool %q: %v", namespacedToolName, err)
-			}
-			return output, nil
-		}
-	}
+	toolFunc := c.createToolFunction(mcpTool, outputSchema, hasOutputSchema, namespacedToolName)
 
 	var opts []ai.ToolOption
 	if len(inputSchema) > 0 {
@@ -141,13 +140,12 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	if hasOutputSchema {
 		opts = append(opts, ai.WithOutputSchema(outputSchema))
 	}
-	return ai.NewTool(namespacedToolName, mcpTool.Description, toolFunc, opts...), nil
+	return ai.NewMultipartTool(namespacedToolName, mcpTool.Description, toolFunc, opts...), nil
 }
 
-func validateMCPToolResult(output interface{}, outputSchema map[string]any) error {
-	result, ok := output.(*mcp.CallToolResult)
-	if !ok || result == nil {
-		return fmt.Errorf("expected *mcp.CallToolResult, got %T", output)
+func validateMCPToolResult(result *mcp.CallToolResult, outputSchema map[string]any) error {
+	if result == nil {
+		return fmt.Errorf("expected *mcp.CallToolResult, got nil")
 	}
 	// MCP tool-level errors are model-visible results, not successful structured
 	// output. They commonly omit structuredContent and must not be schema-validated.
@@ -184,11 +182,17 @@ func (c *GenkitMCPClient) getTools(ctx context.Context) ([]mcp.Tool, error) {
 
 // fetchToolsPage retrieves a single page of tools from the MCP server
 func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Tool, mcp.Cursor, error) {
+	if !c.IsEnabled() {
+		return nil, "", fmt.Errorf("failed to list tools: client disabled")
+	}
 	if c.server == nil {
 		return nil, "", fmt.Errorf("failed to list tools: client not initialized")
 	}
 	if c.server.Error != "" {
 		return nil, "", fmt.Errorf("failed to list tools: %s", c.server.Error)
+	}
+	if c.server.Client == nil || c.server.Transport == nil {
+		return nil, "", fmt.Errorf("failed to list tools: client not initialized")
 	}
 
 	listReq := mcp.ListToolsRequest{
@@ -203,7 +207,9 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 
 	// Decode the tools/list response here instead of through mcp-go's typed
 	// ListTools result. Its ToolOutputSchema only models a subset of JSON Schema
-	// and would otherwise discard extension and unsupported keywords.
+	// and would otherwise discard extension and unsupported keywords. Remove
+	// this bypass once https://github.com/mark3labs/mcp-go/issues/563 is available
+	// in the version used here with lossless input and output schema decoding.
 	response, err := c.server.Transport.SendRequest(ctx, transport.JSONRPCRequest{
 		JSONRPC: mcp.JSONRPC_VERSION,
 		ID:      mcp.NewRequestId(fmt.Sprintf("genkit-list-tools-%d", c.listToolsRequestID.Add(1))),
@@ -233,23 +239,25 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 }
 
 type rawListToolsResult struct {
-	Tools      []toolWithRawOutputSchema `json:"tools"`
-	NextCursor mcp.Cursor                `json:"nextCursor,omitempty"`
+	Tools      []toolWithRawSchemas `json:"tools"`
+	NextCursor mcp.Cursor           `json:"nextCursor,omitempty"`
 }
 
-// toolWithRawOutputSchema retains the exact schema sent by the MCP server.
+// toolWithRawSchemas retains the exact schemas sent by the MCP server.
 // mcp.Tool's default decoder only keeps the JSON Schema fields represented by
-// mcp.ToolOutputSchema.
-type toolWithRawOutputSchema struct {
+// mcp.ToolInputSchema and mcp.ToolOutputSchema.
+type toolWithRawSchemas struct {
 	mcp.Tool
 }
 
-func (t *toolWithRawOutputSchema) UnmarshalJSON(data []byte) error {
+func (t *toolWithRawSchemas) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	rawInputSchema, hasInputSchema := fields["inputSchema"]
 	rawOutputSchema, hasOutputSchema := fields["outputSchema"]
+	delete(fields, "inputSchema")
 	delete(fields, "outputSchema")
 	toolData, err := json.Marshal(fields)
 	if err != nil {
@@ -260,21 +268,23 @@ func (t *toolWithRawOutputSchema) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(toolData, &tool); err != nil {
 		return err
 	}
+	if hasInputSchema && !bytes.Equal(bytes.TrimSpace(rawInputSchema), []byte("null")) {
+		tool.RawInputSchema = append(json.RawMessage(nil), rawInputSchema...)
+	}
 	if hasOutputSchema && !bytes.Equal(bytes.TrimSpace(rawOutputSchema), []byte("null")) {
 		tool.RawOutputSchema = append(json.RawMessage(nil), rawOutputSchema...)
-		tool.OutputSchema = mcp.ToolOutputSchema{}
 	}
 	t.Tool = tool
 	return nil
 }
 
 // createToolFunction creates a Genkit tool function that will execute the MCP tool
-func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolContext, interface{}) (interface{}, error) {
+func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool, outputSchema map[string]any, hasOutputSchema bool, namespacedToolName string) func(*ai.ToolContext, interface{}) (*ai.MultipartToolResponse, error) {
 	// Capture mcpTool by value for the closure
 	currentMCPTool := mcpTool
 	client := c.server.Client
 
-	return func(toolCtx *ai.ToolContext, args interface{}) (interface{}, error) {
+	return func(toolCtx *ai.ToolContext, args interface{}) (*ai.MultipartToolResponse, error) {
 		ctx := toolCtx.Context // Get context from tool context
 
 		// Convert the arguments to the format expected by MCP
@@ -289,8 +299,107 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 			return nil, fmt.Errorf("failed to call tool %s: %w", currentMCPTool.Name, err)
 		}
 
-		return mcpResult, nil
+		return convertMCPToolResult(ctx, mcpResult, outputSchema, hasOutputSchema, namespacedToolName)
 	}
+}
+
+func convertMCPToolResult(ctx context.Context, result *mcp.CallToolResult, outputSchema map[string]any, hasOutputSchema bool, toolName string) (*ai.MultipartToolResponse, error) {
+	if result == nil {
+		return nil, fmt.Errorf("MCP tool %q returned an empty result", toolName)
+	}
+
+	response := &ai.MultipartToolResponse{Metadata: mcpMetaMap(result.Meta)}
+	if result.IsError {
+		response.Output = map[string]any{"error": mcpTextContent(result.Content)}
+		return response, nil
+	}
+
+	text, parts := convertMCPContent(result.Content)
+	response.Content = parts
+	response.Output = result.StructuredContent
+	parsedTextJSON := false
+	if response.Output == nil && text != "" {
+		response.Output, parsedTextJSON = parseMCPTextOutput(text)
+	}
+
+	if hasOutputSchema {
+		if result.StructuredContent != nil || parsedTextJSON {
+			validationResult := &mcp.CallToolResult{StructuredContent: response.Output}
+			if err := validateMCPToolResult(validationResult, outputSchema); err != nil {
+				return nil, core.NewError(core.INTERNAL, "invalid output from tool %q: %v", toolName, err)
+			}
+		} else {
+			logger.FromContext(ctx).Warn("MCP tool declared an output schema but returned no structured content; skipping output validation", "tool", toolName)
+		}
+	}
+
+	return response, nil
+}
+
+func convertMCPContent(contents []mcp.Content) (string, []*ai.Part) {
+	var text strings.Builder
+	var parts []*ai.Part
+	appendText := func(value string) {
+		if value == "" {
+			return
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(value)
+	}
+
+	for _, content := range contents {
+		switch value := content.(type) {
+		case mcp.TextContent:
+			appendText(value.Text)
+		case mcp.ImageContent:
+			parts = append(parts, ai.NewMediaPart(value.MIMEType, fmt.Sprintf("data:%s;base64,%s", value.MIMEType, value.Data)))
+		case mcp.AudioContent:
+			parts = append(parts, ai.NewMediaPart(value.MIMEType, fmt.Sprintf("data:%s;base64,%s", value.MIMEType, value.Data)))
+		case mcp.ResourceLink:
+			parts = append(parts, ai.NewResourcePart(value.URI))
+		case mcp.EmbeddedResource:
+			switch resource := value.Resource.(type) {
+			case mcp.TextResourceContents:
+				appendText(fmt.Sprintf("Resource (%s):\n%s", resource.URI, resource.Text))
+			case mcp.BlobResourceContents:
+				parts = append(parts, ai.NewMediaPart(resource.MIMEType, fmt.Sprintf("data:%s;base64,%s", resource.MIMEType, resource.Blob)))
+			}
+		}
+	}
+	return text.String(), parts
+}
+
+func parseMCPTextOutput(text string) (any, bool) {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var output any
+		if json.Unmarshal([]byte(trimmed), &output) == nil {
+			return output, true
+		}
+	}
+	return text, false
+}
+
+func mcpTextContent(contents []mcp.Content) string {
+	text, _ := convertMCPContent(contents)
+	return text
+}
+
+func mcpMetaMap(meta *mcp.Meta) map[string]any {
+	if meta == nil {
+		return nil
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return nil
+	}
+	var result map[string]any
+	if json.Unmarshal(data, &result) != nil {
+		return nil
+	}
+	return result
 }
 
 // prepareToolArguments converts Genkit tool arguments to MCP format
@@ -320,8 +429,17 @@ func prepareToolArguments(mcpTool mcp.Tool, args interface{}) (map[string]interf
 
 // validateRequiredArguments checks if all required arguments are present
 func validateRequiredArguments(mcpTool mcp.Tool, args map[string]interface{}) error {
-	if mcpTool.InputSchema.Required != nil {
-		for _, required := range mcpTool.InputSchema.Required {
+	requiredFields := mcpTool.InputSchema.Required
+	if mcpTool.RawInputSchema != nil {
+		var schema struct {
+			Required []string `json:"required"`
+		}
+		if json.Unmarshal(mcpTool.RawInputSchema, &schema) == nil {
+			requiredFields = schema.Required
+		}
+	}
+	if requiredFields != nil {
+		for _, required := range requiredFields {
 			if _, exists := args[required]; !exists {
 				return fmt.Errorf("required field %q missing for tool %q", required, mcpTool.Name)
 			}
