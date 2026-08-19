@@ -30,10 +30,12 @@ package exp
 // ("<agent>:<snapshotId>") is self-contained and rides in the delegation tool
 // result, so it is recorded in the orchestrator's conversation history; a
 // re-instantiated orchestrator resumes tracking from the IDs in its history.
-// Status reads go through the sub-agent's [aix.AgentHandle] (resolved via
+// Status goes through the sub-agent's [aix.AgentHandle] (resolved via
 // resolveAgent, i.e. genkit/exp.LookupAgent, the sanctioned path for
-// third-party middleware), whose GetSnapshot dispatches the agent's
-// getSnapshot companion action.
+// third-party middleware): the check tool dispatches the agent's getSnapshot
+// companion action, and the wait tool its waitForSnapshot counterpart, which
+// blocks next to the store rather than making this middleware re-read on a
+// timer.
 
 import (
 	"context"
@@ -42,6 +44,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -57,20 +60,15 @@ const (
 	waitBackgroundTasksToolName  = "wait_for_background_tasks"
 )
 
-// backgroundTaskPollInterval is how often the wait tool re-reads a pending
-// task's snapshot. Package-level so tests can shorten it.
-var backgroundTaskPollInterval = 5 * time.Second
-
-// waitProgressInterval is how often a still-blocked wait tool logs progress,
-// so a long silent wait stays visible in the logs without a line per poll.
-const waitProgressInterval = 60 * time.Second
-
-// transientReadRetries is the number of consecutive failed reads of one task
-// after which the wait tool gives up on it and surfaces the read error: the
-// preceding failures are absorbed by retrying on the poll interval. It rides
-// out isolated store blips while keeping the wait bounded on a persistently
-// broken store. Reads cut short by the wait's own deadline do not count.
+// transientReadRetries is the number of attempts the wait tool makes on one
+// task before it gives up and surfaces the read error. It rides out isolated
+// store blips while keeping the wait bounded on a persistently broken store. A
+// wait cut short by its own deadline is not a failure and does not count.
 const transientReadRetries = 3
+
+// transientRetryDelay is how long the wait tool pauses before it tries a task
+// again after a failed read, so a broken store is retried rather than spun on.
+var transientRetryDelay = time.Second
 
 // taskStatusUnknown is the report status for a task that could not be resolved
 // (malformed ID, unconfigured agent, missing snapshot, or read error). It is
@@ -259,19 +257,21 @@ func (a *Agents) checkBackgroundTasks(st *agentsState) func(context.Context, bac
 	}
 }
 
-// waitForBackgroundTasks is the blocking status tool: it polls the tasks'
-// snapshots until every task settles, the optional timeout elapses, or the
-// calling context ends. A settled task's report is cached for the rest of the
-// call (no snapshot re-reads or artifact re-merges on later ticks), and a
-// transient read failure is retried across polls until it has failed
-// transientReadRetries consecutive times, at which point the read error is
-// surfaced. Each read is additionally bounded to one poll interval, so a hung
-// store read degrades into that retry path instead of stalling the pass (or,
-// on an unbounded wait, the whole tool call); a read cut short by the wait's
-// own deadline is not a store failure and does not count. A timeout returns
-// the current statuses rather than an error so the orchestrator can do other
-// work and come back; cancellation of the calling context propagates as an
-// error.
+// waitForBackgroundTasks is the blocking status tool: it follows every task to
+// its end, or returns the current statuses when the optional timeout elapses.
+// Each task is followed by the sub-agent's waitForSnapshot companion action, so
+// the waiting happens next to the store that knows when the work finished
+// rather than as a snapshot read per tick here: one action dispatch per task
+// for the whole wait, which is one span each in a trace instead of a stream of
+// them, and a settlement is observed as it happens rather than on the next
+// tick. The waits run concurrently, so the slowest task sets the wall clock.
+//
+// A settled task's report is cached for the rest of the generate call (no
+// snapshot re-reads or artifact re-merges when the model checks again), and a
+// failed read is retried up to transientReadRetries times before the error is
+// surfaced. A timeout returns the current statuses rather than an error so the
+// orchestrator can do other work and come back; cancellation of the calling
+// context propagates as an error.
 func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, waitBackgroundTasksInput) (backgroundTasksResult, error) {
 	return func(ctx context.Context, in waitBackgroundTasksInput) (backgroundTasksResult, error) {
 		if len(in.TaskIDs) == 0 {
@@ -301,115 +301,76 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 			"tasks", len(in.TaskIDs), "timeoutSeconds", in.TimeoutSeconds)
 
 		g := genkit.FromContext(ctx)
-		// settled holds tasks that need no further polling: terminal statuses,
-		// unresolvable IDs, and reads that exhausted their retries. lastKnown
-		// holds each task's most recent report so the timeout path surfaces
-		// real statuses even when the final tick's reads were cut short.
-		// failures counts consecutive transient read errors per task.
-		settled := make(map[string]backgroundTaskReport, len(in.TaskIDs))
-		lastKnown := make(map[string]backgroundTaskReport, len(in.TaskIDs))
-		failures := make(map[string]int)
+		reports := make([]backgroundTaskReport, len(in.TaskIDs))
+		var wg sync.WaitGroup
+		for i, id := range in.TaskIDs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				reports[i] = a.awaitTask(waitCtx, g, st, id, start)
+			}()
+		}
+		wg.Wait()
 
-		assemble := func() backgroundTasksResult {
-			res := backgroundTasksResult{Tasks: make([]backgroundTaskReport, 0, len(in.TaskIDs))}
-			for _, id := range in.TaskIDs {
-				if report, ok := settled[id]; ok {
-					res.Tasks = append(res.Tasks, report)
-				} else {
-					res.Tasks = append(res.Tasks, lastKnown[id])
-				}
-			}
-			return res
+		// The calling context ending is cancellation, not a timeout; let it
+		// fail the tool call rather than dressing it up as a settled result.
+		if ctx.Err() != nil {
+			return backgroundTasksResult{}, ctx.Err()
 		}
 
-		// Each read is bounded to one poll interval (floored so shortened
-		// test intervals do not starve healthy reads), keeping a hung store
-		// from freezing an unbounded wait.
-		readTimeout := max(backgroundTaskPollInterval, time.Second)
+		res := backgroundTasksResult{Tasks: reports}
+		pending := 0
+		for _, report := range reports {
+			// taskStatusUnknown deliberately counts as terminal here: it only
+			// arrives after a read failure was classified as a dead end, so
+			// there is nothing left to wait for.
+			if !aix.SnapshotStatus(report.Status).Terminal() {
+				pending++
+			}
+		}
+		if pending > 0 {
+			logger.Debug(ctx, "wait for background tasks timed out",
+				"pending", pending, "elapsedMs", time.Since(start).Milliseconds())
+			res.TimedOut = true
+			res.Note = "Stopped waiting; the pending tasks are still running. Check them again later."
+			return res, nil
+		}
+		logger.Debug(ctx, "wait for background tasks finished",
+			"tasks", len(in.TaskIDs), "elapsedMs", time.Since(start).Milliseconds())
+		return res, nil
+	}
+}
 
-		ticker := time.NewTicker(backgroundTaskPollInterval)
-		defer ticker.Stop()
-		lastProgress := start
-		for {
-			waiting := false
-			for _, id := range in.TaskIDs {
-				if _, ok := settled[id]; ok {
-					continue
-				}
-				if waitCtx.Err() != nil {
-					// The wait ended mid-pass; the Done arm below reports
-					// lastKnown for everything still unsettled.
-					waiting = true
-					break
-				}
-				readCtx, cancelRead := context.WithTimeout(waitCtx, readTimeout)
-				report, transient := a.reportTask(readCtx, g, st, id)
-				cancelRead()
-				if transient {
-					if waitCtx.Err() != nil {
-						// The wait itself ended mid-read: not a store
-						// failure, so it does not count against the retry
-						// budget and must not settle the task with a read
-						// error over lastKnown's real status.
-						waiting = true
-						break
-					}
-					if _, ok := lastKnown[id]; !ok {
-						lastKnown[id] = report
-					}
-					failures[id]++
-					if failures[id] >= transientReadRetries {
-						settled[id] = report // give up; surface the read error
-						logger.Warn(ctx, "background task read retries exhausted",
-							"taskId", id, "attempts", failures[id])
-					} else {
-						waiting = true
-					}
-					continue
-				}
-				lastKnown[id] = report
-				delete(failures, id)
-				// taskStatusUnknown deliberately counts as terminal here: it
-				// only arrives after a read failure was classified as a dead
-				// end, so there is nothing left to wait for.
-				if !aix.SnapshotStatus(report.Status).Terminal() {
-					waiting = true
-				} else {
-					settled[id] = report
-					logger.Debug(ctx, "background task settled",
-						"taskId", id, "status", report.Status,
-						"elapsedMs", time.Since(start).Milliseconds())
-				}
-			}
-			if !waiting {
-				logger.Debug(ctx, "wait for background tasks finished",
-					"tasks", len(in.TaskIDs), "elapsedMs", time.Since(start).Milliseconds())
-				return assemble(), nil
-			}
-			// A long blocked wait stays visible without a log line per poll.
-			if time.Since(lastProgress) >= waitProgressInterval {
-				lastProgress = time.Now()
-				logger.Debug(ctx, "still waiting for background tasks",
-					"pending", len(in.TaskIDs)-len(settled),
-					"elapsedMs", time.Since(start).Milliseconds())
-			}
-			select {
-			case <-waitCtx.Done():
-				// The calling context ending is cancellation, not a timeout;
-				// let it fail the tool call rather than dressing it up as a
-				// settled result.
-				if ctx.Err() != nil {
-					return backgroundTasksResult{}, ctx.Err()
-				}
-				logger.Debug(ctx, "wait for background tasks timed out",
-					"pending", len(in.TaskIDs)-len(settled),
-					"elapsedMs", time.Since(start).Milliseconds())
-				res := assemble()
-				res.TimedOut = true
-				res.Note = "Stopped waiting; the pending tasks are still running. Check them again later."
-				return res, nil
-			case <-ticker.C:
-			}
+// awaitTask follows one task to its end and returns its report, retrying a
+// failed read a few times before it surfaces the error. When ctx ends first
+// (the wait's own timeout, or the caller's cancellation) the task is still
+// running by definition, so it is reported as pending rather than as a read
+// that did not finish; start is the wait's start, for the settlement log line.
+func (a *Agents) awaitTask(ctx context.Context, g *genkit.Genkit, st *agentsState, taskID string, start time.Time) backgroundTaskReport {
+	for attempt := 1; ; attempt++ {
+		report, transient := a.reportTask(ctx, g, st, taskID, awaitSnapshot)
+		if ctx.Err() != nil {
+			report.Status = string(aix.SnapshotStatusPending)
+			report.Error = ""
+			return report
+		}
+		if !transient {
+			logger.Debug(ctx, "background task settled",
+				"taskId", taskID, "status", report.Status,
+				"elapsedMs", time.Since(start).Milliseconds())
+			return report
+		}
+		if attempt >= transientReadRetries {
+			logger.Warn(ctx, "background task read retries exhausted",
+				"taskId", taskID, "attempts", attempt)
+			return report
+		}
+		select {
+		case <-ctx.Done():
+			report.Status = string(aix.SnapshotStatusPending)
+			report.Error = ""
+			return report
+		case <-time.After(transientRetryDelay):
 		}
 	}
 }
@@ -421,25 +382,41 @@ func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []str
 	g := genkit.FromContext(ctx)
 	res := backgroundTasksResult{Tasks: make([]backgroundTaskReport, 0, len(taskIDs))}
 	for _, id := range taskIDs {
-		report, _ := a.reportTask(ctx, g, st, id)
+		report, _ := a.reportTask(ctx, g, st, id, readSnapshotOnce)
 		res.Tasks = append(res.Tasks, report)
 	}
 	return res
 }
 
-// reportTask resolves one task handle and shapes its snapshot into a report.
-// Completed tasks surface the sub-agent's final response and artifacts;
-// terminal non-success statuses surface an explanatory error instead. The
-// second return reports whether a failed read looked transient (a store or
-// transport error rather than a sentinel-classified dead end); the wait tool
-// retries transient reads a few polls before surfacing them.
+// snapshotFetch is how a task's snapshot is obtained: read once for the check
+// tool, waited for by the wait tool. Both dispatch a companion action of the
+// sub-agent, so both apply the runtime's read shaping and both keep the error
+// chain live for classification.
+type snapshotFetch func(context.Context, *aix.AgentHandle, string) (*aix.SessionSnapshot[json.RawMessage], error)
+
+var (
+	readSnapshotOnce snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
+		return agent.GetSnapshot(ctx, snapshotID)
+	}
+	awaitSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
+		return agent.WaitForSnapshot(ctx, snapshotID)
+	}
+)
+
+// reportTask resolves one task handle, obtains its snapshot through fetch, and
+// shapes the result into a report. Completed tasks surface the sub-agent's
+// final response and artifacts; terminal non-success statuses surface an
+// explanatory error instead. The second return reports whether a failed fetch
+// looked transient (a store or transport error rather than a
+// sentinel-classified dead end); the wait tool retries transient fetches a few
+// times before surfacing them.
 //
 // Reports for completed, failed, and aborted tasks are cached on st for the
 // rest of the generate call: those rows never change, so a re-check skips the
 // snapshot fetch and artifact re-merge (and cannot clobber a merged artifact
 // the orchestrator has since edited). Pending, expired, and unresolvable
 // reports can still change on their own and are never cached.
-func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsState, taskID string) (backgroundTaskReport, bool) {
+func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsState, taskID string, fetch snapshotFetch) (backgroundTaskReport, bool) {
 	st.mu.Lock()
 	cached, ok := st.settledReports[taskID]
 	st.mu.Unlock()
@@ -454,13 +431,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 	}
 
 	report := backgroundTaskReport{TaskID: taskID, Agent: ref.Name}
-	// The handle's GetSnapshot dispatches the getSnapshot companion action,
-	// which applies the runtime's read shaping: a pending row whose heartbeat
-	// went stale is surfaced as expired.
+	// Both fetches dispatch a companion action of the sub-agent, which applies
+	// the runtime's read shaping: a pending row whose heartbeat went stale is
+	// surfaced as expired.
 	agent, err := resolveAgent(g, ref)
 	var snap *aix.SessionSnapshot[json.RawMessage]
 	if err == nil {
-		snap, err = agent.GetSnapshot(ctx, snapshotID)
+		snap, err = fetch(ctx, agent, snapshotID)
 	}
 	if err != nil {
 		logger.Debug(ctx, "background task read failed",

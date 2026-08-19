@@ -31,12 +31,13 @@ import (
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
-// fastTaskPolling shortens the wait tool's poll interval for the test.
+// fastTaskPolling shortens the wait tool's retry pause for the test. A healthy
+// wait needs no shortening: it settles when the store says so.
 func fastTaskPolling(t *testing.T) {
 	t.Helper()
-	restore := backgroundTaskPollInterval
-	backgroundTaskPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { backgroundTaskPollInterval = restore })
+	restore := transientRetryDelay
+	transientRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() { transientRetryDelay = restore })
 }
 
 // toolOutputs collects the raw outputs of every tool response for toolName.
