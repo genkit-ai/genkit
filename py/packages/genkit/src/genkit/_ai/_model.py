@@ -64,31 +64,16 @@ class ResolvedModel:
     config: dict[str, Any]
 
 
-def reject_camel_case_keys(*, config: Mapping[str, Any]) -> None:
-    """Raise if a call-site config dict used JSON/Dev UI names.
-
-    Python ``config=`` uses the same names as the Pydantic fields
-    (``max_output_tokens``). camelCase (``maxOutputTokens``) is the wire
-    spelling; accepting both here makes a typo look like it worked.
-    """
-    camel = [k for k in config if isinstance(k, str) and any(c.isupper() for c in k)]
-    if not camel:
-        return
-    shown = ', '.join(camel)
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(f'config keys must be snake_case (max_output_tokens), not camelCase (maxOutputTokens). Got: {shown}'),
-    )
-
-
 def normalize_config(*, config: object) -> dict[str, Any]:
     """Convert a config object or dict into a mergeable dict.
 
     ``generate()`` runs both a ModelRef's default config and the per-call
     ``config=`` through this, then overlays them. Call-time keys win;
-    ``None`` means don't send that field. Keys stay snake_case so
+    ``None`` means don't send that field. Pydantic dumps stay snake_case so
     ``ModelConfig(max_output_tokens=100)`` and
-    ``config={'max_output_tokens': 200}`` hit the same key.
+    ``config={'max_output_tokens': 200}`` hit the same key. Dict keys pass
+    through as written; the plugin config schema decides which spellings
+    are legal.
     """
     if config is None:
         return {}
@@ -104,36 +89,74 @@ def normalize_config(*, config: object) -> dict[str, Any]:
                 dumped[name] = getattr(config, name)
         return dumped
     if isinstance(config, Mapping):
-        data = dict(cast(Mapping[str, Any], config))
-        reject_camel_case_keys(config=data)
-        return data
+        return dict(cast(Mapping[str, Any], config))
     raise TypeError(f'Unsupported config type: {type(config).__name__}')
 
 
 def resolve_model_arg(
     *,
-    model: ModelArg | None,
+    model: object | None,
     registry: Registry,
     message: str = 'No model configured.',
 ) -> ModelArg:
-    """Return the explicit model or the registry default (name or ModelRef)."""
-    resolved = model if model is not None else registry.lookup_value('defaultModel', 'defaultModel')
+    """Return the explicit model or the registry default (name or ModelRef).
+
+    An empty string is treated as omitted so ``model=os.getenv('MODEL')``
+    still picks up the constructor default when the env var is unset.
+    Anything else that is not a name or ModelRef is a hard error — a
+    leftover int or action must not silently run the default model.
+    """
+    if isinstance(model, ModelRef):
+        return cast(ModelArg, model)
+    if isinstance(model, str) and model:
+        return model
+    if model is not None and model != '':
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'model is {type(model).__name__}, expected str or ModelRef.',
+        )
+    resolved = registry.lookup_value('defaultModel', 'defaultModel')
     if isinstance(resolved, ModelRef):
         return cast(ModelArg, resolved)
     if isinstance(resolved, str) and resolved:
         return resolved
+    if resolved is not None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(f'defaultModel is {type(resolved).__name__}, expected str or ModelRef.'),
+        )
     raise GenkitError(status='INVALID_ARGUMENT', message=message)
 
 
 def resolve_model_name(
     *,
-    model: ModelArg | None,
+    model: object | None,
     registry: Registry,
     message: str = 'No model configured.',
 ) -> str:
     """Return a wire model name, unwrapping a ModelRef default if needed."""
     resolved = resolve_model_arg(model=model, registry=registry, message=message)
     return resolved.name if isinstance(resolved, ModelRef) else resolved
+
+
+def resolve_call_model(
+    *,
+    model: object | None,
+    config: object = None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> ResolvedModel:
+    """Resolve a name or constructor ModelRef plus call-time config.
+
+    ``generate()`` / prompts with no ``model=`` still apply the constructor
+    ref's version and config. The merged bag is a dict so overlay can happen;
+    ModelRequest is what turns it back into an object.
+    """
+    normalized = normalize_config(config=config)
+    resolved = resolve_model_arg(model=model, registry=registry, message=message)
+    if isinstance(resolved, ModelRef):
+        return resolve_model_ref(model=resolved, config=normalized)
+    return ResolvedModel(name=resolved, config=normalized)
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:

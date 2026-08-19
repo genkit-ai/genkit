@@ -18,6 +18,7 @@ from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
     normalize_config,
+    resolve_call_model,
     resolve_model_arg,
     resolve_model_name,
     resolve_model_ref,
@@ -39,6 +40,19 @@ class ExcludedKeyConfig(ModelConfig):
     """ModelConfig whose api_key is omitted from model_dump."""
 
     api_key: str | None = Field(None, exclude=True)
+
+
+class OtherFamilyConfig(BaseModel):
+    """A second family's knobs, used to pin leftover keys across a hop."""
+
+    temperature: float | None = None
+    frequency_penalty: float | None = None
+
+
+class NestedConfig(BaseModel):
+    """Nested bag used to pin shallow replace."""
+
+    thinking: dict[str, object] | None = None
 
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
@@ -133,11 +147,18 @@ def test_normalize_config_raises_type_error_for_unsupported_type() -> None:
 
 
 def test_resolve_model_name_raises_when_default_is_not_string() -> None:
-    """resolve_model_name raises GenkitError if the default model is not a string."""
+    """A configured default of the wrong type says so, rather than 'not configured'."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 123)
-    with pytest.raises(GenkitError, match='No model configured.'):
+    with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef'):
         resolve_model_name(model=None, registry=registry)
+
+
+def test_resolve_model_name_empty_string_falls_back_to_default() -> None:
+    """model='' is omitted, so a constructor default still applies."""
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'default-model')
+    assert resolve_model_name(model='', registry=registry) == 'default-model'
 
 
 def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
@@ -172,10 +193,9 @@ def test_normalize_config_restores_excluded_fields() -> None:
     assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
 
 
-def test_normalize_config_rejects_camel_case_keys() -> None:
-    """camelCase dict keys are the JSON spelling; call-site config is snake_case."""
-    with pytest.raises(GenkitError, match='max_output_tokens'):
-        normalize_config(config={'maxOutputTokens': 100})
+def test_normalize_config_passes_through_camel_case_keys() -> None:
+    """Dict keys stay as written; the plugin config schema decides spelling."""
+    assert normalize_config(config={'maxOutputTokens': 100}) == {'maxOutputTokens': 100}
 
 
 def test_normalize_config_accepts_snake_case_keys() -> None:
@@ -203,3 +223,140 @@ def test_resolve_model_arg_returns_default_model_ref() -> None:
     ref = model_ref('echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
     registry.register_value('defaultModel', 'defaultModel', ref)
     assert resolve_model_arg(model=None, registry=registry) is ref
+
+
+def test_resolve_call_model_merges_constructor_model_ref() -> None:
+    """A stored constructor ref contributes version and config when model= is omitted."""
+    registry = Registry()
+    ref = model_ref(
+        'echo-model',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(temperature=0.7),
+    )
+    registry.register_value('defaultModel', 'defaultModel', ref)
+    resolved = resolve_call_model(model=None, config={}, registry=registry)
+    assert resolved.name == 'echo-model'
+    assert resolved.config == {'version': '001', 'temperature': 0.7}
+
+
+def test_resolve_call_model_call_time_config_wins() -> None:
+    """Call-time config overlays the constructor ref per key."""
+    registry = Registry()
+    ref = model_ref(
+        'echo-model',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(temperature=0.7),
+    )
+    registry.register_value('defaultModel', 'defaultModel', ref)
+    resolved = resolve_call_model(model=None, config={'temperature': 0.2}, registry=registry)
+    assert resolved.config == {'version': '001', 'temperature': 0.2}
+
+
+def test_resolve_model_ref_keeps_explicit_empty_values() -> None:
+    """``0``, ``''``, ``[]``, ``{}``, and ``False`` are values the caller set.
+
+    Only ``None`` means omit the field. Clearing stop sequences is ``[]``,
+    not dropping the key; a blank version is ``''``.
+    """
+    ref = model_ref(
+        'm',
+        config_schema=ModelConfig,
+        config=ModelConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
+    )
+    resolved = resolve_model_ref(
+        model=ref,
+        config={
+            'temperature': 0,
+            'max_output_tokens': 0,
+            'version': '',
+            'stop_sequences': [],
+            'thinking': {},
+            'stream': False,
+        },
+    )
+    assert resolved.config == {
+        'temperature': 0,
+        'max_output_tokens': 0,
+        'version': '',
+        'stop_sequences': [],
+        'thinking': {},
+        'stream': False,
+    }
+
+
+def test_resolve_model_ref_config_version_beats_ref_version() -> None:
+    """ref.config.version overlays the constructor version= field."""
+    ref = model_ref(
+        'm',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(version='002'),
+    )
+    assert resolve_model_ref(model=ref, config={}).config == {'version': '002'}
+
+
+def test_normalize_config_passes_through_nested_camel_case_keys() -> None:
+    """Nested dict keys stay as written, same as top-level ones."""
+    assert normalize_config(config={'thinking': {'budgetTokens': 1024}}) == {'thinking': {'budgetTokens': 1024}}
+
+
+def test_resolve_model_arg_rejects_non_name_explicit_model() -> None:
+    """A leftover int must not silently run the constructor default."""
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'echo-model')
+    with pytest.raises(GenkitError, match='model is int, expected str or ModelRef'):
+        resolve_model_arg(model=123, registry=registry)
+
+
+def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None:
+    """An explicit name is a different model; constructor knobs stay off it."""
+    registry = Registry()
+    default = model_ref(
+        'flash',
+        config_schema=CustomConfig,
+        config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
+    )
+    registry.register_value('defaultModel', 'defaultModel', default)
+    resolved = resolve_call_model(model='openai/gpt', config={'temperature': 0.2}, registry=registry)
+    assert resolved.name == 'openai/gpt'
+    assert resolved.config == {'temperature': 0.2}
+
+
+def test_resolve_model_ref_keeps_other_family_keys() -> None:
+    """Switching models does not drop keys the new schema does not know.
+
+    A prompt can still be holding a Gemini bag when the call picks OpenAI.
+    Those leftovers stay; the helper does not know families.
+    """
+    openai = model_ref(
+        'gpt',
+        namespace='openai',
+        config_schema=OtherFamilyConfig,
+        config=OtherFamilyConfig(frequency_penalty=0.5),
+    )
+    resolved = resolve_model_ref(
+        model=openai,
+        config={'temperature': 0.7, 'safety_settings': {'HARM': 'BLOCK'}},
+    )
+    assert resolved.name == 'openai/gpt'
+    assert resolved.config == {
+        'frequency_penalty': 0.5,
+        'temperature': 0.7,
+        'safety_settings': {'HARM': 'BLOCK'},
+    }
+
+
+def test_resolve_model_ref_replaces_nested_bag() -> None:
+    """A nested dict replaces the whole object. Inner keys are not deep-merged.
+
+    Call-time ``thinking={'budget': 256}`` drops the ref's ``level``.
+    """
+    ref = model_ref(
+        'm',
+        config_schema=NestedConfig,
+        config=NestedConfig(thinking={'budget': 1024, 'level': 'low'}),
+    )
+    resolved = resolve_model_ref(model=ref, config={'thinking': {'budget': 256}})
+    assert resolved.config == {'thinking': {'budget': 256}}

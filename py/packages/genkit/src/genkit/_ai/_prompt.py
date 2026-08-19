@@ -46,7 +46,7 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
-    resolve_model_name,
+    resolve_call_model,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -622,7 +622,8 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = resolve_model_name(model=options.model, registry=registry)
+    resolved = resolve_call_model(model=options.model, config=options.config, registry=registry)
+    model = resolved.name
 
     ri: dict[str, Any] = {}
     cache = PromptCache()
@@ -665,7 +666,7 @@ async def to_generate_action_options(
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=options.config,
+        config=resolved.config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,

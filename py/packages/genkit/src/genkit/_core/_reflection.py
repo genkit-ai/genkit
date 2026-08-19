@@ -43,6 +43,7 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
+from genkit._core._model import ModelRef
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInit, AgentInput
 
@@ -250,6 +251,10 @@ def create_reflection_asgi_app(
                     )
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
+            elif type_param == 'defaultModel':
+                # Dev UI lists a model name. The constructor may store a
+                # ModelRef; only the name is JSON-serializable here.
+                raw_values = {key: val.name if isinstance(val, ModelRef) else val for key, val in raw_values.items()}
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:
             logger.exception('Reflection /api/values failed')
