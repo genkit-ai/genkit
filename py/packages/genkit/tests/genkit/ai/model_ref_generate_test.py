@@ -144,14 +144,22 @@ async def test_generate_string_model_config_dict_unchanged(
 
 @pytest.mark.asyncio
 async def test_generate_stream_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
-    """generate_stream accepts a ModelRef."""
-    ai, _ = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig)
+    """generate_stream applies the ref's version and config, not just the name."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(temperature=0.4),
+    )
 
     stream = ai.generate_stream(model=ref, prompt='Hello')
     response = await stream.response
 
     assert '[ECHO]' in response.text
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.4
+    assert _config_value(echo.last_request.config, 'version') == '001'
 
 
 @pytest.mark.asyncio
@@ -174,14 +182,16 @@ async def test_define_prompt_with_model_ref(ai_with_echo: tuple[Genkit, EchoMode
 
 @pytest.mark.asyncio
 async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
-    """generate_operation accepts a ModelRef and uses its wire name."""
+    """generate_operation applies the ref's version and config, not just the name."""
     expected_operation = Operation(
         id='ref-op-123',
         done=False,
         action='/background-model/lro-model',
     )
+    seen: list[ModelRequest] = []
 
     async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen.append(request)
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
@@ -195,11 +205,19 @@ async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
         fn=model_fn,
         info=ModelInfo(supports=Supports(long_running=True)),
     )
-    ref = model_ref('lro-model', config_schema=ModelConfig, config=ModelConfig(temperature=0.4))
+    ref = model_ref(
+        'lro-model',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(temperature=0.4),
+    )
 
     operation = await ai.generate_operation(model=ref, prompt='Generate video')
 
     assert operation.id == 'ref-op-123'
+    assert seen
+    assert _config_value(seen[0].config, 'temperature') == 0.4
+    assert _config_value(seen[0].config, 'version') == '001'
 
 
 @pytest.mark.asyncio
@@ -535,9 +553,10 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
     ai = Genkit(model=flash)
     echo, _ = define_echo_model(ai, name='flash')
 
-    with pytest.raises(GenkitError):
+    with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model=123, prompt='hi')  # type: ignore[arg-type]
 
+    assert 'model is int, expected str or ModelRef' in str(exc_info.value)
     assert echo.last_request is None
 
 

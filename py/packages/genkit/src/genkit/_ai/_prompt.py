@@ -957,8 +957,8 @@ async def render_prompt_config_for_executable_call(
     if extra_docs:
         merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
 
-    # Copy instead of dump/revalidate so a typed config object the caller
-    # passed through (no merge) is still that object when the plugin runs.
+    # Keep the merged config bag as-is. dump/revalidate would rebuild it
+    # and drop keys the plugin is about to see.
     return prompt_config.model_copy(
         update={
             'system': None,
