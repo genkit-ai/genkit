@@ -45,7 +45,12 @@ from genkit import (
     TextPart,
 )
 from genkit.plugin_api import ActionRunContext, tracer
-from genkit_google_genai.models._sdk_config import sdk_config_error
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -208,22 +213,21 @@ class ImagenModel:
             )
         )
 
-    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
-        if not request.config:
-            return None
-
-        dumped = (
-            request.config.model_dump(exclude_none=True, by_alias=False)
-            if isinstance(request.config, BaseModel)
-            else None
+    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfig | None:
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=ImagenConfigSchema,
+            action_name=self._version,
         )
         if not dumped:
             return None
 
+        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateImagesConfig)
         try:
-            return genai_types.GenerateImagesConfig(**dumped)
+            cfg = genai_types.GenerateImagesConfig(**known) if known else genai_types.GenerateImagesConfig()
         except ValidationError as e:
             raise sdk_config_error(action_name=self._version, error=e) from e
+        return attach_leftovers(cfg, leftovers, nest='parameters')
 
     def _contents_from_response(self, response: genai_types.GenerateImagesResponse) -> list:
         """Retrieve contents from google-genai response.

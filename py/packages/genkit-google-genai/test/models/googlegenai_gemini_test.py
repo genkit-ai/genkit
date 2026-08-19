@@ -1042,11 +1042,15 @@ def test_gemini_model__normalize_config_dumps_schema_instance(
     assert dumped == {'code_execution': True}
 
 
-def test_gemini_model__normalize_config_ignores_raw_dicts(
+def test_gemini_model__normalize_config_rejects_raw_dicts(
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """Dict/camelCase folding is gone; Action already validated the instance."""
-    assert gemini_model_instance._normalize_config_to_dict({'code_execution': True}) is None  # type: ignore[arg-type]
+    """A dict at the dump leaf means Action never produced the family instance."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._normalize_config_to_dict({'code_execution': True})  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert gemini_model_instance._version in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -1079,21 +1083,21 @@ def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__unknown_extra_is_invalid_argument(
+async def test_gemini_model__unknown_extra_rides_on_extra_body(
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """Leftover keys dump through and become a named INVALID_ARGUMENT."""
+    """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
         config=GeminiConfigSchema.model_validate({'temperature': 0.5, 'fooBar': 1}),
     )
 
-    with pytest.raises(GenkitError) as exc_info:
-        await gemini_model_instance._genkit_to_googleai_cfg(request)
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
 
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'fooBar' in str(exc_info.value)
-    assert gemini_model_instance._version in str(exc_info.value)
+    assert cfg is not None
+    assert cfg.temperature == 0.5
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
 
 
 @pytest.mark.parametrize(

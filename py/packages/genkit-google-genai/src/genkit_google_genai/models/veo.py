@@ -29,7 +29,7 @@ else:
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
     ModelInfo,
@@ -38,6 +38,12 @@ from genkit import (
 )
 from genkit.model import Error, Operation
 from genkit.plugin_api import ActionRunContext
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 
 
 class VeoVersion(StrEnum):
@@ -251,12 +257,10 @@ class VeoModel:
         if not prompt:
             raise ValueError('Veo requires a text prompt')
 
-        # Call the generateVideos API
         response = await self._client.aio.models.generate_videos(
             model=self._version,
             prompt=prompt,
-            # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
+            config=self._get_config(request),
         )
 
         # Convert to Operation
@@ -293,6 +297,22 @@ class VeoModel:
             op_dict['response'] = response.response
 
         return _from_veo_operation(op_dict)
+
+    def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfig | None:
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=VeoConfigSchema,
+            action_name=self._version,
+        )
+        if not dumped:
+            return None
+
+        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
+        try:
+            cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
+        except ValidationError as e:
+            raise sdk_config_error(action_name=self._version, error=e) from e
+        return attach_leftovers(cfg, leftovers, nest='parameters')
 
     @property
     def metadata(self) -> dict:

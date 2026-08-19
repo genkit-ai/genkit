@@ -21,15 +21,20 @@ start path) and Pydantic GenerateVideosResponse objects (from the check
 path where the SDK returns a model instance).
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
+    VeoModel,
     VeoVersion,
     _from_veo_operation,
     _to_veo_parameters,
     is_veo_model,
 )
 from google.genai import types as genai_types
+
+from genkit import ActionRunContext, Message, ModelRequest, Part, Role, TextPart
 
 
 class TestIsVeoModel:
@@ -71,6 +76,31 @@ class TestVeoVersion:
     def test_new_googleai_models_are_recognized(self, version: VeoVersion) -> None:
         """New Veo 3.0/3.1 model constants map to valid Veo names."""
         assert is_veo_model(version.value) is True
+
+
+@pytest.mark.asyncio
+async def test_veo_start_dumps_aspect_ratio_and_duration() -> None:
+    """A typed Veo config dumps aspectRatio / durationSeconds onto the SDK request."""
+    client = MagicMock()
+    op = MagicMock()
+    op.name = 'operations/1'
+    op.done = False
+    client.aio.models.generate_videos = AsyncMock(return_value=op)
+    veo = VeoModel('veo-3.0-generate-001', client)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat walking'))])],
+        config=VeoConfigSchema.model_validate({'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1}),
+    )
+
+    await veo.start(request, ActionRunContext())
+
+    called = client.aio.models.generate_videos.await_args
+    assert called is not None
+    cfg = called.kwargs['config']
+    assert cfg.aspect_ratio == '16:9'
+    assert cfg.duration_seconds == 5
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
 
 
 class TestToVeoParameters:

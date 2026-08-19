@@ -371,10 +371,7 @@ def _create_veo_background_action(
     full_name = f'{prefix}{clean_name}'
     action_key = f'/background-model/{full_name}'
 
-    # Deliberately not ModelRequest[VeoConfigSchema]: VeoModel.start only
-    # forwards dict configs, so coercing to an instance here would silently
-    # drop aspectRatio/durationSeconds on the way to the SDK.
-    async def _start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def _start(request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
         op = await veo.start(request, ctx)
         op.action = action_key
@@ -423,7 +420,7 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
     return ActionMetadata(
         action_type=ActionKind.BACKGROUND_MODEL,
         name=name,
-        input_json_schema=to_json_schema(ModelRequest),
+        input_json_schema=to_json_schema(ModelRequest[VeoConfigSchema]),
         output_json_schema=to_json_schema(Operation),
         metadata={
             'model': {

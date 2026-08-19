@@ -21,7 +21,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
-from genkit_google_genai.models._sdk_config import sdk_config_error
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
 from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
@@ -1700,7 +1705,7 @@ class GeminiModel:
         2. Dump the typed request.config instance into a snake_case dict
         3. Extract tool-related fields from the dict
         4. Clean Genkit-specific / unsupported keys from the dict
-        5. Build the final GenerateContentConfig
+        5. Build GenerateContentConfig from known fields; leftovers ride on extra_body
         """
         system_instruction: list[genai.types.Part] = []
 
@@ -1718,6 +1723,7 @@ class GeminiModel:
         cfg = None
         tools: list[genai_types.Tool] = []
 
+        leftovers: dict[str, Any] = {}
         if request.config:
             # 2. Normalize config into a dict
             dumped_config = self._normalize_config_to_dict(request.config)
@@ -1729,21 +1735,21 @@ class GeminiModel:
                 # 4. Clean Genkit-specific and unsupported keys
                 self._clean_unsupported_keys(dumped_config)
 
-                # 5. Build GenerateContentConfig
-                if dumped_config:
+                # 5. Build GenerateContentConfig from known fields; leftovers ride
+                # on extra_body so a newly supported key still reaches the API.
+                known, leftovers = split_sdk_fields(dumped_config, genai_types.GenerateContentConfig)
+                if known:
                     try:
-                        cfg = genai_types.GenerateContentConfig(**dumped_config)
+                        cfg = genai_types.GenerateContentConfig(**known)
                     except ValidationError as e:
                         raise sdk_config_error(action_name=self._version, error=e) from e
-                else:
-                    cfg = None
 
         # Tools from top-level field and config-level fields
         tools.extend(self._get_tools(request))
 
         has_output = bool(request.output_format or request.output_schema)
 
-        if cfg is not None or tools or system_instruction or request.output_format:
+        if cfg is not None or tools or system_instruction or request.output_format or leftovers:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
@@ -1775,7 +1781,7 @@ class GeminiModel:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
-            return cfg
+            return attach_leftovers(cfg, leftovers, nest='generationConfig')
 
         return None
 
@@ -1792,18 +1798,12 @@ class GeminiModel:
         self,
         config: GeminiConfigSchema | None,
     ) -> dict[str, Any] | None:
-        """Dump a typed family config to a snake_case dict for the SDK.
-
-        ``request.config`` is already the family schema instance. The SDK
-        wants snake_case field names.
-
-        Returns ``None`` if the config has no meaningful values.
-        """
-        if not isinstance(config, GeminiConfigSchema):
-            return None
-
-        dumped = config.model_dump(exclude_none=True, by_alias=False)
-        return dumped or None
+        """Dump a typed family config to a snake_case dict for the SDK."""
+        return dump_family_config(
+            config=config,
+            expected_type=GeminiConfigSchema,
+            action_name=self._version,
+        )
 
     def _extract_tools_from_config(
         self,

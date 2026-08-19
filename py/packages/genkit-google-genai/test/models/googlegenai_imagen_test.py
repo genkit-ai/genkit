@@ -91,19 +91,33 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     assert base64.b64decode(encoded_data) == response_byte_string
 
 
-def test_imagen_unknown_extra_is_invalid_argument() -> None:
-    """Leftover keys dump through and become a named INVALID_ARGUMENT."""
+def test_imagen_unknown_extra_rides_on_extra_body() -> None:
+    """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
     imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
         config=ImagenConfigSchema.model_validate({'fooBar': 1}),
     )
 
+    cfg = imagen._get_config(request)
+
+    assert cfg is not None
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
+
+
+def test_imagen_rejects_raw_dicts() -> None:
+    """A dict at the dump leaf means Action never produced the family instance."""
+    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        config={'number_of_images': 1},  # type: ignore[arg-type]
+    )
+
     with pytest.raises(GenkitError) as exc_info:
         imagen._get_config(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'fooBar' in str(exc_info.value)
     assert imagen._version in str(exc_info.value)
 
 
