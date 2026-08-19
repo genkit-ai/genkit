@@ -8,7 +8,8 @@
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
@@ -46,6 +47,13 @@ class NestedConfig(BaseModel):
     """Nested bag used to pin shallow replace."""
 
     thinking: dict[str, object] | None = None
+
+
+class AliasedNestedConfig(BaseModel):
+    """Schema with a generated camel alias, used to pin alias overlay."""
+
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    thinking_config: dict[str, object] | None = None
 
 
 def _config_value(config: Any, key: str) -> Any:
@@ -703,3 +711,135 @@ async def test_to_generate_action_options_uses_constructor_ref() -> None:
     assert options.model == 'flash'
     assert _config_value(options.config, 'temperature') == 0.7
     assert _config_value(options.config, 'version') == '001'
+
+
+def _leftover_alias(config: Any, field: str, alias: str) -> None:
+    """The other spelling must not sit beside the field on the plugin object."""
+    if isinstance(config, dict):
+        assert alias not in config
+        return
+    extra = getattr(config, 'model_extra', None) or {}
+    assert extra.get(field) is None
+    assert extra.get(alias) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_alias_dict_overrides_ref_field(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Call-time maxOutputTokens replaces the ref's max_output_tokens."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+
+    await ai.generate(model=ref, config={'maxOutputTokens': 5}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+
+@pytest.mark.asyncio
+async def test_generate_alias_none_clears_ref_field(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Call-time maxOutputTokens=None clears the ref cap."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+
+    await ai.generate(model=ref, config={'maxOutputTokens': None}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') is None
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+
+@pytest.mark.asyncio
+async def test_generate_alias_replaces_nested_bag(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """thinkingConfig replaces the ref's thinking_config bag."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=AliasedNestedConfig,
+        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1}),
+    )
+
+    await ai.generate(model=ref, config={'thinkingConfig': {'thinkingBudget': 256}}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'thinking_config') == {'thinkingBudget': 256}
+    if isinstance(echo.last_request.config, dict):
+        assert 'thinkingConfig' not in echo.last_request.config
+    else:
+        extra = getattr(echo.last_request.config, 'model_extra', None) or {}
+        assert extra.get('thinkingConfig') is None
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_last_write_wins(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Both keys in one call dict fold onto one field; later key wins."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+
+    await ai.generate(
+        model=ref,
+        config={'max_output_tokens': 1, 'maxOutputTokens': 5},
+        prompt='Hello',
+    )
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+
+@pytest.mark.asyncio
+async def test_constructor_ref_alias_dict_overrides() -> None:
+    """Constructor ModelRef + camel call dict is the same overlay."""
+    flash = model_ref(
+        'flash',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+    ai = Genkit(model=flash)
+    echo, _ = define_echo_model(ai, name='flash')
+
+    await ai.generate(prompt='hi', config={'maxOutputTokens': 5})
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+
+@pytest.mark.asyncio
+async def test_prompt_alias_dict_overrides_ref_field(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Prompt call-time maxOutputTokens replaces the ref default."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+    joke = ai.define_prompt(name='jokeAlias', model=ref, prompt='hi')
+
+    await joke(config={'maxOutputTokens': 5})
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
