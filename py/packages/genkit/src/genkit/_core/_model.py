@@ -27,11 +27,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, TypedDict, cast
+from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._error import GenkitError
@@ -68,16 +68,20 @@ ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 
-class ModelConfigDict(TypedDict, total=False):
-    """Common knobs for dict-literal autocomplete on config={...}."""
+class ModelConfigDict(TypedDict, extra_items=Any, total=False):
+    """Common knobs for dict-literal autocomplete on ``config={...}``.
 
-    version: str
-    temperature: float
-    max_output_tokens: int
-    top_k: int
-    top_p: float
-    stop_sequences: Sequence[str]
-    api_key: str
+    ``None`` clears a ModelRef default. Extra keys (provider-specific) stay
+    in the bag and are forwarded.
+    """
+
+    version: str | None
+    temperature: float | None
+    max_output_tokens: float | None
+    top_k: float | None
+    top_p: float | None
+    stop_sequences: Sequence[str] | None
+    api_key: str | None
 
 
 # TypeVars for generic types

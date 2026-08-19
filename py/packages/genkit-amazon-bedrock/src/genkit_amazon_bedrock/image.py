@@ -38,14 +38,13 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     Part,
     Role,
     TextPart,
 )
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit.plugin_api import ActionRunContext, GenkitError, ModelConfig
 from genkit_amazon_bedrock.embedders import InvokeModelTransport
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error

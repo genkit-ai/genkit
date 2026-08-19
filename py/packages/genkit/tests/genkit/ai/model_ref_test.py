@@ -5,7 +5,10 @@
 
 """Unit tests for ModelRef and model_ref()."""
 
+import ast
+import importlib
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
@@ -13,6 +16,14 @@ from pydantic import BaseModel
 from genkit._core._error import GenkitError
 from genkit.model import ModelConfigDict, ModelInfo, ModelRef, Supports, model_ref
 from genkit.plugin_api import ModelConfig
+
+
+def _from_import(module: str, name: str) -> object:
+    """``from module import name`` — ImportError if the name is gone."""
+    try:
+        return getattr(importlib.import_module(module), name)
+    except AttributeError as exc:
+        raise ImportError(f'cannot import name {name!r} from {module!r}') from exc
 
 
 class CustomConfig(BaseModel):
@@ -170,7 +181,7 @@ def test_model_config_dict_accepts_common_knobs() -> None:
     """ModelConfigDict is the typed shape for config={...} literals."""
     config: ModelConfigDict = {
         'temperature': 0.5,
-        'max_output_tokens': 256,
+        'max_output_tokens': 256.0,
         'top_k': 40,
         'top_p': 0.9,
         'stop_sequences': ['END'],
@@ -179,7 +190,49 @@ def test_model_config_dict_accepts_common_knobs() -> None:
     }
 
     assert config['temperature'] == 0.5
-    assert config['max_output_tokens'] == 256
+    assert config['max_output_tokens'] == 256.0
+
+
+def test_model_config_dict_accepts_none_clear() -> None:
+    """None on a common knob is a valid literal (clears a ModelRef default)."""
+    config: ModelConfigDict = {'temperature': None}
+
+    assert config['temperature'] is None
+
+
+def test_public_config_import_contract() -> None:
+    """App code gets ModelConfigDict; ModelConfig lives on plugin_api."""
+    from genkit import ModelConfigDict as VeneerModelConfigDict, PromptGenerateOptions
+    from genkit.plugin_api import ModelConfig as PluginModelConfig
+
+    assert VeneerModelConfigDict is ModelConfigDict
+    assert PluginModelConfig is ModelConfig
+
+    opts: PromptGenerateOptions = {'config': {'temperature': None, 'banana': True}}
+    assert opts['config'] == {'temperature': None, 'banana': True}
+
+    with pytest.raises(ImportError, match='ModelConfig'):
+        _from_import('genkit', 'ModelConfig')
+    with pytest.raises(ImportError, match='ModelConfig'):
+        _from_import('genkit.model', 'ModelConfig')
+
+
+def test_in_tree_sources_do_not_import_model_config_from_veneer() -> None:
+    """Plugin packages take ModelConfig from plugin_api, not genkit / genkit.model."""
+    packages = Path(__file__).resolve().parents[4]
+    forbidden = {('genkit', 'ModelConfig'), ('genkit.model', 'ModelConfig')}
+    offenders: list[str] = []
+    for path in packages.rglob('*.py'):
+        if path.resolve() == Path(__file__).resolve():
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+            for alias in node.names:
+                if (node.module, alias.name) in forbidden:
+                    offenders.append(f'{path.relative_to(packages)}:{node.lineno}')
+    assert offenders == []
 
 
 def test_model_ref_isolates_caller_config_and_info() -> None:

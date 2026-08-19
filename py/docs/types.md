@@ -84,7 +84,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.ModelResponseChunk
 
-::: genkit.ModelConfig
+::: genkit.ModelConfigDict
 
 ::: genkit.ModelInfo
 
@@ -136,7 +136,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.model.ModelRef
 
-::: genkit.model.ModelConfig
+::: genkit.model.ModelConfigDict
 
 ::: genkit.model.Message
 
@@ -175,6 +175,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 ::: genkit.plugin_api.AdjustingTraceExporter
 
 ::: genkit.plugin_api.RedactedSpan
+
+::: genkit.plugin_api.ModelConfig
 
 ::: genkit.plugin_api.ModelRef
 

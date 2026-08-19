@@ -21,7 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit import ModelConfig
+from genkit.plugin_api import ModelConfig
 
 DEFAULT_MAX_RETRIES = 3
 # Socket read timeout: the gap botocore tolerates between two reads, which

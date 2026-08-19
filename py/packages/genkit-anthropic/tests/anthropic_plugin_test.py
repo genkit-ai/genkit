@@ -40,7 +40,6 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit.plugin_api import ModelConfig
 
 
 def test_anthropic_name() -> None:

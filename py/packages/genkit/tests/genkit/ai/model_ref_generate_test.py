@@ -191,6 +191,27 @@ async def test_define_prompt_with_model_ref(ai_with_echo: tuple[Genkit, EchoMode
 
 
 @pytest.mark.asyncio
+async def test_define_prompt_dict_none_clear_and_extra(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """define_prompt dicts accept None-clears and extra keys the same as generate()."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+
+    prompt = ai.define_prompt(
+        name='echoPrompt',
+        model=ref,
+        prompt='Hello',
+        config={'temperature': None, 'banana': True},
+    )
+    await prompt()
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') is None
+    assert _config_value(echo.last_request.config, 'banana') is True
+
+
+@pytest.mark.asyncio
 async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
     """generate_operation applies the ref's version and config, not just the name."""
     expected_operation = Operation(

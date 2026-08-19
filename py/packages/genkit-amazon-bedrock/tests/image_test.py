@@ -29,14 +29,13 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     Part,
     Role,
     TextPart,
 )
-from genkit.plugin_api import ActionRunContext, GenkitError, to_json_schema
+from genkit.plugin_api import ActionRunContext, GenkitError, ModelConfig, to_json_schema
 
 TITAN_IMAGE = 'amazon.titan-image-generator-v1'
 NOVA_CANVAS = 'amazon.nova-canvas-v1:0'
