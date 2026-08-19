@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -74,5 +75,84 @@ func TestPromptStateReflectsLatestCustom(t *testing.T) {
 func TestPromptStateNilWithoutSession(t *testing.T) {
 	if got := base.PromptStateFromContext(context.Background()); got != nil {
 		t.Errorf("PromptStateFromContext() = %#v, want nil", got)
+	}
+}
+
+func TestSnapshotStatus_Terminal(t *testing.T) {
+	cases := []struct {
+		status SnapshotStatus
+		want   bool
+	}{
+		{SnapshotStatusPending, false},
+		{SnapshotStatusCompleted, true},
+		{SnapshotStatusAborted, true},
+		{SnapshotStatusFailed, true},
+		{SnapshotStatusExpired, true},
+		// Empty counts as completed, matching the documented default.
+		{SnapshotStatus(""), true},
+	}
+	for _, tc := range cases {
+		if got := tc.status.Terminal(); got != tc.want {
+			t.Errorf("SnapshotStatus(%q).Terminal() = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestSessionState_LastModelMessage(t *testing.T) {
+	toolOnly := &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
+		ai.NewToolRequestPart(&ai.ToolRequest{Name: "search"}),
+	}}
+
+	cases := []struct {
+		name     string
+		messages []*ai.Message
+		want     string // "" means nil expected
+	}{
+		{name: "empty history"},
+		{name: "no model messages", messages: []*ai.Message{ai.NewUserTextMessage("hi")}},
+		{
+			name: "latest text-bearing model message wins",
+			messages: []*ai.Message{
+				ai.NewUserTextMessage("q1"),
+				ai.NewModelTextMessage("a1"),
+				ai.NewUserTextMessage("q2"),
+				ai.NewModelTextMessage("a2"),
+			},
+			want: "a2",
+		},
+		{
+			name: "tool-request-only tip is skipped",
+			messages: []*ai.Message{
+				ai.NewModelTextMessage("spoken answer"),
+				ai.NewUserTextMessage("follow-up"),
+				toolOnly,
+			},
+			want: "spoken answer",
+		},
+		{
+			name:     "only tool requests",
+			messages: []*ai.Message{toolOnly},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &SessionState[any]{Messages: tc.messages}
+			got := state.LastModelMessage()
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("LastModelMessage() = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Text() != tc.want {
+				t.Fatalf("LastModelMessage().Text() = %v, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A nil receiver (e.g. a pending snapshot's nil state) is tolerated.
+	var nilState *SessionState[any]
+	if got := nilState.LastModelMessage(); got != nil {
+		t.Fatalf("nil receiver LastModelMessage() = %+v, want nil", got)
 	}
 }
