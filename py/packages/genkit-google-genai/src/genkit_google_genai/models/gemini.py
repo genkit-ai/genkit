@@ -36,7 +36,7 @@ from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
-from google.genai.errors import ClientError
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
 
 from genkit import (
@@ -56,10 +56,7 @@ from genkit import (
     ToolDefinition,
 )
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
-from genkit.plugin_api import (
-    ActionRunContext,
-    StatusName,
-)
+from genkit.plugin_api import ActionRunContext, wrap_http_error
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -1446,27 +1443,12 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
+        except APIError as e:
+            code = e.code if isinstance(e.code, int) else 0
+            raise wrap_http_error(e, status_code=code, message=e.message or 'Unknown error') from e
         except Exception as e:
-            # Catch any other exceptions and provide a clear error message
-            # This helps debug issues like authentication errors that might not be ClientError
+            # Auth and other SDK failures are not APIError — still fail the
+            # generate so the caller is not left with a partial reply.
             import logging
 
             logger = logging.getLogger(__name__)
@@ -1546,24 +1528,9 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
+        except APIError as e:
+            code = e.code if isinstance(e.code, int) else 0
+            raise wrap_http_error(e, status_code=code, message=e.message or 'Unknown error') from e
 
         accumulated_content: list[Part] = []
         finish_reason = FinishReason.UNKNOWN

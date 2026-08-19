@@ -55,7 +55,7 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.model import get_basic_usage_stats
-from genkit.plugin_api import ActionRunContext, StatusName
+from genkit.plugin_api import ActionRunContext, StatusName, from_http_code
 from genkit_anthropic.config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
 from genkit_anthropic.model_info import get_model_info
 from genkit_anthropic.utils import (
@@ -87,15 +87,7 @@ class _ModelDumpable(Protocol):
         ...
 
 
-_ANTHROPIC_STATUS_MAP: dict[int, StatusName] = {
-    400: 'INVALID_ARGUMENT',
-    401: 'UNAUTHENTICATED',
-    403: 'PERMISSION_DENIED',
-    429: 'RESOURCE_EXHAUSTED',
-    500: 'INTERNAL',
-    503: 'UNAVAILABLE',
-    529: 'UNAVAILABLE',
-}
+_ANTHROPIC_OVERLOADED = 529
 
 
 def _parse_retry_after_ms(value: str) -> float | None:
@@ -126,9 +118,21 @@ def _parse_retry_after_ms(value: str) -> float | None:
 
 
 def _from_anthropic_error(error: APIError) -> GenkitError:
-    """Convert an Anthropic SDK error to its Genkit equivalent."""
+    """Convert an Anthropic SDK error to its Genkit equivalent.
+
+    The callable wire shows ``error.message`` as-is. Anthropic also sends a
+    retry-after header, and 529 means the service is overloaded — retry
+    should treat that like a 503.
+    """
     status_code = getattr(error, 'status_code', None)
-    status = _ANTHROPIC_STATUS_MAP.get(status_code, 'UNKNOWN') if isinstance(status_code, int) else 'UNKNOWN'
+    if not isinstance(status_code, int):
+        status: StatusName = 'UNKNOWN'
+    elif status_code == _ANTHROPIC_OVERLOADED:
+        # Anthropic uses 529 for "overloaded" — treat it like a 503 so retry
+        # can wait and try again.
+        status = 'UNAVAILABLE'
+    else:
+        status = from_http_code(status_code)
 
     response = getattr(error, 'response', None)
     retry_after_header = response.headers.get('retry-after') if response is not None else None
