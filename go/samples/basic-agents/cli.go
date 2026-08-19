@@ -820,39 +820,19 @@ func summarizeLatest[State any](ctx context.Context, a *aix.Agent[State], sessio
 		shortID(latest.SnapshotID), latest.Status, msgs, when), ansiDim)
 }
 
-// waitForFinalize subscribes to a snapshot's status and blocks until it
-// transitions out of pending. The returned snapshot is the final one (or
-// nil if it disappeared). OnSnapshotStatusChange yields the current
-// status first, so a snapshot that finalized just before the
-// subscription is observed immediately.
+// waitForFinalize blocks until a snapshot leaves pending and returns the final
+// one, or nil if it disappeared while we waited.
 //
-// The status subscription is the optional SnapshotSubscriber capability of
-// the store contract. A store without it cannot stream background progress,
-// so we fall back to reading the snapshot once and returning it as-is.
+// WaitForSnapshot does the waiting, so the CLI does not care how the store it
+// was given observes the change: the agent subscribes where the store can push
+// and re-reads otherwise, and either way a worker that stopped heartbeating
+// ends the wait as expired rather than leaving it hanging.
 func waitForFinalize[State any](ctx context.Context, a *aix.Agent[State], snapshotID string) (*aix.SessionSnapshot[State], error) {
-	store := a.Store()
-	subscriber, ok := store.(aix.SnapshotSubscriber)
-	if !ok {
-		return store.GetSnapshot(ctx, snapshotID)
+	final, err := a.WaitForSnapshot(ctx, snapshotID)
+	if errors.Is(err, aix.ErrSnapshotNotFound) {
+		return nil, nil
 	}
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	statusCh := subscriber.OnSnapshotStatusChange(subCtx, snapshotID)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case status, ok := <-statusCh:
-			if !ok {
-				// Subscription closed (e.g. snapshot deleted under us).
-				return store.GetSnapshot(ctx, snapshotID)
-			}
-			if status == aix.SnapshotStatusPending {
-				continue
-			}
-			return store.GetSnapshot(ctx, snapshotID)
-		}
-	}
+	return final, err
 }
 
 // printHistory replays prior turns in the format the live REPL uses, so a
