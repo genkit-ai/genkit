@@ -21,7 +21,6 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go/option"
 )
@@ -102,21 +101,11 @@ func (m *Meta) Init(ctx context.Context) []api.Action {
 	actions := m.openAICompatible.Init(ctx)
 
 	for model, modelOpts := range supportedModels {
-		if action, ok := m.DefineModel(model, modelOpts).(api.Action); ok {
+		if action, ok := m.openAICompatible.DefineModel(provider, model, modelOpts).(api.Action); ok {
 			actions = append(actions, action)
 		}
 	}
 	return actions
-}
-
-// Model returns a registered Meta model.
-func (m *Meta) Model(g *genkit.Genkit, id string) ai.Model {
-	return m.openAICompatible.Model(g, api.NewName(provider, id))
-}
-
-// DefineModel registers a Meta model, including models not in the built-in list.
-func (m *Meta) DefineModel(id string, opts ai.ModelOptions) ai.Model {
-	return m.openAICompatible.DefineModel(provider, id, opts)
 }
 
 // ListActions lists models exposed by the configured Meta endpoint.
