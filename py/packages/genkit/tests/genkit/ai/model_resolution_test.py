@@ -205,7 +205,7 @@ def test_normalize_config_restores_excluded_fields() -> None:
 
 
 def test_normalize_config_passes_through_camel_case_keys() -> None:
-    """Dict keys stay as written; the plugin config schema decides spelling."""
+    """Dump does not fold. A dict's keys stay as written."""
     assert normalize_config(config={'maxOutputTokens': 100}) == {'maxOutputTokens': 100}
 
 
@@ -335,6 +335,18 @@ def test_resolve_call_model_string_path_omits_none() -> None:
     assert resolved.config['top_k'] == 40
 
 
+def test_resolve_call_model_string_path_does_not_fold() -> None:
+    """A name has no schema, so camel keys are not rewritten."""
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'echo')
+    resolved = resolve_call_model(
+        model='echo',
+        config={'maxOutputTokens': 5},
+        registry=registry,
+    )
+    assert resolved.config == {'maxOutputTokens': 5}
+
+
 def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None:
     """An explicit name is a different model; constructor knobs stay off it."""
     registry = Registry()
@@ -392,11 +404,6 @@ def test_fold_config_aliases_renames_to_field_name() -> None:
     assert fold_config_aliases(config={'maxOutputTokens': 5}, schema=ModelConfig) == {'max_output_tokens': 5}
 
 
-def test_normalize_config_keeps_dict_keys() -> None:
-    """Dump does not fold; dict keys stay as written."""
-    assert normalize_config(config={'maxOutputTokens': 5}) == {'maxOutputTokens': 5}
-
-
 def test_fold_config_aliases_unknown_keys_pass_through() -> None:
     """Fold is a rename, not validation — extras keep their spelling."""
     assert fold_config_aliases(
@@ -448,24 +455,61 @@ def test_resolve_model_ref_alias_none_clears_field() -> None:
 
 
 def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
-    """thinkingConfig folds onto thinking_config and replaces the whole bag."""
+    """thinkingConfig is the thinking_config slot. The call's bag replaces it whole.
+
+    ``thinking_level`` and ``include_thoughts`` from the ref are gone. Inner
+    keys stay as written — fold does not walk into the nested dict.
+    """
     ref = model_ref(
         'm',
         config_schema=AliasedNestedConfig,
-        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1}),
+        config=AliasedNestedConfig(
+            thinking_config={
+                'include_thoughts': True,
+                'thinking_budget': 1024,
+                'thinking_level': 'low',
+            }
+        ),
     )
     resolved = resolve_model_ref(model=ref, config={'thinkingConfig': {'thinkingBudget': 256}})
     assert resolved.config == {'thinking_config': {'thinkingBudget': 256}}
 
 
+def test_resolve_model_ref_alias_none_clears_nested_bag() -> None:
+    """thinkingConfig=None clears the whole thinking_config slot."""
+    ref = model_ref(
+        'm',
+        config_schema=AliasedNestedConfig,
+        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1024, 'thinking_level': 'low'}),
+    )
+    resolved = resolve_model_ref(model=ref, config={'thinkingConfig': None})
+    assert 'thinking_config' not in resolved.config
+    assert 'thinkingConfig' not in resolved.config
+
+
+def test_resolve_model_ref_does_not_fold_inner_keys() -> None:
+    """Both spellings inside a nested bag stay. Only the outer key folds."""
+    ref = model_ref('m', config_schema=AliasedNestedConfig)
+    resolved = resolve_model_ref(
+        model=ref,
+        config={'thinkingConfig': {'thinking_budget': 1, 'thinkingBudget': 256}},
+    )
+    assert resolved.config == {'thinking_config': {'thinking_budget': 1, 'thinkingBudget': 256}}
+
+
 def test_resolve_model_ref_both_spellings_last_write_wins() -> None:
     """Both keys in one dict fold onto one field; later key wins."""
     ref = model_ref('m', config_schema=ModelConfig)
-    resolved = resolve_model_ref(
+    camel_last = resolve_model_ref(
         model=ref,
         config={'max_output_tokens': 1, 'maxOutputTokens': 5},
     )
-    assert resolved.config == {'max_output_tokens': 5}
+    snake_last = resolve_model_ref(
+        model=ref,
+        config={'maxOutputTokens': 5, 'max_output_tokens': 1},
+    )
+    assert camel_last.config == {'max_output_tokens': 5}
+    assert snake_last.config == {'max_output_tokens': 1}
 
 
 def test_get_request_api_key_reads_camel_dict() -> None:
