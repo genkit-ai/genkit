@@ -21,7 +21,14 @@ from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._constants import GENKIT_CLIENT_HEADER, GENKIT_VERSION
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError, StatusCodes, StatusName, get_callable_json
+from genkit._core._error import (
+    GenkitError,
+    StatusCodes,
+    StatusName,
+    from_http_code,
+    get_callable_json,
+    wrap_http_error,
+)
 from genkit._core._http_client import get_cached_client
 from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
@@ -65,6 +72,8 @@ __all__ = [
     'StatusCodes',
     'StatusName',
     'GenkitError',
+    'from_http_code',
+    'wrap_http_error',
     # HTTP / version stamping
     'GENKIT_CLIENT_HEADER',
     'GENKIT_VERSION',

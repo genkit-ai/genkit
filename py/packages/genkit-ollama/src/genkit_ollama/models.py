@@ -93,6 +93,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -110,7 +111,7 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.model import get_basic_usage_stats
-from genkit.plugin_api import ActionRunContext, get_cached_client
+from genkit.plugin_api import ActionRunContext, get_cached_client, wrap_http_error
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,
@@ -250,6 +251,24 @@ class OllamaModel:
             streaming=self.is_streaming_request(ctx=ctx),
         )
 
+        try:
+            return await self._generate_classified(request=request, ctx=ctx, client=client, content=content)
+        except ollama_api.ResponseError as e:
+            code = getattr(e, 'status_code', None)
+            if isinstance(code, int):
+                raise wrap_http_error(e, status_code=code) from e
+            raise
+        except ValueError as e:
+            raise GenkitError(status='INVALID_ARGUMENT', message=str(e), cause=e) from e
+
+    async def _generate_classified(
+        self,
+        *,
+        request: ModelRequest,
+        ctx: ActionRunContext | None,
+        client: ollama_api.AsyncClient | None,
+        content: list[Part],
+    ) -> ModelResponse:
         if self.model_definition.api_type == OllamaAPITypes.CHAT:
             api_response = await self._chat_with_ollama(request=request, ctx=ctx, client=client)
             if api_response:

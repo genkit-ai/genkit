@@ -24,6 +24,7 @@ from genkit._core._error import (
     get_callable_json,
     get_error_stack,
     get_http_status,
+    wrap_http_error,
 )
 
 
@@ -123,3 +124,19 @@ def test_get_error_stack() -> None:
     except ValueError as e:
         tb = get_error_stack(e)
         assert tb == ''
+
+
+def test_wrap_http_error_classifies_status() -> None:
+    cause = RuntimeError('bad request')
+    error = wrap_http_error(cause, status_code=400)
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.cause is cause
+    assert error.original_message == 'bad request'
+
+
+def test_wrap_http_error_marks_503_unavailable() -> None:
+    """A 503 must stay retryable — not collapse to INTERNAL."""
+    cause = RuntimeError('overloaded')
+    error = wrap_http_error(cause, status_code=503)
+    assert error.status == 'UNAVAILABLE'
+    assert error.cause is cause

@@ -28,7 +28,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription
 
@@ -52,6 +52,7 @@ from genkit_openai.models.utils import (
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    reraise_openai_error,
 )
 
 # Maps audio response formats to their MIME types.
@@ -333,10 +334,13 @@ class OpenAITTSModel:
         Returns:
             A ModelResponse containing audio media parts.
         """
-        params = _to_tts_params(self._model_name, request)
-        response_format = params.get('response_format', 'mp3')
-        result = await self._client.audio.speech.create(**params)
-        return _to_tts_response(result, response_format)
+        try:
+            params = _to_tts_params(self._model_name, request)
+            response_format = params.get('response_format', 'mp3')
+            result = await self._client.audio.speech.create(**params)
+            return _to_tts_response(result, response_format)
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)
 
 
 class OpenAISTTModel:
@@ -372,12 +376,15 @@ class OpenAISTTModel:
         Returns:
             A ModelResponse containing the transcribed text.
         """
-        params = _to_stt_params(self._model_name, request)
-        result = await self._client.audio.transcriptions.create(
-            **params,
-            stream=False,
-        )
-        # transcriptions.create(stream=False) returns a union of
-        # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
-        # _to_stt_response handles all of these via isinstance/hasattr checks.
-        return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
+        try:
+            params = _to_stt_params(self._model_name, request)
+            result = await self._client.audio.transcriptions.create(
+                **params,
+                stream=False,
+            )
+            # transcriptions.create(stream=False) returns a union of
+            # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
+            # _to_stt_response handles all of these via isinstance/hasattr checks.
+            return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)

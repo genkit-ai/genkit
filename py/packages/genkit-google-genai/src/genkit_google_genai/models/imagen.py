@@ -30,9 +30,11 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -44,7 +46,7 @@ from genkit import (
     Supports,
     TextPart,
 )
-from genkit.plugin_api import ActionRunContext, tracer
+from genkit.plugin_api import ActionRunContext, tracer, wrap_http_error
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -156,7 +158,7 @@ class ImagenModel:
                 if isinstance(part.root, TextPart):
                     prompt.append(part.root.text)
                 else:
-                    raise ValueError('Non-text messages are not supported')
+                    raise GenkitError(status='INVALID_ARGUMENT', message='Non-text messages are not supported')
         return ' '.join(prompt)
 
     async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
@@ -172,7 +174,7 @@ class ImagenModel:
         prompt = self._build_prompt(request)
         config = self._get_config(request)
         if request.tools:
-            raise ValueError('Tools are not supported for this model.')
+            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
         with tracer.start_as_current_span('generate_images') as span:
             span.set_attribute(
@@ -183,7 +185,13 @@ class ImagenModel:
                     'model': self._version,
                 }),
             )
-            response = await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
+            try:
+                response = await self._client.aio.models.generate_images(
+                    model=self._version, prompt=prompt, config=config
+                )
+            except APIError as e:
+                code = e.code if isinstance(e.code, int) else 0
+                raise wrap_http_error(e, status_code=code, message=e.message or str(e)) from e
             span.set_attribute('genkit:output', json.dumps(_to_dict(response), default=str))
 
         content = self._contents_from_response(response)
@@ -204,8 +212,9 @@ class ImagenModel:
             try:
                 cfg = ta.validate_python(request_config)
             except ValidationError as e:
-                raise ValueError(
-                    'The configuration dictionary is invalid. Refer the documentation for available fields'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message='The configuration dictionary is invalid. Refer the documentation for available fields',
                 ) from e
 
         return cfg

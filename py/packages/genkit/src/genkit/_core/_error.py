@@ -87,6 +87,16 @@ _STATUS_CODE_MAP: dict[StatusName, int] = {
     'DATA_LOSS': 500,
 }
 
+# Reverse of _STATUS_CODE_MAP. A few HTTP codes are shared (400, 409, 500);
+# the overlays pick the status retry should treat as the default for that
+# code — a bad request, a conflict abort, an internal failure.
+_HTTP_CODE_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
+_HTTP_CODE_TO_STATUS.update({
+    400: 'INVALID_ARGUMENT',
+    409: 'ABORTED',
+    500: 'INTERNAL',
+})
+
 
 def http_status_code(status: StatusName) -> int:
     """Gets the HTTP status code for a given status name.
@@ -98,6 +108,21 @@ def http_status_code(status: StatusName) -> int:
         The corresponding HTTP status code.
     """
     return _STATUS_CODE_MAP[status]
+
+
+def from_http_code(code: int) -> StatusName:
+    """Canonical status name for an HTTP status code.
+
+    Any 5xx with no explicit entry falls through to ``INTERNAL``; unmapped
+    4xx codes return ``UNKNOWN``. Plugins wrap provider HTTP errors with this
+    so retry can skip a 400 without also skipping a 503.
+    """
+    mapped = _HTTP_CODE_TO_STATUS.get(code)
+    if mapped is not None:
+        return mapped
+    if code >= 500:
+        return 'INTERNAL'
+    return 'UNKNOWN'
 
 
 class Status(BaseModel):
@@ -256,6 +281,19 @@ class GenkitError(Exception):
             code=StatusCodes[self.status].value,
             message=f'{self.original_message}: {repr(self.cause)}' if self.cause else self.original_message,
         )
+
+
+def wrap_http_error(error: Exception, *, status_code: int, message: str | None = None) -> GenkitError:
+    """Classify a provider HTTP error so retry can skip a 400 without retrying a 503.
+
+    Status only — attach ``response_metadata`` yourself if the provider sent
+    a retry-after delay.
+    """
+    return GenkitError(
+        status=from_http_code(status_code),
+        message=message if message is not None else str(error),
+        cause=error,
+    )
 
 
 class PublicError(GenkitError):

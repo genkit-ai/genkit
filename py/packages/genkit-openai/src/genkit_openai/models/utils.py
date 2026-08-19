@@ -21,9 +21,12 @@ import base64
 import json
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
+
+from openai import APIStatusError
 
 from genkit import (
+    GenkitError,
     MediaPart,
     Message,
     ModelRequest,
@@ -35,6 +38,19 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit.plugin_api import wrap_http_error
+
+
+def reraise_openai_error(error: Exception) -> NoReturn:
+    """Re-raise an OpenAI HTTP or request-shaping error as a classified GenkitError.
+
+    Transport failures pass through so retry can still try again.
+    """
+    if isinstance(error, APIStatusError):
+        raise wrap_http_error(error, status_code=error.status_code) from error
+    if isinstance(error, ValueError):
+        raise GenkitError(status='INVALID_ARGUMENT', message=str(error), cause=error) from error
+    raise error
 
 
 def strip_markdown_fences(text: str) -> str:
