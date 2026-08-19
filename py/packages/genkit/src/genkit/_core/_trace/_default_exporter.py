@@ -34,8 +34,9 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
-from opentelemetry.trace import SpanContext
+from pydantic import BaseModel, Field
 
+from genkit._core._base import GenkitModel
 from genkit._core._compat import override
 from genkit._core._environment import is_dev_environment
 from genkit._core._logger import get_logger
@@ -45,7 +46,54 @@ from ._realtime_processor import RealtimeSpanProcessor
 
 logger = get_logger(__name__)
 
-INSTRUMENTATION = {'name': 'genkit-tracer', 'version': 'v1'}
+
+class SpanStatus(GenkitModel):
+    code: int
+    message: str | None = None
+
+
+class EventAnnotation(GenkitModel):
+    description: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimeEvent(GenkitModel):
+    time: float
+    annotation: EventAnnotation
+
+
+class TimeEvents(GenkitModel):
+    time_event: list[TimeEvent] = Field(default_factory=list)
+
+
+class InstrumentationLibrary(GenkitModel):
+    name: str
+    version: str | None = None
+
+
+class SpanData(GenkitModel):
+    span_id: str
+    trace_id: str
+    start_time: float
+    end_time: float
+    attributes: dict[str, Any]
+    display_name: str
+    span_kind: str
+    instrumentation_library: InstrumentationLibrary
+    time_events: TimeEvents
+    parent_span_id: str | None = None
+    status: SpanStatus | None = None
+
+
+class TraceData(GenkitModel):
+    trace_id: str
+    spans: dict[str, SpanData]
+    display_name: str | None = None
+    start_time: float | None = None
+    end_time: float | None = None
+
+
+INSTRUMENTATION = InstrumentationLibrary(name='genkit-tracer', version='v1')
 TRACE_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 # Five minutes is long enough for a slow local Dev UI and short enough that a
 # wedged collector eventually gets a Failed to save trace line.
@@ -95,130 +143,133 @@ def _otel_event_attributes_to_json(attrs: object | None) -> dict[str, Any]:
     return out
 
 
-def _ensure_exception_message_for_dev_ui(span_entry: dict[str, Any]) -> None:
-    r"""Ensure exception timeEvents carry exception.message for Dev UI / evaluate.ts.
+def ensure_exception_message(*, span: SpanData) -> None:
+    """Dev UI reads the first exception event's message and shows "Error" if it's missing.
 
-    TraceData SpanStatusSchema uses `message` (not OTel's `description`). Dev UI and
-    evaluate.ts read the first `exception` timeEvent's `exception.message` and fall
-    back to the literal "Error" if missing. Synthesize from status.message or
-    the error attr when events are empty or incomplete.
+    Status uses ``message``, not OTel's ``description``. When the span failed
+    but nobody recorded an exception event, copy the status or error attr onto
+    one so the trace still names what broke.
     """
-    st = span_entry.get('status')
-    if not st or st.get('code') != 2:
+    status = span.status
+    if status is None or status.code != 2:
         return
-    attrs = span_entry.get('attributes') or {}
-    msg = st.get('message') or attrs.get(Attr.ERROR)
-    if not msg:
+    message = status.message or span.attributes.get(Attr.ERROR)
+    if not message:
         return
-    if not st.get('message'):
-        span_entry.setdefault('status', {})['message'] = msg
-    te = span_entry.get('timeEvents')
-    events = (te or {}).get('timeEvent') or []
-    for ev in events:
-        ann = ev.get('annotation') or {}
-        if ann.get('description') != 'exception':
+    if not status.message:
+        status.message = message
+    for event in span.time_events.time_event:
+        if event.annotation.description != 'exception':
             continue
-        ann_attrs = ann.get('attributes') or {}
-        if ann_attrs.get('exception.message'):
+        if event.annotation.attributes.get('exception.message'):
             return
-        ann_attrs['exception.message'] = msg
-        ann['attributes'] = ann_attrs
-        ev['annotation'] = ann
+        event.annotation.attributes['exception.message'] = message
         return
-    if not te:
-        span_entry['timeEvents'] = {'timeEvent': []}
-        te = span_entry['timeEvents']
-    te.setdefault('timeEvent', []).append({
-        'time': span_entry.get('endTime', 0),
-        'annotation': {
-            'description': 'exception',
-            'attributes': {
-                'exception.type': 'Error',
-                'exception.message': msg,
-            },
-        },
-    })
+    span.time_events.time_event.append(
+        TimeEvent(
+            time=span.end_time,
+            annotation=EventAnnotation(
+                description='exception',
+                attributes={
+                    'exception.type': 'Error',
+                    'exception.message': message,
+                },
+            ),
+        )
+    )
 
 
-def _events_to_time_events(span: ReadableSpan) -> dict[str, Any]:
-    """Build Genkit trace `timeEvents` from OTel span events (matches JS TraceServerExporter).
-
-    Always includes `timeEvent` (possibly empty) so the payload matches JS and
-    `_ensure_exception_message_for_dev_ui` can append a synthetic exception event.
-    """
+def events_to_time_events(*, span: ReadableSpan) -> TimeEvents:
+    """Copy OTel events onto the collector document so Dev UI can show them."""
     events = getattr(span, 'events', None) or ()
-    time_event: list[dict[str, Any]] = []
+    time_event: list[TimeEvent] = []
     for ev in events:
         name = getattr(ev, 'name', None) or 'event'
         ts = getattr(ev, 'timestamp', None)
         raw_attrs = getattr(ev, 'attributes', None) or {}
-        time_event.append({
-            'time': _ns_to_ms(ts),
-            'annotation': {
-                'attributes': _otel_event_attributes_to_json(raw_attrs),
-                'description': name,
-            },
-        })
-    return {'timeEvent': time_event}
+        time_event.append(
+            TimeEvent(
+                time=_ns_to_ms(ts),
+                annotation=EventAnnotation(
+                    description=name,
+                    attributes=_otel_event_attributes_to_json(raw_attrs),
+                ),
+            )
+        )
+    return TimeEvents(time_event=time_event)
 
 
-def extract_span_data(span: ReadableSpan) -> dict[str, Any]:
-    """Convert ReadableSpan to Genkit telemetry server JSON format."""
-    ctx = cast(SpanContext, span.context)
+def extract_span_data(span: ReadableSpan) -> TraceData:
+    """Convert a finished span into the collector document.
+
+    Requires a span context. Encoding happens later on this same thread via
+    ``encode_trace`` so a value the collector cannot store fails in
+    ``export()``, not after generate has moved on.
+    """
+    ctx = span.context
+    if ctx is None:
+        raise TypeError('span context is required')
     trace_id = format(ctx.trace_id, '032x')
     span_id = format(ctx.span_id, '016x')
     parent_id = format(span.parent.span_id, '016x') if span.parent else None
     start = _ns_to_ms(span.start_time)
     end = _ns_to_ms(span.end_time)
 
-    span_entry: dict[str, Any] = {
-        'spanId': span_id,
-        'traceId': trace_id,
-        'startTime': start,
-        'endTime': end,
-        'attributes': dict(span.attributes or {}),
-        'displayName': span.name,
-        'spanKind': trace_api.SpanKind(span.kind).name,
-        'instrumentationLibrary': INSTRUMENTATION,
-        'timeEvents': _events_to_time_events(span),
-    }
-    if parent_id:
-        span_entry['parentSpanId'] = parent_id
+    status: SpanStatus | None = None
     if span.status:
-        code = trace_api.StatusCode(span.status.status_code).value
-        desc = span.status.description
-        # SpanStatusSchema only has code + message; omit nulls (Zod rejects null for optional strings).
-        status_obj: dict[str, Any] = {'code': code}
-        if desc is not None:
-            status_obj['message'] = desc
-        span_entry['status'] = status_obj
-    _ensure_exception_message_for_dev_ui(span_entry)
+        status = SpanStatus(
+            code=trace_api.StatusCode(span.status.status_code).value,
+            message=span.status.description,
+        )
 
-    result: dict[str, Any] = {'traceId': trace_id, 'spans': {span_id: span_entry}}
+    entry = SpanData(
+        span_id=span_id,
+        trace_id=trace_id,
+        start_time=start,
+        end_time=end,
+        attributes=dict(span.attributes or {}),
+        display_name=span.name,
+        span_kind=trace_api.SpanKind(span.kind).name,
+        instrumentation_library=INSTRUMENTATION,
+        time_events=events_to_time_events(span=span),
+        parent_span_id=parent_id,
+        status=status,
+    )
+    ensure_exception_message(span=entry)
+
+    result = TraceData(trace_id=trace_id, spans={span_id: entry})
     if not span.parent:
-        result['displayName'] = span.name
-        result['startTime'] = start
-        result['endTime'] = end
-
+        result.display_name = span.name
+        result.start_time = start
+        result.end_time = end
     return result
 
 
-def build_trace_payload(spans: Sequence[ReadableSpan]) -> dict[str, Any]:
+def build_trace_payload(*, spans: Sequence[ReadableSpan]) -> TraceData:
     """One collector document for a batch of spans that share a trace id.
 
-    Production uses BatchSpanProcessor, which can flush a whole flow at once.
-    The store keys documents by trace id, so one POST per id is enough.
+    Production flushes a whole flow at once. The store keys documents by
+    trace id, so one POST per id is enough.
     """
-    payload: dict[str, Any] = {'spans': {}}
+    payload = TraceData(trace_id='', spans={})
     for span in spans:
         part = extract_span_data(span)
-        payload['traceId'] = part['traceId']
-        payload['spans'].update(part['spans'])
-        if 'displayName' in part:
-            payload['displayName'] = part['displayName']
-            payload['startTime'] = part['startTime']
-            payload['endTime'] = part['endTime']
+        payload.trace_id = part.trace_id
+        payload.spans.update(part.spans)
+        if part.display_name is not None:
+            payload.display_name = part.display_name
+            payload.start_time = part.start_time
+            payload.end_time = part.end_time
     return payload
+
+
+def encode_trace(*, trace: TraceData) -> str:
+    """JSON for the collector, with no fallback serializer.
+
+    A bytes or object attribute must raise here so export() is loud.
+    GenkitModel.model_dump would stringify those and hide the bug.
+    """
+    return json.dumps(BaseModel.model_dump(trace, by_alias=True, exclude_none=True))
 
 
 DEFAULT_SPAN_FILTERS: dict[str, str] = {
@@ -320,7 +371,6 @@ class TraceServerExporter(SpanExporter):
         for span in spans:
             ctx = span.context
             if ctx is None:
-                extract_span_data(span)
                 raise TypeError('span context is required')
             trace_id = format(ctx.trace_id, '032x')
             if trace_id in filtered_trace_ids:
@@ -329,7 +379,7 @@ class TraceServerExporter(SpanExporter):
 
         jobs: list[tuple[str, str]] = []
         for trace_id, group in by_trace.items():
-            jobs.append((trace_id, json.dumps(build_trace_payload(group))))
+            jobs.append((trace_id, encode_trace(trace=build_trace_payload(spans=group))))
 
         if jobs:
             self.queue.put(jobs)
