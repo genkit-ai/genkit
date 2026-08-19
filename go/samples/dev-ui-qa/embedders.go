@@ -36,9 +36,9 @@ func registerEmbedderCases(g *genkit.Genkit) {
 		"The Dev UI lets you run flows, tools, and retrievers locally.",
 		"Retrievers return ranked documents for a query.",
 	}
-	genkit.DefineRetriever(g, "staticRetriever",
+	genkit.DefineRetrieverAction(g, "staticRetriever",
 		&ai.RetrieverOptions{Label: "Static QA retriever"},
-		func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
+		func(ctx context.Context, req *ai.RetrieverRequest, _ struct{}) (*ai.RetrieverResponse, error) {
 			query := strings.ToLower(req.Query.Content[0].Text)
 			res := &ai.RetrieverResponse{}
 			for i, text := range corpus {

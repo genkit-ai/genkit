@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -63,14 +64,7 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 	// wraps this one on purpose.
 	genkit.DefineTool(g, "shoutTool", "Uppercases the input and appends an exclamation mark",
 		func(ctx *ai.ToolContext, input string) (string, error) {
-			out := ""
-			for _, r := range input {
-				if 'a' <= r && r <= 'z' {
-					r -= 'a' - 'A'
-				}
-				out += string(r)
-			}
-			return out + "!", nil
+			return strings.ToUpper(input) + "!", nil
 		},
 	)
 }
