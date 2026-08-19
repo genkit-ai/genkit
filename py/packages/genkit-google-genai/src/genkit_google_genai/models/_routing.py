@@ -14,10 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bucket a model id by the config schema its action would validate.
+"""Bucket a model id so resolve(MODEL) does not default it to Gemini.
 
-resolve(MODEL) and the family constructors share this table so a name
-that cannot run as a generate model never quietly becomes Gemini.
+Families with no generate path here resolve to nothing: Veo is
+background-only, embedders are a different action kind, and retired or
+unimplemented image ids must not fall through. Lyria, Deep Research, and
+Antigravity fail closed until those families have a generate action here.
 """
 
 from genkit_google_genai.models.gemini import (
@@ -45,6 +47,18 @@ STRIP_PREFIXES = (
     'vertexai/',
 )
 
+# Families with no MODEL generate path on this plugin. Constructor
+# refusal is a different table — TTS, native image, Gemma, and Imagen
+# still resolve as MODEL.
+UNROUTABLE_FAMILIES = frozenset({
+    'embedder',
+    'unsupported',
+    'veo',
+    'lyria',
+    'deep-research',
+    'antigravity',
+})
+
 
 def strip_ref_prefixes(name: str) -> str:
     """Reduce a pasted name to the bare model id."""
@@ -59,46 +73,38 @@ def strip_ref_prefixes(name: str) -> str:
     return local
 
 
-def classify_family(local: str) -> str:
-    """Bucket a bare model id by the config schema its action would validate.
+def classify_family(name: str) -> str:
+    """Bucket a model id by the last path segment.
 
     The embedding check runs first because embedder ids can carry a family
     prefix (``gemini-embedding-001``) and must never mint a generate ref.
     """
-    lower = local.lower()
-    if 'embedding' in lower:
+    leaf = name.split('/')[-1].lower()
+    if 'embedding' in leaf:
         return 'embedder'
-    if is_unsupported_image_model_name(lower):
+    if is_unsupported_image_model_name(leaf):
         return 'unsupported'
-    if is_veo_model(lower):
+    if is_veo_model(leaf):
         return 'veo'
-    if is_lyria_model(lower):
+    if is_lyria_model(leaf):
         return 'lyria'
-    if lower.startswith(('deep-research-', 'antigravity-')):
-        return 'interactions'
-    if is_imagen_model_name(lower):
+    if leaf.startswith('deep-research-'):
+        return 'deep-research'
+    if leaf.startswith('antigravity-'):
+        return 'antigravity'
+    if is_imagen_model_name(leaf):
         return 'imagen'
-    if is_tts_model(lower):
+    if is_tts_model(leaf):
         return 'tts'
-    if is_image_model(lower):
+    if is_image_model(leaf):
         return 'image'
-    if is_gemma_model(lower):
+    if is_gemma_model(leaf):
         return 'gemma'
-    if lower.startswith('gemini-'):
+    if leaf.startswith('gemini-'):
         return 'gemini'
     return 'unknown'
 
 
 def is_unroutable_model_id(name: str) -> bool:
-    """True for ids that resolve(MODEL) must refuse instead of defaulting to Gemini.
-
-    Same closed set the constructors enforce, so a name a constructor
-    refuses can never quietly become a Gemini action at resolve time.
-    """
-    return classify_family(strip_ref_prefixes(name)) in {
-        'embedder',
-        'unsupported',
-        'veo',
-        'lyria',
-        'interactions',
-    }
+    """True for ids that resolve(MODEL) must refuse instead of defaulting to Gemini."""
+    return classify_family(name) in UNROUTABLE_FAMILIES

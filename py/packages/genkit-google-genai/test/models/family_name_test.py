@@ -17,7 +17,7 @@
 """Family name checks for Google model routing."""
 
 import pytest
-from genkit_google_genai.models._routing import is_unroutable_model_id
+from genkit_google_genai.models._routing import classify_family, is_unroutable_model_id
 from genkit_google_genai.models.gemini import (
     is_gemini_model,
     is_gemma_model,
@@ -58,6 +58,8 @@ def test_is_imagen_model_name(name: str, expected: bool) -> None:
         ('imagegeneration@006', True),
         ('imagegeneration@005', True),
         ('vertexai/imagegeneration@006', True),
+        ('imagetext@001', True),
+        ('vertexai/imagetext@001', True),
         ('virtual-try-on-001', True),
         ('vertexai/virtual-try-on-001', True),
         ('imagen-3.0-generate-002', False),
@@ -170,14 +172,38 @@ def test_is_lyria_model(name: str, expected: bool) -> None:
         'antigravity-code-1',
         'gemini-embedding-001',
         'imagegeneration@006',
+        'imagetext@001',
         'virtual-try-on-001',
         'veo-3.0-generate-001',
         'googleai/lyria-002',
+        'models/deep-research-pro-preview',
+        'googleai/deep-research-pro-preview',
+        'publishers/google/models/deep-research-pro-preview',
+        'publishers/google/models/antigravity-preview-05-2026',
+        'publishers/google/models/imagetext@001',
     ],
 )
 def test_unroutable_ids_fail_closed(name: str) -> None:
     """Ids with no generate path here must not default to Gemini."""
     assert is_unroutable_model_id(name) is True
+
+
+@pytest.mark.parametrize(
+    ('name', 'family'),
+    [
+        ('deep-research-pro-preview', 'deep-research'),
+        ('models/deep-research-pro-preview', 'deep-research'),
+        ('googleai/deep-research-pro-preview', 'deep-research'),
+        ('publishers/google/models/deep-research-pro-preview', 'deep-research'),
+        ('antigravity-preview-05-2026', 'antigravity'),
+        ('publishers/google/models/antigravity-preview-05-2026', 'antigravity'),
+        ('lyria-002', 'lyria'),
+        ('imagetext@001', 'unsupported'),
+    ],
+)
+def test_classify_family_uses_leaf_name(name: str, family: str) -> None:
+    """Deep Research and Antigravity are separate buckets, keyed off the leaf."""
+    assert classify_family(name) == family
 
 
 @pytest.mark.parametrize(
