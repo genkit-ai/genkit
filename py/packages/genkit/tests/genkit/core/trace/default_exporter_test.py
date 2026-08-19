@@ -408,7 +408,7 @@ def test_export_encode_bug_is_loud() -> None:
     mock_span = create_mock_span()
     mock_span.context = None
 
-    with pytest.raises((AttributeError, TypeError)), capture_logs() as entries:
+    with pytest.raises(TypeError, match='span context is required'), capture_logs() as entries:
         exporter.export([mock_span])
 
     assert exporter.last_result == SpanExportResult.SUCCESS
@@ -429,6 +429,14 @@ def test_export_non_json_attribute_is_loud() -> None:
 # =============================================================================
 
 
+def test_extract_span_data_requires_context() -> None:
+    """A span without context is a TypeError, not an AttributeError inside format()."""
+    mock_span = create_mock_span()
+    mock_span.context = None
+    with pytest.raises(TypeError, match='span context is required'):
+        extract_span_data(mock_span)
+
+
 def test_extract_span_data_basic_fields() -> None:
     """Test that extract_span_data extracts basic span fields correctly."""
     mock_span = create_mock_span(
@@ -444,16 +452,15 @@ def test_extract_span_data_basic_fields() -> None:
     trace_id_hex = format(12345, '032x')
     span_id_hex = format(67890, '016x')
 
-    assert data['traceId'] == trace_id_hex
-    assert 'spans' in data
-    assert span_id_hex in data['spans']
+    assert data.trace_id == trace_id_hex
+    assert span_id_hex in data.spans
 
-    span_info = data['spans'][span_id_hex]
-    assert span_info['spanId'] == span_id_hex
-    assert span_info['traceId'] == trace_id_hex
-    assert span_info['displayName'] == 'test-span'
-    assert span_info['startTime'] == 1000.0  # Converted to milliseconds
-    assert span_info['endTime'] == 2000.0  # Converted to milliseconds
+    span_info = data.spans[span_id_hex]
+    assert span_info.span_id == span_id_hex
+    assert span_info.trace_id == trace_id_hex
+    assert span_info.display_name == 'test-span'
+    assert span_info.start_time == 1000.0
+    assert span_info.end_time == 2000.0
 
 
 def test_extract_span_data_with_attributes() -> None:
@@ -463,8 +470,8 @@ def test_extract_span_data_with_attributes() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert span_info['attributes'] == {'key1': 'value1', 'key2': 123}
+    span_info = data.spans[span_id_hex]
+    assert span_info.attributes == {'key1': 'value1', 'key2': 123}
 
 
 def test_extract_span_data_with_parent_span() -> None:
@@ -479,8 +486,8 @@ def test_extract_span_data_with_parent_span() -> None:
 
     span_id_hex = format(67890, '016x')
     parent_span_id_hex = format(11111, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert span_info['parentSpanId'] == parent_span_id_hex
+    span_info = data.spans[span_id_hex]
+    assert span_info.parent_span_id == parent_span_id_hex
 
 
 def test_extract_span_data_without_parent_span() -> None:
@@ -491,11 +498,9 @@ def test_extract_span_data_without_parent_span() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert 'parentSpanId' not in span_info
-
-    # Root span should have displayName, startTime, endTime at top level
-    assert data['displayName'] == 'test-span'
+    span_info = data.spans[span_id_hex]
+    assert span_info.parent_span_id is None
+    assert data.display_name == 'test-span'
 
 
 def test_extract_span_data_includes_status() -> None:
@@ -505,10 +510,10 @@ def test_extract_span_data_includes_status() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert 'status' in span_info
-    assert span_info['status']['code'] == trace_api.StatusCode.OK.value  # OK status is 1
-    assert 'message' not in span_info['status']
+    span_info = data.spans[span_id_hex]
+    assert span_info.status is not None
+    assert span_info.status.code == trace_api.StatusCode.OK.value
+    assert span_info.status.message is None
 
 
 def test_extract_span_data_includes_instrumentation_library() -> None:
@@ -518,11 +523,9 @@ def test_extract_span_data_includes_instrumentation_library() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert span_info['instrumentationLibrary'] == {
-        'name': 'genkit-tracer',
-        'version': 'v1',
-    }
+    span_info = data.spans[span_id_hex]
+    assert span_info.instrumentation_library.name == 'genkit-tracer'
+    assert span_info.instrumentation_library.version == 'v1'
 
 
 def test_extract_span_data_handles_none_times() -> None:
@@ -532,9 +535,9 @@ def test_extract_span_data_handles_none_times() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert span_info['startTime'] == 0
-    assert span_info['endTime'] == 0
+    span_info = data.spans[span_id_hex]
+    assert span_info.start_time == 0
+    assert span_info.end_time == 0
 
 
 def test_extract_span_data_ensures_exception_message_from_status_when_events_empty() -> None:
@@ -548,12 +551,13 @@ def test_extract_span_data_ensures_exception_message_from_status_when_events_emp
 
     data = extract_span_data(mock_span)
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert span_info['status']['code'] == 2
-    assert span_info['status']['message'] == 'patched from status only'
-    te = span_info['timeEvents']['timeEvent']
-    assert len(te) == 1
-    assert te[0]['annotation']['attributes']['exception.message'] == 'patched from status only'
+    span_info = data.spans[span_id_hex]
+    assert span_info.status is not None
+    assert span_info.status.code == 2
+    assert span_info.status.message == 'patched from status only'
+    events = span_info.time_events.time_event
+    assert len(events) == 1
+    assert events[0].annotation.attributes['exception.message'] == 'patched from status only'
 
 
 def test_extract_span_data_includes_exception_time_events() -> None:
@@ -573,13 +577,12 @@ def test_extract_span_data_includes_exception_time_events() -> None:
     data = extract_span_data(mock_span)
 
     span_id_hex = format(67890, '016x')
-    span_info = data['spans'][span_id_hex]
-    assert 'timeEvents' in span_info
-    te = span_info['timeEvents']['timeEvent']
-    assert len(te) == 1
-    assert te[0]['annotation']['description'] == 'exception'
-    assert te[0]['annotation']['attributes']['exception.message'] == exc_msg
-    assert te[0]['time'] == 1500.0
+    span_info = data.spans[span_id_hex]
+    events = span_info.time_events.time_event
+    assert len(events) == 1
+    assert events[0].annotation.description == 'exception'
+    assert events[0].annotation.attributes['exception.message'] == exc_msg
+    assert events[0].time == 1500.0
 
 
 # =============================================================================
