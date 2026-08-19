@@ -74,7 +74,11 @@ def family_model_ref(
     config: ConfigT | None,
 ) -> ModelRef[ConfigT]:
     """Strip, gate against the closed family set, then stamp this plugin's namespace."""
-    local = strip_ref_prefixes(str(name))
+    # str(None) is 'None', and gemini_model allows unknown ids, so a
+    # non-string would mint a real-looking ref instead of failing here.
+    if not isinstance(name, str):
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.{method}: model name must be a string.')
+    local = strip_ref_prefixes(name)
     if not local:
         raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.{method}: model name is required.')
     actual = classify_family(local)
@@ -100,7 +104,11 @@ def family_embedder_ref(
     This deliberately returns an EmbedderRef, not a ModelRef: an embedder id
     must never end up in generate(model=...).
     """
-    local = strip_ref_prefixes(str(name))
+    if not isinstance(name, str):
+        raise GenkitError(
+            status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name must be a string.'
+        )
+    local = strip_ref_prefixes(name)
     if not local:
         raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name is required.')
     actual = classify_family(local)

@@ -91,9 +91,10 @@ class TestHappyPaths:
         ref = GoogleAI.gemini_model('gemini-2.5-flash', config=config)
         assert ref.config == config
 
-    def test_unknown_id_allowed_on_gemini_model_only(self) -> None:
+    def test_unknown_id_allowed_on_gemini_model_and_embedding(self) -> None:
         """A brand-new release must work before this plugin learns its name."""
         assert GoogleAI.gemini_model('totally-new-model').name == 'googleai/totally-new-model'
+        assert GoogleAI.embedding('totally-new-embedder').name == 'googleai/totally-new-embedder'
 
         with pytest.raises(GenkitError):
             GoogleAI.imagen_model('totally-new-model')
@@ -122,6 +123,29 @@ class TestStripThenPrefix:
         with pytest.raises(GenkitError) as exc_info:
             GoogleAI.gemini_model('googleai/')
         assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'model name is required' in str(exc_info.value)
+
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.embedding('googleai/')
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'embedder name is required' in str(exc_info.value)
+
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.embedding('')
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'embedder name is required' in str(exc_info.value)
+
+    def test_non_string_name_is_rejected(self) -> None:
+        """A non-string must not become a name via str() (None → 'None')."""
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.gemini_model(None)  # type: ignore[arg-type]
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'must be a string' in str(exc_info.value)
+
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.embedding(123)  # type: ignore[arg-type]
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'must be a string' in str(exc_info.value)
 
 
 class TestClosedRejectSet:
@@ -158,6 +182,16 @@ class TestClosedRejectSet:
             VertexAI.imagen_model('gemini-2.5-flash')
         with pytest.raises(GenkitError, match=r'embedding'):
             GoogleAI.gemini_model('gemini-embedding-001')
+        with pytest.raises(GenkitError, match=r'background model and has no ref constructor'):
+            GoogleAI.gemini_model('veo-3.0-generate-001')
+        with pytest.raises(GenkitError, match=r'has no ref constructor'):
+            GoogleAI.gemini_model('lyria-002')
+        with pytest.raises(GenkitError, match=r'is not a supported model'):
+            GoogleAI.gemini_model('imagegeneration@006')
+        with pytest.raises(GenkitError, match=r'is not a supported model'):
+            GoogleAI.gemini_model('virtual-try-on-001')
+        with pytest.raises(GenkitError, match=r'is not a imagen model'):
+            GoogleAI.imagen_model('totally-new-model')
 
     def test_family_constructors_reject_other_families(self) -> None:
         """Non-gemini constructors take only their own family ids."""
