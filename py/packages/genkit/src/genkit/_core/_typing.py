@@ -583,7 +583,7 @@ class OutputConfig(GenkitModel):
         alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
     )
     format: str | None = None
-    json_schema: dict[str, Any] | None = Field(default=None, alias='schema')
+    json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
     constrained: bool | None = None
     content_type: str | None = None
 

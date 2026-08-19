@@ -34,7 +34,7 @@ class TextFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(format='text')
+            output_format='text'
         )
     """
 

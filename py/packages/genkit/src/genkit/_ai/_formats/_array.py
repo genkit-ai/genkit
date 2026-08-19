@@ -44,16 +44,14 @@ class ArrayFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='array',
-                schema={
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {'name': {'type': 'string'}}
-                    }
+            output_format='array',
+            output_schema={
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {'name': {'type': 'string'}}
                 }
-            )
+            }
         )
     """
 
