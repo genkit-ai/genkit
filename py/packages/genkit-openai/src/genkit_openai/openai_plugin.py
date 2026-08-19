@@ -64,6 +64,32 @@ def open_ai_name(name: str) -> str:
     return f'openai/{name}'
 
 
+# Prefixes people paste from action keys, Dev UI traces, or another plugin's
+# samples. Stripping them first means this constructor decides the namespace.
+_STRIP_PREFIXES = (
+    'background-model/',
+    'model/',
+    'models/',
+    'embedders/',
+    'googleai/',
+    'vertexai/',
+    'openai/',
+)
+
+
+def _strip_ref_prefixes(name: str) -> str:
+    """Reduce a pasted name to the bare model id."""
+    local = name
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _STRIP_PREFIXES:
+            if local.startswith(prefix):
+                local = local[len(prefix) :]
+                changed = True
+    return local
+
+
 class _ModelType(enum.Enum):
     """Classification of OpenAI model types based on name patterns."""
 
@@ -208,7 +234,7 @@ class OpenAI(Plugin):
         request shapes, so binding OpenAIConfig to them would let chat-only
         keys like frequency_penalty ride into the wrong endpoint.
         """
-        local = str(name).removeprefix('openai/')
+        local = _strip_ref_prefixes(str(name))
         if not local:
             raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
         model_type = _classify_model(local)

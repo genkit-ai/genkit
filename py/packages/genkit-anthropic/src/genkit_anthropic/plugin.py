@@ -40,6 +40,31 @@ logger = structlog.get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
 
+# Prefixes people paste from action keys, Dev UI traces, or another plugin's
+# samples. Stripping them first means this constructor decides the namespace.
+_STRIP_PREFIXES = (
+    'background-model/',
+    'model/',
+    'models/',
+    'embedders/',
+    'googleai/',
+    'vertexai/',
+    f'{ANTHROPIC_PLUGIN_NAME}/',
+)
+
+
+def _strip_ref_prefixes(name: str) -> str:
+    """Reduce a pasted name to the bare model id."""
+    local = name
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _STRIP_PREFIXES:
+            if local.startswith(prefix):
+                local = local[len(prefix) :]
+                changed = True
+    return local
+
 
 def anthropic_name(name: str) -> str:
     """Get Anthropic model name.
@@ -71,7 +96,7 @@ class Anthropic(Plugin):
         plugin learns their names; every Anthropic generate model takes
         AnthropicConfig.
         """
-        local = str(name).removeprefix(f'{ANTHROPIC_PLUGIN_NAME}/')
+        local = _strip_ref_prefixes(str(name))
         if not local:
             raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
         return model_ref(local, config_schema=AnthropicConfig, namespace=ANTHROPIC_PLUGIN_NAME, config=config)

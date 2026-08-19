@@ -48,9 +48,24 @@ def test_gpt_model_strips_own_prefix() -> None:
     assert OpenAI.gpt_model('openai/gpt-4o').name == 'openai/gpt-4o'
 
 
-def test_gpt_model_keeps_foreign_prefix() -> None:
-    """A Vertex or Azure paste is a different name, not remapped onto OpenAI."""
-    assert OpenAI.gpt_model('vertexai/gpt-4o').name == 'openai/vertexai/gpt-4o'
+@pytest.mark.parametrize(
+    'pasted',
+    [
+        'openai/gpt-4o',
+        'vertexai/gpt-4o',
+        'googleai/gpt-4o',
+        'model/gpt-4o',
+        'models/gpt-4o',
+        'models/openai/gpt-4o',
+    ],
+)
+def test_gpt_model_strips_pasted_prefixes(pasted: str) -> None:
+    """Every pasted prefix form lands on this plugin, not the pasted one."""
+    assert OpenAI.gpt_model(pasted).name == 'openai/gpt-4o'
+
+
+def test_gpt_model_keeps_unlisted_foreign_prefix() -> None:
+    """Prefixes this loop does not know stay in the id (azure is not stripped)."""
     assert OpenAI.gpt_model('azure/gpt-4o').name == 'openai/azure/gpt-4o'
 
 
