@@ -29,8 +29,29 @@ with whatever subset you have:
 | `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`)    | anthropic        |
 
 The missing-key Init panic (ANT-52, GGA-48) is itself an audit case; to
-reproduce it, bypass the conditional init by constructing the plugin with no
-key in the environment.
+reproduce it, set `DEV_UI_QA_FORCE_PLUGINS=1`, which registers all three
+plugins unconditionally (see Tier A below).
+
+## Tier A repros (no API keys)
+
+Tier A covers everything that works keyless: local registrations only. With
+no credentials set, `genkit start -- go run .` logs one "skipping" line per
+plugin and the Dev UI should list Flows(4), Prompts(1), Tools(1),
+Retrievers(1), Models(0).
+
+| Check | Steps | Expect |
+| ----- | ----- | ------ |
+| Discovery | Open the Dev UI, check the sidebar counts | Flows `smoke`, `streamingCounter`, `loggingFlow`, `panicFlow`; prompt `qa-joke`; tool `shoutTool`; retriever `staticRetriever`; no models/embedders |
+| Streaming | Run `streamingCounter` with input `5` and "Stream response" checked | One chunk every 400ms, then final `streamed 5 chunks` |
+| Log streaming | Run `loggingFlow` with any string input; look for its log lines in the UI, then `curl http://127.0.0.1:4033/api/traces/<traceId>/logs` | Three records at INFO/WARN/ERROR, span-correlated, on the telemetry server; whether the UI renders them is the finding |
+| Trace spans | Open the trace for any run (`View trace`, or `/traces/<id>`) | Root flow span with Input, Output, and Attributes sections |
+| Flow panic | Run `panicFlow` with any input | Panic message `DEV_UI_QA_PANIC_MARKER: ...` in the terminal; record what the UI shows and whether the process survived |
+| Init panic | `DEV_UI_QA_FORCE_PLUGINS=1 genkit start -- go run .` with no keys | Go panic `Google AI requires setting GEMINI_API_KEY...` at Init; record what happens to the CLI and the Dev UI |
+
+Tool and retriever runs are direct: `shoutTool` uppercases its string input;
+`staticRetriever` substring-matches the query against a three-document corpus
+(try `{"content":[{"text":"dev ui"}]}`). `qa-joke` renders its template
+keyless but fails generation with "model is required" - also a useful row.
 
 ## Recording results
 
