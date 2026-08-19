@@ -126,7 +126,51 @@ func TestAgentsValidation(t *testing.T) {
 	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: "ok"}}}).New(ctx); err != nil {
 		t.Errorf("unexpected error for a valid config: %v", err)
 	}
+
+	// Generated tool names are validated as a set at New time, so collisions
+	// surface as a config error instead of a generate-time duplicate-tool
+	// rejection of the whole request.
+	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: "dup"}, {Name: "dup"}}}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error for duplicate agent names, got %v", err)
+	}
+	// With a bare prefix, a delegation tool can land exactly on a shared
+	// background-task tool's name.
+	bare := ""
+	collide := &Agents{
+		Agents:     []aix.AgentRef{{Name: "check_background_tasks"}},
+		ToolPrefix: &bare,
+		Async:      true,
+	}
+	if _, err := collide.New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when a delegation tool collides with a background-task tool, got %v", err)
+	}
 }
+
+func TestAgentsBackgroundToolNames(t *testing.T) {
+	// Default and empty prefixes keep the well-known bare names; an explicit
+	// non-empty prefix namespaces them so two Async instances can coexist.
+	cases := []struct {
+		name      string
+		prefix    *string
+		wantCheck string
+		wantWait  string
+	}{
+		{name: "nil prefix", prefix: nil, wantCheck: "check_background_tasks", wantWait: "wait_for_background_tasks"},
+		{name: "empty prefix", prefix: ptr(""), wantCheck: "check_background_tasks", wantWait: "wait_for_background_tasks"},
+		{name: "custom prefix", prefix: ptr("research"), wantCheck: "research_check_background_tasks", wantWait: "research_wait_for_background_tasks"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Agents{ToolPrefix: tc.prefix}
+			check, wait := a.backgroundToolNames()
+			if check != tc.wantCheck || wait != tc.wantWait {
+				t.Errorf("backgroundToolNames() = %q, %q; want %q, %q", check, wait, tc.wantCheck, tc.wantWait)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func TestAgentsInjectsSystemPrompt(t *testing.T) {
 	g := newTestGenkit(t)

@@ -30,15 +30,17 @@ package exp
 // ("<agent>:<snapshotId>") is self-contained and rides in the delegation tool
 // result, so it is recorded in the orchestrator's conversation history; a
 // re-instantiated orchestrator resumes tracking from the IDs in its history.
-// Status reads go through the sub-agent's [aix.AgentHandle] (resolved with
-// [genkitx.LookupAgent], the sanctioned path for third-party middleware),
-// whose GetSnapshot dispatches the agent's getSnapshot companion action.
+// Status reads go through the sub-agent's [aix.AgentHandle] (resolved via
+// resolveAgent, i.e. genkit/exp.LookupAgent, the sanctioned path for
+// third-party middleware), whose GetSnapshot dispatches the agent's
+// getSnapshot companion action.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -47,7 +49,6 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
 // Names of the shared background-task tools added when [Agents.Async] is set.
@@ -64,10 +65,11 @@ var backgroundTaskPollInterval = 5 * time.Second
 // so a long silent wait stays visible in the logs without a line per poll.
 const waitProgressInterval = 60 * time.Second
 
-// transientReadRetries is how many consecutive failed reads of one task the
-// wait tool absorbs (retrying on the poll interval) before it gives up on that
-// task and surfaces the read error. It rides out isolated store blips while
-// keeping the wait bounded on a persistently broken store.
+// transientReadRetries is the number of consecutive failed reads of one task
+// after which the wait tool gives up on it and surfaces the read error: the
+// preceding failures are absorbed by retrying on the poll interval. It rides
+// out isolated store blips while keeping the wait bounded on a persistently
+// broken store. Reads cut short by the wait's own deadline do not count.
 const transientReadRetries = 3
 
 // taskStatusUnknown is the report status for a task that could not be resolved
@@ -95,7 +97,7 @@ type backgroundTasksInput struct {
 // waitBackgroundTasksInput is the input of the wait tool.
 type waitBackgroundTasksInput struct {
 	TaskIDs        []string `json:"taskIds" jsonschema_description:"Task IDs returned by background delegations (form \"<agent>:<snapshotId>\")."`
-	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema_description:"Maximum seconds to wait before returning the current statuses. 0 or omitted waits until every task settles; a negative value returns the current statuses immediately."`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema_description:"Maximum seconds to wait before returning the current statuses. 0 or omitted waits until every task settles; a negative value returns the current statuses immediately. Values too large to represent are treated as unbounded."`
 }
 
 // backgroundTaskReport is the per-task entry returned by the check and wait
@@ -163,6 +165,20 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		return delegationResult{Response: "Error: " + err.Error()}, nil
 	}
 
+	// Pre-flight detach capability from the agent's own metadata: Abortable
+	// is derived at definition time from exactly the store conditions the
+	// runtime's detach check enforces, so a genkit-defined agent that cannot
+	// detach is rejected here deterministically, without a wasted invocation
+	// and without the hedged post-hoc wording below (which remains only for
+	// metadata-less agents).
+	if meta := agent.Metadata(); meta != nil && !meta.Abortable {
+		a.releaseDelegation(st)
+		logger.Warn(ctx, "background launch refused, agent cannot detach", "agent", ref.Name)
+		return delegationResult{Response: fmt.Sprintf(
+			"Error calling agent %q: this agent lacks a session store that supports background work, so it cannot run tasks in the background. Delegate to it without \"background\" instead.",
+			ref.Name)}, nil
+	}
+
 	out, err := runSubAgent(ctx, agent, task, nil, true)
 	if err != nil {
 		a.releaseDelegation(st)
@@ -173,6 +189,7 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 	switch out.FinishReason {
 	case aix.AgentFinishReasonDetached:
 		taskID := formatTaskID(ref.Name, out.SnapshotID)
+		checkName, waitName := a.backgroundToolNames()
 		logger.Debug(ctx, "background task started",
 			"agent", ref.Name, "taskId", taskID, "sessionId", out.SessionID)
 		return delegationResult{
@@ -180,7 +197,7 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 			Status: string(aix.SnapshotStatusPending),
 			Response: fmt.Sprintf(
 				"Background task %s started for agent %q. Collect the result with %s or %s.",
-				taskID, ref.Name, checkBackgroundTasksToolName, waitBackgroundTasksToolName),
+				taskID, ref.Name, checkName, waitName),
 		}, nil
 	case aix.AgentFinishReasonFailed:
 		// A failed launch is a pre-detach rejection: with detach on the first
@@ -192,7 +209,10 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		// error was decoded from the wire, which keeps only the status name
 		// (never the sentinel), and the status is the runtime's general
 		// precondition category, so the hint is phrased conditionally rather
-		// than asserting the cause.
+		// than asserting the cause. It applies only to metadata-less agents:
+		// a genkit-defined agent that cannot detach was already rejected by
+		// the pre-flight above, so its other FAILED_PRECONDITIONs (e.g. from
+		// the agent fn itself) must not carry a misleading capability hint.
 		msg := subAgentFailureMessage(out.Error)
 		errStatus := ""
 		if out.Error != nil {
@@ -200,7 +220,7 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		}
 		logger.Warn(ctx, "background launch rejected",
 			"agent", ref.Name, "status", errStatus, "error", msg)
-		if out.Error != nil && out.Error.Status == status.FailedPrecondition {
+		if out.Error != nil && out.Error.Status == status.FailedPrecondition && agent.Metadata() == nil {
 			msg += " If this agent lacks a session store that supports background work, delegate to it without \"background\" instead."
 		}
 		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %s", ref.Name, msg)}, nil
@@ -214,53 +234,66 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 }
 
 // backgroundTaskTools builds the shared status tools added when [Agents.Async]
-// is set.
-func (a *Agents) backgroundTaskTools() []ai.Tool {
+// is set, named per this configuration (see [Agents.backgroundToolNames]).
+// st carries the per-call cache of terminal reports.
+func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
+	checkName, waitName := a.backgroundToolNames()
 	return []ai.Tool{
-		aix.NewTool(checkBackgroundTasksToolName,
+		aix.NewTool(checkName,
 			"Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.",
-			a.checkBackgroundTasks()),
-		aix.NewTool(waitBackgroundTasksToolName,
+			a.checkBackgroundTasks(st)),
+		aix.NewTool(waitName,
 			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned.",
-			a.waitForBackgroundTasks()),
+			a.waitForBackgroundTasks(st)),
 	}
 }
 
 // checkBackgroundTasks is the non-blocking status tool: one snapshot read per
 // task, no waiting.
-func (a *Agents) checkBackgroundTasks() func(context.Context, backgroundTasksInput) (backgroundTasksResult, error) {
+func (a *Agents) checkBackgroundTasks(st *agentsState) func(context.Context, backgroundTasksInput) (backgroundTasksResult, error) {
 	return func(ctx context.Context, in backgroundTasksInput) (backgroundTasksResult, error) {
 		if len(in.TaskIDs) == 0 {
 			return backgroundTasksResult{Note: noTaskIDsNote}, nil
 		}
-		return a.reportTasks(ctx, in.TaskIDs), nil
+		return a.reportTasks(ctx, st, in.TaskIDs), nil
 	}
 }
 
 // waitForBackgroundTasks is the blocking status tool: it polls the tasks'
 // snapshots until every task settles, the optional timeout elapses, or the
 // calling context ends. A settled task's report is cached for the rest of the
-// call (no snapshot re-reads or artifact re-merges on later ticks), transient
-// read errors are retried for transientReadRetries consecutive polls before
-// the error is surfaced, and each read is bounded by the timeout so a hung
-// store read cannot outlive it. A timeout returns the current statuses rather
-// than an error so the orchestrator can do other work and come back;
-// cancellation of the calling context propagates as an error.
-func (a *Agents) waitForBackgroundTasks() func(context.Context, waitBackgroundTasksInput) (backgroundTasksResult, error) {
+// call (no snapshot re-reads or artifact re-merges on later ticks), and a
+// transient read failure is retried across polls until it has failed
+// transientReadRetries consecutive times, at which point the read error is
+// surfaced. Each read is additionally bounded to one poll interval, so a hung
+// store read degrades into that retry path instead of stalling the pass (or,
+// on an unbounded wait, the whole tool call); a read cut short by the wait's
+// own deadline is not a store failure and does not count. A timeout returns
+// the current statuses rather than an error so the orchestrator can do other
+// work and come back; cancellation of the calling context propagates as an
+// error.
+func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, waitBackgroundTasksInput) (backgroundTasksResult, error) {
 	return func(ctx context.Context, in waitBackgroundTasksInput) (backgroundTasksResult, error) {
 		if len(in.TaskIDs) == 0 {
 			return backgroundTasksResult{Note: noTaskIDsNote}, nil
 		}
 		// A negative timeout means "don't wait": report the current statuses.
 		if in.TimeoutSeconds < 0 {
-			return a.reportTasks(ctx, in.TaskIDs), nil
+			return a.reportTasks(ctx, st, in.TaskIDs), nil
 		}
 
 		waitCtx := ctx
 		if in.TimeoutSeconds > 0 {
-			var cancel context.CancelFunc
-			waitCtx, cancel = context.WithTimeout(ctx, time.Duration(in.TimeoutSeconds)*time.Second)
-			defer cancel()
+			// A model-supplied value large enough to overflow the nanosecond
+			// multiplication (about 292 years) is effectively unbounded, the
+			// same as 0; without the clamp it wraps negative and the wait
+			// would return instantly with an already-expired context.
+			const maxWaitSeconds = math.MaxInt64 / int64(time.Second)
+			if int64(in.TimeoutSeconds) <= maxWaitSeconds {
+				var cancel context.CancelFunc
+				waitCtx, cancel = context.WithTimeout(ctx, time.Duration(in.TimeoutSeconds)*time.Second)
+				defer cancel()
+			}
 		}
 
 		start := time.Now()
@@ -289,6 +322,11 @@ func (a *Agents) waitForBackgroundTasks() func(context.Context, waitBackgroundTa
 			return res
 		}
 
+		// Each read is bounded to one poll interval (floored so shortened
+		// test intervals do not starve healthy reads), keeping a hung store
+		// from freezing an unbounded wait.
+		readTimeout := max(backgroundTaskPollInterval, time.Second)
+
 		ticker := time.NewTicker(backgroundTaskPollInterval)
 		defer ticker.Stop()
 		lastProgress := start
@@ -298,11 +336,24 @@ func (a *Agents) waitForBackgroundTasks() func(context.Context, waitBackgroundTa
 				if _, ok := settled[id]; ok {
 					continue
 				}
-				// Bounded by waitCtx so a hung read cannot outlive the
-				// timeout; a read the timeout cuts short lands in the
-				// transient branch and lastKnown keeps the prior report.
-				report, transient := a.reportTask(waitCtx, g, id)
+				if waitCtx.Err() != nil {
+					// The wait ended mid-pass; the Done arm below reports
+					// lastKnown for everything still unsettled.
+					waiting = true
+					break
+				}
+				readCtx, cancelRead := context.WithTimeout(waitCtx, readTimeout)
+				report, transient := a.reportTask(readCtx, g, st, id)
+				cancelRead()
 				if transient {
+					if waitCtx.Err() != nil {
+						// The wait itself ended mid-read: not a store
+						// failure, so it does not count against the retry
+						// budget and must not settle the task with a read
+						// error over lastKnown's real status.
+						waiting = true
+						break
+					}
 					if _, ok := lastKnown[id]; !ok {
 						lastKnown[id] = report
 					}
@@ -318,7 +369,10 @@ func (a *Agents) waitForBackgroundTasks() func(context.Context, waitBackgroundTa
 				}
 				lastKnown[id] = report
 				delete(failures, id)
-				if report.Status == string(aix.SnapshotStatusPending) {
+				// taskStatusUnknown deliberately counts as terminal here: it
+				// only arrives after a read failure was classified as a dead
+				// end, so there is nothing left to wait for.
+				if !aix.SnapshotStatus(report.Status).Terminal() {
 					waiting = true
 				} else {
 					settled[id] = report
@@ -363,11 +417,11 @@ func (a *Agents) waitForBackgroundTasks() func(context.Context, waitBackgroundTa
 // reportTasks builds one report per task ID. Failures are isolated per task
 // (an unresolvable ID never fails the whole call), so one bad handle cannot
 // hide the status of the others.
-func (a *Agents) reportTasks(ctx context.Context, taskIDs []string) backgroundTasksResult {
+func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []string) backgroundTasksResult {
 	g := genkit.FromContext(ctx)
 	res := backgroundTasksResult{Tasks: make([]backgroundTaskReport, 0, len(taskIDs))}
 	for _, id := range taskIDs {
-		report, _ := a.reportTask(ctx, g, id)
+		report, _ := a.reportTask(ctx, g, st, id)
 		res.Tasks = append(res.Tasks, report)
 	}
 	return res
@@ -379,7 +433,20 @@ func (a *Agents) reportTasks(ctx context.Context, taskIDs []string) backgroundTa
 // second return reports whether a failed read looked transient (a store or
 // transport error rather than a sentinel-classified dead end); the wait tool
 // retries transient reads a few polls before surfacing them.
-func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, taskID string) (backgroundTaskReport, bool) {
+//
+// Reports for completed, failed, and aborted tasks are cached on st for the
+// rest of the generate call: those rows never change, so a re-check skips the
+// snapshot fetch and artifact re-merge (and cannot clobber a merged artifact
+// the orchestrator has since edited). Pending, expired, and unresolvable
+// reports can still change on their own and are never cached.
+func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsState, taskID string) (backgroundTaskReport, bool) {
+	st.mu.Lock()
+	cached, ok := st.settledReports[taskID]
+	st.mu.Unlock()
+	if ok {
+		return cached, false
+	}
+
 	ref, snapshotID, err := a.resolveTaskID(taskID)
 	if err != nil {
 		logger.Debug(ctx, "background task id did not resolve", "taskId", taskID, "error", err)
@@ -387,7 +454,14 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, taskID string
 	}
 
 	report := backgroundTaskReport{TaskID: taskID, Agent: ref.Name}
-	snap, err := fetchTaskSnapshot(ctx, g, ref.Name, snapshotID)
+	// The handle's GetSnapshot dispatches the getSnapshot companion action,
+	// which applies the runtime's read shaping: a pending row whose heartbeat
+	// went stale is surfaced as expired.
+	agent, err := resolveAgent(g, ref)
+	var snap *aix.SessionSnapshot[json.RawMessage]
+	if err == nil {
+		snap, err = agent.GetSnapshot(ctx, snapshotID)
+	}
 	if err != nil {
 		logger.Debug(ctx, "background task read failed",
 			"taskId", taskID, "agent", ref.Name, "error", err)
@@ -420,13 +494,22 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, taskID string
 			// Same limitation as synchronous delegation: the interrupt cannot
 			// be resumed from here.
 			report.Response = interruptedResponse(ref.Name)
-			return report, false
+			break
 		}
+		// Mirror the synchronous path, whose response is the literal final
+		// message (SessionRunner.Result): the persisted conversation's tip is
+		// that same message, so a delegation reports the same answer whether
+		// it ran in the background or not, rather than walking back to older
+		// text the model spoke mid-tool-loop.
+		var tip *ai.Message
 		var arts []*aix.Artifact
 		if snap.State != nil {
+			if n := len(snap.State.Messages); n > 0 {
+				tip = snap.State.Messages[n-1]
+			}
 			arts = snap.State.Artifacts
 		}
-		report.Response = messageText(snap.State.LastModelMessage())
+		report.Response = messageText(tip)
 		if report.Response == "" {
 			report.Response = "(no response)"
 		}
@@ -446,6 +529,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, taskID string
 	case aix.SnapshotStatusExpired:
 		report.Error = "The background worker stopped reporting progress and is presumed dead. Delegate the task again if the result is still needed."
 	}
+
+	switch snap.Status {
+	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
+		st.mu.Lock()
+		st.settledReports[taskID] = report
+		st.mu.Unlock()
+	}
 	return report, false
 }
 
@@ -459,11 +549,13 @@ func formatTaskID(agentName, snapshotID string) string {
 
 // resolveTaskID parses a task handle by matching it against the configured
 // agents, taking the longest matching name so a configured name containing ':'
-// cannot have its tasks claimed by a shorter configured prefix of it. Snapshot
-// IDs are runtime-minted UUIDs and never contain ':', so the longest configured
-// prefix is always the launching agent. Matching against the configuration also
-// confines the background-task tools to the agents this middleware was
-// configured with.
+// cannot have its tasks claimed by a shorter configured prefix of it. The
+// agent runtime mints the detach pending row's ID itself (a UUID, never
+// containing ':'; see the detach handler in ai/exp), so the longest configured
+// prefix is always the launching agent; anchoring the parse on the finite set
+// of configured names, rather than on the ID's shape, is also what keeps it
+// robust and confines the background-task tools to the agents this middleware
+// was configured with.
 func (a *Agents) resolveTaskID(taskID string) (aix.AgentRef, string, error) {
 	var (
 		best    aix.AgentRef
@@ -480,24 +572,6 @@ func (a *Agents) resolveTaskID(taskID string) (aix.AgentRef, string, error) {
 			"task ID %q does not match any configured agent (expected \"<agent>:<snapshotId>\")", taskID)
 	}
 	return best, taskID[bestLen:], nil
-}
-
-// fetchTaskSnapshot reads the task's snapshot through the sub-agent's handle,
-// whose GetSnapshot dispatches the getSnapshot companion action and so applies
-// the runtime's read shaping: a pending row whose heartbeat went stale is
-// surfaced as expired. The handle classifies the permanent setup gaps itself
-// (an unregistered agent is NOT_FOUND, a storeless one FAILED_PRECONDITION via
-// [aix.ErrSessionStoreNotConfigured]), so callers can tell them apart from a
-// transient read failure.
-func fetchTaskSnapshot(ctx context.Context, g *genkit.Genkit, agentName, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
-	if err := requireGenkit(g); err != nil {
-		return nil, err
-	}
-	agent, err := genkitx.LookupAgent(g, agentName)
-	if err != nil {
-		return nil, err
-	}
-	return agent.GetSnapshot(ctx, snapshotID)
 }
 
 // shortSnapshotID trims a snapshot ID to a compact artifact-namespace

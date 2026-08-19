@@ -160,8 +160,12 @@ type Agents struct {
 	Agents []aix.AgentRef `json:"agents,omitempty" jsonschema_description:"Sub-agents available for delegation. At least one is required."`
 	// ToolPrefix is the prefix for generated delegation tool names. A nil value
 	// defaults to "delegate_to" (tools become delegate_to_<agent>); a pointer to
-	// the empty string uses bare agent names.
-	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names."`
+	// the empty string uses bare agent names. An explicitly set, non-empty
+	// prefix also namespaces the [Agents.Async] background-task tools (e.g.
+	// research_check_background_tasks), so two Async instances with distinct
+	// prefixes can share one generate call. New rejects a configuration whose
+	// generated tool names collide.
+	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the async background-task tools."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
 	MaxDelegations int `json:"maxDelegations,omitempty" jsonschema_description:"Caps the number of sub-agent delegations per generate call, preventing runaway delegation loops. Defaults to 0, which means unlimited."`
@@ -193,9 +197,23 @@ type agentsState struct {
 	// delegations counts delegations made so far, enforcing MaxDelegations and
 	// providing the per-invocation number used to namespace artifacts.
 	delegations int
+	// seq allocates invocation numbers and never decreases, unlike the
+	// delegations cap counter above: a refunded delegation's number must not
+	// be reissued, because under parallel tool calls the reissued number can
+	// belong to a still-running delegation, and two delegations sharing an
+	// invocation ID overwrite each other's artifacts (AddArtifacts replaces
+	// by name).
+	seq int
 	// conversation is the latest request message list, captured each turn for
 	// optional history forwarding.
 	conversation []*ai.Message
+	// settledReports caches terminal background-task reports by task ID for
+	// the rest of the generate call: completed, failed, and aborted rows
+	// never change, so later re-checks skip the snapshot fetch and artifact
+	// re-merge (and cannot clobber a merged artifact the orchestrator has
+	// since edited). Pending, expired, and unresolvable reports are never
+	// cached; those can still change.
+	settledReports map[string]backgroundTaskReport
 }
 
 // New validates the configuration and returns the hooks: a delegation tool per
@@ -214,7 +232,22 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	}
 
 	prefix := a.prefix()
-	st := &agentsState{}
+	st := &agentsState{settledReports: make(map[string]backgroundTaskReport)}
+
+	// Every generated tool name is validated against the set as it is built:
+	// a collision (two agents mapping to one delegation tool name, or a
+	// delegation tool landing on a background-task tool's name) would
+	// otherwise surface only at generate time as a duplicate-tool rejection
+	// of the whole request.
+	names := make(map[string]string, len(a.Agents)+2)
+	claimName := func(name, owner string) error {
+		if prev, ok := names[name]; ok {
+			return status.Errorf(status.ErrInvalidArgument,
+				"agents middleware: tool name %q for %s collides with %s; use a different ToolPrefix or agent name", name, owner, prev)
+		}
+		names[name] = owner
+		return nil
+	}
 
 	tools := make([]ai.Tool, 0, len(a.Agents)+2)
 	for _, ref := range a.Agents {
@@ -223,6 +256,9 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 			desc = fmt.Sprintf("Delegates a task to the %q sub-agent.", ref.Name)
 		}
 		name := makeToolName(prefix, ref.Name)
+		if err := claimName(name, fmt.Sprintf("agent %q", ref.Name)); err != nil {
+			return nil, err
+		}
 		// The async variant carries the extra "background" input flag, so the
 		// two modes need distinct input schemas (tool schemas are static).
 		if a.Async {
@@ -232,7 +268,13 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		}
 	}
 	if a.Async {
-		tools = append(tools, a.backgroundTaskTools()...)
+		checkName, waitName := a.backgroundToolNames()
+		for _, n := range []string{checkName, waitName} {
+			if err := claimName(n, "the background-task tools"); err != nil {
+				return nil, err
+			}
+		}
+		tools = append(tools, a.backgroundTaskTools(st)...)
 	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
@@ -244,7 +286,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		st.conversation = params.Request.Messages
 		st.mu.Unlock()
 
-		instructions := buildAgentsInstructions(genkit.FromContext(ctx), a.Agents, prefix, a.Async)
+		instructions := a.buildInstructions(genkit.FromContext(ctx))
 		params.Request = injectSystemText(params.Request, agentsMarker, instructions)
 		return next(ctx, params)
 	}
@@ -297,7 +339,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Contex
 // delegation tool and the async-enabled variant when the model does not
 // request background execution.
 func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
-	invocationNum, history, ok := a.reserveDelegation(st)
+	invocationNum, conversation, ok := a.reserveDelegation(st)
 	if !ok {
 		logger.Warn(ctx, "delegation refused, limit reached", "agent", ref.Name, "limit", a.MaxDelegations)
 		return delegationLimitResult(a.MaxDelegations), nil
@@ -305,14 +347,17 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 
 	agent, err := resolveAgent(genkit.FromContext(ctx), ref)
 	if err != nil {
+		a.releaseDelegation(st)
 		logger.Warn(ctx, "sub-agent resolution failed", "agent", ref.Name, "error", err)
 		return delegationResult{Response: "Error: " + err.Error()}, nil
 	}
 
 	// History rides in client-managed init state, which server-managed
-	// agents reject; forward it only to client-managed sub-agents.
-	if len(history) > 0 && !isClientManaged(agent) {
-		history = nil
+	// agents reject; forward it only to client-managed sub-agents. The
+	// filtering copy runs outside the state mutex.
+	var history []*ai.Message
+	if isClientManaged(agent) {
+		history = recentTextHistory(conversation, a.HistoryLength)
 	}
 
 	logger.Debug(ctx, "delegating to sub-agent",
@@ -323,7 +368,8 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 		// The agent runtime resolves failures and interrupts gracefully (see
 		// foldDelegationOutput), so this only fires for exceptions outside
 		// that handling (e.g. a rejected init payload). Surface it as tool
-		// output.
+		// output; the slot goes back because no sub-agent work ran.
+		a.releaseDelegation(st)
 		logger.Warn(ctx, "sub-agent call failed", "agent", ref.Name, "error", err)
 		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
 	}
@@ -336,23 +382,28 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 }
 
 // reserveDelegation enforces MaxDelegations and reserves the next delegation's
-// invocation number, atomically, before any work happens. It also snapshots the
-// conversation history for optional forwarding. ok is false when the cap is
-// reached.
-func (a *Agents) reserveDelegation(st *agentsState) (invocationNum int, history []*ai.Message, ok bool) {
+// invocation number, atomically, before any work happens. ok is false when the
+// cap is reached. The returned conversation is the raw captured message list
+// for optional history forwarding: treat it as read-only (the generate hook
+// replaces the slice header wholesale under the mutex; messages are never
+// mutated in place), and filter it outside the lock.
+func (a *Agents) reserveDelegation(st *agentsState) (invocationNum int, conversation []*ai.Message, ok bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if a.MaxDelegations > 0 && st.delegations >= a.MaxDelegations {
 		return 0, nil, false
 	}
 	st.delegations++
-	return st.delegations, recentTextHistory(st.conversation, a.HistoryLength), true
+	st.seq++
+	return st.seq, st.conversation, true
 }
 
-// releaseDelegation returns a reserved slot for a delegation the sub-agent
-// rejected before any work ran, so the cap only counts delegations that did
-// something. Number reuse by a later delegation is harmless: a rejected
-// delegation produced no artifacts under its invocation ID.
+// releaseDelegation returns a reserved cap slot for a delegation that failed
+// before any sub-agent work ran (a resolution failure, a hard call error, or
+// a pre-detach rejection), so the cap only counts delegations that did
+// something. The released slot's invocation number is never reissued (the
+// allocator is the separate seq counter), so a concurrent live delegation
+// cannot end up sharing an artifact namespace with a later one.
 func (a *Agents) releaseDelegation(st *agentsState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -489,6 +540,20 @@ func (a *Agents) prefix() string {
 	return *a.ToolPrefix
 }
 
+// backgroundToolNames returns the names of the shared background-task tools
+// for this configuration. They are the bare well-known names by default and
+// prefixed with an explicitly set [Agents.ToolPrefix], so two Async instances
+// with distinct prefixes can coexist on one generate call without colliding
+// on the shared names (the default delegate_to prefix is a delegation verb,
+// not an instance namespace, so it is deliberately not applied here).
+func (a *Agents) backgroundToolNames() (check, wait string) {
+	if a.ToolPrefix == nil {
+		return checkBackgroundTasksToolName, waitBackgroundTasksToolName
+	}
+	return makeToolName(*a.ToolPrefix, checkBackgroundTasksToolName),
+		makeToolName(*a.ToolPrefix, waitBackgroundTasksToolName)
+}
+
 // strategy resolves the artifact strategy, defaulting to inline.
 func (a *Agents) strategy() ArtifactStrategy {
 	if a.ArtifactStrategy == ArtifactStrategySession {
@@ -506,15 +571,16 @@ func makeToolName(prefix, agentName string) string {
 	return prefix + "_" + agentName
 }
 
-// buildAgentsInstructions renders the <sub-agents> system prompt block. g may be
+// buildInstructions renders the <sub-agents> system prompt block. g may be
 // nil (e.g. outside an agent/Generate context), in which case only configured
-// descriptions are used. With async set, the block also explains background
-// delegation and the background-task tools.
-func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix string, async bool) string {
+// descriptions are used. With [Agents.Async] set, the block also explains
+// background delegation and names this configuration's background-task tools.
+func (a *Agents) buildInstructions(g *genkit.Genkit) string {
+	prefix := a.prefix()
 	var b strings.Builder
 	b.WriteString("<sub-agents>\n")
 	b.WriteString("You can delegate tasks to specialized sub-agents using their delegation tools:\n")
-	for _, ref := range refs {
+	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" && g != nil {
 			desc = discoverDescription(g, ref.Name)
@@ -527,13 +593,14 @@ func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix strin
 	b.WriteString("\n")
 	b.WriteString("When a task is better handled by a specialized agent, delegate it using the ")
 	b.WriteString("appropriate tool. Provide a clear, self-contained task description.\n")
-	if async {
+	if a.Async {
+		checkName, waitName := a.backgroundToolNames()
 		b.WriteString("\n")
 		b.WriteString("Delegations can run in the background: set \"background\": true on a ")
 		b.WriteString("delegation tool call to get a taskId back immediately while the ")
 		b.WriteString("sub-agent keeps working. Continue with other work, then collect ")
-		b.WriteString("results with " + checkBackgroundTasksToolName + " (returns current ")
-		b.WriteString("status without waiting) or " + waitBackgroundTasksToolName + " ")
+		b.WriteString("results with " + checkName + " (returns current ")
+		b.WriteString("status without waiting) or " + waitName + " ")
 		b.WriteString("(blocks until the tasks settle). Background tasks keep running ")
 		b.WriteString("across turns, and task IDs from earlier tool results stay valid: ")
 		b.WriteString("check them before delegating the same work again.\n")
