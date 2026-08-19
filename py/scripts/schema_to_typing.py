@@ -134,23 +134,29 @@ def _models_allowing_extra(schema: dict) -> set[str]:
 
 
 def _typed_map_aliases(defs: dict) -> dict[str, str]:
-    """Inline object schemas with typed scalar ``additionalProperties`` -> Python dict alias.
+    """Object schemas that are only a string-keyed map become a dict alias.
 
-    e.g. ``ReflectionRunActionParams.telemetryLabels``:
-      ``{type: object, additionalProperties: {type: string}}`` -> ``dict[str, str]``.
-
-    Emitting these as type aliases (mirroring ``Metadata`` / ``Custom``) keeps the
-    symbol exported and importable while letting callers pass plain Python dicts —
-    a class with no fields and ``extra='forbid'`` would reject every key on the
-    Dev UI's ``{'genkitx:ignore-trace': 'true'}`` payload.
+    The collector document stores attributes and the spans table as records; a
+    class with no fields and extra='forbid' would drop every key (Dev UI
+    labels, span ids). Scalar maps stay ``dict[str, str]``, open maps become
+    ``dict[str, Any]``, and a ``$ref`` value type becomes ``dict[str, ThatType]``.
     """
 
     result: dict[str, str] = {}
     for name, defn in defs.items():
         if not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
+        if defn.get('properties'):
+            continue
         ap = defn.get('additionalProperties')
+        if ap is True or ap == {}:
+            result[name] = 'dict[str, Any]'
+            continue
         if not isinstance(ap, dict):
+            continue
+        ref = (ap.get('$ref') or '').split('/')[-1]
+        if ref:
+            result[name] = f'dict[str, {_output_name(ref)}]'
             continue
         ap_type = ap.get('type')
         if isinstance(ap_type, str) and ap_type in PRIM:
