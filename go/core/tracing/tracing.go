@@ -421,7 +421,9 @@ func telemetryJSONString(value any) string {
 	if err != nil {
 		return base.JSONString(value)
 	}
-	if !bytes.Contains(raw, []byte("data:")) || !bytes.Contains(raw, []byte(";base64")) {
+	// Most span values do not contain media. Avoid decoding JSON unless the
+	// serialized value contains the distinctive data-URI base64 marker.
+	if !bytes.Contains(raw, []byte("data:")) || !bytes.Contains(raw, []byte(";base64,")) {
 		return string(raw)
 	}
 
