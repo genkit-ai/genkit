@@ -48,6 +48,35 @@ from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
 
 logger = structlog.get_logger(__name__)
 
+# Genkit common fields that are not chat.completions.create() kwargs.
+# stop_sequences is remapped to stop; the rest are peeled off.
+_GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences'})
+
+
+def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
+    """Kwargs for chat.completions.create().
+
+    Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
+    was not set. Everything else on the config, including extras, goes out
+    under the Python field name. ``max_output_tokens`` is not mapped to
+    ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
+    """
+    body: dict[str, Any] = {}
+    for name in type(config).model_fields:
+        if name in _GENKIT_ONLY:
+            continue
+        value = getattr(config, name)
+        if value is not None:
+            body[name] = value
+    extras = config.model_extra
+    if extras:
+        for name, value in extras.items():
+            if value is not None:
+                body[name] = value
+    if 'stop' not in body and config.stop_sequences is not None:
+        body['stop'] = config.stop_sequences
+    return body
+
 
 class OpenAIModel:
     """Handles OpenAI API interactions for the Genkit plugin."""
@@ -279,7 +308,10 @@ class OpenAIModel:
                 # pyrefly: ignore[bad-typed-dict-key] - response_format dict is valid for OpenAI API
                 openai_config['response_format'] = response_format
         if request.config:
-            openai_config.update(**request.config.model_dump(exclude_none=True))
+            config = (
+                request.config if isinstance(request.config, OpenAIConfig) else self.normalize_config(request.config)
+            )
+            openai_config.update(_openai_create_kwargs(config=config))
         return openai_config
 
     async def _generate(self, request: ModelRequest) -> ModelResponse:

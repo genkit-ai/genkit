@@ -17,9 +17,11 @@
 """Tests for the OpenAI.gpt_model typed ref constructor."""
 
 from typing import get_args, get_type_hints
+from unittest.mock import MagicMock
 
 import pytest
 from genkit_openai import KnownGpt, OpenAI, OpenAIConfig, openai_model
+from genkit_openai.models.model import OpenAIModel
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
 
 from genkit import GenkitError
@@ -116,17 +118,31 @@ def test_create_model_action_types_openai_config() -> None:
     assert args and args[0] is OpenAIConfig
 
 
-def test_create_model_action_accepts_camel_case_config() -> None:
-    """A reflection / Dev UI payload can set knobs in camelCase."""
+@pytest.mark.asyncio
+async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
+    """Dev UI camelCase binds, then create() gets OpenAI snake_case names."""
     plugin = OpenAI(api_key='test-key')
     action = plugin._create_model_action('openai/gpt-4o')
     validated = action._validate_input(  # noqa: SLF001
         {
             'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],
-            'config': {'frequencyPenalty': 0.5, 'maxOutputTokens': 256},
+            'config': {
+                'frequencyPenalty': 0.5,
+                'maxOutputTokens': 256,
+                'stopSequences': ['END'],
+                'topP': 0.9,
+                'apiKey': 'should-not-leak',
+            },
         }
     )
     assert validated is not None
-    assert validated.config is not None
-    assert validated.config.frequency_penalty == 0.5
-    assert validated.config.max_output_tokens == 256
+    body = await OpenAIModel(model='gpt-4o', client=MagicMock())._get_openai_request_config(validated)
+    assert body['frequency_penalty'] == 0.5
+    assert body['top_p'] == 0.9
+    assert body['stop'] == ['END']
+    assert 'max_output_tokens' not in body
+    assert 'maxOutputTokens' not in body
+    assert 'frequencyPenalty' not in body
+    assert 'stop_sequences' not in body
+    assert 'api_key' not in body
+    assert 'apiKey' not in body
