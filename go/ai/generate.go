@@ -318,6 +318,24 @@ func LookupModel(r api.Registry, name string) Model {
 	return &ModelAction{*action}
 }
 
+// isAbnormal reports whether generation ended in a way known to carry no
+// conforming output. Every code path that would otherwise parse a response
+// against its output schema consults this predicate first: a schema error
+// raised on such a response would mask the FinishReason and FinishMessage the
+// caller needs to handle the outcome.
+//
+// FinishReasonUnknown is not in the set on purpose: plugins map unrecognized
+// provider reasons to it, so treating it as abnormal would silently drop
+// output validation for responses the model may well have completed.
+func (fr FinishReason) isAbnormal() bool {
+	switch fr {
+	case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
+		return true
+	default:
+		return false
+	}
+}
+
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
 func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback) (*ModelResponse, error) {
 	if opts.Model == "" {
@@ -585,23 +603,15 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 			if formatHandler != nil {
 				resp.formatHandler = streamingHandler
-				switch resp.FinishReason {
-				case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
-					// A termination known to be abnormal carries no conforming
-					// output, and a schema error here would mask the
-					// FinishReason and FinishMessage the caller needs to
-					// handle it, so the response passes through as-is.
-					// FinishReasonUnknown is not in this set on purpose:
-					// plugins map unrecognized provider reasons to it, and
-					// ParseMessage is the only place the output schema is
-					// enforced, so skipping it on an unclassified reason would
-					// silently drop validation for output the model may well
-					// have completed.
+				if resp.FinishReason.isAbnormal() {
+					// The response passes through as-is so the caller reads the
+					// finish reason rather than a schema error. See
+					// [FinishReason.isAbnormal].
 					logger.Warn(ctx, "model finished abnormally, skipping output parsing",
 						"model", opts.Model,
 						"finishReason", resp.FinishReason,
 						"finishMessage", resp.FinishMessage)
-				default:
+				} else {
 					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
 					resp.Message, err = formatHandler.ParseMessage(resp.Message)
 					if err != nil {
@@ -997,8 +1007,10 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 
 // GenerateData runs a generate request and returns strongly-typed output.
 // If the response doesn't contain text output (e.g., contains tool requests
-// or interrupts instead), the output will be nil and no error is returned.
-// Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
+// or interrupts instead), or generation ended abnormally (blocked, aborted,
+// interrupted, other), the output will be nil and no error is returned. Check
+// resp.FinishReason, resp.Interrupts() or resp.ToolRequests() to handle these
+// cases.
 //
 // The output format is JSON with a schema inferred from Out; an explicit
 // [WithOutputSchema] or [WithOutputSchemaName] overrides the schema while
@@ -1018,10 +1030,12 @@ func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...Generate
 		return nil, nil, err
 	}
 
-	// If there's no text content to parse (e.g., the response contains tool
-	// requests or interrupts), return nil output. The caller should check
-	// resp.Interrupts() or resp.ToolRequests() to handle these cases.
-	if resp.Text() == "" {
+	// Two responses have no conforming output to extract: one that ended
+	// abnormally, whose FinishReason is the news the caller needs, and one with
+	// no text at all, which is what a turn holding tool requests, interrupts, or
+	// media looks like. Both hand the response back unparsed rather than report a
+	// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 		return nil, resp, nil
 	}
 
@@ -1106,7 +1120,10 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 //
 // Like [GenerateData], the output format is JSON with a schema inferred from
 // Out; overriding the format with a non-JSON [WithOutputFormat] or
-// [WithOutputEnums] breaks typed extraction.
+// [WithOutputEnums] breaks typed extraction. Also like [GenerateData], a
+// response with no text output or one that ended abnormally (blocked, aborted,
+// interrupted, other) yields zero-value Output and no error; check
+// Response.FinishReason, Interrupts() or ToolRequests() to handle those.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		done := false
@@ -1150,10 +1167,12 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 
-		// If there's no text content to parse (e.g., the response contains tool
-		// requests or interrupts), return zero-value output. The caller should check
-		// resp.Interrupts() or resp.ToolRequests() to handle these cases.
-		if resp.Text() == "" {
+		// Two responses have no conforming output to extract: one that ended
+		// abnormally, whose FinishReason is the news the caller needs, and one with
+		// no text at all, which is what a turn holding tool requests, interrupts, or
+		// media looks like. Both hand the response back unparsed rather than report a
+		// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
 		}
