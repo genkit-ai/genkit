@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
+from genkit._ai._prompt import PromptConfig, to_generate_action_options
 from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
@@ -406,6 +407,24 @@ async def test_dict_none_clears_ref_default_via_generate(
 
 
 @pytest.mark.asyncio
+async def test_string_model_none_omits_key(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """None means omit on a name too, same as on a ref."""
+    ai, echo = ai_with_echo
+
+    await ai.generate(model='testEcho', config={'temperature': None}, prompt='Hello')
+
+    assert echo.last_request is not None
+    cfg = echo.last_request.config
+    if isinstance(cfg, dict):
+        assert 'temperature' not in cfg
+    else:
+        assert cfg is not None
+        assert 'temperature' not in cfg.model_dump(exclude_unset=True)
+
+
+@pytest.mark.asyncio
 async def test_empty_values_stay_on_generate(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
@@ -652,3 +671,22 @@ async def test_prompt_uses_constructor_model_ref_config() -> None:
 
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'temperature') == 0.7
+
+
+@pytest.mark.asyncio
+async def test_to_generate_action_options_uses_constructor_ref() -> None:
+    """A stored ModelRef default still resolves when PromptConfig.model is omitted."""
+    flash = model_ref(
+        'flash',
+        config_schema=ModelConfig,
+        version='001',
+        config=ModelConfig(temperature=0.7),
+    )
+    ai = Genkit(model=flash)
+    define_echo_model(ai, name='flash')
+
+    options = await to_generate_action_options(ai.registry, PromptConfig(prompt='hi'))
+
+    assert options.model == 'flash'
+    assert _config_value(options.config, 'temperature') == 0.7
+    assert _config_value(options.config, 'version') == '001'

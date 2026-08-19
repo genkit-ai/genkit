@@ -629,9 +629,7 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    if model is None:
-        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
+    resolved = resolve_call_model(model=options.model, config=options.config, registry=registry)
 
     ri: dict[str, Any] = {}
     cache = PromptCache()
@@ -672,9 +670,9 @@ async def to_generate_action_options(
     merged_docs = await render_docs({}, options, None)
 
     return GenerateActionOptions(
-        model=model,
+        model=resolved.name,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=options.config,
+        config=resolved.config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
