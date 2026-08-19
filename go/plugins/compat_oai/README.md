@@ -126,6 +126,14 @@ A plugin whose config is the raw OpenAI request (the `openai` plugin, or a
 proxy for the real OpenAI API) uses `OpenAICompatible.NewModel` instead,
 which takes the SDK's `openai.ChatCompletionNewParams` as the model config.
 
+Authentication is the plugin's own to supply, in `OpenAICompatible.APIKey` or
+as a `WithAPIKey` in `Opts`. The OpenAI SDK reads `OPENAI_API_KEY`,
+`OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` from the environment for every client
+it builds, and `Init` clears all three before applying what the plugin
+composes, so a plugin serving another provider never forwards OpenAI's
+identity to that provider's endpoint. A plugin that wants one of them, as the
+`openai` plugin does, reads it and sets it explicitly.
+
 A typed config can also carry a per-request API key (`RequestConfig.APIKey` /
 `EmbeddingConfig.APIKey`) that overrides the plugin's key for that request
 alone. The key is a client credential: it never serializes, so it stays out of
