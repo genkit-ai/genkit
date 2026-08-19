@@ -41,6 +41,11 @@ def test_claude_model_strips_own_prefix() -> None:
     assert ref.name == 'anthropic/claude-sonnet-4-5'
 
 
+def test_claude_model_keeps_foreign_prefix() -> None:
+    """A Vertex Model Garden paste is a different name, not remapped onto Anthropic."""
+    assert Anthropic.claude_model('vertexai/claude-sonnet-4-5').name == 'anthropic/vertexai/claude-sonnet-4-5'
+
+
 def test_claude_model_carries_config() -> None:
     """A default config passed at construction survives into the ref."""
     ref = Anthropic.claude_model('claude-sonnet-4-5', config=AnthropicConfig(max_output_tokens=256))

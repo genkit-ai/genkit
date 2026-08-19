@@ -39,6 +39,16 @@ from genkit._core._model import OutputConfig
 from genkit.plugin_api import ActionRunContext
 
 
+def test_unknown_chat_id_json_mode_uses_json_object() -> None:
+    """An unlisted chat id that asked for JSON gets json_object, not a KeyError."""
+    model = OpenAIModel(model='my-custom-ft', client=MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'json_object'}
+
+
 def test_get_messages(sample_request: ModelRequest) -> None:
     """Test _get_messages method.
 

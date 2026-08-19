@@ -213,10 +213,17 @@ class OpenAI(Plugin):
             raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
         model_type = _classify_model(local)
         if model_type != _ModelType.CHAT:
+            kind = {
+                _ModelType.EMBEDDER: 'an embedder',
+                _ModelType.IMAGE: 'an image model',
+                _ModelType.TTS: 'a tts model',
+                _ModelType.STT: 'an stt model',
+            }[model_type]
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
-                    f"OpenAI.gpt_model: '{local}' is a {model_type.value} model; only chat models take OpenAIConfig."
+                    f"OpenAI.gpt_model: '{local}' is {kind}; it does not take "
+                    f'OpenAIConfig. Pass it as a string (openai_model({local!r})).'
                 ),
             )
         return model_ref(local, config_schema=OpenAIConfig, namespace='openai', config=config)

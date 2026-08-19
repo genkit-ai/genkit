@@ -46,12 +46,31 @@ def test_gpt_model_strips_own_prefix() -> None:
     assert OpenAI.gpt_model('openai/gpt-4o').name == 'openai/gpt-4o'
 
 
+def test_gpt_model_keeps_foreign_prefix() -> None:
+    """A Vertex or Azure paste is a different name, not remapped onto OpenAI."""
+    assert OpenAI.gpt_model('vertexai/gpt-4o').name == 'openai/vertexai/gpt-4o'
+    assert OpenAI.gpt_model('azure/gpt-4o').name == 'openai/azure/gpt-4o'
+
+
+def test_gpt_model_carries_config() -> None:
+    """A default config passed at construction survives into the ref."""
+    ref = OpenAI.gpt_model('gpt-4o', config=OpenAIConfig(temperature=0.2))
+    assert ref.config is not None
+    assert ref.config.temperature == 0.2
+
+
+def test_gpt_model_allows_unknown_chat_ids() -> None:
+    """A brand-new chat id works before this plugin learns its name."""
+    assert OpenAI.gpt_model('gpt-next-99').name == 'openai/gpt-next-99'
+
+
 @pytest.mark.parametrize(
     'bad_id',
     [
         'gpt-image-1',  # image endpoint takes a different request shape
         'dall-e-3',
         'tts-1',
+        'gpt-4o-mini-tts',  # catalog speech id that looks like a chat model
         'whisper-1',
         'gpt-4o-transcribe',
         'text-embedding-3-small',  # embedders never take chat config
@@ -62,6 +81,16 @@ def test_gpt_model_is_chat_only(bad_id: str) -> None:
     with pytest.raises(GenkitError) as exc_info:
         OpenAI.gpt_model(bad_id)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_gpt_model_reject_names_the_string_path() -> None:
+    """The error names the id and the plain-string way to still use it."""
+    with pytest.raises(GenkitError) as exc_info:
+        OpenAI.gpt_model('dall-e-3')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    message = str(exc_info.value)
+    assert 'an image model' in message
+    assert "openai_model('dall-e-3')" in message
 
 
 def test_gpt_model_requires_a_name() -> None:
@@ -85,3 +114,19 @@ def test_create_model_action_types_openai_config() -> None:
     request_type = hints['request']
     args = get_args(request_type) or (getattr(request_type, '__pydantic_generic_metadata__', {}) or {}).get('args')
     assert args and args[0] is OpenAIConfig
+
+
+def test_create_model_action_accepts_camel_case_config() -> None:
+    """A reflection / Dev UI payload can set knobs in camelCase."""
+    plugin = OpenAI(api_key='test-key')
+    action = plugin._create_model_action('openai/gpt-4o')
+    validated = action._validate_input(  # noqa: SLF001
+        {
+            'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],
+            'config': {'frequencyPenalty': 0.5, 'maxOutputTokens': 256},
+        }
+    )
+    assert validated is not None
+    assert validated.config is not None
+    assert validated.config.frequency_penalty == 0.5
+    assert validated.config.max_output_tokens == 256
