@@ -987,68 +987,19 @@ func summarizeLatest[State any](ctx context.Context, a *aix.Agent[State], sessio
 		shortID(latest.SnapshotID), latest.Status, msgs, when), ansiDim)
 }
 
-// orphanPoll is how often waitForFinalize re-reads a snapshot it is waiting
-// on. Comfortably under the runtime's heartbeat timeout, so a worker that
-// died is noticed a poll or two after the row goes stale rather than a minute
-// later.
-const orphanPoll = 10 * time.Second
-
-// waitForFinalize subscribes to a snapshot's status and blocks until it
-// transitions out of pending. The returned snapshot is the final one (or
-// nil if it disappeared). OnSnapshotStatusChange yields the current
-// status first, so a snapshot that finalized just before the
-// subscription is observed immediately.
+// waitForFinalize blocks until a snapshot leaves pending and returns the final
+// one, or nil if it disappeared while we waited.
 //
-// The subscription reports the status as stored, which stays pending forever
-// if the background worker died: nothing writes a terminal in its place. So
-// the wait also polls, because a read through the agent surfaces a stale
-// heartbeat as expired and gives the caller something to act on.
-//
-// The status subscription is the optional SnapshotSubscriber capability of
-// the store contract. A store without it cannot stream background progress,
-// so we fall back to reading the snapshot once and returning it as-is.
+// WaitForSnapshot does the waiting, so the CLI does not care how the store it
+// was given observes the change: the agent subscribes where the store can push
+// and re-reads otherwise, and either way a worker that stopped heartbeating
+// ends the wait as expired rather than leaving it hanging.
 func waitForFinalize[State any](ctx context.Context, a *aix.Agent[State], snapshotID string) (*aix.SessionSnapshot[State], error) {
-	// A snapshot that vanished under us reads as an error through the agent
-	// where the raw store returns nil; the callers treat both as "gone".
-	read := func() (*aix.SessionSnapshot[State], error) {
-		snap, err := a.GetSnapshot(ctx, snapshotID)
-		if errors.Is(err, aix.ErrSnapshotNotFound) {
-			return nil, nil
-		}
-		return snap, err
+	final, err := a.WaitForSnapshot(ctx, snapshotID)
+	if errors.Is(err, aix.ErrSnapshotNotFound) {
+		return nil, nil
 	}
-	subscriber, ok := a.Store().(aix.SnapshotSubscriber)
-	if !ok {
-		return read()
-	}
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	statusCh := subscriber.OnSnapshotStatusChange(subCtx, snapshotID)
-	ticker := time.NewTicker(orphanPoll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-			// Expired is not a status anything writes, so it arrives only on
-			// a read. Stop waiting on it: the worker is presumed dead and no
-			// terminal is coming.
-			snap, err := read()
-			if err != nil || snap == nil || snap.Status != aix.SnapshotStatusPending {
-				return snap, err
-			}
-		case status, ok := <-statusCh:
-			if !ok {
-				// Subscription closed (e.g. snapshot deleted under us).
-				return read()
-			}
-			if status == aix.SnapshotStatusPending {
-				continue
-			}
-			return read()
-		}
-	}
+	return final, err
 }
 
 // printHistory replays prior turns in the format the live REPL uses, so a
