@@ -719,7 +719,8 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        json_schema=options.output.json_schema if options.output else None,
+        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
+        json_schema=options.output.json_schema if options.output else None,  # pyright: ignore[reportCallIssue]
         constrained=options.output.constrained if options.output else None,
     )
     return ModelRequest(

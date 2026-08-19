@@ -87,7 +87,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import AliasChoices, ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -281,20 +281,14 @@ def _emit_model(
         f'    model_config: ClassVar[ConfigDict] = {cfg}',
     ]
     for k, v in props.items():
-        # OutputConfig.schema would shadow BaseModel.schema; use json_schema
-        # (same Python name as GenerateActionOutputConfig) and pin the wire
-        # alias so dump/validate still speak `schema`.
+        # OutputConfig.schema would shadow BaseModel.schema, so the Python
+        # name is json_schema. alias pins the wire key; to_camel would emit
+        # jsonSchema.
         snake = _camel_to_snake(k)
         force_field = False
         if name == 'OutputConfig' and snake == 'schema':
-            # Field name for constructors/typecheckers; wire still uses `schema`.
-            # Split validation/serialization aliases so checkers agree on
-            # json_schema= rather than splitting on Field(alias=...).
             field_name = 'json_schema'
-            alias_extra = (
-                ", validation_alias=AliasChoices('json_schema', 'schema')"
-                ", serialization_alias='schema'"
-            )
+            alias_extra = ", alias='schema'"
             force_field = True
         elif snake in ('schema_', 'schema'):
             field_name = 'schema'

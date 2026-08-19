@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import AliasChoices, ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -583,9 +583,7 @@ class OutputConfig(GenkitModel):
         alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
     )
     format: str | None = None
-    json_schema: dict[str, Any] | None = Field(
-        default=None, validation_alias=AliasChoices('json_schema', 'schema'), serialization_alias='schema'
-    )
+    json_schema: dict[str, Any] | None = Field(default=None, alias='schema')
     constrained: bool | None = None
     content_type: str | None = None
 
