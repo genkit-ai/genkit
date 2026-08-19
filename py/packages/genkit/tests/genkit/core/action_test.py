@@ -24,6 +24,7 @@ from genkit._core._action import (
     parse_plugin_name_from_action_name,
 )
 from genkit._core._error import GenkitError
+from genkit._core._model import OutputConfig
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -384,3 +385,40 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginConfig)
     assert seen['config'].api_key == 'k'
+
+
+@pytest.mark.asyncio
+async def test_action_revalidates_cross_typed_model_request() -> None:
+    """The plugin handler sees its own config class, not the caller's.
+
+    generate and wrap_model may build the request with a different config
+    type. The plugin still gets PluginCfg and the JSON-mode settings, not a
+    type miss or unconstrained text.
+    """
+
+    class CarrierCfg(BaseModel):
+        temperature: float | None = None
+
+    class PluginCfg(BaseModel):
+        temperature: float | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def model_fn(request: ModelRequest[PluginCfg]) -> str:
+        seen['request'] = request
+        return 'ok'
+
+    action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
+    request = ModelRequest[CarrierCfg](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config=CarrierCfg(temperature=0.5),
+        output=OutputConfig(format='json', constrained=True),
+    )
+    assert isinstance(request.config, CarrierCfg)
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['request'].config, PluginCfg)
+    assert seen['request'].config.temperature == 0.5
+    assert seen['request'].output_format == 'json'
+    assert seen['request'].output_constrained is True
