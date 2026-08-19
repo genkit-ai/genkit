@@ -97,6 +97,66 @@ func TestSendPrefersCompletionOverTeardownCancellation(t *testing.T) {
 	}
 }
 
+// TestSendReportsAbortWhileActionRuns is the other half of that precedence:
+// completion wins only when the action has actually completed. An abort on a
+// session still running has no result to prefer, so Send must report the
+// cancellation. Without this, a helper that always answered
+// ErrActionCompleted would pass: callers like Agent.Run tolerate that error
+// and go to Output, so an abort would be swallowed and the invocation would
+// look like it finished.
+//
+// The action outlives the cancellation deliberately, keeping doneCh open so
+// there is no completion to race.
+func TestSendReportsAbortWhileActionRuns(t *testing.T) {
+	newSession := func(t *testing.T) (*BidiConnection[string, string, string], func()) {
+		t.Helper()
+		started, release := make(chan struct{}), make(chan struct{})
+		action := NewBidiActionOf(api.ActionTypeCustom, "blocks", nil,
+			func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+				close(started)
+				<-release
+				return "finished", nil
+			})
+		conn, err := action.Connect(context.Background(), struct{}{})
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		<-started
+		return conn, func() { close(release) }
+	}
+
+	check := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Send() error = %v, want the abort", err)
+		}
+		if errors.Is(err, ErrActionCompleted) {
+			t.Errorf("Send() error = %v, want an abort rather than completion: the action is still running", err)
+		}
+	}
+
+	t.Run("sent after the abort", func(t *testing.T) {
+		conn, finish := newSession(t)
+		defer finish()
+		conn.Cancel()
+		check(t, conn.Send("hi"))
+	})
+
+	t.Run("already blocked at the abort", func(t *testing.T) {
+		conn, finish := newSession(t)
+		defer finish()
+		// The action never reads, so the first input takes the only buffer
+		// slot and the second blocks in Send's select.
+		if err := conn.Send("first"); err != nil {
+			t.Fatalf("Send() error = %v, want the free buffer slot to take it", err)
+		}
+		sent := make(chan error, 1)
+		go func() { sent <- conn.Send("second") }()
+		conn.Cancel()
+		check(t, <-sent)
+	})
+}
+
 func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()
 
