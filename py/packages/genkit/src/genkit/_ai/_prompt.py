@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -196,9 +196,6 @@ class ModelStreamResponse(Generic[OutputT]):
     # remain available for cases where you want both halves explicitly.
     def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
         return self._channel.__aiter__()
-
-
-PromptFunctionType = Callable[[Any, PromptInputConfig], Coroutine[Any, Any, PromptMetadata]]
 
 
 @dataclass
@@ -698,15 +695,6 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
     return cast(dict[str, Any], template_input)
 
 
-def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
-    """Build a Resume from flat resume_respond / resume_restart / resume_metadata kwargs."""
-    return resume_options_to_resume(
-        resume_respond=opts.get('resume_respond'),
-        resume_restart=opts.get('resume_restart'),
-        resume_metadata=opts.get('resume_metadata'),
-    )
-
-
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools: list[Action] = []
@@ -928,8 +916,8 @@ async def render_prompt_config_for_executable_call(
 ) -> PromptConfig:
     """Expand dotprompt with the call's input into one merged :class:`PromptConfig`.
 
-    Sets final ``messages``, merged ``docs``, optional ``resume``, and clears template source fields
-    before :func:`to_generate_action_options`.
+    Sets final ``messages`` and merged ``docs``, and clears template source
+    fields, before :func:`to_generate_action_options`.
     """
     ri = coerce_prompt_template_input(template_input)
     render_context = opts.get('context')

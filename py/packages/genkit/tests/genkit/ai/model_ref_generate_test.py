@@ -580,6 +580,19 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_name_config_is_hard_error() -> None:
+    """A leftover int on config= is INVALID_ARGUMENT, same as model=123."""
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='echo')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model='echo', prompt='hi', config=123)  # type: ignore[arg-type]
+
+    assert 'config is int, expected Mapping or BaseModel' in str(exc_info.value)
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
 async def test_version_survives_temperature_overlay(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
