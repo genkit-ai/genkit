@@ -428,6 +428,7 @@ func TestResolveVeoActions(t *testing.T) {
 	const modelName = "veo-3.0-generate-001"
 	startKey := api.KeyFromName(api.ActionTypeBackgroundModel, api.NewName(googleAIProvider, modelName))
 	checkKey := api.KeyFromName(api.ActionTypeCheckOperation, api.NewName(googleAIProvider, modelName+"/check"))
+	cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, api.NewName(googleAIProvider, modelName+"/cancel"))
 
 	// Resolving either key yields the background model bundle, and registering
 	// it makes both the start and check actions resolvable.
@@ -455,6 +456,14 @@ func TestResolveVeoActions(t *testing.T) {
 					t.Errorf("action %q not registered", key)
 				}
 			}
+
+			// Veo passes no cancel function, so the bundle carries no cancel
+			// companion and resolveAction answers no cancel-operation key.
+			// Giving a googlegenai background model a cancel function has to
+			// teach the resolver that key as well; this is what catches it.
+			if r.LookupAction(cancelKey) != nil {
+				t.Errorf("action %q registered, so resolveAction must answer cancel-operation keys too", cancelKey)
+			}
 		})
 	}
 
@@ -471,8 +480,10 @@ func TestResolveVeoActions(t *testing.T) {
 	})
 
 	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
-		for _, id := range []string{"gemini-flash-latest", "gemini-flash-latest/check"} {
-			for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
+		for _, id := range []string{"gemini-flash-latest", "gemini-flash-latest/check", "gemini-flash-latest/cancel"} {
+			for _, atype := range []api.ActionType{
+				api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation, api.ActionTypeCancelOperation,
+			} {
 				if action := resolveAction(client, catalog{provider: googleAIProvider}, atype, id); action != nil {
 					t.Errorf("resolveAction(%s, %q) = %v, want nil", atype, id, action)
 				}
