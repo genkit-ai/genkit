@@ -96,6 +96,17 @@ async def test_openai_plugin_list_actions() -> None:
     assert actions[0].name == 'openai/gpt-4-0613'
     assert actions[-1].name == 'openai/text-embedding-ada-002'
 
+    chat = next(a for a in actions if a.name == 'openai/gpt-4')
+    assert chat.metadata is not None
+    chat_props = chat.metadata['model']['customOptions']['properties']
+    assert 'frequencyPenalty' in chat_props
+    assert 'maxTokens' in chat_props
+
+    embed = next(a for a in actions if a.name == 'openai/text-embedding-ada-002')
+    assert embed.metadata is not None
+    embed_options = embed.metadata.get('embedder', {}).get('customOptions')
+    assert embed_options is None or 'frequencyPenalty' not in (embed_options.get('properties') or {})
+
 
 @pytest.mark.asyncio
 async def test_openai_runtime_clients_are_loop_local() -> None:

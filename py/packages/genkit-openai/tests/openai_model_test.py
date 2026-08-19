@@ -98,7 +98,7 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
             'stop_sequences': ['END'],
             'api_key': 'secret',
             'top_k': 8,
-            'version': 'ignored',
+            'version': 'gpt-4o-2024-08-06',
             'prompt_cache_key': 'abc',
             'some_new_openai_knob': 1,
         }),
@@ -108,10 +108,24 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
     assert body['stop'] == ['END']
     assert body['prompt_cache_key'] == 'abc'
     assert body['some_new_openai_knob'] == 1
+    assert body['model'] == 'gpt-4o-2024-08-06'
     assert 'max_output_tokens' not in body
     assert 'stop_sequences' not in body
     assert 'api_key' not in body
     assert 'top_k' not in body
+    assert 'version' not in body
+
+
+@pytest.mark.asyncio
+async def test_get_openai_config_model_field_overrides_version() -> None:
+    """OpenAIConfig.model is the create() model id; it wins over version."""
+    model = OpenAIModel(model='gpt-4o', client=MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=OpenAIConfig(version='gpt-4o-2024-08-06', model='gpt-4.1'),
+    )
+    body = await model._get_openai_request_config(request)
+    assert body['model'] == 'gpt-4.1'
     assert 'version' not in body
 
 
@@ -222,6 +236,10 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
         (
             ModelConfig(temperature=0.7),
             OpenAIConfig(temperature=0.7),
+        ),
+        (
+            ModelConfig(version='gpt-4o-2024-08-06'),
+            OpenAIConfig(version='gpt-4o-2024-08-06'),
         ),
         (
             None,

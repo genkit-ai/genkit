@@ -531,7 +531,7 @@ class OpenAI(Plugin):
                 actions.append(
                     model_action_metadata(
                         name=open_ai_name(name),
-                        config_schema=ModelConfig,
+                        config_schema=OpenAIConfig,
                         info={
                             'label': f'OpenAI - {name}',
                             'supports': Supports(

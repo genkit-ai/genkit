@@ -49,7 +49,7 @@ from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
 logger = structlog.get_logger(__name__)
 
 # Genkit common fields that are not chat.completions.create() kwargs.
-# stop_sequences is remapped to stop; the rest are peeled off.
+# version becomes the wire model id; stop_sequences becomes stop.
 _GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences'})
 
 
@@ -57,9 +57,10 @@ def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
     """Kwargs for chat.completions.create().
 
     Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
-    was not set. Everything else on the config, including extras, goes out
-    under the Python field name. ``max_output_tokens`` is not mapped to
-    ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
+    was not set. ``version`` is peeled here and applied as ``model`` by the
+    caller when ``OpenAIConfig.model`` is unset. Everything else, including
+    extras, goes out under the Python field name. ``max_output_tokens`` is
+    not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
@@ -311,6 +312,8 @@ class OpenAIModel:
             config = (
                 request.config if isinstance(request.config, OpenAIConfig) else self.normalize_config(request.config)
             )
+            if config.version:
+                openai_config['model'] = config.version
             openai_config.update(_openai_create_kwargs(config=config))
         return openai_config
 
@@ -441,6 +444,7 @@ class OpenAIModel:
 
         if isinstance(config, (ModelConfig, ModelConfig)):
             return OpenAIConfig(
+                version=config.version,
                 temperature=config.temperature,
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,
