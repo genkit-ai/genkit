@@ -18,10 +18,15 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -154,5 +159,225 @@ func TestSessionState_LastModelMessage(t *testing.T) {
 	var nilState *SessionState[any]
 	if got := nilState.LastModelMessage(); got != nil {
 		t.Fatalf("nil receiver LastModelMessage() = %+v, want nil", got)
+	}
+}
+
+// --- waitForSnapshot ---
+
+// unsubscribableStore is a [SessionStore] that deliberately does not implement
+// [SnapshotSubscriber], so a wait on it falls back to re-reading. It forwards
+// to testInMemStore rather than embedding it, because embedding would promote
+// the subscription method and defeat the point.
+type unsubscribableStore[State any] struct{ inner *testInMemStore[State] }
+
+func (s unsubscribableStore[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+	return s.inner.GetSnapshot(ctx, snapshotID)
+}
+
+func (s unsubscribableStore[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	return s.inner.GetLatestSnapshot(ctx, sessionID)
+}
+
+func (s unsubscribableStore[State]) SaveSnapshot(
+	ctx context.Context,
+	snapshotID string,
+	fn func(*SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
+	return s.inner.SaveSnapshot(ctx, snapshotID, fn)
+}
+
+// putSnapshot writes one row verbatim, so a test can stage a snapshot in any
+// lifecycle state without running an agent.
+func putSnapshot[State any](t *testing.T, store SessionStore[State], snap *SessionSnapshot[State]) {
+	t.Helper()
+	if _, err := store.SaveSnapshot(context.Background(), snap.SnapshotID,
+		func(*SessionSnapshot[State]) (*SessionSnapshot[State], error) { return snap, nil }); err != nil {
+		t.Fatalf("SaveSnapshot(%q): %v", snap.SnapshotID, err)
+	}
+}
+
+// settleSnapshot flips a staged row to a terminal status, as a detached turn's
+// finalize does.
+func settleSnapshot[State any](t *testing.T, store SessionStore[State], snapshotID string, snapStatus SnapshotStatus) {
+	t.Helper()
+	if _, err := store.SaveSnapshot(context.Background(), snapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			settled := *existing
+			settled.Status = snapStatus
+			return &settled, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot(%q, %q): %v", snapshotID, snapStatus, err)
+	}
+}
+
+func TestWaitSnapshot_TerminalReturnsWithoutWaiting(t *testing.T) {
+	store := newTestInMemStore[any]()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "done", SessionID: "s1", Status: SnapshotStatusCompleted,
+		State: &SessionState[any]{Messages: []*ai.Message{ai.NewModelTextMessage("finished")}},
+	})
+
+	// No deadline: a wait that did not return at once would hang the test.
+	got, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "done", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusCompleted {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
+	}
+	if text := got.State.LastModelMessage().Text(); text != "finished" {
+		t.Errorf("last model message = %q, want %q", text, "finished")
+	}
+}
+
+func TestWaitSnapshot_SubscriptionDeliversSettlement(t *testing.T) {
+	store := newTestInMemStore[any]()
+	beat := time.Now()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+
+	// The liveness re-read is left at its production cadence, so a settlement
+	// observed inside the test's timeout can only have arrived by subscription.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan *SessionSnapshot[any], 1)
+	go func() {
+		snap, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "")
+		if err != nil {
+			t.Errorf("waitSnapshot: %v", err)
+			close(done)
+			return
+		}
+		done <- snap
+	}()
+
+	settleSnapshot(t, store, "running", SnapshotStatusCompleted)
+	select {
+	case snap := <-done:
+		if snap == nil {
+			t.Fatal("wait failed")
+		}
+		if snap.Status != SnapshotStatusCompleted {
+			t.Fatalf("status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+		}
+	case <-ctx.Done():
+		t.Fatal("wait did not observe the settlement")
+	}
+}
+
+func TestWaitSnapshot_RereadsWithoutSubscriber(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	inner := newTestInMemStore[any]()
+	store := unsubscribableStore[any]{inner: inner}
+	beat := time.Now()
+	putSnapshot[any](t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		settleSnapshot[any](t, store, "running", SnapshotStatusFailed)
+	}()
+
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusFailed {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusFailed)
+	}
+}
+
+func TestWaitSnapshot_ExpiredHeartbeatEndsTheWait(t *testing.T) {
+	restore := snapshotWaitLivenessInterval
+	snapshotWaitLivenessInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitLivenessInterval = restore })
+
+	store := newTestInMemStore[any]()
+	// A worker that died a heartbeat timeout ago: the row stays pending, so no
+	// subscription can report it and only the liveness re-read notices.
+	stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "orphan", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &stale,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "orphan", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusExpired {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusExpired)
+	}
+}
+
+func TestWaitSnapshot_ContextEndsTheWait(t *testing.T) {
+	store := newTestInMemStore[any]()
+	beat := time.Now()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitSnapshot error = %v, want DeadlineExceeded", err)
+	}
+}
+
+func TestWaitSnapshot_UnknownSnapshot(t *testing.T) {
+	store := newTestInMemStore[any]()
+	_, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "nope", "")
+	if !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("waitSnapshot error = %v, want ErrSnapshotNotFound", err)
+	}
+	if got, want := err.Error(), "waitForSnapshot: "; len(got) < len(want) || got[:len(want)] != want {
+		t.Errorf("error = %q, want it to name the operation that failed", got)
+	}
+}
+
+func TestNewSnapshotActions_WaitAction(t *testing.T) {
+	store := newTestInMemStore[any]()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "done", SessionID: "s1", Status: SnapshotStatusCompleted,
+	})
+	_, wait, _ := newSnapshotActions[any]("waiter", store, nil)
+	if wait == nil {
+		t.Fatal("newSnapshotActions returned no wait action for a store-backed agent")
+	}
+	if got := wait.Desc().Type; got != api.ActionTypeAgentWait {
+		t.Errorf("wait action type = %q, want %q", got, api.ActionTypeAgentWait)
+	}
+
+	// A session ID alone resolves whichever row is latest at resolution time,
+	// which is a race with the session's next turn, so the wait requires the
+	// snapshot ID that a read would accept on its own.
+	_, err := wait.RunJSON(context.Background(), json.RawMessage(`{"sessionId":"s1"}`), nil)
+	if !errors.Is(err, status.ErrInvalidArgument) {
+		t.Fatalf("wait by session ID error = %v, want INVALID_ARGUMENT", err)
+	}
+
+	raw, err := wait.RunJSON(context.Background(), json.RawMessage(`{"snapshotId":"done"}`), nil)
+	if err != nil {
+		t.Fatalf("wait action: %v", err)
+	}
+	var snap SessionSnapshot[any]
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+	}
+
+	// A client-managed agent keeps no snapshots, so it gets no wait action.
+	if _, clientWait, _ := newSnapshotActions[any]("clientManaged", nil, nil); clientWait != nil {
+		t.Error("newSnapshotActions returned a wait action for a store-less agent")
 	}
 }
