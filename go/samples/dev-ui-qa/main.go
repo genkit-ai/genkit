@@ -48,10 +48,10 @@ func main() {
 	} else {
 		log.Println("dev-ui-qa: GEMINI_API_KEY not set, skipping googleai")
 	}
-	if os.Getenv("GOOGLE_CLOUD_PROJECT") != "" {
+	if os.Getenv("GOOGLE_CLOUD_PROJECT") != "" && (os.Getenv("GOOGLE_CLOUD_LOCATION") != "" || os.Getenv("GOOGLE_CLOUD_REGION") != "") {
 		plugins = append(plugins, &googlegenai.VertexAI{})
 	} else {
-		log.Println("dev-ui-qa: GOOGLE_CLOUD_PROJECT not set, skipping vertexai")
+		log.Println("dev-ui-qa: GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION/REGION not set, skipping vertexai")
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
 		plugins = append(plugins, &anthropic.Anthropic{})
@@ -74,5 +74,7 @@ func main() {
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
