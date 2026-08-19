@@ -29,12 +29,18 @@ from genkit_google_genai.models.veo import (
     VeoModel,
     VeoVersion,
     _from_veo_operation,
-    _to_veo_parameters,
     is_veo_model,
 )
 from google.genai import types as genai_types
 
-from genkit import ActionRunContext, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionRunContext, GenkitError, Message, ModelRequest, Part, Role, TextPart
+
+
+def _text_request(*, config: object | None = None) -> ModelRequest:
+    return ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat walking'))])],
+        config=config,  # type: ignore[arg-type]
+    )
 
 
 class TestIsVeoModel:
@@ -87,8 +93,7 @@ async def test_veo_start_dumps_aspect_ratio_and_duration() -> None:
     op.done = False
     client.aio.models.generate_videos = AsyncMock(return_value=op)
     veo = VeoModel('veo-3.0-generate-001', client)
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat walking'))])],
+    request = _text_request(
         config=VeoConfigSchema.model_validate({'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1}),
     )
 
@@ -103,32 +108,44 @@ async def test_veo_start_dumps_aspect_ratio_and_duration() -> None:
     assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
 
 
-class TestToVeoParameters:
-    """Tests for _to_veo_parameters."""
+@pytest.mark.asyncio
+async def test_veo_start_no_config_sends_none() -> None:
+    """No config is a valid start; generate_videos gets no knobs."""
+    client = MagicMock()
+    op = MagicMock()
+    op.name = 'operations/1'
+    op.done = False
+    client.aio.models.generate_videos = AsyncMock(return_value=op)
+    veo = VeoModel('veo-3.0-generate-001', client)
 
-    def test_none_config(self) -> None:
-        """None config returns empty dict."""
-        assert _to_veo_parameters(None) == {}
+    await veo.start(_text_request(), ActionRunContext())
 
-    def test_dict_config(self) -> None:
-        """Dict config filters out None values."""
-        config = {'aspect_ratio': '16:9', 'duration_seconds': 5, 'empty': None}
-        result = _to_veo_parameters(config)
-        assert result == {'aspect_ratio': '16:9', 'duration_seconds': 5}
+    called = client.aio.models.generate_videos.await_args
+    assert called is not None
+    assert called.kwargs['config'] is None
 
-    def test_schema_config(self) -> None:
-        """VeoConfigSchema is converted with camelCase keys."""
-        config = VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5)
-        result = _to_veo_parameters(config)
-        assert result['aspectRatio'] == '16:9'
-        assert result['durationSeconds'] == 5
 
-    def test_schema_config_includes_new_fields(self) -> None:
-        """VeoConfigSchema includes newer Veo parameters."""
-        config = VeoConfigSchema(resolution='1080p', seed=7)
-        result = _to_veo_parameters(config)
-        assert result['resolution'] == '1080p'
-        assert result['seed'] == 7
+def test_veo_rejects_raw_dicts() -> None:
+    """A dict at the dump leaf means Action never produced the family instance."""
+    veo = VeoModel('veo-3.0-generate-001', MagicMock())
+
+    with pytest.raises(GenkitError) as exc_info:
+        veo._get_config(_text_request(config={'aspectRatio': '16:9'}))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert veo._version in str(exc_info.value)
+
+
+def test_veo_invalid_sdk_field_is_invalid_argument() -> None:
+    """SDK type errors become a named INVALID_ARGUMENT."""
+    veo = VeoModel('veo-3.0-generate-001', MagicMock())
+    request = _text_request(config=VeoConfigSchema.model_construct(duration_seconds='nope'))
+
+    with pytest.raises(GenkitError) as exc_info:
+        veo._get_config(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'duration_seconds' in str(exc_info.value)
 
 
 class TestFromVeoOperation:

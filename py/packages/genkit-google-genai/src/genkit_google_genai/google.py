@@ -377,7 +377,7 @@ def _create_veo_background_action(
         op.action = action_key
         return op
 
-    async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
+    async def _check(op: Operation, _ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
         updated = await veo.check(op)
         updated.action = action_key

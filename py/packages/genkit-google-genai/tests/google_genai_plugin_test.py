@@ -50,7 +50,7 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfigSchema, VeoModel
 
-from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
 from genkit.plugin_api import Action, to_json_schema
 
@@ -336,6 +336,72 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
             assert isinstance(request.config, VeoConfigSchema)
             assert request.config.aspect_ratio == '16:9'
             assert request.config.duration_seconds == 5
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Action.run camelCase + leftover reaches generate_videos; start stamps the action key."""
+    mock_list_models.return_value = GenaiModels()
+    op = MagicMock()
+    op.name = 'operations/1'
+    op.done = False
+    mock_client.return_value.aio.models.generate_videos = AsyncMock(return_value=op)
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
+    assert action is not None
+
+    started = await action.run({
+        'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
+        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1},
+    })
+
+    called = mock_client.return_value.aio.models.generate_videos.await_args
+    assert called is not None
+    cfg = called.kwargs['config']
+    assert cfg.aspect_ratio == '16:9'
+    assert cfg.duration_seconds == 5
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
+    assert started.response.action == '/background-model/vertexai/veo-3.0-generate-001'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_action_run_rejects_bad_duration(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Action rejects durationSeconds='nope' before generate_videos."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
+    assert action is not None
+
+    with pytest.raises(GenkitError) as exc_info:
+        await action.run({
+            'messages': [{'role': 'user', 'content': [{'text': 'a clip'}]}],
+            'config': {'durationSeconds': 'nope'},
+        })
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    mock_client.return_value.aio.models.generate_videos.assert_not_called()
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_check_is_typed(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Check is Operation in, Operation out — no config to coerce."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.0-generate-001/check')
+    assert action is not None
+    hints = get_type_hints(action._fn)  # noqa: SLF001
+    assert hints['op'] is Operation
+    assert hints['return'] is Operation
 
 
 @patch('genkit_google_genai.google.genai.client.Client')

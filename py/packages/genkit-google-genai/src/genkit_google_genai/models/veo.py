@@ -140,28 +140,6 @@ def _extract_text(request: ModelRequest) -> str:
     return ' '.join(prompt_parts)
 
 
-def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Convert config to Veo API parameters.
-
-    Args:
-        config: The model configuration (VeoConfigSchema or dict).
-
-    Returns:
-        Dictionary of Veo API parameters.
-    """
-    if config is None:
-        return {}
-
-    if isinstance(config, VeoConfigSchema):
-        params = config.model_dump(by_alias=True, exclude_none=True)
-    elif isinstance(config, dict):
-        params = {k: v for k, v in config.items() if v is not None}
-    else:
-        return {}
-
-    return params
-
-
 def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     """Convert Veo API operation to Genkit Operation.
 
@@ -240,7 +218,7 @@ class VeoModel:
         self._version = version
         self._client = client
 
-    async def start(self, request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(self, request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
         """Start a video generation operation (background model pattern for GoogleAI).
 
         Args:
