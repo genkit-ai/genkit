@@ -116,3 +116,7 @@ cd $CURRENT
 cd  js/plugins/google-genai
 pnpm publish --provenance=false --tag $RELEASE_TAG --publish-branch $RELEASE_BRANCH --registry https://wombat-dressing-room.appspot.com
 cd $CURRENT
+
+cd  js/plugins/anthropic
+pnpm publish --provenance=false --tag $RELEASE_TAG --publish-branch $RELEASE_BRANCH --registry https://wombat-dressing-room.appspot.com
+cd $CURRENT
