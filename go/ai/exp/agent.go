@@ -1545,8 +1545,14 @@ func (rt *agentRuntime[State]) handleDetach(
 	// an interval below). Timestamps are caller-managed; a reader treats a
 	// pending snapshot whose heartbeat has gone stale as expired (its background
 	// worker is presumed dead).
+	//
+	// The runtime mints the pending row's ID, as reserveTurnSnapshotID does for
+	// turn snapshots, rather than letting the store mint at write time: task
+	// handles built on this ID rely on the runtime's UUID format (in
+	// particular, it contains no ':'), which a store-minted ID would not
+	// guarantee.
 	now := time.Now()
-	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), "",
+	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), uuid.New().String(),
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
 				SessionID:   sessionID,

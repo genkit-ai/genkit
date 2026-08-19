@@ -342,6 +342,11 @@ func WithSessionID[State any](id string) InvocationOption[State] {
 // resolveOptions) and [AgentHandle.Run], so typed and untyped callers reject
 // the same inputs with the same wording; name is the agent's, woven into the
 // errors.
+//
+// It returns (nil, nil) when no option set anything: "no init" is decided
+// here, next to the merge a new option must extend, so a caller-side field
+// check cannot silently drop a future [AgentInit] field. A nil init runs the
+// invocation with a fresh session, identical to a zero-valued one.
 func resolveInvocationInit[State any](name string, opts []InvocationOption[State]) (*AgentInit[State], error) {
 	invOpts := &invocationOptions[State]{}
 	for _, opt := range opts {
@@ -355,6 +360,10 @@ func resolveInvocationInit[State any](name string, opts []InvocationOption[State
 	}
 	if invOpts.state != nil && invOpts.sessionIDSet {
 		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", name)
+	}
+
+	if invOpts.state == nil && invOpts.snapshotID == "" && !invOpts.sessionIDSet {
+		return nil, nil
 	}
 
 	return &AgentInit[State]{
@@ -373,19 +382,25 @@ type WaitOption interface {
 
 type waitOptions struct {
 	pollInterval time.Duration
+	// pollIntervalSet records that WithPollInterval was used, independent of
+	// the value, so a non-positive interval is rejected rather than silently
+	// falling back to the default, and duplicates are counted whatever their
+	// values (mirrors sessionIDSet above).
+	pollIntervalSet bool
 }
 
 // applyWait merges o into opts, rejecting a non-positive interval and
 // duplicate options.
 func (o *waitOptions) applyWait(opts *waitOptions) error {
-	if o.pollInterval != 0 {
-		if o.pollInterval < 0 {
+	if o.pollIntervalSet {
+		if o.pollInterval <= 0 {
 			return errors.New("poll interval must be positive (WithPollInterval)")
 		}
-		if opts.pollInterval != 0 {
+		if opts.pollIntervalSet {
 			return errors.New("cannot set poll interval more than once (WithPollInterval)")
 		}
 		opts.pollInterval = o.pollInterval
+		opts.pollIntervalSet = true
 	}
 	return nil
 }
@@ -395,5 +410,5 @@ func (o *waitOptions) applyWait(opts *waitOptions) error {
 // Each read is one getSnapshot companion-action call, so pick an interval the
 // agent's session store can absorb.
 func WithPollInterval(d time.Duration) WaitOption {
-	return &waitOptions{pollInterval: d}
+	return &waitOptions{pollInterval: d, pollIntervalSet: true}
 }
