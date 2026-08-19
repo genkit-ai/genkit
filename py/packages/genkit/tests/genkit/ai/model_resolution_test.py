@@ -5,19 +5,23 @@
 
 """Unit tests for veneer model resolution helpers.
 
-Covers normalize_config, resolve_model_arg, resolve_model_name, and
-resolve_model_ref as pure functions, independent of generate()/prompt wiring.
+Covers dump, fold, overlay, and resolve as pure functions, independent
+of generate()/prompt wiring.
 """
 
 from dataclasses import FrozenInstanceError
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
+    fold_config_aliases,
+    get_request_api_key,
     normalize_config,
+    overlay_config,
     resolve_call_model,
     resolve_model_arg,
     resolve_model_name,
@@ -53,6 +57,13 @@ class NestedConfig(BaseModel):
     """Nested bag used to pin shallow replace."""
 
     thinking: dict[str, object] | None = None
+
+
+class AliasedNestedConfig(BaseModel):
+    """Schema with a generated camel alias, used to pin alias fold."""
+
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    thinking_config: dict[str, object] | None = None
 
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
@@ -374,3 +385,90 @@ def test_resolve_model_ref_replaces_nested_bag() -> None:
     )
     resolved = resolve_model_ref(model=ref, config={'thinking': {'budget': 256}})
     assert resolved.config == {'thinking': {'budget': 256}}
+
+
+def test_fold_config_aliases_renames_to_field_name() -> None:
+    """A camel dict key becomes the Python field name."""
+    assert fold_config_aliases(config={'maxOutputTokens': 5}, schema=ModelConfig) == {'max_output_tokens': 5}
+
+
+def test_normalize_config_keeps_dict_keys() -> None:
+    """Dump does not fold; dict keys stay as written."""
+    assert normalize_config(config={'maxOutputTokens': 5}) == {'maxOutputTokens': 5}
+
+
+def test_fold_config_aliases_unknown_keys_pass_through() -> None:
+    """Fold is a rename, not validation — extras keep their spelling."""
+    assert fold_config_aliases(
+        config={'maxOutputTokens': 5, 'fooBar': 1},
+        schema=ModelConfig,
+    ) == {'max_output_tokens': 5, 'fooBar': 1}
+
+
+def test_overlay_config_folds_and_last_layer_wins() -> None:
+    """Same slot across layers: later spelling replaces the earlier one."""
+    assert overlay_config(
+        layers=[{'max_output_tokens': 100}, {'maxOutputTokens': 5}],
+        schema=ModelConfig,
+    ) == {'max_output_tokens': 5}
+
+
+def test_overlay_config_none_clears() -> None:
+    """None after fold drops the field instead of leaving a sibling alias."""
+    assert (
+        overlay_config(
+            layers=[{'max_output_tokens': 100}, {'maxOutputTokens': None}],
+            schema=ModelConfig,
+        )
+        == {}
+    )
+
+
+def test_overlay_config_unknown_keys_pass_through() -> None:
+    """Extras keep their spelling and still last-write-win."""
+    assert overlay_config(
+        layers=[{'fooBar': 1}, {'fooBar': 2, 'maxOutputTokens': 5}],
+        schema=ModelConfig,
+    ) == {'fooBar': 2, 'max_output_tokens': 5}
+
+
+def test_resolve_model_ref_alias_overlay_replaces_field() -> None:
+    """Call-time maxOutputTokens replaces the dumped max_output_tokens."""
+    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    resolved = resolve_model_ref(model=ref, config={'maxOutputTokens': 5})
+    assert resolved.config == {'max_output_tokens': 5}
+
+
+def test_resolve_model_ref_alias_none_clears_field() -> None:
+    """Call-time maxOutputTokens=None clears the dumped ref default."""
+    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    resolved = resolve_model_ref(model=ref, config={'maxOutputTokens': None})
+    assert 'max_output_tokens' not in resolved.config
+    assert 'maxOutputTokens' not in resolved.config
+
+
+def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
+    """thinkingConfig folds onto thinking_config and replaces the whole bag."""
+    ref = model_ref(
+        'm',
+        config_schema=AliasedNestedConfig,
+        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1}),
+    )
+    resolved = resolve_model_ref(model=ref, config={'thinkingConfig': {'thinkingBudget': 256}})
+    assert resolved.config == {'thinking_config': {'thinkingBudget': 256}}
+
+
+def test_resolve_model_ref_both_spellings_last_write_wins() -> None:
+    """Both keys in one dict fold onto one field; later key wins."""
+    ref = model_ref('m', config_schema=ModelConfig)
+    resolved = resolve_model_ref(
+        model=ref,
+        config={'max_output_tokens': 1, 'maxOutputTokens': 5},
+    )
+    assert resolved.config == {'max_output_tokens': 5}
+
+
+def test_get_request_api_key_reads_camel_dict() -> None:
+    """A wire-shaped dict still exposes the per-request key."""
+    assert get_request_api_key({'apiKey': 'secret'}) == 'secret'
+    assert get_request_api_key({'api_key': 'secret'}) == 'secret'

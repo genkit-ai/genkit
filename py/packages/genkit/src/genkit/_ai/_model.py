@@ -63,23 +63,43 @@ class ResolvedModel:
     config: dict[str, Any]
 
 
-def normalize_config(*, config: object) -> dict[str, Any]:
-    """Convert a config object or dict into a mergeable dict.
+def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
+    """Map each field name and alias to the Python field name."""
+    names: dict[str, str] = {}
+    for name, field in schema.model_fields.items():
+        names[name] = name
+        if field.alias:
+            names[field.alias] = name
+    return names
 
-    ``generate()`` runs both a ModelRef's default config and the per-call
-    ``config=`` through this, then overlays them. Call-time keys win;
-    ``None`` means don't send that field. Pydantic dumps stay snake_case so
-    ``ModelConfig(max_output_tokens=100)`` and
-    ``config={'max_output_tokens': 200}`` hit the same key. Dict keys pass
-    through as written; the plugin config schema decides which spellings
-    are legal.
+
+def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
+    """Rewrite schema aliases to field names. Unknown keys stay as written."""
+    names = config_field_names(schema)
+    return {names.get(key, key): value for key, value in config.items()}
+
+
+def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel]) -> dict[str, Any]:
+    """Fold each layer, last layer wins, drop ``None``.
+
+    ``maxOutputTokens`` and ``max_output_tokens`` are the same slot. Keys
+    the schema does not know pass through.
+    """
+    merged: dict[str, Any] = {}
+    for layer in layers:
+        merged.update(fold_config_aliases(config=layer, schema=schema))
+    return {key: value for key, value in merged.items() if value is not None}
+
+
+def normalize_config(*, config: object) -> dict[str, Any]:
+    """Dump a config object or dict. Does not fold or merge.
+
+    Pydantic dumps the Python field names, including explicit ``None``.
+    Dict keys stay as written. ``api_key`` is copied back when dump omits it.
     """
     if config is None:
         return {}
     if isinstance(config, BaseModel):
-        # Overlay needs the keys the caller wrote, including explicit None.
-        # Skip fields they never set. Don't camelCase — maxOutputTokens
-        # would miss a dict override on max_output_tokens.
         dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
         # api_key is left out of JSON on purpose; copy it back so a
         # per-request key still reaches the plugin.
@@ -157,39 +177,32 @@ def resolve_call_model(
     The outgoing bag has no ``None`` values — name or ref — so the plugin
     sees a missing key rather than null.
     """
-    normalized = normalize_config(config=config)
     resolved = resolve_model_arg(model=model, registry=registry, message=message)
+    normalized = normalize_config(config=config)
     if isinstance(resolved, ModelRef):
         return resolve_model_ref(model=resolved, config=normalized)
     return ResolvedModel(
         name=resolved,
-        config={k: v for k, v in normalized.items() if v is not None},
+        config={key: value for key, value in normalized.items() if value is not None},
     )
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
-    """Merge a ModelRef's defaults with per-call config for the plugin request.
+    """Dump layers, overlay, return name + bag.
 
-    Precedence (lowest to highest): ``ref.version``, ``ref.config``, then
-    call-time ``config``. Each layer overwrites keys from the layers below.
-
-    The merged dict is forwarded to the plugin as-is — no schema validation or
-    key stripping at this layer. ``ModelRef`` typing catches config mistakes at
-    construction; at call time we still pass unknown keys through so plugins can
-    accept new provider options before the SDK schema is updated.
-
-    An explicitly set ``None`` clears a value inherited from a lower layer.
-    After merge, ``None`` values are removed so plugins see a missing key rather
-    than ``null``.
+    Lowest to highest: ``ref.version``, dumped ``ref.config``, call
+    ``config``. No validation — unknown keys pass through.
     """
-    merged: dict[str, Any] = {}
+    layers: list[dict[str, Any]] = []
     if model.version is not None:
-        merged['version'] = model.version
+        layers.append({'version': model.version})
     if model.config is not None:
-        merged.update(normalize_config(config=model.config))
-    merged.update(config)
-    merged = {k: v for k, v in merged.items() if v is not None}
-    return ResolvedModel(name=model.name, config=merged)
+        layers.append(normalize_config(config=model.config))
+    layers.append(config)
+    return ResolvedModel(
+        name=model.name,
+        config=overlay_config(layers=layers, schema=model.config_schema),
+    )
 
 
 def model_action_metadata(
@@ -292,9 +305,10 @@ def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | No
 
     if isinstance(config, Mapping):
         config_mapping = cast(Mapping[str, object], config)
-        api_key = config_mapping.get('api_key')
-        if isinstance(api_key, str) and api_key:
-            return api_key
+        for key in ('api_key', 'apiKey'):
+            api_key = config_mapping.get(key)
+            if isinstance(api_key, str) and api_key:
+                return api_key
     else:
         # Defensive fallback for plugin-specific config classes that inherit from
         # ModelConfig or expose an api_key attribute.
