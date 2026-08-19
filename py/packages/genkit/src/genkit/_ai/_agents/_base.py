@@ -19,8 +19,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
-from typing import Generic
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
 
@@ -69,7 +69,7 @@ from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfig
+from genkit._core._model import ModelConfig, ModelRef, ModelRefConfigT
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._typing import (
@@ -336,11 +336,11 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    model: str | None = None,
+    model: ModelRef[ModelRefConfigT] | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    config: dict[str, object] | ModelConfig | None = None,
+    config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
