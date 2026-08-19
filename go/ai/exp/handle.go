@@ -121,9 +121,11 @@ func AgentMetadataOf(a api.Action) *AgentMetadata {
 			return nil
 		}
 		meta := &AgentMetadata{}
-		if err := json.Unmarshal(b, meta); err != nil {
-			return nil
-		}
+		// Best-effort decode: encoding/json fills every well-typed field
+		// before reporting the first type error, so one mistyped field in a
+		// wire descriptor leaves that field zero instead of erasing the
+		// capabilities that did decode.
+		_ = json.Unmarshal(b, meta)
 		return meta
 	}
 	return nil
@@ -159,7 +161,7 @@ func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...Invoca
 		return nil, fmt.Errorf("agent %q: marshal input: %w", h.name, err)
 	}
 	var initJSON json.RawMessage
-	if init.SessionID != "" || init.SnapshotID != "" || init.State != nil {
+	if init != nil {
 		initJSON, err = json.Marshal(init)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: marshal init: %w", h.name, err)
@@ -190,6 +192,13 @@ func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...Invoca
 // [SnapshotSubscriber]. Check [AgentMetadata.Abortable] to pre-flight. The
 // rejection is decoded from the invocation's failed output, which keeps only
 // the status name, so match it with [status.Of] rather than errors.Is.
+//
+// An agent may also settle the invocation synchronously, before the runtime
+// observes the detach directive (e.g. a custom agent whose fn returns without
+// consuming the input). When a turn committed, Start returns a task over its
+// snapshot, which is already terminal, so Poll and Wait resolve immediately;
+// when nothing was recorded, Start fails with FAILED_PRECONDITION naming the
+// finish reason, since there is no durable record to track.
 func (h *AgentHandle) Start(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*DetachedTask, error) {
 	if input == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
@@ -210,12 +219,17 @@ func (h *AgentHandle) Start(ctx context.Context, input *AgentInput, opts ...Invo
 		}
 		return nil, fmt.Errorf("agent %q: background launch failed: %w", h.name, cause)
 	default:
-		// With detach riding the first input, the runtime resolves the
-		// invocation as detached or failed before any turn output can settle
-		// it; any other reason means the agent did not honor the detach
-		// contract.
-		return nil, status.Errorf(status.ErrInternal,
-			"agent %q: expected the invocation to detach, got finish reason %q", h.name, out.FinishReason)
+		// The invocation settled before the runtime observed the detach
+		// directive (nothing orders the intake reader ahead of an agent fn
+		// that never consumes its input). A committed turn's snapshot is the
+		// settled work's durable record, so hand back a task over it; Poll
+		// and Wait resolve immediately with the terminal snapshot.
+		if out.SnapshotID != "" {
+			return &DetachedTask{handle: h, snapshotID: out.SnapshotID}, nil
+		}
+		return nil, status.Errorf(status.ErrFailedPrecondition,
+			"agent %q: the invocation settled synchronously (finish reason %q, session %q) without recording a snapshot, so there is no background task to track",
+			h.name, out.FinishReason, out.SessionID)
 	}
 }
 

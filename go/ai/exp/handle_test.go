@@ -192,6 +192,25 @@ func TestAgentMetadataOf(t *testing.T) {
 		}
 	})
 
+	t.Run("map form keeps well-typed fields past a mistyped one", func(t *testing.T) {
+		// A wire descriptor with one bad field must not erase the
+		// capabilities that did decode: history forwarding and abort
+		// pre-flights key off these.
+		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{
+			"agent": map[string]any{"stateManagement": "client", "abortable": "true"},
+		}}}
+		meta := AgentMetadataOf(a)
+		if meta == nil {
+			t.Fatal("AgentMetadataOf = nil, want best-effort metadata")
+		}
+		if meta.StateManagement != AgentStateManagementClient {
+			t.Errorf("StateManagement = %q, want %q despite the mistyped sibling", meta.StateManagement, AgentStateManagementClient)
+		}
+		if meta.Abortable {
+			t.Error("Abortable = true, want zero value for the mistyped field")
+		}
+	})
+
 	t.Run("action without agent metadata", func(t *testing.T) {
 		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{"other": true}}}
 		if got := AgentMetadataOf(a); got != nil {
@@ -478,4 +497,57 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 			t.Fatalf("Poll(missing) error = %v, want NOT_FOUND", err)
 		}
 	})
+}
+
+func TestAgentHandle_StartSettledSynchronously(t *testing.T) {
+	// An agent whose fn returns without consuming its input can settle the
+	// invocation before the runtime observes the detach directive. Start must
+	// treat that as a first-class outcome: a task over the committed snapshot
+	// when one exists, or FAILED_PRECONDITION when nothing was recorded;
+	// never an INTERNAL contract-violation error. The race is scheduling-
+	// dependent, so accept either outcome on each iteration and pin only the
+	// contract.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	agent := DefineCustomAgent(reg, "eager",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, nil // settles immediately, no turn, no snapshot
+		},
+		WithSessionStore(store),
+	)
+	h := agent.Handle()
+	for i := 0; i < 20; i++ {
+		task, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+		if err == nil {
+			// The detach won the race; the launch is a normal task.
+			if task == nil || task.SnapshotID() == "" {
+				t.Fatalf("iteration %d: nil or empty task without error", i)
+			}
+			continue
+		}
+		if !errors.Is(err, status.ErrFailedPrecondition) || !strings.Contains(err.Error(), "settled synchronously") {
+			t.Fatalf("iteration %d: err = %v, want FAILED_PRECONDITION about synchronous settlement", i, err)
+		}
+	}
+}
+
+func TestWaitOptionValidation(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineGatedAgent(t, reg, "waiter", store)
+	h, err := LookupAgent(reg, "waiter")
+	if err != nil {
+		t.Fatalf("LookupAgent: %v", err)
+	}
+	task := h.Task("irrelevant")
+
+	if _, err := task.Wait(context.Background(), WithPollInterval(0)); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("Wait(WithPollInterval(0)) error = %v, want positivity rejection", err)
+	}
+	if _, err := task.Wait(context.Background(), WithPollInterval(-time.Second)); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("Wait(WithPollInterval(-1s)) error = %v, want positivity rejection", err)
+	}
+	if _, err := task.Wait(context.Background(), WithPollInterval(time.Second), WithPollInterval(2*time.Second)); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("duplicate WithPollInterval error = %v, want duplicate-option rejection", err)
+	}
 }
