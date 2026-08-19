@@ -108,7 +108,7 @@ func TestPluginRegistersMuseSparkAndGenerates(t *testing.T) {
 	if plugin.Name() != "meta" {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "meta")
 	}
-	model := plugin.Model(g, meta.ModelMuseSpark11)
+	model := genkit.LookupModel(g, "meta/"+meta.ModelMuseSpark11)
 	if model == nil {
 		t.Fatal("Muse Spark model was not registered")
 	}
