@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // --- AgentOption ---
@@ -373,44 +372,4 @@ func resolveInvocationInit[State any](name string, opts []InvocationOption[State
 		SnapshotID: invOpts.snapshotID,
 		State:      invOpts.state,
 	}, nil
-}
-
-// --- WaitOption ---
-
-// WaitOption configures [DetachedTask.Wait].
-type WaitOption interface {
-	applyWait(*waitOptions) error
-}
-
-type waitOptions struct {
-	pollInterval time.Duration
-	// pollIntervalSet records that WithPollInterval was used, independent of
-	// the value, so a non-positive interval is rejected rather than silently
-	// falling back to the default, and duplicates are counted whatever their
-	// values (mirrors sessionIDSet above).
-	pollIntervalSet bool
-}
-
-// applyWait merges o into opts, rejecting a non-positive interval and
-// duplicate options.
-func (o *waitOptions) applyWait(opts *waitOptions) error {
-	if o.pollIntervalSet {
-		if o.pollInterval <= 0 {
-			return errors.New("poll interval must be positive (WithPollInterval)")
-		}
-		if opts.pollIntervalSet {
-			return errors.New("cannot set poll interval more than once (WithPollInterval)")
-		}
-		opts.pollInterval = o.pollInterval
-		opts.pollIntervalSet = true
-	}
-	return nil
-}
-
-// WithPollInterval sets how often [DetachedTask.Wait] re-reads the task's
-// snapshot while it is pending. The default is 2 seconds; d must be positive.
-// Each read is one getSnapshot companion-action call, so pick an interval the
-// agent's session store can absorb.
-func WithPollInterval(d time.Duration) WaitOption {
-	return &waitOptions{pollInterval: d, pollIntervalSet: true}
 }

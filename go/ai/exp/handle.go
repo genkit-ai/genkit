@@ -20,20 +20,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 )
 
-// defaultTaskPollInterval is how often [DetachedTask.Wait] re-reads a pending
-// task's snapshot when [WithPollInterval] is not given.
-const defaultTaskPollInterval = 2 * time.Second
-
 // AgentHandle is the untyped caller-side view of an agent: its run action and
-// snapshot-lifecycle companion actions (getSnapshot, abort), addressed with
-// the custom-state type fixed to [json.RawMessage]. It is how code that does
-// not hold the defining [Agent] value calls an agent it knows only by name:
+// snapshot-lifecycle companion actions (getSnapshot, waitForSnapshot, abort),
+// addressed with the custom-state type fixed to [json.RawMessage]. It is how
+// code that does not hold the defining [Agent] value calls an agent it knows
+// only by name:
 // orchestrators, middleware, and tools resolve one with [LookupAgent] (or the
 // genkit/exp package's LookupAgent), and a typed owner hands one out with
 // [Agent.Handle].
@@ -47,8 +43,10 @@ type AgentHandle struct {
 	name string
 	run  api.BidiAction
 	// Companion actions; nil when the agent lacks the capability (see
-	// [Agent.GetSnapshotAction] and [Agent.AbortAction]).
+	// [Agent.GetSnapshotAction], [Agent.WaitForSnapshotAction], and
+	// [Agent.AbortAction]).
 	getSnapshot api.Action
+	wait        api.Action
 	abort       api.Action
 	meta        *AgentMetadata
 }
@@ -75,6 +73,7 @@ func LookupAgent(r api.Registry, name string) (*AgentHandle, error) {
 		name:        name,
 		run:         run,
 		getSnapshot: r.LookupAction(api.KeyFromName(api.ActionTypeAgentSnapshot, name)),
+		wait:        r.LookupAction(api.KeyFromName(api.ActionTypeAgentWait, name)),
 		abort:       r.LookupAction(api.KeyFromName(api.ActionTypeAgentAbort, name)),
 		meta:        AgentMetadataOf(run),
 	}, nil
@@ -90,6 +89,7 @@ func (a *Agent[State]) Handle() *AgentHandle {
 		name:        a.Name(),
 		run:         a,
 		getSnapshot: a.getSnapshot,
+		wait:        a.wait,
 		abort:       a.abort,
 		meta:        AgentMetadataOf(a),
 	}
@@ -254,7 +254,30 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string) (*Sess
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", h.name)
 	}
-	return h.readSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID})
+	return h.snapshotVia(ctx, h.getSnapshot, "read", &GetSnapshotRequest{SnapshotID: snapshotID})
+}
+
+// WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
+// through the agent's waitForSnapshot companion action, returning the terminal
+// snapshot shaped exactly as [AgentHandle.GetSnapshot] shapes a read. An
+// already-terminal snapshot returns at once. It is [Agent.WaitForSnapshot] with
+// custom state as raw JSON, and it is how a caller that holds only actions
+// follows a detached invocation: one dispatch for the whole wait, rather than a
+// read per tick.
+//
+// A snapshot that failed, aborted, or expired is returned like any other, so a
+// non-nil error means the wait itself could not proceed: a read failed, or ctx
+// ended and its error is returned. Bound the wait with [context.WithTimeout],
+// then call [AgentHandle.GetSnapshot] to learn where the task stands.
+//
+// It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
+// agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
+// missing snapshot is NOT_FOUND.
+func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+	if snapshotID == "" {
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", h.name)
+	}
+	return h.snapshotVia(ctx, h.wait, "follow", &GetSnapshotRequest{SnapshotID: snapshotID})
 }
 
 // GetLatestSnapshot fetches a session's most recently created snapshot
@@ -269,23 +292,25 @@ func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string) (
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", h.name)
 	}
-	return h.readSnapshot(ctx, &GetSnapshotRequest{SessionID: sessionID})
+	return h.snapshotVia(ctx, h.getSnapshot, "read", &GetSnapshotRequest{SessionID: sessionID})
 }
 
-// readSnapshot dispatches req to the getSnapshot companion action and decodes
-// the snapshot. The action runs in-process here, so its error chain stays
-// live: sentinel matching with errors.Is works, subtypes included (e.g.
-// [ErrSnapshotNotFound] is a [status.ErrNotFound]).
-func (h *AgentHandle) readSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
-	if h.getSnapshot == nil {
+// snapshotVia dispatches req to act, one of the two companion actions that
+// answer a [GetSnapshotRequest] with a [SessionSnapshot], and decodes the
+// result. verb names what the caller wanted to do with the snapshot, for the
+// message reporting an agent that keeps none. The action runs in-process here,
+// so its error chain stays live: sentinel matching with errors.Is works,
+// subtypes included (e.g. [ErrSnapshotNotFound] is a [status.ErrNotFound]).
+func (h *AgentHandle) snapshotVia(ctx context.Context, act api.Action, verb string, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	if act == nil {
 		return nil, status.Errorf(ErrSessionStoreNotConfigured,
-			"agent %q has no session store, so it keeps no snapshots to read", h.name)
+			"agent %q has no session store, so it keeps no snapshots to %s", h.name, verb)
 	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("agent %q: marshal snapshot request: %w", h.name, err)
 	}
-	raw, err := h.getSnapshot.RunJSON(ctx, reqJSON, nil)
+	raw, err := act.RunJSON(ctx, reqJSON, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -359,40 +384,19 @@ func (t *DetachedTask) Poll(ctx context.Context) (*SessionSnapshot[json.RawMessa
 	return t.handle.GetSnapshot(ctx, t.snapshotID)
 }
 
-// Wait blocks until the task settles and returns its terminal snapshot,
-// re-reading the snapshot on an interval ([WithPollInterval] to change it). A
-// task that failed, aborted, or expired still returns its snapshot rather than
-// an error (inspect [SessionSnapshot.Status] and [SessionSnapshot.Error]), so
-// a non-nil error means the wait itself could not proceed: a read failed, or
-// ctx ended and its error is returned. Use [context.WithTimeout] to bound the
-// wait.
-func (t *DetachedTask) Wait(ctx context.Context, opts ...WaitOption) (*SessionSnapshot[json.RawMessage], error) {
-	waitOpts := &waitOptions{}
-	for _, opt := range opts {
-		if err := opt.applyWait(waitOpts); err != nil {
-			return nil, fmt.Errorf("agent %q: Wait: %w", t.handle.name, err)
-		}
-	}
-	interval := waitOpts.pollInterval
-	if interval == 0 {
-		interval = defaultTaskPollInterval
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		snap, err := t.Poll(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if snap.Status.Terminal() {
-			return snap, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-		}
-	}
+// Wait blocks until the task settles and returns its terminal snapshot, in one
+// dispatch of the agent's waitForSnapshot companion action: the waiting happens
+// server-side, next to the store that knows when the work finished, so the
+// caller neither picks a cadence nor pays a dispatch per tick. A task that
+// failed, aborted, or expired still returns its snapshot rather than an error
+// (inspect [SessionSnapshot.Status] and [SessionSnapshot.Error]), so a non-nil
+// error means the wait itself could not proceed: a read failed, or ctx ended
+// and its error is returned.
+//
+// Use [context.WithTimeout] to bound the wait; on the deadline the wait returns
+// ctx's error, and [DetachedTask.Poll] then reports where the task stands.
+func (t *DetachedTask) Wait(ctx context.Context) (*SessionSnapshot[json.RawMessage], error) {
+	return t.handle.WaitForSnapshot(ctx, t.snapshotID)
 }
 
 // Abort asks the task's background work to stop and returns the snapshot's

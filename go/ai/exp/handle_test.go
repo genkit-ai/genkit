@@ -328,7 +328,7 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 	rehydrated := h2.Task(task.SnapshotID())
 
 	close(release)
-	final, err := rehydrated.Wait(context.Background(), WithPollInterval(10*time.Millisecond))
+	final, err := rehydrated.Wait(context.Background())
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 		t.Fatalf("Abort status = %q, want %q", got, SnapshotStatusAborted)
 	}
 
-	final, err := task.Wait(context.Background(), WithPollInterval(10*time.Millisecond))
+	final, err := task.Wait(context.Background())
 	if err != nil {
 		t.Fatalf("Wait after abort: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestAgentHandle_StartSettledSynchronously(t *testing.T) {
 	}
 }
 
-func TestWaitOptionValidation(t *testing.T) {
+func TestWaitValidation(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 	defineGatedAgent(t, reg, "waiter", store)
@@ -539,15 +539,13 @@ func TestWaitOptionValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupAgent: %v", err)
 	}
-	task := h.Task("irrelevant")
 
-	if _, err := task.Wait(context.Background(), WithPollInterval(0)); err == nil || !strings.Contains(err.Error(), "must be positive") {
-		t.Fatalf("Wait(WithPollInterval(0)) error = %v, want positivity rejection", err)
+	// An unknown snapshot has nothing to wait on, so the wait fails the way
+	// the read does rather than blocking until ctx ends.
+	if _, err := h.Task("no-such-snapshot").Wait(context.Background()); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("Wait on unknown snapshot error = %v, want ErrSnapshotNotFound", err)
 	}
-	if _, err := task.Wait(context.Background(), WithPollInterval(-time.Second)); err == nil || !strings.Contains(err.Error(), "must be positive") {
-		t.Fatalf("Wait(WithPollInterval(-1s)) error = %v, want positivity rejection", err)
-	}
-	if _, err := task.Wait(context.Background(), WithPollInterval(time.Second), WithPollInterval(2*time.Second)); err == nil || !strings.Contains(err.Error(), "more than once") {
-		t.Fatalf("duplicate WithPollInterval error = %v, want duplicate-option rejection", err)
+	if _, err := h.WaitForSnapshot(context.Background(), ""); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Fatalf("WaitForSnapshot(\"\") error = %v, want INVALID_ARGUMENT", err)
 	}
 }

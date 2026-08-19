@@ -5031,6 +5031,11 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 	if getAction != nil {
 		t.Error("getSnapshot action should NOT be registered without a store")
 	}
+	waitAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+		reg, api.ActionTypeAgentWait, "noStoreFlow")
+	if waitAction != nil {
+		t.Error("waitForSnapshot action should NOT be registered without a store")
+	}
 	abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "noStoreFlow")
 	if abortAction != nil {
@@ -5395,6 +5400,12 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered even when store lacks SnapshotSubscriber")
 		}
+		// Waiting needs no subscription: without one it re-reads the row.
+		waitAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+			reg, api.ActionTypeAgentWait, "minCaps")
+		if waitAction == nil {
+			t.Error("waitForSnapshot action should be registered even when store lacks SnapshotSubscriber")
+		}
 		abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
@@ -5419,29 +5430,38 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if got := af.GetSnapshotAction(); got != nil {
 			t.Errorf("GetSnapshotAction() = %v, want nil", got)
 		}
+		if got := af.WaitForSnapshotAction(); got != nil {
+			t.Errorf("WaitForSnapshotAction() = %v, want nil", got)
+		}
 		if got := af.AbortAction(); got != nil {
 			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
-	t.Run("store without aborter → getSnapshot only", func(t *testing.T) {
+	t.Run("store without aborter → reads and waits, no abort", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		af := DefineCustomAgent(reg, "getOnly", noopFn,
 			WithSessionStore[testState](minimalStore[testState]{}))
 		if af.GetSnapshotAction() == nil {
 			t.Error("GetSnapshotAction() = nil, want action")
 		}
+		if af.WaitForSnapshotAction() == nil {
+			t.Error("WaitForSnapshotAction() = nil, want action")
+		}
 		if got := af.AbortAction(); got != nil {
 			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
-	t.Run("aborter store → both, identical to the registered actions", func(t *testing.T) {
+	t.Run("aborter store → all, identical to the registered actions", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		af := DefineCustomAgent(reg, "bothCompanions", noopFn,
 			WithSessionStore(newTestInMemStore[testState]()))
 		if got, want := af.GetSnapshotAction(), reg.LookupAction("/agent-snapshot/bothCompanions"); got == nil || got != want {
 			t.Errorf("GetSnapshotAction() = %v, want registered action %v", got, want)
+		}
+		if got, want := af.WaitForSnapshotAction(), reg.LookupAction("/agent-wait/bothCompanions"); got == nil || got != want {
+			t.Errorf("WaitForSnapshotAction() = %v, want registered action %v", got, want)
 		}
 		if got, want := af.AbortAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
 			t.Errorf("AbortAction() = %v, want registered action %v", got, want)
