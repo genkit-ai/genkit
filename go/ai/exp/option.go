@@ -19,6 +19,8 @@ package exp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 )
 
 // --- AgentOption ---
@@ -332,4 +334,68 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 // error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
+}
+
+// resolveInvocationInit merges opts into the invocation's [AgentInit],
+// enforcing the per-option duplicate checks and the mutual-exclusivity rules:
+// WithState excludes both WithSessionID and WithSnapshotID (a client-managed
+// conversation's identity rides inside the state itself), while WithSessionID
+// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] (via
+// resolveOptions) and [AgentHandle.Run], so typed and untyped callers reject
+// the same inputs with the same wording; name is the agent's, woven into the
+// errors.
+func resolveInvocationInit[State any](name string, opts []InvocationOption[State]) (*AgentInit[State], error) {
+	invOpts := &invocationOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyInvocation(invOpts); err != nil {
+			return nil, fmt.Errorf("Agent %q: %w", name, err)
+		}
+	}
+
+	if invOpts.state != nil && invOpts.snapshotID != "" {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", name)
+	}
+	if invOpts.state != nil && invOpts.sessionIDSet {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", name)
+	}
+
+	return &AgentInit[State]{
+		SessionID:  invOpts.sessionID,
+		SnapshotID: invOpts.snapshotID,
+		State:      invOpts.state,
+	}, nil
+}
+
+// --- WaitOption ---
+
+// WaitOption configures [DetachedTask.Wait].
+type WaitOption interface {
+	applyWait(*waitOptions) error
+}
+
+type waitOptions struct {
+	pollInterval time.Duration
+}
+
+// applyWait merges o into opts, rejecting a non-positive interval and
+// duplicate options.
+func (o *waitOptions) applyWait(opts *waitOptions) error {
+	if o.pollInterval != 0 {
+		if o.pollInterval < 0 {
+			return errors.New("poll interval must be positive (WithPollInterval)")
+		}
+		if opts.pollInterval != 0 {
+			return errors.New("cannot set poll interval more than once (WithPollInterval)")
+		}
+		opts.pollInterval = o.pollInterval
+	}
+	return nil
+}
+
+// WithPollInterval sets how often [DetachedTask.Wait] re-reads the task's
+// snapshot while it is pending. The default is 2 seconds; d must be positive.
+// Each read is one getSnapshot companion-action call, so pick an interval the
+// agent's session store can absorb.
+func WithPollInterval(d time.Duration) WaitOption {
+	return &waitOptions{pollInterval: d}
 }

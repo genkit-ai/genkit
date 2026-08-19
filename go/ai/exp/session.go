@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -39,6 +40,37 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 		return state, nil
 	}
 	return t(ctx, state)
+}
+
+// Terminal reports whether the status is settled: no further transition will
+// happen on its own. [SnapshotStatusPending] is the only non-terminal status
+// (an empty status counts as [SnapshotStatusCompleted], matching the
+// documented default), so waiters stop on completed, failed, aborted, and
+// expired alike. An expired snapshot's raw store row is still pending, but its
+// worker is presumed dead, so nothing will finalize it.
+func (s SnapshotStatus) Terminal() bool {
+	return s != SnapshotStatusPending
+}
+
+// LastModelMessage returns the most recent model message that carries text:
+// the conversation's final response as a reader would quote it. Model messages
+// holding no text (e.g. only tool requests) are skipped, so a conversation
+// whose tip is mid-tool-loop still resolves to the last spoken response. It
+// returns nil when no model message carries text, and tolerates a nil
+// receiver (e.g. a pending snapshot's nil [SessionSnapshot.State]).
+//
+// The returned message points into the state's own message list; treat it as
+// read-only, or deep-copy before mutating.
+func (s *SessionState[State]) LastModelMessage() *ai.Message {
+	if s == nil {
+		return nil
+	}
+	for _, msg := range slices.Backward(s.Messages) {
+		if msg != nil && msg.Role == ai.RoleModel && msg.Text() != "" {
+			return msg
+		}
+	}
+	return nil
 }
 
 // --- Session store ---

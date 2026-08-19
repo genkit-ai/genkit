@@ -3137,32 +3137,11 @@ func (a *Agent[State]) RunText(
 	}, opts...)
 }
 
-// resolveOptions applies invocation options and returns the init struct.
-// Mutual exclusivity is checked here, once, after all options are merged:
-// WithState excludes both WithSessionID and WithSnapshotID (a
-// client-managed conversation's identity rides inside the state itself),
-// while WithSessionID and WithSnapshotID compose as an assertion.
-// Per-option duplicate checks live in applyInvocation.
+// resolveOptions applies invocation options and returns the init struct; the
+// merge rules live in resolveInvocationInit (option.go), shared with the
+// untyped [AgentHandle] surface.
 func (a *Agent[State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
-	invOpts := &invocationOptions[State]{}
-	for _, opt := range opts {
-		if err := opt.applyInvocation(invOpts); err != nil {
-			return nil, fmt.Errorf("Agent %q: %w", a.action.Name(), err)
-		}
-	}
-
-	if invOpts.state != nil && invOpts.snapshotID != "" {
-		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", a.action.Name())
-	}
-	if invOpts.state != nil && invOpts.sessionIDSet {
-		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", a.action.Name())
-	}
-
-	return &AgentInit[State]{
-		SessionID:  invOpts.sessionID,
-		SnapshotID: invOpts.snapshotID,
-		State:      invOpts.state,
-	}, nil
+	return resolveInvocationInit(a.action.Name(), opts)
 }
 
 // --- AgentConnection ---
