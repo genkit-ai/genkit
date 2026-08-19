@@ -184,8 +184,12 @@ class TestClosedRejectSet:
             GoogleAI.gemini_model('gemini-embedding-001')
         with pytest.raises(GenkitError, match=r'background model and has no ref constructor'):
             GoogleAI.gemini_model('veo-3.0-generate-001')
-        with pytest.raises(GenkitError, match=r'has no ref constructor'):
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
             GoogleAI.gemini_model('lyria-002')
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+            GoogleAI.gemini_model('deep-research-pro-preview')
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+            GoogleAI.gemini_model('antigravity-code-1')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
             GoogleAI.gemini_model('imagegeneration@006')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
@@ -217,9 +221,9 @@ class TestEmbeddingConstructor:
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
-        ref = VertexAI.embedding('embedders/googleai/text-embedding-005', version='005')
-        assert ref.name == 'vertexai/text-embedding-005'
-        assert ref.version == '005'
+        ref = VertexAI.embedding('embedders/googleai/text-embedding-004', version='text-embedding-005')
+        assert ref.name == 'vertexai/text-embedding-004'
+        assert ref.version == 'text-embedding-005'
 
     def test_embedding_rejects_generate_models(self) -> None:
         """Generate-model ids cannot mint an EmbedderRef."""

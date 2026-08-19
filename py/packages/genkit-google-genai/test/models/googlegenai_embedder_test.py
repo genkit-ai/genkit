@@ -68,6 +68,26 @@ async def test_embedding(mocker: MockerFixture, version: GeminiEmbeddingModels) 
 
 
 @pytest.mark.asyncio
+async def test_options_version_is_the_api_model(mocker: MockerFixture) -> None:
+    """options.version overlays the action id as the model sent to embed_content."""
+    request_text = 'request text'
+    embedding_values = [0.1, 0.2]
+    request = EmbedRequest(
+        input=[Document.from_text(request_text)],
+        options={'version': 'vertexai/text-embedding-005'},
+    )
+    api_response = genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=embedding_values)])
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.embed_content.return_value = api_response
+
+    embedder = Embedder('text-embedding-004', googleai_client_mock)
+    await embedder.generate(request)
+
+    googleai_client_mock.aio.models.embed_content.assert_called_once()
+    assert googleai_client_mock.aio.models.embed_content.call_args.kwargs['model'] == 'text-embedding-005'
+
+
+@pytest.mark.asyncio
 async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
     """Multimodal docs forward media parts to the client alongside the text."""
     text = 'a photo'
