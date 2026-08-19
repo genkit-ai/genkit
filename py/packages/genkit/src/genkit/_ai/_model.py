@@ -150,12 +150,18 @@ def resolve_call_model(
     ``generate()`` / prompts with no ``model=`` still apply a registry
     default ref's version and config. The merged bag is a dict so overlay
     can happen; ModelRequest is what turns it back into an object.
+
+    The outgoing bag has no ``None`` values — name or ref — so the plugin
+    sees a missing key rather than null.
     """
     normalized = normalize_config(config=config)
     resolved = resolve_model_arg(model=model, registry=registry, message=message)
     if isinstance(resolved, ModelRef):
         return resolve_model_ref(model=resolved, config=normalized)
-    return ResolvedModel(name=resolved, config=normalized)
+    return ResolvedModel(
+        name=resolved,
+        config={k: v for k, v in normalized.items() if v is not None},
+    )
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:

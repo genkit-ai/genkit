@@ -310,6 +310,20 @@ def test_resolve_model_arg_rejects_non_name_explicit_model() -> None:
         resolve_model_arg(model=123, registry=registry)
 
 
+def test_resolve_call_model_string_path_omits_none() -> None:
+    """None means omit on a name, same as after a ref merge."""
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'echo')
+    resolved = resolve_call_model(
+        model='echo',
+        config={'temperature': None, 'top_k': 40},
+        registry=registry,
+    )
+    assert resolved.name == 'echo'
+    assert 'temperature' not in resolved.config
+    assert resolved.config['top_k'] == 40
+
+
 def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None:
     """An explicit name is a different model; constructor knobs stay off it."""
     registry = Registry()
