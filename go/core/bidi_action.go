@@ -561,7 +561,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	}
 	select {
 	case <-c.ctx.Done():
-		return c.ctxErr()
+		return c.completedOrCtxErr()
 	default:
 	}
 
@@ -569,10 +569,27 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	case c.inputCh <- input:
 		return nil
 	case <-c.ctx.Done():
-		return c.ctxErr()
+		return c.completedOrCtxErr()
 	case <-c.doneCh:
 		return status.Errorf(ErrActionCompleted, "action has completed")
 	}
+}
+
+// completedOrCtxErr reports the reason a send cannot proceed, preferring
+// completion over cancellation the way [BidiConnection.Output] and
+// [BidiConnection.Receive] do. Completion closes doneCh and then releases the
+// connection context, so a context that reads as done may already be the
+// action's own teardown rather than an abort: a teardown landing between the
+// checks above, or racing the blocking select, must still surface as
+// [ErrActionCompleted] so the caller goes to Output for the real result
+// instead of reporting a cancellation that never happened.
+func (c *BidiConnection[In, Out, Stream]) completedOrCtxErr() error {
+	select {
+	case <-c.doneCh:
+		return status.Errorf(ErrActionCompleted, "action has completed")
+	default:
+	}
+	return c.ctxErr()
 }
 
 // Close signals that no more inputs will be sent. It does not terminate

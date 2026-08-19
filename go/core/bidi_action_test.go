@@ -25,12 +25,77 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
+
+// TestSendPrefersCompletionOverTeardownCancellation pins Send's precedence
+// against the connection's own teardown. run closes doneCh and then releases
+// the connection context, so a context that reads as done is usually the
+// action finishing rather than an abort. Send tests the two in separate
+// selects, and a teardown landing between them used to surface as
+// context.Canceled: callers tolerate ErrActionCompleted and go to Output for
+// the outcome, but take a cancellation as the outcome, so the action's real
+// error was discarded.
+//
+// The window is a few instructions wide. This drives it under contention
+// rather than forcing it, with the gate piling the workers up so they are
+// descheduled around the call. A run that reproduces nothing still cannot
+// fail, and the fix makes the misreport impossible rather than rare.
+func TestSendPrefersCompletionOverTeardownCancellation(t *testing.T) {
+	const (
+		iterations = 500_000
+		workers    = 32
+	)
+
+	ctx := context.Background()
+	want := errors.New("action failed before reading input")
+	action := NewBidiActionOf(api.ActionTypeCustom, "failfast", nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			return "", want
+		})
+
+	var (
+		gate       sync.Mutex
+		cancelled  atomic.Int64
+		lostResult atomic.Int64
+		wg         sync.WaitGroup
+	)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations / workers {
+				conn, err := action.Connect(ctx, struct{}{})
+				if err != nil {
+					t.Errorf("Connect() error = %v", err)
+					return
+				}
+				gate.Lock()
+				err = conn.Send("hi")
+				gate.Unlock()
+				if errors.Is(err, context.Canceled) {
+					cancelled.Add(1)
+				}
+				if _, err := conn.Output(); !errors.Is(err, want) {
+					lostResult.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := cancelled.Load(); n != 0 {
+		t.Errorf("Send reported cancellation on %d of %d completed invocations, want the action's completion", n, iterations)
+	}
+	if n := lostResult.Load(); n != 0 {
+		t.Errorf("Output lost the action's error on %d of %d invocations", n, iterations)
+	}
+}
 
 func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()
