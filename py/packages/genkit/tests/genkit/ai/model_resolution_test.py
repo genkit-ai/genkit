@@ -140,9 +140,9 @@ def test_resolved_model_is_frozen() -> None:
         resolved.name = 'other'  # type: ignore[misc]
 
 
-def test_normalize_config_raises_type_error_for_unsupported_type() -> None:
-    """normalize_config raises TypeError if the config is not None, BaseModel, or Mapping."""
-    with pytest.raises(TypeError, match='Unsupported config type'):
+def test_normalize_config_rejects_unsupported_type() -> None:
+    """A leftover int is INVALID_ARGUMENT, same class of reject as model=123."""
+    with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel'):
         normalize_config(config=123)
 
 

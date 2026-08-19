@@ -89,7 +89,10 @@ def normalize_config(*, config: object) -> dict[str, Any]:
         return dumped
     if isinstance(config, Mapping):
         return dict(cast(Mapping[str, Any], config))
-    raise TypeError(f'Unsupported config type: {type(config).__name__}')
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
+    )
 
 
 def resolve_model_arg(
