@@ -155,8 +155,8 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
         - Veo name (``veo-``) → veo
         - 'gemini'/'gemma' in name (and not an embedding) → gemini
       Ids with no working generate path here (``imagegeneration@*``,
-      ``virtual-try-on-*``) are not categorized at all, so they are never
-      advertised or registered.
+      ``imagetext@*``, ``virtual-try-on-*``) are not categorized at all, so
+      they are never advertised or registered.
       Embedders are intentionally NOT discovered here. The Vertex catalog
       over-lists embedders that are published but not callable, so they
       are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
@@ -338,14 +338,19 @@ def _create_veo_background_action(
     prefix = f'{plugin_name}/'
     clean_name = name.removeprefix(prefix)
     full_name = f'{prefix}{clean_name}'
+    action_key = f'/background-model/{full_name}'
 
     async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
         veo = VeoModel(clean_name, client_getter())
-        return await veo.start(request, ctx)
+        op = await veo.start(request, ctx)
+        op.action = action_key
+        return op
 
     async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
         veo = VeoModel(clean_name, client_getter())
-        return await veo.check(op)
+        updated = await veo.check(op)
+        updated.action = action_key
+        return updated
 
     info = veo_model_info(clean_name).model_dump(by_alias=True)
 
@@ -387,7 +392,10 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
         input_json_schema=to_json_schema(ModelRequest),
         output_json_schema=to_json_schema(Operation),
         metadata={
-            'model': {**veo_model_info(local).model_dump(by_alias=True), 'customOptions': to_json_schema(VeoConfigSchema)},
+            'model': {
+                **veo_model_info(local).model_dump(by_alias=True),
+                'customOptions': to_json_schema(VeoConfigSchema),
+            },
             'type': 'background-model',
         },
     )

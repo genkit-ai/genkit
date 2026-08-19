@@ -21,7 +21,7 @@ import os
 import queue
 import threading
 from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import (
@@ -38,13 +38,16 @@ from genkit_google_genai.google import (
     GOOGLEAI_PLUGIN_NAME,
     VERTEXAI_PLUGIN_NAME,
     GenaiModels,
+    _list_genai_models,
     googleai_name,
     vertexai_name,
 )
 from genkit_google_genai.models.gemini import GeminiImageConfigSchema
 from genkit_google_genai.models.imagen import ImagenConfigSchema
+from genkit_google_genai.models.veo import VeoModel
 
-from genkit import ActionKind
+from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
+from genkit.model import Operation
 from genkit.plugin_api import Action, to_json_schema
 
 
@@ -291,7 +294,16 @@ async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'model_id',
-    ['virtual-try-on-001', 'imagegeneration@006', 'lyria-002', 'deep-research-pro-preview', 'gemini-embedding-001'],
+    [
+        'virtual-try-on-001',
+        'imagegeneration@006',
+        'imagetext@001',
+        'lyria-002',
+        'deep-research-pro-preview',
+        'gemini-embedding-001',
+        'models/deep-research-pro-preview',
+        'publishers/google/models/deep-research-pro-preview',
+    ],
 )
 async def test_vertexai_unroutable_ids_fail_closed(
     mock_list_models: MagicMock, mock_client: MagicMock, model_id: str
@@ -310,7 +322,16 @@ async def test_vertexai_unroutable_ids_fail_closed(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'model_id',
-    ['virtual-try-on-001', 'imagegeneration@006', 'lyria-002', 'deep-research-pro-preview', 'gemini-embedding-001'],
+    [
+        'virtual-try-on-001',
+        'imagegeneration@006',
+        'imagetext@001',
+        'lyria-002',
+        'deep-research-pro-preview',
+        'gemini-embedding-001',
+        'models/deep-research-pro-preview',
+        'publishers/google/models/deep-research-pro-preview',
+    ],
 )
 async def test_googleai_unroutable_ids_fail_closed(
     mock_list_models: MagicMock, mock_client: MagicMock, model_id: str
@@ -407,6 +428,54 @@ async def test_list_actions_advertises_veo_as_background(mock_list_models: Magic
         assert len(veo_entries) == 1
         assert veo_entries[0].name == f'{plugin_name}/veo-3.0-generate-001'
         assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
+
+
+def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> None:
+    """Discovery buckets on the ``veo-`` prefix, not a ``veo`` substring."""
+
+    def _model(name: str) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = None
+        item.description = ''
+        return item
+
+    client = MagicMock()
+    client.models.list.return_value = [
+        _model('publishers/google/models/gemini-2.5-flash'),
+        _model('publishers/google/models/veo-3.0-generate-001'),
+        _model('publishers/google/models/braveo-lab'),
+        _model('publishers/google/models/imagegeneration@006'),
+        _model('publishers/google/models/virtual-try-on-001'),
+        _model('publishers/google/models/imagetext@001'),
+    ]
+    catalog = _list_genai_models(client, is_vertex=True)
+    assert catalog.veo == ['veo-3.0-generate-001']
+    assert catalog.imagen == []
+    assert 'imagetext@001' not in catalog.gemini
+    assert 'braveo-lab' not in catalog.gemini
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_start_stamps_background_action_key(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Start and check stamp ``/background-model/{name}`` so a later check can resolve."""
+    mock_list_models.return_value = GenaiModels()
+    plugin = VertexAI(project='test-project')
+    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
+    check = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.0-generate-001/check')
+    assert start is not None
+    assert check is not None
+
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a clip'))])])
+    with patch.object(VeoModel, 'start', new=AsyncMock(return_value=Operation(id='ops/1'))):
+        started = await start.run(request)
+    assert started.response.action == '/background-model/vertexai/veo-3.0-generate-001'
+
+    with patch.object(VeoModel, 'check', new=AsyncMock(return_value=Operation(id='ops/1'))):
+        checked = await check.run(Operation(id='ops/1'))
+    assert checked.response.action == '/background-model/vertexai/veo-3.0-generate-001'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
