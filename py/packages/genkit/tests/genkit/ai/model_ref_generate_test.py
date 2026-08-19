@@ -142,13 +142,14 @@ async def test_generate_model_ref_same_key_override(
 async def test_generate_string_model_config_dict_unchanged(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """Bare string model path still accepts dict config."""
+    """A name has no ref to overlay. The call dict is the whole config."""
     ai, echo = ai_with_echo
 
     response = await ai.generate(model='testEcho', prompt='Hello', config={'temperature': 0.1})
 
     assert '0.1' in response.text
     assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.1
 
 
 @pytest.mark.asyncio
@@ -765,18 +766,73 @@ async def test_generate_alias_none_clears_ref_field(
 async def test_generate_alias_replaces_nested_bag(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """thinkingConfig replaces the ref's thinking_config bag."""
+    """thinkingConfig is the thinking_config slot. The call's bag replaces it whole.
+
+    ``thinking_level`` and ``include_thoughts`` from the ref are gone. Inner
+    keys stay as written.
+    """
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
         config_schema=AliasedNestedConfig,
-        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1}),
+        config=AliasedNestedConfig(
+            thinking_config={
+                'include_thoughts': True,
+                'thinking_budget': 1024,
+                'thinking_level': 'low',
+            }
+        ),
     )
 
     await ai.generate(model=ref, config={'thinkingConfig': {'thinkingBudget': 256}}, prompt='Hello')
 
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'thinking_config') == {'thinkingBudget': 256}
+    if isinstance(echo.last_request.config, dict):
+        assert 'thinkingConfig' not in echo.last_request.config
+    else:
+        extra = getattr(echo.last_request.config, 'model_extra', None) or {}
+        assert extra.get('thinkingConfig') is None
+
+
+@pytest.mark.asyncio
+async def test_generate_alias_none_clears_nested_bag(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """thinkingConfig=None clears the whole thinking_config slot."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=AliasedNestedConfig,
+        config=AliasedNestedConfig(thinking_config={'thinking_budget': 1024, 'thinking_level': 'low'}),
+    )
+
+    await ai.generate(model=ref, config={'thinkingConfig': None}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'thinking_config') is None
+    _leftover_alias(echo.last_request.config, 'thinking_config', 'thinkingConfig')
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_fold_inner_keys(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Both spellings inside a nested bag stay. Only the outer key folds."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=AliasedNestedConfig)
+
+    await ai.generate(
+        model=ref,
+        config={'thinkingConfig': {'thinking_budget': 1, 'thinkingBudget': 256}},
+        prompt='Hello',
+    )
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'thinking_config') == {
+        'thinking_budget': 1,
+        'thinkingBudget': 256,
+    }
     if isinstance(echo.last_request.config, dict):
         assert 'thinkingConfig' not in echo.last_request.config
     else:
@@ -804,6 +860,15 @@ async def test_generate_both_spellings_last_write_wins(
 
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+    await ai.generate(
+        model=ref,
+        config={'maxOutputTokens': 5, 'max_output_tokens': 1},
+        prompt='Hello',
+    )
+
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == 1
     _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
 
 
@@ -842,4 +907,24 @@ async def test_prompt_alias_dict_overrides_ref_field(
 
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
+    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
+
+
+@pytest.mark.asyncio
+async def test_prompt_alias_none_clears_ref_field(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Prompt call-time maxOutputTokens=None is the same clear as generate."""
+    ai, echo = ai_with_echo
+    ref = model_ref(
+        'testEcho',
+        config_schema=ModelConfig,
+        config=ModelConfig(max_output_tokens=100),
+    )
+    joke = ai.define_prompt(name='jokeAliasClear', model=ref, prompt='hi')
+
+    await joke(config={'maxOutputTokens': None})
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'max_output_tokens') is None
     _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
