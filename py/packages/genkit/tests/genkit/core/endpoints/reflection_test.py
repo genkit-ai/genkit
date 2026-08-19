@@ -424,16 +424,19 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
 
 @pytest.mark.asyncio
 async def test_values_default_model_ref_is_name() -> None:
-    """A constructor ModelRef lists as its wire name so the Dev UI can JSON it."""
-    ai = Genkit(
-        model=model_ref(
+    """A stored ModelRef lists as its wire name so the Dev UI can JSON it."""
+    registry = Registry()
+    registry.register_value(
+        'defaultModel',
+        'defaultModel',
+        model_ref(
             'echoModel',
             config_schema=ModelConfig,
             version='001',
             config=ModelConfig(temperature=0.7),
-        )
+        ),
     )
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(registry)
     try:
         response = await client.get('/api/values?type=defaultModel')
         assert response.status_code == 200

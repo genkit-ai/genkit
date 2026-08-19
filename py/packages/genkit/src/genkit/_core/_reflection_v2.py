@@ -710,8 +710,8 @@ class ReflectionServerV2:
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
-                # Dev UI lists a model name. A constructor ModelRef is stored
-                # as-is; only the name is JSON-serializable here.
+                # Dev UI lists a model name. A stored ModelRef is an object;
+                # only the name is JSON-serializable here.
                 mapped[name] = value.name if isinstance(value, ModelRef) else value
         await self.send_response(sid, {'values': mapped})
 

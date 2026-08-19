@@ -31,7 +31,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._model import ModelConfig, ModelRequest
+from genkit._core._model import ModelRequest
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
@@ -55,7 +55,6 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import model_ref
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -86,64 +85,6 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
     stream_result = ai.generate_stream(prompt='hi', config={'temperature': 11})
 
     assert (await stream_result.response).text == want_txt
-
-
-@pytest.mark.asyncio
-async def test_generate_uses_constructor_model_ref() -> None:
-    """Genkit(model=ref) applies the ref's name, version, and config on generate()."""
-    ref = model_ref(
-        'echoModel',
-        config_schema=ModelConfig,
-        version='001',
-        config=ModelConfig(temperature=0.7),
-    )
-    ai = Genkit(model=ref)
-    echo, _ = define_echo_model(ai)
-
-    response = await ai.generate(prompt='hi')
-
-    assert response.text.startswith('[ECHO] user: "hi"')
-    assert echo.last_request is not None
-    assert echo.last_request.config is not None
-    assert echo.last_request.config.temperature == 0.7
-    assert echo.last_request.config.version == '001'
-
-
-@pytest.mark.asyncio
-async def test_generate_constructor_model_ref_call_time_config_wins() -> None:
-    """Call-time config overlays the constructor ref per key."""
-    ref = model_ref(
-        'echoModel',
-        config_schema=ModelConfig,
-        config=ModelConfig(temperature=0.7),
-    )
-    ai = Genkit(model=ref)
-    echo, _ = define_echo_model(ai)
-
-    await ai.generate(prompt='hi', config={'temperature': 0.2})
-
-    assert echo.last_request is not None
-    assert echo.last_request.config is not None
-    assert echo.last_request.config.temperature == 0.2
-
-
-@pytest.mark.asyncio
-async def test_prompt_uses_constructor_model_ref_config() -> None:
-    """A prompt with no model= still picks up the constructor ref's config."""
-    ref = model_ref(
-        'echoModel',
-        config_schema=ModelConfig,
-        config=ModelConfig(temperature=0.7),
-    )
-    ai = Genkit(model=ref)
-    echo, _ = define_echo_model(ai)
-    hello = ai.define_prompt(name='hello', prompt='hi')
-
-    await hello()
-
-    assert echo.last_request is not None
-    assert echo.last_request.config is not None
-    assert echo.last_request.config.temperature == 0.7
 
 
 @pytest.mark.asyncio

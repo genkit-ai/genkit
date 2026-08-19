@@ -62,7 +62,6 @@ from genkit._ai._generate import (
 )
 from genkit._ai._model import (
     Message,
-    ModelArg,
     ModelConfig,
     ModelFn,
     ModelResponse,
@@ -171,7 +170,7 @@ class Genkit:
     def __init__(
         self,
         plugins: list[Plugin] | None = None,
-        model: ModelArg | None = None,
+        model: str | None = None,
         prompt_dir: str | Path | None = None,
         reflection_server_spec: ServerSpec | None = None,
     ) -> None:
@@ -907,7 +906,7 @@ class Genkit:
             name='genkit-reflection-server',
         ).start()
 
-    def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:
+    def _initialize_registry(self, model: str | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
         if model:
             self.registry.register_value('defaultModel', 'defaultModel', model)

@@ -145,11 +145,11 @@ def resolve_call_model(
     registry: Registry,
     message: str = 'No model configured.',
 ) -> ResolvedModel:
-    """Resolve a name or constructor ModelRef plus call-time config.
+    """Resolve a name or stored ModelRef plus call-time config.
 
-    ``generate()`` / prompts with no ``model=`` still apply the constructor
-    ref's version and config. The merged bag is a dict so overlay can happen;
-    ModelRequest is what turns it back into an object.
+    ``generate()`` / prompts with no ``model=`` still apply a registry
+    default ref's version and config. The merged bag is a dict so overlay
+    can happen; ModelRequest is what turns it back into an object.
     """
     normalized = normalize_config(config=config)
     resolved = resolve_model_arg(model=model, registry=registry, message=message)

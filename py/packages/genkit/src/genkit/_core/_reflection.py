@@ -252,8 +252,8 @@ def create_reflection_asgi_app(
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
             elif type_param == 'defaultModel':
-                # Dev UI lists a model name. The constructor may store a
-                # ModelRef; only the name is JSON-serializable here.
+                # Dev UI lists a model name. A stored ModelRef is an object;
+                # only the name is JSON-serializable here.
                 raw_values = {key: val.name if isinstance(val, ModelRef) else val for key, val in raw_values.items()}
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:

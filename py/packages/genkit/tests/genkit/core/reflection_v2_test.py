@@ -257,7 +257,7 @@ async def test_reflection_server_v2_list_values(fake_manager: FakeReflectionMana
 async def test_reflection_server_v2_list_values_model_ref_is_name(
     fake_manager: FakeReflectionManager,
 ) -> None:
-    """A constructor ModelRef lists as its wire name, not the object."""
+    """A stored ModelRef lists as its wire name, not the object."""
     registry = Registry()
     registry.register_value(
         'defaultModel',
