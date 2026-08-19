@@ -25,6 +25,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -116,11 +117,11 @@ func delegationResponses(t *testing.T, msgs []*ai.Message, toolName string) []de
 }
 
 func TestAgentsValidation(t *testing.T) {
-	if _, err := (&Agents{}).New(ctx); err == nil {
-		t.Error("expected error when no agents are configured")
+	if _, err := (&Agents{}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when no agents are configured, got %v", err)
 	}
-	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: ""}}}).New(ctx); err == nil {
-		t.Error("expected error when an agent reference has no name")
+	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: ""}}}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when an agent reference has no name, got %v", err)
 	}
 	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: "ok"}}}).New(ctx); err != nil {
 		t.Errorf("unexpected error for a valid config: %v", err)
@@ -526,6 +527,7 @@ func TestAgentsConfigSerialization(t *testing.T) {
 		MaxDelegations:   3,
 		HistoryLength:    2,
 		ArtifactStrategy: ArtifactStrategySession,
+		Async:            true,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -543,6 +545,9 @@ func TestAgentsConfigSerialization(t *testing.T) {
 	}
 	if got.ArtifactStrategy != ArtifactStrategySession {
 		t.Errorf("artifactStrategy lost in round trip: %q", got.ArtifactStrategy)
+	}
+	if !got.Async {
+		t.Error("async lost in round trip")
 	}
 }
 
