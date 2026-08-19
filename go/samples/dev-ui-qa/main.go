@@ -62,23 +62,33 @@ func main() {
 	// QA than no surface. The panic itself is a lifecycle case; see
 	// lifecycle.go.
 	var plugins []api.Plugin
-	if hasGoogleAI() {
-		plugins = append(plugins, &googlegenai.GoogleAI{})
+	force := os.Getenv("DEV_UI_QA_FORCE_PLUGINS") == "1"
+	if force {
+		// Escape hatch to demonstrate the missing-auth Init panic UX
+		// (ANT-52, GGA-48): register everything regardless of creds.
+		plugins = append(plugins, &googlegenai.GoogleAI{}, &googlegenai.VertexAI{}, &anthropic.Anthropic{})
 	} else {
-		log.Println("dev-ui-qa: GEMINI_API_KEY not set, skipping googleai")
-	}
-	if hasVertex() {
-		plugins = append(plugins, &googlegenai.VertexAI{})
-	} else {
-		log.Println("dev-ui-qa: GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION/REGION not set, skipping vertexai")
-	}
-	if hasAnthropic() {
-		plugins = append(plugins, &anthropic.Anthropic{})
-	} else {
-		log.Println("dev-ui-qa: ANTHROPIC_API_KEY not set, skipping anthropic")
+		if hasGoogleAI() {
+			plugins = append(plugins, &googlegenai.GoogleAI{})
+		} else {
+			log.Println("dev-ui-qa: GEMINI_API_KEY not set, skipping googleai")
+		}
+		if hasVertex() {
+			plugins = append(plugins, &googlegenai.VertexAI{})
+		} else {
+			log.Println("dev-ui-qa: GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION/REGION not set, skipping vertexai")
+		}
+		if hasAnthropic() {
+			plugins = append(plugins, &anthropic.Anthropic{})
+		} else {
+			log.Println("dev-ui-qa: ANTHROPIC_API_KEY not set, skipping anthropic")
+		}
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(plugins...),
+		genkit.WithPromptDir("prompts"),
+	)
 
 	genkit.DefineFlow(g, "smoke", func(ctx context.Context, input string) (string, error) {
 		return "ok: " + input, nil

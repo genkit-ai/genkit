@@ -1,0 +1,8 @@
+---
+input:
+  schema:
+    topic?: string
+  default:
+    topic: airplane food
+---
+Share a short joke about {{topic}}.

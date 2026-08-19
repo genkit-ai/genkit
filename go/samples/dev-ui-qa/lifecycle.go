@@ -14,15 +14,20 @@
 
 package main
 
-import "github.com/firebase/genkit/go/genkit"
+import (
+	"context"
+
+	"github.com/firebase/genkit/go/genkit"
+)
 
 // registerLifecycleCases covers "Crash and lifecycle" and the failure rows of
 // "Discovery and action list": a flow that panics on demand (what the UI
 // shows, whether it reconnects; same class as GGA-1/GGA-32), silent
 // dynamic-listing failure (GGA-38), and the Init panic on missing auth
-// (ANT-52, GGA-48) - the last is exercised by unsetting keys, not by a
-// registration here.
+// (ANT-52, GGA-48) - the last is exercised by DEV_UI_QA_FORCE_PLUGINS=1 with
+// keys unset, not by a registration here.
 func registerLifecycleCases(g *genkit.Genkit) {
-	// TODO: panic flow, log-streaming exercise flow (ccfe1093d).
-	_ = g
+	genkit.DefineFlow(g, "panicFlow", func(ctx context.Context, input string) (string, error) {
+		panic("DEV_UI_QA_PANIC_MARKER: panicFlow panicked on purpose (input: " + input + ")")
+	})
 }

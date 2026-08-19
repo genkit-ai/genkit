@@ -21,6 +21,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
@@ -350,4 +351,46 @@ func registerGoogleAIFlows(g *genkit.Genkit, mathAdd ai.Tool) {
 			return fmt.Sprintf("turn 1: %s\n\nturn 2: %s", first.Text(), second.Text()), nil
 		})
 	}
+
+	// Tier A: chunks must arrive in the UI one at a time, not as a single
+	// batch, so each is delayed enough to defeat buffering.
+	genkit.DefineStreamingFlow(g, "streamingCounter",
+		func(ctx context.Context, count int, sendChunk core.StreamCallback[string]) (string, error) {
+			if count <= 0 {
+				count = 5
+			}
+			for i := 1; i <= count; i++ {
+				if err := sendChunk(ctx, fmt.Sprintf("chunk %d of %d", i, count)); err != nil {
+					return "", err
+				}
+				time.Sleep(400 * time.Millisecond)
+			}
+			return fmt.Sprintf("streamed %d chunks", count), nil
+		},
+	)
+
+	// Tier A: exercises log streaming into the Dev UI (ccfe1093d) at each
+	// level the console handler forwards.
+	genkit.DefineFlow(g, "loggingFlow", func(ctx context.Context, input string) (string, error) {
+		log := logger.FromContext(ctx)
+		log.Info("loggingFlow info line", "input", input)
+		log.Warn("loggingFlow warn line", "hint", "this should render as a warning")
+		log.Error("loggingFlow error line", "code", "QA_TEST_ERROR")
+		return "logged 3 lines at info/warn/error", nil
+	})
+
+	// Tier A: tools appear as standalone actions in the Dev UI; no flow
+	// wraps this one on purpose.
+	genkit.DefineTool(g, "shoutTool", "Uppercases the input and appends an exclamation mark",
+		func(ctx *ai.ToolContext, input string) (string, error) {
+			out := ""
+			for _, r := range input {
+				if 'a' <= r && r <= 'z' {
+					r -= 'a' - 'A'
+				}
+				out += string(r)
+			}
+			return out + "!", nil
+		},
+	)
 }
