@@ -8,11 +8,26 @@ issue on its own: `ANT-`, `GGA-`, `DEC-` for decisions, `IF-` for in-flight item
 
 Audited <date> at `<commit>`. SDK versions pinned: <target> `<ver>`, <reference> `<ver>`.
 
-Every row was re-checked against the code by <N> independent reviewers working from the claims
-alone: <n> confirmed as written, <n> corrected for detail or consequence, <n> found factually
-wrong, <n> previously unresolved now resolved. Rows whose original claim was wrong or materially
-understated carry `corrected` in their tag and say what the original got wrong. <Which direction
-the wrong rows pointed, so the reader knows which half of the list is least settled.>
+Then **one of the two headers below**, never neither.
+
+*If phase 6 ran:*
+
+> Every row was re-checked against the code by <N> independent reviewers working from the claims
+> alone. Rows whose original claim was wrong or materially understated carry `corrected` in their
+> tag and say what the original got wrong. <Which direction the wrong rows pointed, so the reader
+> knows which half of the list is least settled.>
+
+*If phase 6 did not run* - required wording, at the top, before any row:
+
+> **THIS LIST IS UNVERIFIED.** Phase 6 (adversarial verification) <and phase 7 (the open-PR
+> sweep)> did not run. Roughly half of an unverified first pass needs rework, and wrong rows skew
+> toward claims about the reference implementation - of which this list contains <n>. Treat every
+> row as a hypothesis with evidence attached, not a finding. Nothing here should be filed as an
+> issue until the missing phases run.
+
+Do **not** respond to being unable to verify by shortening the list to only the rows you are
+confident about. Keep everything and label harder - a reviewer can strike a row, but cannot
+recover one that was never written.
 
 Severity: **X** = correctness bug (a valid provider response or documented config fails);
 **T** = table stakes; **C** = consistency/experience.
@@ -25,6 +40,10 @@ Reference: `<ref path>` (<LOC>). Target: `<target paths>` (<LOC>). <Direction ve
 two-way, say so before the rows, because it changes scoping.>
 
 ### Corrections to the seed list
+
+Only when the caller supplied known gaps to check. A "seed list" is whatever the requester already
+believes is broken - from a meeting, an epic, or an earlier audit. **Omit this section entirely if
+there was none**; do not emit the heading with a disclaimer.
 
 - ~~"<seed claim>"~~ — **not a gap.** <evidence with `path:line`>. What is actually missing is
   <ROW-ID>.
@@ -99,5 +118,10 @@ decisions distinct — do not fold a locally-fixable defect in because it touche
 - Paths are repo-relative from the root, so a citation resolves without guessing. Where the
   output will be read alongside the repo, link them at the pinned commit rather than the
   default branch — line anchors drift.
-- Recount every counting claim (lines, sections, samples, catalog members) rather than
-  reasoning from an earlier count. They are the fastest way for a reviewer to lose trust.
+- Recount every counting claim (lines, sections, samples, catalog members) rather than reasoning
+  from an earlier count. They are the fastest way for a reviewer to lose trust. Check which
+  spelling a file uses before counting it - counting `test(` in a suite written with `it(` undercounts
+  by a factor.
+- Where a defect is severe on one code path and harmless on another, tag it by its worst reachable
+  path and state the condition in the evidence. A config bug that only bites through the Dev UI is
+  still a correctness bug.

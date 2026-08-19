@@ -29,6 +29,13 @@ being worked on - see `in-flight.md`), or a typo.
 One tracked path that is easy to get wrong: the CLI and tooling live at **`genkit-tools/`** in
 the repo root, not under `js/`.
 
+**Several roles a plugin appears to own actually live in the framework**, and a row is invisible
+until you follow the call out of the plugin tree. Known hops: the HTTP-status-to-Genkit-status code
+table (`go/core/status`), untyped-config deserialization (`go/ai/config.go` into
+`go/internal/base/json.go`), media-part URI handling (`go/plugins/internal/uri`), and the response
+and finish-reason types (`go/ai/gen.go`). A defect in any of these surfaces as a plugin bug and
+fixes in the shared ones land across every plugin that calls them.
+
 ## Per plugin
 
 | plugin | JS | Go |

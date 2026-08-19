@@ -3,9 +3,9 @@
 The frozen checklist. Walk it in order, once per plugin. Every dimension produces either a
 row in the gap list or nothing.
 
-Extracted from the anthropic JS -> Go run and corrected by the google-genai replay
-(2026-08-18). Append to it when a plugin forces a question these do not cover; never silently
-skip one.
+Each dimension is a **question**, deliberately not an answer - prior findings live in the appendix
+at the end so an auditor can choose whether to be primed by them. Append to the checklist when a
+plugin forces a question these do not cover; never silently skip one.
 
 ## Group 0. Coverage - do this first
 
@@ -56,11 +56,12 @@ these dimensions is a two-way convergence, not a catch-up.
 | C2 | Genkit-common coverage | maxOutputTokens, temperature, topK, topP, stopSequences, version - present, absent, or renamed on each side. |
 | C3 | Provider-specific coverage | Field by field, for every provider config field the reference exposes. |
 | C4 | Validation | Refinements, ranges, mutual exclusions, integer-vs-float constraints, and where they are enforced (plugin vs provider API). |
-| C5 | Managed fields | Fields a Genkit primitive owns (messages, system, model, output format, function tools). Whether setting one is rejected with a pointer to the right option, silently overwritten, or silently dropped. |
+| C5 | Managed-field protection | Which fields a Genkit primitive owns (messages, system, model, output format, function tools), and what happens when config supplies one anyway - rejected with the option to use instead, silently overwritten, or silently dropped. Check the ordering: config spread *after* the framework builds the request body can clobber messages, model, system or tools with no error. |
 | C6 | Dev UI presentation | Field descriptions, hidden fields, and reflection artefacts leaking into the schema. |
-| C7 | Schema type mapping | For reflected schemas: how SDK wrapper types are mapped to JSON Schema primitives, and what happens to a wrapper type the mapping does not name. Matching on `reflect.Type.Name()` string literals degrades silently on an SDK rename; comparing against `reflect.TypeOf(...)` fails at compile time instead. Check whether sibling plugins share the problem before generalising it - one did not, because its SDK uses plain pointer scalars with nothing to remap. |
-| C8 | Passthrough behaviour | Whether the schema rejects unknown keys or spreads them into the wire request, and *where* it spreads them. This decides whether a field absent from the schema is genuinely unreachable: a nested-config passthrough will not reach a field the provider places at the request root. The most common cause of a false "unreachable" row. |
-| C9 | Backend-conditional fields | Fields the SDK accepts on one backend and hard-errors on for another. Where one description map serves both backends, check the descriptions carry the caveat - otherwise a user reads documentation for a field that cannot work. |
+| C7 | Schema type mapping | For reflected schemas: how SDK wrapper types become JSON Schema primitives, and what happens to a wrapper type the mapping does not name. How is the mapping keyed, and would an SDK rename fail loudly or degrade silently? Check whether sibling plugins share whatever you find before generalising it. |
+| C8 | Passthrough behaviour | Whether the schema rejects unknown keys or spreads them into the wire request, and *where* it spreads them. This decides whether a field absent from the schema is genuinely unreachable, and it cuts both ways: passthrough can also let config silently overwrite what a Genkit primitive built. |
+| C9 | Backend-conditional fields | Fields the SDK accepts on one backend and hard-errors on for another. Where one description map serves several backends, check the descriptions carry the caveat. |
+| C10 | Config deserialization path | How an untyped config (`map[string]any`, JSON from the Dev UI or an HTTP transport) becomes the typed config the model function receives, and **whether the typed and untyped paths behave identically**. Probe it by running it - see the SDK-probing rule in SKILL.md. A discriminated union that does not round-trip drops the field with no error, which makes the bug invisible to typed callers and to source reading, and reachable only through the Dev UI. Establish this early: every other config row depends on it. |
 
 ## D. Request conversion
 
@@ -103,7 +104,7 @@ Only applies when group 0.1 found a background-model or check-operation action.
 
 | # | Dimension | What to compare |
 |---|-----------|-----------------|
-| F1 | Status classification | Per HTTP code. Check provider-specific codes (e.g. 529) individually - a generic `>= 500 -> Internal` fallback misclassifies them. |
+| F1 | Status classification | Per HTTP code, on both sides. Provider-specific codes need checking individually rather than assuming the general mapping covers them. Follow the classification helper wherever it leads: the code table may live in the framework, outside any plugin directory. |
 | F2 | Retry metadata | Whether `retry-after` (both delay-seconds and HTTP-date forms) reaches the caller. |
 | F3 | Caller-fault vs server-fault | Whether a bad request is classified so retry middleware does not reissue it. |
 | F4 | Message quality | Whether the error names the option to use instead. |
@@ -124,3 +125,39 @@ Only applies when group 0.1 found a background-model or check-operation action.
 | H1 | Unit coverage | Which of the dimensions above have a test on each side. |
 | H2 | Live tests | Presence, and what they cover. |
 | H3 | Conformance tests | Whether the plugin participates in the shared conformance suite. |
+
+---
+
+# Appendix: known findings from prior runs
+
+**Spoilers. Skip this section while auditing** if you want an independent result, and read it
+afterwards as a completeness check.
+
+The dimensions above are deliberately phrased as questions. Earlier drafts embedded the answers
+from prior runs, and an independent auditor reported that this stopped some rows from being real
+derivations - it confirmed conclusions it had been handed. The findings still have value as a
+coverage check, so they live here instead, separated from the checklist.
+
+Treat every entry as dated and possibly closed. Verify against the current commit before reusing.
+
+- **C7** - a Go plugin keyed its SDK wrapper-type remap on `reflect.Type.Name()` string literals,
+  which degrades silently on an SDK rename rather than failing at build time. A sibling plugin did
+  not share the problem, because its SDK uses plain pointer scalars with nothing to remap.
+- **C8** - a reference-side schema ending `.passthrough()` spread unknown keys into the nested
+  config object, so a field the provider places at the *request root* stayed unreachable while two
+  sibling fields did not. The same passthrough let config overwrite messages, model, system and
+  tools after the framework had built them.
+- **C10** - an inline union discriminator (`{"type":"adaptive"}`) failed to round-trip through
+  `map[string]any` into the SDK params struct, so the field vanished with no error on the untyped
+  path while the typed path worked. Reachable only through the Dev UI and invisible to source
+  reading.
+- **E1** - a Go response switch handled three of the SDK's twelve content-block variants and
+  returned an error for the rest, so a safety-redacted thinking block failed the whole request.
+- **E4** - a Go plugin assigned the SDK's field-presence bookkeeping struct to the raw response
+  field, which serialises to empty stubs; the intended value was the SDK's raw-JSON accessor.
+- **F1** - a provider's overload code (529) fell through a generic `>= 500 -> Internal` branch in
+  the framework's code table, landing the one retryable condition in the wrong retry class.
+- **G1/G2** - a target README asserted a capability that two correctness rows showed did not work
+  end-to-end. README claims are a docs dimension, never evidence of a feature.
+- **H1** - the language with no unit test for its response-conversion path was the language whose
+  response path carried five separate defects. Test-coverage gaps predict where the bugs are.

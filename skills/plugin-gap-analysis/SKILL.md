@@ -29,12 +29,17 @@ Python comparison, say it is out of scope and why rather than auditing a moving 
 Default: **JS is the reference, Go is the target** - JS is the reference implementation and Go
 plugins have had less focused attention.
 
-**Verify direction per plugin before scoping.** The anthropic audit came out one-way, Go behind
-on nearly everything. The google-genai audit came out two-way: Go led on config surface,
-README, samples, transport options and error metadata, while JS led on model-family coverage.
-Do dimension group 0 first, tally which side leads per group, and state the verdict at the top
-of the report. Where the target leads half the groups, this is a convergence, not a catch-up -
-and a workplan that says "bring the target up to the reference" will *remove* capability.
+**Verify direction per plugin before scoping, and distrust any inherited verdict.** Every run so
+far has come out two-way. An early anthropic run was recorded as one-way with the target behind
+on nearly everything; an independent re-run of the same plugin found the target leading on
+catalog handling and plugin surface, with a third of all rows pointing at the *reference* -
+including two of its strongest correctness findings. The stale verdict measurably primed the
+second auditor in the wrong direction until the evidence overrode it.
+
+Do dimension group 0 first, tally which side leads per group, and state the verdict at the top of
+the report. Where the target leads half the groups, this is a convergence, not a catch-up - and a
+workplan that says "bring the target up to the reference" will *remove* capability. Treat the
+direction as an output of the audit, never an input to it.
 
 Record reverse-direction gaps in the same flat list either way. The goal is experience parity,
 not a one-way feature checklist.
@@ -114,6 +119,14 @@ and rows covered by an open PR should not be filed at all.
 - **Read the code, not the README.** A README claim is a docs dimension, not evidence of a
   feature. Several rows came from a config description advertising a capability the response
   path could not handle.
+- **Probe the SDK by running it, do not only read it.** This is the highest-yield hour in the
+  audit and reading alone will not find these. Compile a throwaway program against the pinned SDK
+  and print what actually happens: marshal a config fragment, unmarshal it into the params struct,
+  re-marshal, and diff. Reflected-config plugins in particular hide defects that no amount of
+  source reading reveals - an inline union whose discriminator does not round-trip drops the field
+  silently, and a response field that looks populated can serialise to empty stubs. In one run four
+  of the strongest rows, three of them correctness bugs, came only from probes of this kind.
+  Enumerate the SDK's union variants too, and diff them against the cases the plugin handles.
 - **`grep` for absence, cite for presence** - and treat every absence claim as suspect until
   you have ruled out the escape hatches in `references/verification.md`. Absence claims were
   the single largest source of wrong rows. Say which command you ran.
@@ -163,13 +176,21 @@ These recur. File them once, at the API-design level, not per plugin.
 
 ## Prior runs
 
-- `anthropic` (JS -> Go), 2026-08-18 at `ccfe1093d`. Direction one-way as expected. Corrected one
-  seed item that had already landed. Several correctness rows were missing cases in
-  response-conversion switches.
-- `google-genai` (JS <-> Go), same commit. **Direction came out two-way**, which is what forced
-  dimension group 0 and the direction-check step.
+- `anthropic` (JS -> Go), 2026-08-18. Recorded at the time as one-way with the target behind.
+  **Superseded - see the re-run below.**
+- `google-genai` (JS <-> Go), same date. Direction came out two-way, which is what forced dimension
+  group 0 and the direction-check step.
 - **Verification pass over both.** Wrong rows pointed at the *reference* far more often than the
   target, so reverse-direction claims are the least reliable output of a first pass. Severity moved
   substantially in both directions, and the verifiers surfaced better bugs than the audit had -
-  including a target-side `raw` response field that serialised to an empty object, breaking
-  response inspection entirely.
+  including a target-side raw-response field that serialised to empty stubs, breaking response
+  inspection entirely.
+- **Independent re-run of `anthropic`**, 2026-08-19, by an auditor given only this skill and no
+  prior findings. Reached **two-way, net reference ahead** - overturning the earlier verdict - and
+  found several defects both earlier passes missed: an untyped-config union that silently drops a
+  field, server-side tools unreachable from JSON config, a reference that curates three retired
+  model IDs, and a reference that advertises constrained generation then hard-fails it on its own
+  default surface. Two of the three errors this skill's traps were written to prevent did not recur;
+  the third did, and produced the SDK-environment-defaults trap in `verification.md`. Most of its
+  strongest rows came from compiling probes against the pinned SDK rather than reading it, which is
+  why that is now a rule.

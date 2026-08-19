@@ -51,6 +51,14 @@ root while passthrough only reaches the nested config object. The distinction is
 searched. One row asserted a transport option was missing when it existed on one backend and
 not the other - and the row had the direction backwards.
 
+**The SDK's own defaults and environment variables.** Before claiming a client option is
+unreachable, check whether the provider SDK reads it from the environment or defaults it itself.
+A plugin that never passes `baseURL` may still honour a `*_BASE_URL` env var because the SDK
+constructor defaults from it - so "no way to reach a proxy" is wrong even though the grep over
+plugin source returns nothing. Two separate runs made this exact error on the same row. Scope the
+search to plugin code to find what the *plugin* does, then check the SDK for what the user
+actually gets.
+
 **Second package location, and on-disk vs tracked.** Searching one plugin directory produced a
 "no plugin in this language" claim that was false. Worse, a directory present on disk was
 entirely untracked at the pinned commit, so a path cited from a local listing did not exist in
