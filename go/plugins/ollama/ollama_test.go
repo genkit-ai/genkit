@@ -815,6 +815,10 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 			"answer": map[string]any{"type": "string"},
 		},
 	}
+	arraySchema := map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
+	}
 	refSchema := map[string]any{
 		"$defs": map[string]any{
 			"Answer": map[string]any{
@@ -856,6 +860,13 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 			mockBody:   chatResponse,
 		},
 		{
+			name:       "chat model, schema-constrained array output",
+			modelType:  "chat",
+			output:     &ai.ModelOutputConfig{Format: ai.OutputFormatArray, Schema: arraySchema, Constrained: true},
+			wantFormat: arraySchema,
+			mockBody:   chatResponse,
+		},
+		{
 			// When Constrained=false the framework chose prompt injection; format must not be sent.
 			name:      "chat model, Format=json but Constrained=false → format absent",
 			modelType: "chat",
@@ -893,7 +904,7 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 			// fallback for a caller-built ModelOutputConfig instead.
 			name:       "chat model, Constrained=true without schema → format:\"json\"",
 			modelType:  "chat",
-			output:     &ai.ModelOutputConfig{Constrained: true},
+			output:     &ai.ModelOutputConfig{Format: ai.OutputFormatJSON, Constrained: true},
 			wantFormat: "json",
 			mockBody:   chatResponse,
 		},
@@ -1040,6 +1051,49 @@ func TestGenerateStructuredOutputWiring(t *testing.T) {
 				t.Fatalf("format = %#v, want %#v", gotFormat, tt.wantFormat)
 			}
 		})
+	}
+}
+
+func TestGenerateEnumOutputUsesStringEnumGrammar(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Ollama's top-level string grammar produces a quoted JSON string. The
+		// enum response parser must normalize it back to the bare enum value.
+		_, _ = w.Write([]byte(`{"model":"llama3.1","message":{"role":"assistant","content":"\"RED\""},"done":true}`))
+	}))
+	defer server.Close()
+
+	o := &Ollama{ServerAddress: server.URL}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(o))
+	model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, nil)
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value": map[string]any{
+				"type": "string",
+				"enum": []any{"RED", "BLUE"},
+			},
+		},
+	}
+
+	if _, err := genkit.Generate(t.Context(), g,
+		ai.WithModel(model),
+		ai.WithPrompt("pick a color"),
+		ai.WithOutputSchema(schema),
+		ai.WithOutputFormat(ai.OutputFormatEnum),
+	); err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+	wantFormat := map[string]any{
+		"type": "string",
+		"enum": []any{"RED", "BLUE"},
+	}
+	if format, ok := capturedBody["format"]; !ok || !reflect.DeepEqual(format, wantFormat) {
+		t.Fatalf("format = %#v, want %#v", format, wantFormat)
 	}
 }
 

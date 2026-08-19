@@ -36,7 +36,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
-	"github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -759,23 +759,70 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config
 }
 
 // ollamaFormatValue returns the value for the Ollama API's format field when
-// native constrained output is active, or nil when the framework chose prompt
-// injection (e.g. tools are present or the caller opted out). Passing nil
-// leaves the format field absent from the request, which is correct in both
-// the prompt-injection case and plain text output.
+// native constrained output is active. JSON and array formats use their schema
+// directly. Enum schemas are normalized to a top-level string enum because the
+// enum response parser expects a bare value rather than an object wrapper.
 func ollamaFormatValue(output *ai.ModelOutputConfig) any {
 	if output == nil || !output.Constrained {
 		return nil
 	}
-	if len(output.Schema) > 0 {
+	switch output.Format {
+	case ai.OutputFormatJSON, ai.OutputFormatArray:
+		if len(output.Schema) == 0 {
+			// The framework only enables native constraints when a schema is
+			// present. Keep "json" as a defense-in-depth fallback for a
+			// caller-built JSON ModelOutputConfig.
+			if output.Format == ai.OutputFormatJSON {
+				return ai.OutputFormatJSON
+			}
+			return nil
+		}
 		// Ollama's constrained-output engine does not resolve JSON Schema
 		// references, so flatten schemas supplied explicitly by callers.
 		return schemautil.ResolveRefs(output.Schema)
+	case ai.OutputFormatEnum:
+		return ollamaEnumFormat(output.Schema)
+	default:
+		return nil
 	}
-	// Defense in depth: every format handler that sets Constrained also sets
-	// Schema (see ai/format.go), so this is unreached through the framework.
-	// It only matters for a ModelOutputConfig a caller builds by hand.
-	return ai.OutputFormatJSON
+}
+
+// ollamaEnumFormat converts either supported enum schema shape into the
+// top-level string enum Ollama needs to generate the value expected by Genkit's
+// enum response parser.
+func ollamaEnumFormat(schema map[string]any) map[string]any {
+	if enums := enumStrings(schema["enum"]); len(enums) > 0 {
+		return map[string]any{"type": "string", "enum": enums}
+	}
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for _, value := range properties {
+			property, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if enums := enumStrings(property["enum"]); len(enums) > 0 {
+				return map[string]any{"type": "string", "enum": enums}
+			}
+		}
+	}
+	return nil
+}
+
+func enumStrings(value any) []string {
+	switch enums := value.(type) {
+	case []string:
+		return enums
+	case []any:
+		result := make([]string, 0, len(enums))
+		for _, value := range enums {
+			if enum, ok := value.(string); ok {
+				result = append(result, enum)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
 }
 
 // convertTools converts Genkit tool definitions to Ollama tool format

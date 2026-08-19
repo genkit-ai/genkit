@@ -180,28 +180,32 @@ func isAnnotation(key string) bool {
 }
 
 func hasLocalRefsOutsideDefs(v any) bool {
+	return hasLocalRefs(v, true)
+}
+
+func hasLocalRefs(v any, root bool) bool {
 	switch node := v.(type) {
 	case map[string]any:
 		if ref, ok := node["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
 			return true
 		}
 		for key, val := range node {
-			if key == "$defs" || key == "definitions" {
+			if root && (key == "$defs" || key == "definitions") {
 				continue
 			}
-			if hasLocalRefsOutsideDefs(val) {
+			if hasLocalRefs(val, false) {
 				return true
 			}
 		}
 	case []any:
 		for _, item := range node {
-			if hasLocalRefsOutsideDefs(item) {
+			if hasLocalRefs(item, false) {
 				return true
 			}
 		}
 	case []map[string]any:
 		for _, item := range node {
-			if hasLocalRefsOutsideDefs(item) {
+			if hasLocalRefs(item, false) {
 				return true
 			}
 		}

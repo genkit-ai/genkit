@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	"github.com/firebase/genkit/go/core/status"
-	"github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"google.golang.org/genai"
 )
 
@@ -27,7 +27,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		}
 		s, err := schemautil.ResolveRef(originalSchema, ref)
 		if err != nil {
-			return nil, status.Errorf(status.ErrInvalidSchema, "%v", err)
+			return nil, status.Errorf(status.ErrInvalidSchema, "%w", err)
 		}
 		return toGeminiSchema(originalSchema, s)
 	}

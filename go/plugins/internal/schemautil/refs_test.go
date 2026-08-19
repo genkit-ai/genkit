@@ -450,6 +450,30 @@ func TestResolveRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("nested property named definitions does not hide unresolved ref", func(t *testing.T) {
+		schema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"definitions": map[string]any{"$ref": "#/$defs/Never"},
+				"other":       map[string]any{"$ref": "#/$defs/Ok"},
+			},
+			"$defs": map[string]any{
+				"Never": false,
+				"Ok":    map[string]any{"type": "string"},
+			},
+		}
+
+		got := ResolveRefs(schema)
+		if _, has := got["$defs"]; !has {
+			t.Fatal("expected $defs to remain for a ref under a property named definitions")
+		}
+		properties, _ := got["properties"].(map[string]any)
+		definitions, _ := properties["definitions"].(map[string]any)
+		if definitions["$ref"] != "#/$defs/Never" {
+			t.Errorf("nested definitions property = %#v, want unresolved ref preserved", definitions)
+		}
+	})
+
 	t.Run("unresolved top-level external ref does not mutate input schema", func(t *testing.T) {
 		schema := map[string]any{
 			"$ref": "https://example.com/schemas/External",
