@@ -35,6 +35,7 @@ from genkit import (
     Role,
     TextPart,
 )
+from genkit._core._model import OutputConfig
 from genkit.plugin_api import ActionRunContext
 
 
@@ -209,25 +210,31 @@ class TestNeedsSchemaInPrompt:
     def test_true_for_deepseek_with_json_and_schema(self) -> None:
         """Returns True for DeepSeek model with json format and schema."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
-        request = ModelRequest(messages=[], output_format='json', output_schema=_SAMPLE_SCHEMA)
+        request = ModelRequest(
+            messages=[],
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
+        )
         assert model._needs_schema_in_prompt(request) is True
 
     def test_false_for_gpt_with_json_and_schema(self) -> None:
         """Returns False for GPT models even with json format and schema."""
         model = OpenAIModel(model='gpt-4o', client=MagicMock())
-        request = ModelRequest(messages=[], output_format='json', output_schema=_SAMPLE_SCHEMA)
+        request = ModelRequest(
+            messages=[],
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
+        )
         assert model._needs_schema_in_prompt(request) is False
 
     def test_false_for_deepseek_without_schema(self) -> None:
         """Returns False for DeepSeek when no schema is provided."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
-        request = ModelRequest(messages=[], output_format='json')
+        request = ModelRequest(messages=[], output=OutputConfig(format='json'))
         assert model._needs_schema_in_prompt(request) is False
 
     def test_false_for_deepseek_with_text_format(self) -> None:
         """Returns False for DeepSeek when format is text."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
-        request = ModelRequest(messages=[], output_format='text')
+        request = ModelRequest(messages=[], output=OutputConfig(format='text'))
         assert model._needs_schema_in_prompt(request) is False
 
     def test_false_for_no_format(self) -> None:
@@ -270,8 +277,7 @@ class TestSchemaInjectionInConfig:
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a character'))]),
             ],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         config = await model._get_openai_request_config(request)
 
@@ -291,8 +297,7 @@ class TestSchemaInjectionInConfig:
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a character'))]),
             ],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         config = await model._get_openai_request_config(request)
 
@@ -309,7 +314,7 @@ class TestSchemaInjectionInConfig:
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
             ],
-            output_format='json',
+            output=OutputConfig(format='json'),
         )
         config = await model._get_openai_request_config(request)
 
@@ -326,8 +331,7 @@ class TestSchemaInjectionInConfig:
                 Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='You are helpful'))]),
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Generate'))]),
             ],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         config = await model._get_openai_request_config(request)
 
@@ -384,8 +388,7 @@ class TestCleanJsonResponse:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         response = ModelResponse(
             request=request,
@@ -403,8 +406,7 @@ class TestCleanJsonResponse:
         model = OpenAIModel(model='gpt-4o', client=MagicMock())
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         fenced_text = '```json\n{"name": "John", "level": 5}\n```'
         response = ModelResponse(
@@ -423,7 +425,7 @@ class TestCleanJsonResponse:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='text',
+            output=OutputConfig(format='text'),
         )
         text = '```json\n{"a": 1}\n```'
         response = ModelResponse(
@@ -454,8 +456,7 @@ class TestCleanJsonResponse:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='json',
-            output_schema=_SAMPLE_SCHEMA,
+            output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         text = '{"name": "John", "level": 5}'
         response = ModelResponse(

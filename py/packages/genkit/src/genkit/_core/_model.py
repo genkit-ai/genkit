@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -52,6 +52,7 @@ from genkit._core._typing import (
     ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
+    OutputConfig as OutputConfigData,
     Part,
     Resume,
     Role,
@@ -71,6 +72,9 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
+# ModelConfig subclasses without forcing everything through GenerationCommonConfig.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -273,12 +277,22 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
-    """Hand-written model request with flat output fields and veneer types.
+class OutputConfig(OutputConfigData):
+    """Output settings for a model request.
 
-    Output config is inlined as flat fields (output_format, output_schema, etc.)
-    instead of a nested OutputConfig object. Messages and docs use veneer types
-    (Message, Document) for convenience methods like .text.
+    Construct with ``json_schema=``; the serialized key on the wire is
+    ``schema``. This is the class to import and construct from hand-written
+    code.
+    """
+
+
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
+    """Hand-written model request with veneer types and flat output accessors.
+
+    Output settings live nested as ``output: OutputConfig`` so dump/validate
+    round-trips the wire shape, while flat properties (``output_format`` etc.)
+    stay the plugin-author convenience surface. Messages and docs use veneer
+    types (Message, Document) for helpers like ``.text``.
 
     Example:
         class GeminiConfig(ModelConfig):
@@ -290,20 +304,35 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
                 print(msg.text)  # Message veneer property
             if request.output_format == 'json':
                 schema = request.output_schema
+
+    Note:
+        Pass output settings as ``output=OutputConfig(...)``. The flat
+        names (``output_format`` etc.) are convenience properties you read
+        and write after construction — they are not constructor arguments,
+        so passing them there leaves output unset.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
-    # Flat output fields (no nested OutputConfig)
-    output_format: str | None = None
-    output_schema: dict[str, Any] | None = None
-    output_constrained: bool | None = None
-    output_content_type: str | None = None
+    # Wire-shaped output storage; flat access via the properties below.
+    output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @field_validator('config', mode='before')
+    @classmethod
+    def _check_config_type(cls, v: object) -> object:
+        """Ensure config is None, a dict, or a BaseModel instance.
+
+        Raises ValueError (not TypeError) so pydantic wraps it in a
+        ValidationError and the veneer's error contract holds.
+        """
+        if v is not None and not isinstance(v, (BaseModel, dict)):
+            raise ValueError(f'config must be a BaseModel or dict, got {type(v).__name__}')
+        return v
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -321,27 +350,43 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
         # pyrefly: ignore[bad-return]
         return [d if isinstance(d, Document) else Document(d.content, d.metadata) for d in v]
 
-    @model_serializer(mode='wrap')
-    def _serialize_for_spec(self, serializer: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-        """Serialize to spec wire format with nested output (matches JS/Go)."""
-        data = serializer(self)
-        # Build nested output from flat fields - spec expects output key always present
-        output: dict[str, Any] = {}
-        if self.output_format is not None:
-            output['format'] = self.output_format
-        if self.output_schema is not None:
-            output['schema'] = self.output_schema
-        if self.output_constrained is not None:
-            output['constrained'] = self.output_constrained
-        if self.output_content_type is not None:
-            output['contentType'] = self.output_content_type
-        # Remove flat fields, add nested output
-        data.pop('outputFormat', None)
-        data.pop('outputSchema', None)
-        data.pop('outputConstrained', None)
-        data.pop('outputContentType', None)
-        data['output'] = output
-        return data
+    # Flat accessors: the plugin-author convenience surface over nested output.
+
+    @property
+    def output_format(self) -> str | None:
+        """Output format (e.g. 'json'); reads ``output.format``."""
+        return self.output.format
+
+    @output_format.setter
+    def output_format(self, v: str | None) -> None:
+        self.output.format = v
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        """Output JSON schema; reads ``output.json_schema``."""
+        return self.output.json_schema
+
+    @output_schema.setter
+    def output_schema(self, v: dict[str, Any] | None) -> None:
+        self.output.json_schema = v
+
+    @property
+    def output_constrained(self) -> bool | None:
+        """Whether constrained decoding is requested; reads ``output.constrained``."""
+        return self.output.constrained
+
+    @output_constrained.setter
+    def output_constrained(self, v: bool | None) -> None:
+        self.output.constrained = v
+
+    @property
+    def output_content_type(self) -> str | None:
+        """Output content type; reads ``output.content_type``."""
+        return self.output.content_type
+
+    @output_content_type.setter
+    def output_content_type(self, v: str | None) -> None:
+        self.output.content_type = v
 
 
 class ModelResponse(GenkitModel, Generic[OutputT]):

@@ -288,7 +288,7 @@ def _emit_model(
         force_field = False
         if name == 'OutputConfig' and snake == 'schema':
             field_name = 'json_schema'
-            alias_extra = ", alias='schema'"
+            alias_extra = ", validation_alias='schema', serialization_alias='schema'"
             force_field = True
         elif snake in ('schema_', 'schema'):
             field_name = 'schema'

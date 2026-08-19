@@ -31,7 +31,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._model import ModelRequest
+from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
@@ -76,7 +76,7 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
     """Test that the generate function uses the default model."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hi" {"temperature":11}'
 
     response = await ai.generate(prompt='hi', config={'temperature': 11})
 
@@ -126,11 +126,11 @@ async def test_generate_with_explicit_model(setup_test: SetupFixture) -> None:
 
     response = await ai.generate(model='echoModel', prompt='hi', config={'temperature': 11})
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
     stream_result = ai.generate_stream(model='echoModel', prompt='hi', config={'temperature': 11})
 
-    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ async def test_generate_with_str_prompt(setup_test: SetupFixture) -> None:
 
     response = await ai.generate(prompt='hi', config={'temperature': 11})
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_generate_with_part_prompt(setup_test: SetupFixture) -> None:
     """Test that the generate function with a part prompt works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hi" {"temperature":11}'
 
     response = await ai.generate(prompt=[Part(root=TextPart(text='hi'))], config={'temperature': 11})
 
@@ -164,7 +164,7 @@ async def test_generate_with_part_list_prompt(setup_test: SetupFixture) -> None:
     """Test that the generate function with a list of parts prompt works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hello","world" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hello","world" {"temperature":11}'
 
     response = await ai.generate(
         prompt=[Part(root=TextPart(text='hello')), Part(root=TextPart(text='world'))],
@@ -186,7 +186,7 @@ async def test_generate_with_str_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a string system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(system='talk like pirate', prompt='hi', config={'temperature': 11})
 
@@ -202,7 +202,7 @@ async def test_generate_with_part_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a part system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(
         system=[Part(root=TextPart(text='talk like pirate'))],
@@ -226,7 +226,7 @@ async def test_generate_with_part_list_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a list of parts system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk","like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk","like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(
         system=[Part(root=TextPart(text='talk')), Part(root=TextPart(text='like pirate'))],
@@ -260,7 +260,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
         config={'temperature': 11},
     )
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
     stream_result = ai.generate_stream(
         messages=[
@@ -272,7 +272,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
         config={'temperature': 11},
     )
 
-    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -854,10 +854,12 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
-        output_format='json',
-        output_schema=_schema,
-        output_constrained=True,
-        output_content_type='application/json',
+        output=OutputConfig(
+            format='json',
+            json_schema=_schema,
+            constrained=True,
+            content_type='application/json',
+        ),
     )
 
     response = await ai.generate(
@@ -920,11 +922,13 @@ async def test_generate_defaults_to_json_format(
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
-        output_format='json',
-        output_schema=_schema,
-        # these get populated by the format
-        output_constrained=True,
-        output_content_type='application/json',
+        output=OutputConfig(
+            format='json',
+            json_schema=_schema,
+            # these get populated by the format
+            constrained=True,
+            content_type='application/json',
+        ),
     )
 
     response = await ai.generate(
@@ -961,27 +965,29 @@ async def test_generate_json_format_unconstrained(
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
-        output_format='json',
-        output_schema={
-            'properties': {
-                'foo': {
-                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'foo field',
-                    'title': 'Foo',
+        output=OutputConfig(
+            format='json',
+            json_schema={
+                'properties': {
+                    'foo': {
+                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'foo field',
+                        'title': 'Foo',
+                    },
+                    'bar': {
+                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'bar field',
+                        'title': 'Bar',
+                    },
                 },
-                'bar': {
-                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'bar field',
-                    'title': 'Bar',
-                },
+                'title': 'TestSchema',
+                'type': 'object',
             },
-            'title': 'TestSchema',
-            'type': 'object',
-        },
-        output_constrained=False,
-        output_content_type='application/json',
+            constrained=False,
+            content_type='application/json',
+        ),
     )
 
     response = await ai.generate(
@@ -1239,27 +1245,29 @@ async def test_generate_json_format_unconstrained_with_instructions(
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
-        output_format='json',
-        output_schema={
-            'properties': {
-                'foo': {
-                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'foo field',
-                    'title': 'Foo',
+        output=OutputConfig(
+            format='json',
+            json_schema={
+                'properties': {
+                    'foo': {
+                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'foo field',
+                        'title': 'Foo',
+                    },
+                    'bar': {
+                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'bar field',
+                        'title': 'Bar',
+                    },
                 },
-                'bar': {
-                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'bar field',
-                    'title': 'Bar',
-                },
+                'title': 'TestSchema',
+                'type': 'object',
             },
-            'title': 'TestSchema',
-            'type': 'object',
-        },
-        output_constrained=False,
-        output_content_type='application/json',
+            constrained=False,
+            content_type='application/json',
+        ),
     )
 
     response = await ai.generate(
@@ -1479,27 +1487,29 @@ async def test_define_format(setup_test: SetupFixture) -> None:
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
-        output_format='json',
-        output_schema={
-            'properties': {
-                'foo': {
-                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'foo field',
-                    'title': 'Foo',
+        output=OutputConfig(
+            format='json',
+            json_schema={
+                'properties': {
+                    'foo': {
+                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'foo field',
+                        'title': 'Foo',
+                    },
+                    'bar': {
+                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                        'default': None,
+                        'description': 'bar field',
+                        'title': 'Bar',
+                    },
                 },
-                'bar': {
-                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                    'default': None,
-                    'description': 'bar field',
-                    'title': 'Bar',
-                },
+                'title': 'TestSchema',
+                'type': 'object',
             },
-            'title': 'TestSchema',
-            'type': 'object',
-        },
-        output_constrained=True,
-        output_content_type='application/banana',
+            constrained=True,
+            content_type='application/banana',
+        ),
     )
 
 

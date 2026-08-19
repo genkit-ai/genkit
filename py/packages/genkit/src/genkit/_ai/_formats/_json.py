@@ -40,10 +40,8 @@ class JsonFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='json',
-                schema={'type': 'object', 'properties': {'foo': {'type': 'string'}}}
-            )
+            output_format='json',
+            output_schema={'type': 'object', 'properties': {'foo': {'type': 'string'}}}
         )
     """
 

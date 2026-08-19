@@ -18,8 +18,9 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, cast
+from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 
@@ -29,6 +30,7 @@ from genkit._core._action import (
     ActionRunContext,
     get_func_description,
 )
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     Message,
     ModelConfig,
@@ -87,6 +89,42 @@ def model_ref(
     )
 
 
+def _check_request_annotation(name: str, fn: ModelFn) -> None:
+    """Reject model fns whose request annotation is not a ModelRequest class.
+
+    Unions like ``ModelRequest[X] | None`` are an antipattern: generate() never
+    passes None, and a non-class annotation silently disables typed-request
+    construction (the request falls back to the untyped carrier + rebuild).
+    Fail fast at definition time with an actionable message instead.
+    """
+    try:
+        hints = get_type_hints(fn, include_extras=True)
+        params = list(inspect.signature(fn).parameters)
+    except Exception:  # noqa: BLE001 - unresolvable annotations: let Action handle it
+        return
+    if not params:
+        return
+    ann = hints.get(params[0])
+    if ann is None:
+        return  # unannotated stays allowed
+    if get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
+    # Hand-written ModelRequest subclasses also pass this check. That is
+    # incidental — generate() only builds bare ModelRequest and
+    # ModelRequest[Config], so subclassing is not a supported surface.
+    if isinstance(ann, type) and issubclass(ann, ModelRequest):
+        return
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f"Model '{name}': the request parameter must be annotated as ModelRequest "
+            f'or ModelRequest[YourConfig], got {ann!r}. Unions such as '
+            f"'ModelRequest[X] | None' are not allowed: generate() never passes None, "
+            f'and non-class annotations disable typed-request construction.'
+        ),
+    )
+
+
 def define_model(
     registry: Registry,
     name: str,
@@ -97,6 +135,7 @@ def define_model(
     description: str | None = None,
 ) -> Action:
     """Register a custom model action."""
+    _check_request_annotation(name, fn)
     # Build model options dict
     model_options: dict[str, object] = {}
 
