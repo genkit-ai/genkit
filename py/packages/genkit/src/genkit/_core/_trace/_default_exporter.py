@@ -21,12 +21,13 @@ from __future__ import annotations
 import json
 import os
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterable, Sequence
 from queue import Queue
 from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import (
@@ -63,6 +64,20 @@ EXPORT_TIMEOUT_SECONDS = 300
 # is killed, so we give the last span a couple of seconds to land. Ctrl-C of
 # a wedged collector still shouldn't sit for minutes.
 SHUTDOWN_FLUSH_TIMEOUT_MILLIS = 2_000
+
+
+def post_trace(*, url: str, body: str) -> None:
+    """POST one collector document without going through the process httpx logger."""
+    if urlparse(url).scheme not in ('http', 'https'):
+        raise ValueError(f'invalid telemetry server URL {url!r}')
+    request = urllib.request.Request(  # noqa: S310 — scheme checked above
+        url,
+        data=body.encode(),
+        headers=TRACE_HEADERS,
+        method='POST',
+    )
+    with urllib.request.urlopen(request, timeout=EXPORT_TIMEOUT_SECONDS) as response:  # noqa: S310
+        response.read()
 
 
 def resolve_telemetry_server_url(*, telemetry_server_url: str, telemetry_server_endpoint: str) -> str:
@@ -303,16 +318,15 @@ class TraceServerExporter(SpanExporter):
         url = urljoin(self.telemetry_server_url, self.telemetry_server_endpoint)
         try:
             # generate() already returned; this wait lives on the worker.
-            with httpx.Client(timeout=EXPORT_TIMEOUT_SECONDS) as client:
-                for trace_id, body in jobs:
-                    try:
-                        client.post(url, content=body, headers=TRACE_HEADERS)
-                    except (httpx.RequestError, OSError) as error:
-                        self.note_transport_failure(trace_id=trace_id, error=error)
-                        return
-                    self.failed_traces.discard(trace_id)
+            for trace_id, body in jobs:
+                try:
+                    post_trace(url=url, body=body)
+                except (urllib.error.URLError, TimeoutError, OSError) as error:
+                    self.note_transport_failure(trace_id=trace_id, error=error)
+                    return
+                self.failed_traces.discard(trace_id)
             self.last_result = SpanExportResult.SUCCESS
-        except (httpx.RequestError, OSError) as error:
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
             trace_id = jobs[0][0] if jobs else 'unknown'
             self.note_transport_failure(trace_id=trace_id, error=error)
 

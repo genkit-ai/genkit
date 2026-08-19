@@ -28,19 +28,11 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Libraries that log every HTTP hop or provider chatter. Under Dev UI those
-# are health checks, span exports, and "AFC is enabled..." on every
-# tool-using generate — useful in GENKIT_LOG=debug, noise otherwise.
+# Health-check access logs on the reflection server under genkit start.
+# Collector posts use urllib so we do not set the process httpx logger.
 QUIET_LOGGERS = (
-    'httpx',
-    'httpcore',
     'uvicorn.access',
     'uvicorn.error',
-    'opentelemetry.exporter',
-    'opentelemetry.instrumentation',
-    'opentelemetry.sdk.trace.export',
-    # AFC only. Muting google_genai would also hide auth-precedence INFO.
-    'google_genai.models',
 )
 
 
@@ -96,7 +88,7 @@ def configure_structlog_level() -> bool:
 
 
 def configure_logging(*, shared_tty: bool | None = None) -> None:
-    """Configure genkit console logging and mute noisy HTTP/health poll loggers.
+    """Configure genkit console logging and mute reflection access logs on a shared TTY.
 
     Safe to call more than once. Default level is ``info``; override with
     ``GENKIT_LOG=debug|info|warn|error``.
