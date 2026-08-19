@@ -95,7 +95,7 @@ async def test_generate_model_ref_default_config(ai_with_echo: tuple[Genkit, Ech
 async def test_generate_model_ref_merges_call_time_dict(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """Call-time dict config merges over ModelRef defaults (JS parity)."""
+    """Call-time dict config merges over ModelRef defaults."""
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
@@ -257,7 +257,7 @@ async def test_define_agent_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel
 
 @pytest.mark.asyncio
 async def test_model_ref_version_seeds_config(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
-    """ref.version flows into config at lowest precedence (JS generate.ts parity)."""
+    """ref.version flows into config at lowest precedence."""
     ai, echo = ai_with_echo
     ref = model_ref('testEcho', config_schema=ModelConfig, version='001')
 
