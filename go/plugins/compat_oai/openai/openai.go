@@ -272,8 +272,13 @@ type OpenAI struct {
 	// APIKey is the API key for the OpenAI API. If empty, the values of the environment variable "OPENAI_API_KEY" will be consulted.
 	// Request a key at https://platform.openai.com/api-keys
 	APIKey string
-	// Optional: Opts are additional options for the OpenAI client.
+	// Optional: Opts are additional options for the OpenAI client, applied
+	// last so an option here wins over what the plugin composes.
 	// Can include other options like WithOrganization, WithBaseURL, etc.
+	//
+	// The organization and project come from OPENAI_ORG_ID and
+	// OPENAI_PROJECT_ID when set; WithOrganization or WithProject here
+	// overrides them.
 	Opts []option.RequestOption
 
 	// Models overrides what the plugin knows about an OpenAI model, keyed by
@@ -320,13 +325,20 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 		panic("openai plugin initialization failed: apiKey is required")
 	}
 
-	// set the options
-	o.openAICompatible.Opts = []option.RequestOption{
-		option.WithAPIKey(apiKey),
+	// The base plugin does not inherit the identity the OpenAI SDK reads from
+	// the environment, so that no plugin serving another provider sends
+	// OpenAI's credentials to it. This plugin does serve OpenAI, so it applies
+	// that identity itself: the key resolved above, plus the organization and
+	// project, which keep the meaning the SDK gave them. Opts still come last
+	// and win.
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if org := os.Getenv("OPENAI_ORG_ID"); org != "" {
+		opts = append(opts, option.WithOrganization(org))
 	}
-	if len(o.Opts) > 0 {
-		o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
+	if project := os.Getenv("OPENAI_PROJECT_ID"); project != "" {
+		opts = append(opts, option.WithProject(project))
 	}
+	o.openAICompatible.Opts = append(opts, o.Opts...)
 
 	o.openAICompatible.Provider = provider
 	actions := o.openAICompatible.Init(ctx)
