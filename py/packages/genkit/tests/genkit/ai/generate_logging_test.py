@@ -9,7 +9,7 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import FinishReason, GenerationBlockedError, Genkit, Message, ModelResponse
 from genkit._ai._testing import define_programmable_model
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import GENKIT_LOG
@@ -77,6 +77,32 @@ async def test_generate_logs_named_records_when_debug_enabled(monkeypatch: pytes
     responded = [entry for entry in entries if entry['event'] == 'model responded']
     assert len(responded) == 1
     assert responded[0]['tool_requests'] == 0
+    assert 'response' not in responded[0]
+
+
+@pytest.mark.asyncio
+async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal still gets a model-responded record so the log panel shows why."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+        )
+    ]
+
+    with capture_logs() as entries:
+        with pytest.raises(GenerationBlockedError, match='Generation blocked: safety'):
+            await ai.generate(prompt='hi')
+
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.BLOCKED
     assert 'response' not in responded[0]
 
 

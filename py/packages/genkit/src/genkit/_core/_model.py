@@ -28,13 +28,14 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from genkit._core._base import GenkitModel
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusName
 from genkit._core._extract_json import extract_json
+from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     Candidate,
     DocumentData,
@@ -344,6 +345,33 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
         return data
 
 
+class GenerationResponseError(GenkitError):
+    """Raised when generate() cannot return a usable response."""
+
+    def __init__(
+        self,
+        response: ModelResponse[Any],
+        message: str,
+        status: StatusName | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        wire = dict(details or {})
+        # Dump the response so the callable/Dev UI can show what the model
+        # returned without keeping a live object on the wire.
+        if 'response' not in wire:
+            wire['response'] = response.model_dump(mode='json')
+        super().__init__(
+            message=message,
+            status=status or 'FAILED_PRECONDITION',
+            details=wire,
+        )
+        self.response: ModelResponse[Any] = response
+
+
+class GenerationBlockedError(GenerationResponseError):
+    """Raised when the model refused to generate (finish_reason=blocked)."""
+
+
 class ModelResponse(GenkitModel, Generic[OutputT]):
     """Model response with utilities for text extraction, output parsing, and validation."""
 
@@ -371,14 +399,59 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.custom = {}
 
     def assert_valid(self) -> None:
-        """Validate response structure. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+        """Raise if this response is not a usable generate() result.
+
+        A blocked finish is a refusal, not a reply — fail here so the caller
+        does not treat leftover text as output. A response with no message and
+        no operation has nothing to return.
+        """
+        if self.finish_reason == FinishReason.BLOCKED:
+            detail = f': {self.finish_message}' if self.finish_message else '.'
+            raise GenerationBlockedError(
+                response=self,
+                message=f'Generation blocked{detail}',
+            )
+        if self.message is None and self.operation is None:
+            raise GenerationResponseError(
+                response=self,
+                message=(
+                    f"Model did not generate a message. Finish reason: '{self.finish_reason}': {self.finish_message}"
+                ),
+            )
 
     def assert_valid_schema(self) -> None:
-        """Validate response conforms to output schema. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+        """Raise if the caller asked for structured output and this is not it."""
+        schema = self.request.output_schema if self.request is not None else None
+        if schema is None and self._schema_type is None:
+            return
+
+        try:
+            parsed = self._raw_parsed_output()
+        except ValueError as error:
+            preview = (self.text or '')[:200]
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Model output was not valid JSON for the requested schema: {preview}',
+                cause=error,
+            ) from error
+
+        if schema is not None:
+            parse_schema(data=parsed, json_schema=schema)
+        if self._schema_type is None:
+            return
+        try:
+            _ = self.output
+        except ValidationError as error:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Model output did not match the requested schema.',
+                cause=error,
+            ) from error
+
+    def _raw_parsed_output(self) -> object:
+        if self._message_parser and self.message is not None:
+            return self._message_parser(self.message)
+        return extract_json(self.text)
 
     def __eq__(self, other: object) -> bool:
         """Compare responses by message and finish_reason."""
@@ -400,17 +473,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     @cached_property
     def output(self) -> OutputT:
         """Parsed JSON output from the response text, validated against schema if set."""
-        if self._message_parser and self.message is not None:
-            parsed = self._message_parser(self.message)
-        else:
-            parsed = extract_json(self.text)
-
-        # If we have a schema type and the parsed output is a dict, validate and
-        # return a proper Pydantic instance. Skip if parsed is already the correct
-        # type or if it's not a dict (e.g., custom formats may return strings).
-        if self._schema_type is not None and parsed is not None and isinstance(parsed, dict):
+        parsed = self._raw_parsed_output()
+        if self._schema_type is not None and parsed is not None:
             return cast(OutputT, self._schema_type.model_validate(parsed))
-
         return cast(OutputT, parsed)
 
     @cached_property
@@ -534,8 +599,17 @@ def text_from_message(msg: Message) -> str:
 
 
 def text_from_content(content: Sequence[Part | DocumentPart]) -> str:
-    """Concatenate text from a list of parts."""
-    return ''.join(str(p.root.text) for p in content if hasattr(p.root, 'text') and p.root.text is not None)
+    """Concatenate text parts.
+
+    Thoughts ride on ``ReasoningPart``, so they stay out of ``.text`` —
+    that's the visible reply, not the model's scratch work.
+    """
+    texts: list[str] = []
+    for p in content:
+        root = p.root
+        if isinstance(root, TextPart) and root.text is not None:
+            texts.append(str(root.text))
+    return ''.join(texts)
 
 
 def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:

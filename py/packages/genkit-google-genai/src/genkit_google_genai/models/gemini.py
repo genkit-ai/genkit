@@ -80,9 +80,18 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'LANGUAGE',
         'MALICIOUS',
         'IMAGE_SAFETY',
+        'IMAGE_PROHIBITED_CONTENT',
+        'IMAGE_RECITATION',
     ):
         return FinishReason.BLOCKED
-    if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'UNEXPECTED_TOOL_CALL',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+    ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN
 

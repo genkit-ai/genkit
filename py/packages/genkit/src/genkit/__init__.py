@@ -66,6 +66,8 @@ from genkit.embedder import (
 from genkit.model import (
     Constrained,
     FinishReason,
+    GenerationBlockedError,
+    GenerationResponseError,
     Message,
     ModelConfig,
     ModelInfo,
@@ -98,6 +100,8 @@ __all__ = [
     # Errors
     'ErrorResponseMetadata',
     'GenkitError',
+    'GenerationBlockedError',
+    'GenerationResponseError',
     'PublicError',
     # Tools
     'Interrupt',

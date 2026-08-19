@@ -37,6 +37,7 @@ from genkit_google_genai.models.gemini import (
     GemmaConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
+    _to_finish_reason,
     google_model_info,
     is_image_model,
     is_tts_model,
@@ -1183,3 +1184,12 @@ async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ActionRunContext())
     assert raised.value.status == 'UNAVAILABLE'
+
+
+def test_to_finish_reason_image_policy_vs_no_image() -> None:
+    """Image-policy refusals are blocked; a missing image is just other."""
+    assert _to_finish_reason('IMAGE_SAFETY') == FinishReason.BLOCKED
+    assert _to_finish_reason('IMAGE_PROHIBITED_CONTENT') == FinishReason.BLOCKED
+    assert _to_finish_reason('IMAGE_RECITATION') == FinishReason.BLOCKED
+    assert _to_finish_reason('NO_IMAGE') == FinishReason.OTHER
+    assert _to_finish_reason('IMAGE_OTHER') == FinishReason.OTHER
