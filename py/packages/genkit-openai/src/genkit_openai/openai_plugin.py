@@ -64,21 +64,13 @@ def open_ai_name(name: str) -> str:
     return f'openai/{name}'
 
 
-# Prefixes people paste from action keys, Dev UI traces, or another plugin's
-# samples. Stripping them first means this constructor decides the namespace.
-_STRIP_PREFIXES = (
-    'background-model/',
-    'model/',
-    'models/',
-    'embedders/',
-    'googleai/',
-    'vertexai/',
-    'openai/',
-)
+# Only this plugin's namespace. A vertexai/ or azure/ paste is a different
+# name — remapping it here would send the request to the OpenAI API.
+_STRIP_PREFIXES = ('openai/',)
 
 
 def _strip_ref_prefixes(name: str) -> str:
-    """Reduce a pasted name to the bare model id."""
+    """Peel this plugin's prefix so it is not stamped twice."""
     local = name
     changed = True
     while changed:

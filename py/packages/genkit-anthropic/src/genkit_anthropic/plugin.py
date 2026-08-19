@@ -40,21 +40,13 @@ logger = structlog.get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
 
-# Prefixes people paste from action keys, Dev UI traces, or another plugin's
-# samples. Stripping them first means this constructor decides the namespace.
-_STRIP_PREFIXES = (
-    'background-model/',
-    'model/',
-    'models/',
-    'embedders/',
-    'googleai/',
-    'vertexai/',
-    f'{ANTHROPIC_PLUGIN_NAME}/',
-)
+# Only this plugin's namespace. A vertexai/ paste is a different name —
+# remapping it here would send the request to the Anthropic API.
+_STRIP_PREFIXES = (f'{ANTHROPIC_PLUGIN_NAME}/',)
 
 
 def _strip_ref_prefixes(name: str) -> str:
-    """Reduce a pasted name to the bare model id."""
+    """Peel this plugin's prefix so it is not stamped twice."""
     local = name
     changed = True
     while changed:

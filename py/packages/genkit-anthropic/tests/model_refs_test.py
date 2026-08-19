@@ -41,20 +41,9 @@ def test_claude_model_strips_own_prefix() -> None:
     assert ref.name == 'anthropic/claude-sonnet-4-5'
 
 
-@pytest.mark.parametrize(
-    'pasted',
-    [
-        'anthropic/claude-sonnet-4-5',
-        'vertexai/claude-sonnet-4-5',
-        'googleai/claude-sonnet-4-5',
-        'model/claude-sonnet-4-5',
-        'models/claude-sonnet-4-5',
-        'models/anthropic/claude-sonnet-4-5',
-    ],
-)
-def test_claude_model_strips_pasted_prefixes(pasted: str) -> None:
-    """Every pasted prefix form lands on this plugin, not the pasted one."""
-    assert Anthropic.claude_model(pasted).name == 'anthropic/claude-sonnet-4-5'
+def test_claude_model_keeps_foreign_prefix() -> None:
+    """A Vertex Model Garden paste is a different name, not remapped onto Anthropic."""
+    assert Anthropic.claude_model('vertexai/claude-sonnet-4-5').name == 'anthropic/vertexai/claude-sonnet-4-5'
 
 
 def test_claude_model_carries_config() -> None:
