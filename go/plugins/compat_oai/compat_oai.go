@@ -209,6 +209,17 @@ func (o *OpenAICompatible) Init(ctx context.Context) []api.Action {
 		panic("compat_oai.Init already called")
 	}
 
+	// The OpenAI SDK reads organization and project headers from the process
+	// environment. Those credentials belong only to OpenAI and must not leak
+	// to compatible providers. Explicit options supplied by a plugin follow
+	// these deletions and can deliberately restore either header.
+	if o.Provider != "openai" {
+		o.Opts = append([]option.RequestOption{
+			option.WithHeaderDel("OpenAI-Organization"),
+			option.WithHeaderDel("OpenAI-Project"),
+		}, o.Opts...)
+	}
+
 	if o.APIKey != "" {
 		o.Opts = append([]option.RequestOption{option.WithAPIKey(o.APIKey)}, o.Opts...)
 	}

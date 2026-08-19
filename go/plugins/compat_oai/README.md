@@ -198,8 +198,8 @@ describes every model it resolves with one permissive capability set. `Models`
 is how a caller narrows one. Follow that shape for a gateway, and the curated
 shape above for a vendor.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
-`xai`, and `zai` directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `meta`,
+`openrouter`, `xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
