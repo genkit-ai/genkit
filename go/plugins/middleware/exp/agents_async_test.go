@@ -347,3 +347,87 @@ func TestAgentsBackgroundLaunchRejectedWithoutStore(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentsAsyncInstancesCoexistWithPrefixes pins that two Async middleware
+// instances with distinct explicit prefixes can share one generate call: the
+// background-task tools are namespaced per instance, so the request is not
+// rejected as carrying duplicate tools.
+func TestAgentsAsyncInstancesCoexistWithPrefixes(t *testing.T) {
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "researcher",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher-coexist", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "unused"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	model := toolModel(t, g, "test/orch-coexist", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return textResp(req, "done"), nil
+	})
+
+	research, code := "research", "code"
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("go"),
+		ai.WithUse(
+			&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, ToolPrefix: &research, Async: true},
+			&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, ToolPrefix: &code, Async: true},
+		))
+	if err != nil {
+		t.Fatalf("two prefixed Async instances should coexist, got %v", err)
+	}
+	if resp.Text() != "done" {
+		t.Fatalf("unexpected response: %q", resp.Text())
+	}
+}
+
+// TestAgentsWaitTimeoutOverflowIsUnbounded pins the timeoutSeconds overflow
+// clamp: a value too large for the nanosecond multiplication is treated as
+// unbounded rather than wrapping negative into an already-expired context, so
+// the wait still settles its tasks normally instead of returning instantly
+// with timedOut and unresolved statuses.
+func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
+	fastTaskPolling(t)
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "researcher",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher-overflow", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "unused"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	// A missing snapshot on a configured agent settles on the first pass
+	// (NOT_FOUND is a dead end), so the wait returns without waiting out the
+	// absurd timeout; before the clamp, the dead context instead failed every
+	// read and the result came back timedOut with a read error.
+	waiter := toolModel(t, g, "test/orch-overflow", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if hasToolResponse(req.Messages) {
+			return textResp(req, "collected"), nil
+		}
+		return toolReqResp(req, &ai.ToolRequest{
+			Name: waitBackgroundTasksToolName,
+			Input: map[string]any{
+				"taskIds":        []string{"researcher:no-such-snapshot"},
+				"timeoutSeconds": float64(10000000000),
+			},
+		}), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(waiter), ai.WithPrompt("collect"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+	}
+	res := decodeTaskReports(t, waitOuts[0])
+	if res.TimedOut {
+		t.Errorf("overflowed timeout must behave as unbounded, got timedOut result: %+v", res)
+	}
+	if len(res.Tasks) != 1 || res.Tasks[0].Status != taskStatusUnknown ||
+		!strings.Contains(res.Tasks[0].Error, "not found") {
+		t.Errorf("expected the missing snapshot to settle as unknown/not-found, got %+v", res.Tasks)
+	}
+}
