@@ -122,6 +122,15 @@ type BackgroundActionOptions[In, Out any] struct {
 	Cancel CancelOpFunc[Out]
 }
 
+// checkOpName and cancelOpName return the registry names of a background
+// action's lifecycle companions: the action's own name followed by the
+// operation the companion performs, e.g. "googleai/veo-2/check". Both the
+// constructor and [LookupBackgroundAction] build the names this way, and
+// tooling that reaches a companion directly (the Dev UI polls and cancels
+// background tasks over the reflection API) expects the same shape.
+func checkOpName(name string) string  { return name + "/check" }
+func cancelOpName(name string) string { return name + "/cancel" }
+
 // NewBackgroundActionOf creates a new background action without
 // registering it. Register it with [BackgroundAction.Register].
 //
@@ -184,7 +193,7 @@ func NewBackgroundActionOf[In, Out any](
 		OutputSchema: opSchema,
 	}
 
-	checkAction := NewActionOf(api.ActionTypeCheckOperation, name, opOpts,
+	checkAction := NewActionOf(api.ActionTypeCheckOperation, checkOpName(name), opOpts,
 		func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 			updatedOp, err := checkFn(ctx, op)
 			if err != nil {
@@ -196,7 +205,7 @@ func NewBackgroundActionOf[In, Out any](
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
 	if cancelFn != nil {
-		cancelAction = NewActionOf(api.ActionTypeCancelOperation, name, opOpts,
+		cancelAction = NewActionOf(api.ActionTypeCancelOperation, cancelOpName(name), opOpts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
 				if err != nil {
@@ -253,12 +262,12 @@ func LookupBackgroundAction[In, Out any](r api.Registry, key string) *Background
 		return nil
 	}
 
-	checkAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCheckOperation, name)
+	checkAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCheckOperation, checkOpName(name))
 	if checkAction == nil {
 		return nil
 	}
 
-	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCancelOperation, name)
+	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCancelOperation, cancelOpName(name))
 
 	return &BackgroundAction[In, Out]{
 		action: startAction,
