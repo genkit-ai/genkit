@@ -88,3 +88,35 @@ func TestMediaDataIsRedactedFromSpanAttributes(t *testing.T) {
 		t.Errorf("genkit:input lost the remote media URL: %s", inputAttribute)
 	}
 }
+
+func TestMediaLikeTextIsNotTreatedAsInlineMedia(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	exporter := &spanExporter{}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(provider)
+	defer func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(previousProvider)
+	}()
+
+	input := map[string]string{
+		"description": "data: is a text prefix;base64 is a suffix",
+	}
+	_, err := tracing.RunInNewSpan(
+		context.Background(),
+		&tracing.SpanMetadata{Name: "text", Type: "action"},
+		input,
+		func(context.Context, map[string]string) (any, error) { return nil, nil },
+	)
+	if err != nil {
+		t.Fatalf("RunInNewSpan: %v", err)
+	}
+	if len(exporter.spans) != 1 {
+		t.Fatalf("exported %d spans, want 1", len(exporter.spans))
+	}
+	for _, attr := range exporter.spans[0].Attributes() {
+		if string(attr.Key) == "genkit:input" && attr.Value.AsString() != `{"description":"data: is a text prefix;base64 is a suffix"}` {
+			t.Fatalf("genkit:input was changed: %s", attr.Value.AsString())
+		}
+	}
+}
