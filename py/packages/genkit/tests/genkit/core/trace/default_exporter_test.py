@@ -46,6 +46,7 @@ from genkit._core._trace._default_exporter import (
     init_telemetry_server_exporter,
 )
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
+from genkit._core._typing import TraceData
 
 # =============================================================================
 # Tests for create_span_processor
@@ -449,6 +450,7 @@ def test_extract_span_data_basic_fields() -> None:
 
     data = extract_span_data(mock_span)
 
+    assert type(data) is TraceData
     trace_id_hex = format(12345, '032x')
     span_id_hex = format(67890, '016x')
 
@@ -555,7 +557,9 @@ def test_extract_span_data_ensures_exception_message_from_status_when_events_emp
     assert span_info.status is not None
     assert span_info.status.code == 2
     assert span_info.status.message == 'patched from status only'
+    assert span_info.time_events is not None
     events = span_info.time_events.time_event
+    assert events is not None
     assert len(events) == 1
     assert events[0].annotation.attributes['exception.message'] == 'patched from status only'
 
@@ -578,7 +582,9 @@ def test_extract_span_data_includes_exception_time_events() -> None:
 
     span_id_hex = format(67890, '016x')
     span_info = data.spans[span_id_hex]
+    assert span_info.time_events is not None
     events = span_info.time_events.time_event
+    assert events is not None
     assert len(events) == 1
     assert events[0].annotation.description == 'exception'
     assert events[0].annotation.attributes['exception.message'] == exc_msg

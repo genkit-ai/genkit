@@ -34,64 +34,25 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from genkit._core._base import GenkitModel
 from genkit._core._compat import override
 from genkit._core._environment import is_dev_environment
 from genkit._core._logger import get_logger
+from genkit._core._typing import (
+    Annotation,
+    InstrumentationLibrary,
+    SpanData,
+    SpanStatus,
+    TimeEvent,
+    TimeEvents,
+    TraceData,
+)
 
 from ._attrs import Attr, Subtype
 from ._realtime_processor import RealtimeSpanProcessor
 
 logger = get_logger(__name__)
-
-
-class SpanStatus(GenkitModel):
-    code: int
-    message: str | None = None
-
-
-class EventAnnotation(GenkitModel):
-    description: str
-    attributes: dict[str, Any] = Field(default_factory=dict)
-
-
-class TimeEvent(GenkitModel):
-    time: float
-    annotation: EventAnnotation
-
-
-class TimeEvents(GenkitModel):
-    time_event: list[TimeEvent] = Field(default_factory=list)
-
-
-class InstrumentationLibrary(GenkitModel):
-    name: str
-    version: str | None = None
-
-
-class SpanData(GenkitModel):
-    span_id: str
-    trace_id: str
-    start_time: float
-    end_time: float
-    attributes: dict[str, Any]
-    display_name: str
-    span_kind: str
-    instrumentation_library: InstrumentationLibrary
-    time_events: TimeEvents
-    parent_span_id: str | None = None
-    status: SpanStatus | None = None
-
-
-class TraceData(GenkitModel):
-    trace_id: str
-    spans: dict[str, SpanData]
-    display_name: str | None = None
-    start_time: float | None = None
-    end_time: float | None = None
-
 
 INSTRUMENTATION = InstrumentationLibrary(name='genkit-tracer', version='v1')
 TRACE_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
@@ -158,17 +119,21 @@ def ensure_exception_message(*, span: SpanData) -> None:
         return
     if not status.message:
         status.message = message
-    for event in span.time_events.time_event:
+    time_events = span.time_events or TimeEvents(time_event=[])
+    span.time_events = time_events
+    event_list = time_events.time_event or []
+    time_events.time_event = event_list
+    for event in event_list:
         if event.annotation.description != 'exception':
             continue
         if event.annotation.attributes.get('exception.message'):
             return
         event.annotation.attributes['exception.message'] = message
         return
-    span.time_events.time_event.append(
+    event_list.append(
         TimeEvent(
             time=span.end_time,
-            annotation=EventAnnotation(
+            annotation=Annotation(
                 description='exception',
                 attributes={
                     'exception.type': 'Error',
@@ -190,7 +155,7 @@ def events_to_time_events(*, span: ReadableSpan) -> TimeEvents:
         time_event.append(
             TimeEvent(
                 time=_ns_to_ms(ts),
-                annotation=EventAnnotation(
+                annotation=Annotation(
                     description=name,
                     attributes=_otel_event_attributes_to_json(raw_attrs),
                 ),
