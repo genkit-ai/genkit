@@ -247,13 +247,11 @@ func TestWaitSnapshot_RereadsWithoutSubscriber(t *testing.T) {
 }
 
 func TestWaitSnapshot_ExpiredHeartbeatEndsTheWait(t *testing.T) {
-	restore := snapshotWaitLivenessInterval
-	snapshotWaitLivenessInterval = 10 * time.Millisecond
-	t.Cleanup(func() { snapshotWaitLivenessInterval = restore })
-
 	store := newTestInMemStore[any]()
-	// A worker that died a heartbeat timeout ago: the row stays pending, so no
-	// subscription can report it and only the liveness re-read notices.
+	// A worker that died before the wait even started: the read shaping
+	// reports the pending row as expired, which is terminal, so the wait ends
+	// on its first read. TestWaitSnapshot_LivenessRereadCatchesADeadWorker
+	// covers the harder case, where the worker dies mid-wait.
 	stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
 	putSnapshot(t, store, &SessionSnapshot[any]{
 		SnapshotID: "orphan", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &stale,
@@ -262,6 +260,41 @@ func TestWaitSnapshot_ExpiredHeartbeatEndsTheWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "orphan", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusExpired {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusExpired)
+	}
+}
+
+// TestWaitSnapshot_LivenessRereadCatchesADeadWorker covers the one settlement
+// no subscription can deliver: the worker dies, so the row stays pending and
+// only its heartbeat goes stale. Nothing is ever written, so the wait ends only
+// because it keeps re-reading.
+func TestWaitSnapshot_LivenessRereadCatchesADeadWorker(t *testing.T) {
+	restore := snapshotWaitLivenessInterval
+	snapshotWaitLivenessInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitLivenessInterval = restore })
+
+	store := newTestInMemStore[any]()
+	beat := time.Now()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		// Same status, so the store pushes nothing; only the heartbeat ages.
+		stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
+		putSnapshot(t, store, &SessionSnapshot[any]{
+			SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &stale,
+		})
+	}()
+
+	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "")
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -403,6 +436,89 @@ func TestWaitSnapshot_DeadEndReadFailureFailsFast(t *testing.T) {
 	}
 	if got := store.readCount(); got != 2 {
 		t.Errorf("reads = %d, want 2 (dead ends are not retried)", got)
+	}
+}
+
+func TestWaitSnapshot_FirstReadBlipIsRetried(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	// A wait that starts while the store is briefly unreachable is still a
+	// wait: the caller asked to follow work that is running, so one blip at
+	// t=0 must not decide the answer.
+	blip := errors.New("store blip")
+	store := &scriptedStore{script: []scriptedRead{
+		{err: blip},
+		{snap: &SessionSnapshot[any]{SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusCompleted}},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusCompleted {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
+	}
+	if got := store.readCount(); got != 2 {
+		t.Errorf("reads = %d, want 2 (the blip, then the settled row)", got)
+	}
+}
+
+// notifyAheadStore models a store whose status notification outruns the row's
+// read visibility, which the [SnapshotSubscriber] contract permits: it pushes
+// "completed" at subscribe time while reads keep reporting the pending row for
+// pendingReads more reads.
+type notifyAheadStore struct {
+	mu           sync.Mutex
+	reads        int
+	pendingReads int
+}
+
+func (s *notifyAheadStore) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	if s.reads <= s.pendingReads {
+		return scriptedPending(), nil
+	}
+	return &SessionSnapshot[any]{SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusCompleted}, nil
+}
+
+func (s *notifyAheadStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
+	return nil, errors.New("notifyAheadStore: GetLatestSnapshot is not implemented")
+}
+
+func (s *notifyAheadStore) SaveSnapshot(ctx context.Context, snapshotID string, fn func(*SessionSnapshot[any]) (*SessionSnapshot[any], error)) (*SessionSnapshot[any], error) {
+	return nil, errors.New("notifyAheadStore: SaveSnapshot is not implemented")
+}
+
+func (s *notifyAheadStore) OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus {
+	ch := make(chan SnapshotStatus, 1)
+	ch <- SnapshotStatusCompleted
+	return ch
+}
+
+func TestWaitSnapshot_NotificationAheadOfTheRowKeepsWaiting(t *testing.T) {
+	restore := snapshotWaitLivenessInterval
+	snapshotWaitLivenessInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitLivenessInterval = restore })
+
+	// The notification says settled but the row does not yet agree. The row is
+	// what the caller gets back, so the wait must keep going rather than hand
+	// out a pending snapshot as terminal.
+	store := &notifyAheadStore{pendingReads: 2}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusCompleted {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
 	}
 }
 

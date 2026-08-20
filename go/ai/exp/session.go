@@ -19,8 +19,8 @@ package exp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -311,9 +311,20 @@ const (
 // else (a store blip, a read that hit snapshotWaitReadTimeout) is presumed
 // transient.
 func waitReadDeadEnd(err error) bool {
-	return errors.Is(err, status.ErrNotFound) ||
-		errors.Is(err, status.ErrInvalidArgument) ||
-		errors.Is(err, status.ErrFailedPrecondition)
+	// One chain walk, and the set reads as the policy it is. Subtypes carry
+	// their base's status (ErrSnapshotNotFound is a NOT_FOUND), so they land
+	// here too; an unclassified failure is presumed transient.
+	if s, ok := status.Classified(err); ok {
+		return slices.Contains(waitReadDeadEndStatuses, s)
+	}
+	return false
+}
+
+// waitReadDeadEndStatuses are the read failures no retry can help.
+var waitReadDeadEndStatuses = []status.Name{
+	status.NotFound,
+	status.InvalidArgument,
+	status.FailedPrecondition,
 }
 
 // waitSnapshot resolves a snapshot exactly as [readSnapshot] does and then
@@ -329,12 +340,11 @@ func waitReadDeadEnd(err error) bool {
 // can report it. Without a subscriber that same interval is the whole
 // mechanism, so it is much shorter.
 //
-// An in-wait re-read that fails transiently is retried at that same cadence,
-// up to snapshotWaitReadRetries consecutive failures, so a store blip does not
-// fail a long wait; a dead end (the row is gone, the request is rejected)
-// surfaces at once. The initial read is never retried: it prices the common
-// already-terminal case at exactly one read, and its failures reach the caller
-// unchanged (e.g. NOT_FOUND for an unknown snapshot).
+// A read that fails transiently is retried at that same cadence, up to
+// snapshotWaitReadRetries consecutive failures, so a store blip does not fail
+// a long wait; a dead end (the row is gone, the request is rejected) surfaces
+// at once, including on the first read. The success path is unaffected: an
+// already-terminal snapshot still costs exactly one read.
 //
 // Cancelling ctx ends the wait with ctx's error. Callers bound a wait with
 // [context.WithTimeout] and re-read the row afterwards to learn where it stands.
@@ -350,12 +360,22 @@ func waitSnapshot[State any](
 		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID)
 	}
 
+	// The first read prices the common already-terminal case at exactly one
+	// read. A dead end reaches the caller unchanged (e.g. NOT_FOUND for an
+	// unknown snapshot); a transient failure falls into the wait below and is
+	// retried there on the wait's own cadence, because a store blip at the
+	// moment a wait starts is no more fatal than one in the middle of it.
+	readFailures := 0
 	snap, err := read(snapshotID, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if snap.Status.Terminal() {
+	switch {
+	case err == nil && snap.Status.Terminal():
 		return snap, nil
+	case err != nil && waitReadDeadEnd(err):
+		return nil, err
+	case err != nil:
+		readFailures = 1
+		logger.Debug(ctx, "first snapshot read failed inside a wait; retrying",
+			"snapshotId", snapshotID, "error", err)
 	}
 
 	var statusCh <-chan SnapshotStatus
@@ -373,7 +393,6 @@ func waitSnapshot[State any](
 
 	start := time.Now()
 	lastProgress := start
-	readFailures := 0
 	// retryRead decides what a failed in-wait re-read means: a dead end or
 	// exhausted retries surface the error, anything else is ridden out at the
 	// wait's own re-read cadence (the next tick retries).
@@ -398,41 +417,47 @@ func waitSnapshot[State any](
 				// store dropped it). Fall back to re-reading, which reports
 				// whatever the row says now, at the unsubscribed cadence.
 				statusCh = nil
-				ticker.Reset(snapshotWaitPollInterval)
+				interval = snapshotWaitPollInterval
+				ticker.Reset(interval)
 				continue
 			}
+			// A notification carries a status, not the row, so it only means
+			// "re-read now": the row is what the caller gets back, and the
+			// shared re-read below is what decides the wait is over.
 			if !snapStatus.Terminal() {
 				continue
 			}
-			// The subscription carries a status, not the row: re-read to
-			// return the settled snapshot with its cumulative state. A
-			// transient failure here falls through to the next tick, whose
-			// re-read finds the same settled row.
-			cur, err := read(snapshotID, "")
-			if err != nil {
-				if err := retryRead(err); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			return cur, nil
 		case <-ticker.C:
-			cur, err := read(snapshotID, "")
-			if err != nil {
-				if err := retryRead(err); err != nil {
-					return nil, err
-				}
-				continue
+		}
+
+		// One re-read serves both wakeups. It keeps sessionID, so the
+		// ownership assertion the caller made holds for the whole wait and not
+		// just its first read, and it settles the wait only on a row that says
+		// so: a store may notify before the write is visible to a reader, and
+		// answering a wait with a pending row would break its contract.
+		cur, err := read(snapshotID, sessionID)
+		if err != nil {
+			if err := retryRead(err); err != nil {
+				return nil, err
 			}
+			// Retry soon rather than on the next liveness beat. A subscribed
+			// wait's terminal notification fires once and has already been
+			// consumed, so after a failure the re-read is the only path left
+			// to the settled row and must not be 30s away.
+			ticker.Reset(snapshotWaitPollInterval)
+			continue
+		}
+		if readFailures > 0 {
 			readFailures = 0
-			if cur.Status.Terminal() {
-				return cur, nil
-			}
-			if time.Since(lastProgress) >= snapshotWaitProgressInterval {
-				lastProgress = time.Now()
-				logger.Debug(ctx, "still waiting for snapshot",
-					"snapshotId", snapshotID, "elapsedMs", time.Since(start).Milliseconds())
-			}
+			ticker.Reset(interval)
+		}
+		if cur.Status.Terminal() {
+			return cur, nil
+		}
+		if time.Since(lastProgress) >= snapshotWaitProgressInterval {
+			lastProgress = time.Now()
+			logger.Debug(ctx, "still waiting for snapshot",
+				"snapshotId", snapshotID, "elapsedMs", time.Since(start).Milliseconds())
 		}
 	}
 }

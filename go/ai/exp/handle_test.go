@@ -192,22 +192,35 @@ func TestAgentMetadataOf(t *testing.T) {
 		}
 	})
 
-	t.Run("map form keeps well-typed fields past a mistyped one", func(t *testing.T) {
-		// A wire descriptor with one bad field must not erase the
-		// capabilities that did decode: history forwarding and abort
-		// pre-flights key off these.
+	t.Run("map form that does not decode reports nothing, not a partial", func(t *testing.T) {
+		// Every field here is a capability a caller gates on, so a partial
+		// decode is worse than none: the mistyped abortable below would read
+		// as a definite "cannot run in the background" and get the agent
+		// refused work it can do. Callers treat nil as "unknown" and ask the
+		// runtime instead.
 		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{
 			"agent": map[string]any{"stateManagement": "client", "abortable": "true"},
 		}}}
-		meta := AgentMetadataOf(a)
+		if meta := AgentMetadataOf(a); meta != nil {
+			t.Fatalf("AgentMetadataOf = %+v, want nil for a descriptor that did not decode", meta)
+		}
+	})
+
+	t.Run("returned metadata does not alias the descriptor", func(t *testing.T) {
+		// The copy claim has to cover StateSchema too: it is a map, so a
+		// struct copy alone shares it with every other reader of a descriptor
+		// documented as immutable.
+		desc := api.ActionDesc{Metadata: map[string]any{
+			"agent": AgentMetadata{StateSchema: map[string]any{"type": "object"}},
+		}}
+		meta := AgentMetadataOf(fakeDescAction{desc: desc})
 		if meta == nil {
-			t.Fatal("AgentMetadataOf = nil, want best-effort metadata")
+			t.Fatal("AgentMetadataOf = nil, want typed metadata")
 		}
-		if meta.StateManagement != AgentStateManagementClient {
-			t.Errorf("StateManagement = %q, want %q despite the mistyped sibling", meta.StateManagement, AgentStateManagementClient)
-		}
-		if meta.Abortable {
-			t.Error("Abortable = true, want zero value for the mistyped field")
+		meta.StateSchema["type"] = "tampered"
+		original := desc.Metadata["agent"].(AgentMetadata)
+		if got := original.StateSchema["type"]; got != "object" {
+			t.Errorf("descriptor schema type = %v, want %q untouched", got, "object")
 		}
 	})
 
