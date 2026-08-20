@@ -370,7 +370,7 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
     # We pass a context dictionary with both serializable and unserializable values,
     # including nested dictionaries and lists.
     complex_context: dict[str, object] = {
-        'auth': {
+        'session': {
             'user_id': 123,
             'token': 'secret_token',
             'raw_connection': UnserializableObject(),  # should be dropped
@@ -392,9 +392,9 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
     context_json = json.loads(context_attr)
 
     # Assertions
-    assert context_json['auth']['user_id'] == 123
-    assert context_json['auth']['token'] == 'secret_token'
-    assert context_json['auth']['raw_connection'] == 'Unserializable'
+    assert context_json['session']['user_id'] == 123
+    assert context_json['session']['token'] == 'secret_token'
+    assert context_json['session']['raw_connection'] == 'Unserializable'
 
     assert context_json['serializable_list'] == [1, 'two', {'nested_key': 'nested_val'}]
     assert context_json['unserializable_list'] == [1, 'Unserializable', 3]
@@ -432,6 +432,31 @@ async def test_action_context_telemetry_circular_references(exporter: InMemorySp
 
     # 'key' is serializable, and 'self' circular reference should be safely cut off with '[Circular]'
     assert context_json == {'key': 'val', 'self': '[Circular]'}
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_redacts_auth_and_secrets(exporter: InMemorySpanExporter) -> None:
+    """Top-level auth/secrets are redacted on the span so the Context panel is safe."""
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(name='scrubTest', kind=ActionKind.FLOW, fn=noop)
+    await action.run(
+        context={
+            'auth': {'token': 'super-secret'},
+            'secrets': {'apiKey': 'SUPER-SECRET'},
+            'safeField': 'hello',
+            'nestedField': {'auth': 'this stays'},
+        }
+    )
+
+    span = _by_name(exporter.get_finished_spans(), 'scrubTest')
+    context_json = json.loads(dict(span.attributes or {})['genkit:metadata:context'])
+    assert context_json['auth'] == '<redacted>'
+    assert context_json['secrets'] == '<redacted>'
+    assert context_json['safeField'] == 'hello'
+    assert context_json['nestedField'] == {'auth': 'this stays'}
 
 
 def test_metadata_key_prevents_double_prefix() -> None:
