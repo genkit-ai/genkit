@@ -345,8 +345,8 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 	if custom.Counter != 42 {
 		t.Errorf("custom counter = %d, want 42", custom.Counter)
 	}
-	if got, want := final.State.LastModelMessage().Text(), "finished"; got != want {
-		t.Errorf("LastModelMessage().Text() = %q, want %q", got, want)
+	if got, want := tipText(t, final.State), "finished"; got != want {
+		t.Errorf("final message = %q, want %q", got, want)
 	}
 }
 

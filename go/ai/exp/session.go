@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -53,27 +52,6 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 // worker is presumed dead, so nothing will finalize it.
 func (s SnapshotStatus) Terminal() bool {
 	return s != SnapshotStatusPending
-}
-
-// LastModelMessage returns the most recent model message that carries text:
-// the conversation's final response as a reader would quote it. Model messages
-// holding no text (e.g. only tool requests) are skipped, so a conversation
-// whose tip is mid-tool-loop still resolves to the last spoken response. It
-// returns nil when no model message carries text, and tolerates a nil
-// receiver (e.g. a pending snapshot's nil [SessionSnapshot.State]).
-//
-// The returned message points into the state's own message list; treat it as
-// read-only, or deep-copy before mutating.
-func (s *SessionState[State]) LastModelMessage() *ai.Message {
-	if s == nil {
-		return nil
-	}
-	for _, msg := range slices.Backward(s.Messages) {
-		if msg != nil && msg.Role == ai.RoleModel && msg.Text() != "" {
-			return msg
-		}
-	}
-	return nil
 }
 
 // --- Session store ---
