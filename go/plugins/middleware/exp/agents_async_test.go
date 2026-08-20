@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -30,15 +29,6 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
-
-// fastTaskPolling shortens the wait tool's retry pause for the test. A healthy
-// wait needs no shortening: it settles when the store says so.
-func fastTaskPolling(t *testing.T) {
-	t.Helper()
-	restore := transientRetryDelay
-	transientRetryDelay = 10 * time.Millisecond
-	t.Cleanup(func() { transientRetryDelay = restore })
-}
 
 // toolOutputs collects the raw outputs of every tool response for toolName.
 func toolOutputs(msgs []*ai.Message, toolName string) []any {
@@ -84,7 +74,6 @@ func lenientDelegation(v any) delegationResult {
 // tool while the sub-agent is still gated, then release the gate and collect
 // the completed result (response and inline artifact) via the wait tool.
 func TestAgentsAsyncDelegationLifecycle(t *testing.T) {
-	fastTaskPolling(t)
 	g := newTestGenkit(t)
 
 	// Gate the sub-agent so the task stays pending until the orchestrator has
@@ -209,7 +198,6 @@ func TestAgentsAsyncDelegationLifecycle(t *testing.T) {
 // history: the pickup path a re-instantiated orchestrator relies on. The wait
 // also carries two unusable handles to verify per-task error isolation.
 func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
-	fastTaskPolling(t)
 	g := newTestGenkit(t)
 
 	genkitx.DefineAgent[any](g, "researcher",
@@ -387,7 +375,6 @@ func TestAgentsAsyncInstancesCoexistWithPrefixes(t *testing.T) {
 // the wait still settles its tasks normally instead of returning instantly
 // with timedOut and unresolved statuses.
 func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
-	fastTaskPolling(t)
 	g := newTestGenkit(t)
 
 	genkitx.DefineAgent[any](g, "researcher",

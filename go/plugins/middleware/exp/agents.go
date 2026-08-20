@@ -57,26 +57,18 @@ const (
 	ArtifactStrategySession ArtifactStrategy = "session"
 )
 
-// requireGenkit classifies the absence of a Genkit instance on the context as
-// a failed precondition: a wiring gap in how the middleware runs, not anything
-// the caller sent. Both delegation and background-task reads resolve through
-// it.
-func requireGenkit(g *genkit.Genkit) error {
-	if g == nil {
-		return status.Errorf(status.ErrFailedPrecondition,
-			"no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
-	}
-	return nil
-}
-
 // resolveAgent looks the agent up by name through g and returns its handle.
 // Resolution goes through the Genkit instance (the sanctioned path for
 // third-party middleware) rather than the registry directly; the handle
 // carries the agent's companion actions and capability metadata along with
-// the run surface.
+// the run surface. Both delegation and background-task reads resolve through
+// it.
 func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) {
-	if err := requireGenkit(g); err != nil {
-		return nil, err
+	if g == nil {
+		// A failed precondition: a wiring gap in how the middleware runs, not
+		// anything the caller sent.
+		return nil, status.Errorf(status.ErrFailedPrecondition,
+			"no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
 	}
 	return genkitx.LookupAgent(g, ref.Name)
 }
@@ -335,21 +327,37 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Contex
 	}
 }
 
-// runDelegation is the synchronous delegation body, shared by the plain
-// delegation tool and the async-enabled variant when the model does not
-// request background execution.
-func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
+// beginDelegation is the prologue every delegation shares, synchronous or
+// background: it enforces MaxDelegations, reserves the delegation's invocation
+// number, and resolves the sub-agent, refunding the reserved slot when
+// resolution fails. A non-nil refusal is the tool result to return as-is: the
+// model-facing text for a cap refusal or a resolution failure. conversation is
+// the captured message list for optional history forwarding (see
+// reserveDelegation); background launches ignore it.
+func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState) (invocationNum int, conversation []*ai.Message, agent *aix.AgentHandle, refusal *delegationResult) {
 	invocationNum, conversation, ok := a.reserveDelegation(st)
 	if !ok {
 		logger.Warn(ctx, "delegation refused, limit reached", "agent", ref.Name, "limit", a.MaxDelegations)
-		return delegationLimitResult(a.MaxDelegations), nil
+		return 0, nil, nil, &delegationResult{Response: fmt.Sprintf(
+			"Delegation limit reached (%d). Complete the task using information already gathered.", a.MaxDelegations)}
 	}
 
 	agent, err := resolveAgent(genkit.FromContext(ctx), ref)
 	if err != nil {
 		a.releaseDelegation(st)
 		logger.Warn(ctx, "sub-agent resolution failed", "agent", ref.Name, "error", err)
-		return delegationResult{Response: "Error: " + err.Error()}, nil
+		return 0, nil, nil, &delegationResult{Response: "Error: " + err.Error()}
+	}
+	return invocationNum, conversation, agent, nil
+}
+
+// runDelegation is the synchronous delegation body, shared by the plain
+// delegation tool and the async-enabled variant when the model does not
+// request background execution.
+func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
+	invocationNum, conversation, agent, refusal := a.beginDelegation(ctx, ref, st)
+	if refusal != nil {
+		return *refusal, nil
 	}
 
 	// History rides in client-managed init state, which server-managed
@@ -408,13 +416,6 @@ func (a *Agents) releaseDelegation(st *agentsState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.delegations--
-}
-
-// delegationLimitResult is the refusal returned once MaxDelegations is
-// exhausted.
-func delegationLimitResult(limit int) delegationResult {
-	return delegationResult{Response: fmt.Sprintf(
-		"Delegation limit reached (%d). Complete the task using information already gathered.", limit)}
 }
 
 // foldDelegationOutput turns a settled sub-agent output into a delegation tool
