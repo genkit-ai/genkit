@@ -136,6 +136,17 @@ async def test_strict_config_rejects_unknown_keys_as_genkit_error(ai_and_seen: t
 
 
 @pytest.mark.asyncio
+async def test_foreign_config_class_raises_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ModelConfig on a plugin that wants ConformingCfg is a raise. Pass a mapping."""
+    ai, _ = ai_and_seen
+    with pytest.raises(
+        GenkitError,
+        match=r'config must be .+\.ConformingCfg or a mapping, got .+\.GenerationCommonConfig',
+    ):
+        await ai.generate(model='conforming', prompt='hi', config=ModelConfig(temperature=0.7))
+
+
+@pytest.mark.asyncio
 async def test_output_format_reaches_the_plugin(ai_and_seen: tuple[Genkit, dict]) -> None:
     """ai.generate(output_format='json') is what the plugin reads as request.output_format."""
     ai, seen = ai_and_seen

@@ -22,10 +22,11 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
+from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
@@ -75,6 +76,48 @@ ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 # Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
 # ModelConfig subclasses without forcing everything through GenerationCommonConfig.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
+
+
+def declared_config_type(cls: type) -> type | None:
+    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+    meta = getattr(cls, '__pydantic_generic_metadata__', None)
+    if not meta:
+        return None
+    args = meta.get('args') or ()
+    if not args:
+        return None
+    arg = args[0]
+    if isinstance(arg, TypeVar) or arg is Any:
+        return None
+    return arg
+
+
+def config_type_path(cls: type) -> str:
+    """The public import a plugin author would use, else the defining module.
+
+    Walks parent packages from the top and uses the first one that re-exports
+    this class under the same name (``genkit_openai.OpenAIConfig``, not
+    ``genkit_openai.typing.OpenAIConfig``). Nested / test-local classes keep
+    the defining path.
+    """
+    impl = f'{cls.__module__}.{cls.__qualname__}'
+    if '<locals>' in cls.__qualname__ or '.' in cls.__qualname__:
+        return impl
+    parts = cls.__module__.split('.')
+    name = cls.__name__
+    for i in range(1, len(parts) + 1):
+        mod_name = '.'.join(parts[:i])
+        try:
+            mod = import_module(mod_name)
+        except ImportError:
+            continue
+        if getattr(mod, name, None) is not cls:
+            continue
+        public = getattr(mod, '__all__', None)
+        if public is not None and name not in public:
+            continue
+        return f'{mod_name}.{name}'
+    return impl
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -325,14 +368,25 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     @field_validator('config', mode='before')
     @classmethod
     def _check_config_type(cls, v: object) -> object:
-        """Ensure config is None, a dict, or a BaseModel instance.
+        """A mapping is the bag the plugin schema coerces.
 
-        Raises ValueError (not TypeError) so pydantic wraps it in a
-        ValidationError and the veneer's error contract holds.
+        A Pydantic instance is only legal if it is that schema. OpenAIConfig
+        on a Gemini request is a caller mistake — pass a mapping instead.
         """
-        if v is not None and not isinstance(v, (BaseModel, dict)):
-            raise ValueError(f'config must be a BaseModel or dict, got {type(v).__name__}')
-        return v
+        if v is None:
+            return v
+        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
+            return v
+        if isinstance(v, BaseModel):
+            expected = declared_config_type(cls)
+            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+                raise ValueError(
+                    f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
+                )
+            if expected is dict:
+                raise ValueError(f'config must be a mapping, got {type(v).__name__}')
+            return v
+        raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
 
     @field_validator('messages', mode='before')
     @classmethod
