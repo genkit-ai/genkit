@@ -89,10 +89,6 @@ jobs:
             exit 1
           fi
 
-          echo "::group::Build tombstone packages"
-          python3 py/scripts/publish_tombstones.py --dist-dir dist/
-          echo "::endgroup::"
-
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
