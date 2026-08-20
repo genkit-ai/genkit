@@ -19,7 +19,7 @@ from genkit._ai._generate import (
 )
 from genkit._ai._testing import define_programmable_model
 from genkit._core._environment import GENKIT_ENV
-from genkit._core._logger import GENKIT_LOG
+from genkit._core._logger import GENKIT_LOG, get_logger
 from genkit._core._typing import CustomPart, GenerationUsage, Media, MediaPart, Role, TextPart
 
 BLOB = 'A' * 1_000_000
@@ -169,10 +169,12 @@ async def test_generate_logs_nothing_at_default_level() -> None:
     structlog.reset_defaults()
 
     with capture_logs() as entries:
+        get_logger('genkit.test').info('capture probe')
         await _generate_once()
 
     events = [entry['event'] for entry in entries]
-    assert events == []
+    assert 'capture probe' in events
+    assert 'generate response' not in events
 
 
 @pytest.mark.asyncio

@@ -233,6 +233,16 @@ def define_background_model(
     if info:
         model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
+    # generate_operation looks at this flag. A background model is a
+    # poll-handle model, so the flag is set on registration.
+    supports = model_options.get('supports')
+    if not isinstance(supports, dict):
+        supports = {}
+    else:
+        supports = dict(supports)
+    supports['longRunning'] = True
+    model_options['supports'] = supports
+
     # Precedence: explicit label argument > info.label > fallback to model name
     label = label or model_options.get('label') or name
     model_options['label'] = label

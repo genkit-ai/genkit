@@ -151,7 +151,7 @@ jobs:
           cd py
           # Check for common API key patterns
           if grep -rE "(sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|AKIA[0-9A-Z]{16})" \
-              packages/ plugins/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
+              packages/ samples/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
             echo "Error: Potential hardcoded secrets found"
             exit 1
           fi
@@ -231,7 +231,7 @@ jobs:
             if [[ -f "$wheel" ]]; then
               wheel_name=$(basename "$wheel" | sed 's/-[0-9].*//')
               # Only check publishable packages
-              if [[ "$wheel_name" == "genkit" ]] || [[ "$wheel_name" == genkit_plugin_* ]]; then
+              if [[ "$wheel_name" == "genkit" ]] || [[ "$wheel_name" == genkit_* ]]; then
                 echo "Checking $wheel_name..."
                 # Check for py.typed
                 if ! unzip -l "$wheel" 2>/dev/null | grep -qE "py\.typed$"; then

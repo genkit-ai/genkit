@@ -21,6 +21,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
 from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
@@ -30,14 +36,14 @@ else:
     from enum import StrEnum
 
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, cast
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
 
 from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import ClientError
-from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema
 
 from genkit import (
     Constrained,
@@ -812,6 +818,50 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
 
 
+# Quote autocomplete needs a Literal. The version enums above and the
+# ``_add_model`` names below are the catalog; a test requires each family
+# Literal to equal that catalog filtered by family.
+KnownGemini: TypeAlias = Literal[
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-flash-latest',
+    'gemini-pro-latest',
+    'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-pro-preview-customtools',
+    'gemini-3.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-2.5-flash-preview-04-17',
+    'gemini-2.5-pro-exp-03-25',
+    'gemini-2.5-pro-preview-03-25',
+    'gemini-2.5-pro-preview-05-06',
+]
+KnownGeminiTts: TypeAlias = Literal[
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+]
+KnownGeminiImage: TypeAlias = Literal[
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash-image-preview',
+    'gemini-3-pro-image',
+    'gemini-3-pro-image-preview',
+    'gemini-3.1-flash-image',
+    'gemini-3.1-flash-image-preview',
+]
+KnownGemma: TypeAlias = Literal[
+    'gemma-3-1b-it',
+    'gemma-3-4b-it',
+    'gemma-3-12b-it',
+    'gemma-3-27b-it',
+    'gemma-3n-e4b-it',
+]
+
+
 SUPPORTED_MODELS = {}
 
 
@@ -844,6 +894,10 @@ _add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
 
+# Frozen at import so quote-autocomplete tests do not see ids that
+# resolve() writes into SUPPORTED_MODELS later.
+GEMINI_CATALOG_IDS = frozenset(SUPPORTED_MODELS)
+
 
 DEFAULT_SUPPORTS_MODEL = Supports(
     multiturn=True,
@@ -872,13 +926,15 @@ def is_gemini_model(name: str) -> bool:
         >>> is_gemini_model('gemini-2.5-flash-preview-tts')
         False
     """
-    return name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and not is_tts_model(local) and not is_image_model(local)
 
 
 def is_tts_model(name: str) -> bool:
-    """Check if the model is a text-to-speech (TTS) model.
+    """Check if the model is a Gemini text-to-speech (TTS) model.
 
-    TTS models output audio instead of text and use GeminiTtsConfigSchema.
+    TTS is a ``gemini-`` name that contains ``-tts``. Strip the plugin /
+    ``models/`` prefix first so ``googleai/gemini-…-tts`` still routes here.
 
     Args:
         name: The model name to check.
@@ -890,13 +946,16 @@ def is_tts_model(name: str) -> bool:
         >>> is_tts_model('gemini-2.5-flash-preview-tts')
         True
     """
-    return (name.startswith('gemini-') and name.endswith('-tts')) or 'tts' in name
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-tts' in local
 
 
 def is_image_model(name: str) -> bool:
-    """Check if the model is a Gemini image generation model.
+    """Check if the model is a Gemini native image generation model.
 
-    Image models output images instead of text and use GeminiImageConfigSchema.
+    Native image is a ``gemini-`` name that contains ``-image``. Imagen
+    (``imagen-…``) is a different family — a bare ``image`` substring
+    would catch both.
 
     Args:
         name: The model name to check.
@@ -908,13 +967,15 @@ def is_image_model(name: str) -> bool:
         >>> is_image_model('gemini-2.0-flash-preview-image-generation')
         True
     """
-    return (name.startswith('gemini-') and '-image' in name) or 'image' in name
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-image' in local
 
 
 def is_gemma_model(name: str) -> bool:
     """Check if the model is a Gemma open model.
 
-    Gemma models are Google's open-weight models with different configuration.
+    Gemma is the ``gemma-`` prefix on the local name after stripping the
+    plugin / ``models/`` prefix.
 
     Args:
         name: The model name to check.
@@ -926,7 +987,7 @@ def is_gemma_model(name: str) -> bool:
         >>> is_gemma_model('gemma-2-27b-it')
         True
     """
-    return name.startswith('gemma-')
+    return name.split('/')[-1].lower().startswith('gemma-')
 
 
 def is_tuned_gemini_name(name: str) -> bool:
@@ -1689,10 +1750,10 @@ class GeminiModel:
 
         The conversion follows a linear pipeline:
         1. Extract system instructions from messages
-        2. Normalize request.config into a dict (regardless of input type)
+        2. Dump the typed request.config instance into a snake_case dict
         3. Extract tool-related fields from the dict
         4. Clean Genkit-specific / unsupported keys from the dict
-        5. Build the final GenerateContentConfig
+        5. Build GenerateContentConfig from known fields; leftovers ride on extra_body
         """
         system_instruction: list[genai.types.Part] = []
 
@@ -1710,6 +1771,7 @@ class GeminiModel:
         cfg = None
         tools: list[genai_types.Tool] = []
 
+        leftovers: dict[str, Any] = {}
         if request.config:
             # 2. Normalize config into a dict
             dumped_config = self._normalize_config_to_dict(request.config)
@@ -1721,28 +1783,28 @@ class GeminiModel:
                 # 4. Clean Genkit-specific and unsupported keys
                 self._clean_unsupported_keys(dumped_config)
 
-                # 5. Build GenerateContentConfig
-                if dumped_config:
-                    cfg = genai_types.GenerateContentConfig(**dumped_config)
-                else:
-                    cfg = None
+                # 5. Build GenerateContentConfig from known fields; leftovers ride
+                # on extra_body so a newly supported key still reaches the API.
+                known, leftovers = split_sdk_fields(dumped_config, genai_types.GenerateContentConfig)
+                if known:
+                    try:
+                        cfg = genai_types.GenerateContentConfig(**known)
+                    except ValidationError as e:
+                        raise sdk_config_error(action_name=self._version, error=e) from e
 
         # Tools from top-level field and config-level fields
         tools.extend(self._get_tools(request))
 
         has_output = bool(request.output_format or request.output_schema)
 
-        if cfg is not None or tools or system_instruction or request.output_format:
+        if cfg is not None or tools or system_instruction or request.output_format or leftovers:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
             if has_output:
                 model_name = self._version
                 if request.config:
-                    if isinstance(request.config, dict):
-                        version = request.config.get('version')
-                    else:
-                        version = getattr(request.config, 'version', None)
+                    version = getattr(request.config, 'version', None)
                     if version:
                         model_name = version
 
@@ -1767,7 +1829,7 @@ class GeminiModel:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
-            return cfg
+            return attach_leftovers(cfg, leftovers, nest='generationConfig')
 
         return None
 
@@ -1782,47 +1844,14 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: GeminiConfigSchema | None,
     ) -> dict[str, Any] | None:
-        """Return the config as a snake_case dict for the rest of the pipeline.
-
-        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
-        generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
-        as alias-form extras), or a raw dict in either casing. Only the
-        plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
-        ``code_execution``), so we re-validate through it whenever the input
-        isn't already one — that's what folds aliased keys onto their
-        canonical snake_case fields before tool extraction runs.
-
-        Returns ``None`` if the config has no meaningful values.
-        """
-        if isinstance(config, GeminiConfigSchema):
-            schema = config
-        elif isinstance(config, ModelConfig):
-            # Re-route through the plugin schema so the alias machinery folds
-            # any plugin-specific extras onto their canonical fields.
-            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))
-        elif isinstance(config, dict):
-            schema = self._pick_plugin_schema(config)
-        else:
-            return None
-
-        dumped = schema.model_dump(exclude_none=True, by_alias=False)
-        return dumped or None
-
-    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
-        """Validate ``data`` through whichever subclass matches the model.
-
-        Routing is purely by model name so each family gets its own
-        validation rules -- most importantly Gemma, which intentionally
-        relaxes the standard Gemini temperature bounds and would otherwise
-        reject valid configs. The per-request ``version`` override (when
-        present) takes precedence over the version this instance is bound
-        to, mirroring how the actual model name is resolved at call time.
-        """
-        model_name = data.get('version') or self._version
-        schema_cls = get_model_config_schema(model_name)
-        return schema_cls.model_validate(data)
+        """Dump a typed family config to a snake_case dict for the SDK."""
+        return dump_family_config(
+            config=config,
+            expected_type=GeminiConfigSchema,
+            action_name=self._version,
+        )
 
     def _extract_tools_from_config(
         self,
