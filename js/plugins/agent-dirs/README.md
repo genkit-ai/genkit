@@ -183,8 +183,10 @@ compiled:
 
 Skill bodies, knowledge documents and the knowledge index are re-read per
 turn, so edits are live in a running session. `instructions.md` and tool code
-are compiled at startup - restart (`tsx --watch` restarts on TS changes; an
-instructions edit needs a manual restart). Real watch mode is future work.
+are compiled at startup, so they need a restart: `agent-dirs serve --watch`
+restarts the server on any change under the agents directory (sessions
+survive - snapshots persist to the store). Under a hand-written entry point,
+`tsx --watch` restarts on TS changes only.
 
 ## Serving and deployment
 
@@ -243,8 +245,8 @@ the entry as stale. Exported standalone; upstream candidate for
 
 ## API summary
 
-- `agent-dirs serve [dir] [--port <n>] [--host <h>]` - zero-code CLI runner
-  (see Quickstart).
+- `agent-dirs serve [dir] [--port <n>] [--host <h>] [--watch]` - zero-code
+  CLI runner (see Quickstart); `--watch` restarts on directory changes.
 - `agentDirs(options)` - the plugin. `dir`, `store`, `snapshotDir`,
   `strict`, `defaultModel`.
 - `directoryAgent(ai, name)` - resolve a registered agent (the `remoteAgent`
@@ -259,7 +261,8 @@ the entry as stale. Exported standalone; upstream candidate for
 
 - `state:` schema in frontmatter (picoschema) → `stateSchema`
 - `input`/`output` frontmatter (warned as unknown keys and ignored)
-- watch mode / hot re-registration on directory changes
+- in-process hot re-registration on directory changes (`serve --watch`
+  restarts the process instead)
 - typegen for a typed `directoryAgent(ai, 'name')`
 - lazy plugin action listing (`listActionsFn`) - agents resolve eagerly
 - channel adapters (Slack/cron); OKF attested computations

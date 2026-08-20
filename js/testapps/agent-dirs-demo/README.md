@@ -22,8 +22,9 @@ export GCLOUD_PROJECT=<your-project>
 Three ways, same agents:
 
 ```sh
-# 1. Zero host code - the folder is the only input:
-pnpm server:zero
+# 1. Zero host code - the folder is the only input
+#    (--watch restarts on any agent-file edit):
+pnpm server:zero --watch
 
 # 2. Host-code path (src/index.ts) - same thing, written out; the template
 #    for picking your own provider or embedding in an existing app:

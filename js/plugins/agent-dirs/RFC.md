@@ -204,8 +204,9 @@ what we think closes the biggest gaps:
 
 - `state:` schema in frontmatter (picoschema to `stateSchema`); wants a
   public picoschema conversion API.
-- Watch mode. Skill and knowledge bodies are already re-read per turn;
-  prompts and tools need a restart.
+- In-process watch mode. Skill and knowledge bodies are already re-read per
+  turn, and `serve --watch` restarts the process on directory changes;
+  re-registering in place needs registry un-register support.
 - Typegen for `directoryAgent(ai, 'name')` state types.
 - Whether `input` / `output` prompt-style frontmatter should apply to
   agents (currently unknown keys: warned and ignored).

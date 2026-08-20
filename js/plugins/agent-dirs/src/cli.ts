@@ -32,22 +32,26 @@
 import { vertexAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit/beta';
 import { logger } from 'genkit/logging';
+import { spawn, type ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { agentDirs } from './index.js';
 import { serveAgents } from './server.js';
 
-const USAGE = `Usage: agent-dirs serve [dir] [--port <n>] [--host <h>]
+const USAGE = `Usage: agent-dirs serve [dir] [--port <n>] [--host <h>] [--watch]
 
-  dir     agents directory (default ./agents)
-  --port  listen port (default PORT env or 8080)
-  --host  interface to bind (default 127.0.0.1; the endpoints carry no
-          auth, so pass --host 0.0.0.0 only behind a platform ingress,
-          e.g. in a container)`;
+  dir      agents directory (default ./agents)
+  --port   listen port (default PORT env or 8080)
+  --host   interface to bind (default 127.0.0.1; the endpoints carry no
+           auth, so pass --host 0.0.0.0 only behind a platform ingress,
+           e.g. in a container)
+  --watch  restart the server when anything under dir changes (dev only)`;
 
 interface ServeArgs {
   dir?: string;
   port?: number;
   host?: string;
+  watch?: boolean;
 }
 
 function parseArgs(argv: string[]): ServeArgs | undefined {
@@ -64,6 +68,8 @@ function parseArgs(argv: string[]): ServeArgs | undefined {
       args.host = rest[++i];
     } else if (arg.startsWith('--host=')) {
       args.host = arg.slice('--host='.length);
+    } else if (arg === '--watch') {
+      args.watch = true;
     } else if (!arg.startsWith('-')) {
       if (args.dir !== undefined) return undefined; // one dir only
       args.dir = arg;
@@ -81,6 +87,78 @@ function parseArgs(argv: string[]): ServeArgs | undefined {
   return args;
 }
 
+/**
+ * `--watch`: supervise a child server process and restart it when anything
+ * under the agents directory changes. A process restart (rather than
+ * in-process re-registration) is deliberate: tool modules are ESM imports
+ * and the module cache would serve stale code, and the registry has no
+ * un-register. Skill and knowledge bodies are already re-read per turn
+ * without this.
+ */
+function runSupervisor(dir: string, args: ServeArgs): void {
+  const resolved = path.resolve(dir);
+  if (!fs.existsSync(resolved)) {
+    console.error(`agent-dirs: --watch: no such directory: ${resolved}`);
+    process.exit(1);
+  }
+
+  const childArgs = [
+    ...process.execArgv,
+    process.argv[1],
+    'serve',
+    dir,
+    ...(args.port !== undefined ? [`--port=${args.port}`] : []),
+    ...(args.host !== undefined ? [`--host=${args.host}`] : []),
+  ];
+
+  let child: ChildProcess | undefined;
+  let restartTimer: NodeJS.Timeout | undefined;
+  let shuttingDown = false;
+
+  const start = () => {
+    child = spawn(process.execPath, childArgs, { stdio: 'inherit' });
+    child.on('exit', (code) => {
+      child = undefined;
+      // A startup crash (e.g. broken frontmatter under strict mode) must not
+      // kill the watcher: stay up so fixing the file restarts the server.
+      if (!shuttingDown && code !== 0) {
+        logger.warn('[agent-dirs] server exited; waiting for changes');
+      }
+    });
+  };
+
+  const restart = (filename: string | null) => {
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => {
+      logger.info(
+        `[agent-dirs] change detected (${filename ?? dir}), restarting`
+      );
+      if (child) {
+        child.once('exit', start);
+        child.kill('SIGTERM');
+      } else {
+        start();
+      }
+    }, 300);
+  };
+
+  fs.watch(resolved, { recursive: true }, (_event, filename) =>
+    restart(filename)
+  );
+
+  const shutdown = (signal: NodeJS.Signals) => {
+    shuttingDown = true;
+    clearTimeout(restartTimer);
+    child?.kill(signal);
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  logger.info(`[agent-dirs] watching ${resolved}`);
+  start();
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (!args) {
@@ -88,6 +166,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const dir = args.dir ?? './agents';
+
+  if (args.watch) {
+    runSupervisor(dir, args);
+    return;
+  }
 
   // Default provider and store. Platform-resolved config (firebase.json /
   // the hosting service) should select these per project: provider from the
