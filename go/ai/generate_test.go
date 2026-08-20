@@ -18,14 +18,17 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
@@ -3053,6 +3056,218 @@ func TestMediaParts(t *testing.T) {
 		var msg *Message
 		if parts := msg.MediaParts(); parts != nil {
 			t.Errorf("MediaParts() on nil message = %v, want nil", parts)
+		}
+	})
+}
+
+// generateSpanMessageCounts returns, sorted, the number of messages each
+// collected span named "generate" recorded as its input.
+func generateSpanMessageCounts(t *testing.T, c *spanCollector) []int {
+	t.Helper()
+	var counts []int
+	for _, s := range c.allByName("generate") {
+		input, ok := spanAttr(s, "genkit:input")
+		if !ok {
+			t.Errorf("generate span recorded no input")
+			continue
+		}
+		var decoded struct {
+			Messages []*Message `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(input), &decoded); err != nil {
+			t.Errorf("generate span input is not a request: %v", err)
+			continue
+		}
+		counts = append(counts, len(decoded.Messages))
+	}
+	slices.Sort(counts)
+	return counts
+}
+
+// TestGenerateSpanRecordsAccumulatedMessages checks that every tool-loop turn
+// opens a generate span recording the conversation as of that turn, not the
+// messages the call started with.
+func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
+	// Two tool calls and a final answer: three model calls in all, whose
+	// requests hold 1, 3, and 5 messages as each turn appends a model and a
+	// tool message. Through the action the counts are the same, since the
+	// action's own span stands in for the first turn's: a fourth count here
+	// would mean the two are duplicating each other.
+	const turns = 3
+	want := []int{1, 3, 5}
+
+	setup := func(t *testing.T) (api.Registry, *spanCollector) {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/loopModel",
+			handler: loopingToolModel("myTool", turns-1),
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+		return r, collectSpans(t)
+	}
+
+	t.Run("through Generate", func(t *testing.T) {
+		r, spans := setup(t)
+
+		_, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+		)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+		// The loop's spans are annotated by type alone. A subtype would show
+		// up in their trace paths, and in every path built under them.
+		for _, s := range spans.allByName("generate") {
+			assertSpanAttr(t, s, "genkit:type", "util")
+			if got, ok := spanAttr(s, "genkit:metadata:subtype"); ok {
+				t.Errorf("generate span carries subtype %q, want none", got)
+			}
+		}
+	})
+
+	t.Run("through the generate action", func(t *testing.T) {
+		r, spans := setup(t)
+		action := DefineGenerateAction(testCtx, r)
+
+		_, err := action.Run(testCtx, &GenerateActionOptions{
+			Model:    "test/loopModel",
+			Messages: []*Message{NewUserTextMessage("start")},
+			Tools:    []string{"myTool"},
+		}, nil)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+	})
+}
+
+// TestToolLoopLeavesEarlierRequestsAlone checks that each turn of the tool loop
+// works from its own request: middleware holds these, so reusing one would
+// retroactively add the next turn's messages to a request a hook read.
+func TestToolLoopLeavesEarlierRequestsAlone(t *testing.T) {
+	r := newTestRegistry(t)
+	var seen []*ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/loopModel",
+		handler: loopingToolModel("myTool", 2),
+	})
+	defineTool(r, "myTool", "A test tool",
+		func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+
+	recorder := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+				seen = append(seen, p.Request)
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/loopModel"),
+		WithPrompt("start"),
+		WithTools(LookupTool(r, "myTool")),
+		WithUse(recorder),
+	)
+	assertNoError(t, err)
+
+	// One request per turn, each holding what the turn before it appended,
+	// still true once the whole loop has run.
+	want := []int{1, 3, 5}
+	if len(seen) != len(want) {
+		t.Fatalf("middleware saw %d requests, want %d", len(seen), len(want))
+	}
+	for i, n := range want {
+		if got := len(seen[i].Messages); got != n {
+			t.Errorf("request %d holds %d messages after the loop finished, want %d", i, got, n)
+		}
+	}
+}
+
+// interruptedForResume runs a generate that stops on a tool interrupt and
+// returns the registry, the tool, and the interrupted response, ready for a
+// resuming call.
+func interruptedForResume(t *testing.T) (api.Registry, Tool, *ModelResponse) {
+	t.Helper()
+	r := childRegistry(t)
+	tool := defineTool(r, "conditional", "A tool that interrupts on request",
+		func(ctx *ToolContext, in conditionalToolInput) (string, error) {
+			if in.Interrupt {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "test"}})
+			}
+			return "processed: " + in.Value, nil
+		})
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/resumeModel",
+		handler: toolCallingModelHandler("conditional", map[string]any{"Value": "v", "Interrupt": true}, "done"),
+	})
+
+	res, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithPrompt("go"), WithTools(tool))
+	assertNoError(t, err)
+	if res.FinishReason != "interrupted" {
+		t.Fatalf("setup: finish reason = %q, want %q", res.FinishReason, "interrupted")
+	}
+	return r, tool, res
+}
+
+// TestResumeCarriesOptionsForward checks the options the loop switches to once
+// a resumed call has replayed its tools. It reads them for the rest of the
+// call, so whatever the revised copy drops is lost from that point on.
+func TestResumeCarriesOptionsForward(t *testing.T) {
+	t.Run("keeps the caller's step name", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+		spans := collectSpans(t)
+
+		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithStepName("myStep"))
+		assertNoError(t, err)
+
+		// Both turns are the caller's step, so neither may fall back to the default.
+		if got := len(spans.allByName("generate")); got != 0 {
+			t.Errorf("got %d spans named %q, want 0: every iteration is the named step", got, "generate")
+		}
+		if got := len(spans.allByName("myStep")); got != 2 {
+			t.Errorf("got %d spans named %q, want 2 (one per iteration)", got, "myStep")
+		}
+	})
+
+	t.Run("resume survives a hook writing to its options", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+
+		clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Options.Resume != nil {
+						p.Options.Resume.Respond = nil
+						p.Options.Resume.Restart = nil
+					}
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		out, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithUse(clobber))
+		assertNoError(t, err)
+
+		// The hook's writes land on its own copy, so the call resumes as usual.
+		if out.FinishReason == "interrupted" {
+			t.Error("call stayed interrupted: a hook's write to Options reached the loop")
+		}
+		if got := out.Text(); got != "done" {
+			t.Errorf("resumed response = %q, want %q", got, "done")
 		}
 	})
 }
