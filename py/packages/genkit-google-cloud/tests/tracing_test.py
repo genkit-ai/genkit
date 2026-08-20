@@ -29,13 +29,25 @@ Tests cover JS/Go parity for:
 
 import os
 import warnings
+from collections.abc import Generator
 from unittest import mock
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Environment variable and value constants (matching genkit._core._environment)
 _GENKIT_ENV = 'GENKIT_ENV'
 _ENV_DEV = 'dev'
 _ENV_PROD = 'prod'
+
+
+@pytest.fixture(autouse=True)
+def _reset_instrumentation() -> Generator[None, None, None]:
+    from genkit.telemetry import reset_instrumentation
+
+    reset_instrumentation()
+    yield
+    reset_instrumentation()
 
 
 def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
@@ -140,9 +152,12 @@ def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
         # Call without force_dev_export (using legacy force_export)
         enable_google_cloud_telemetry(force_dev_export=False)
 
+        from genkit.telemetry import OtelInstrumentation, is_instrumented_by
+
         # Verify nothing was called
         mock_gcp_exporter.assert_not_called()
         mock_add_exporter.assert_not_called()
+        assert not is_instrumented_by(OtelInstrumentation)
 
 
 def test_enable_google_cloud_telemetry_exports_in_dev_with_force() -> None:
@@ -160,12 +175,13 @@ def test_enable_google_cloud_telemetry_exports_in_dev_with_force() -> None:
     ):
         from genkit_google_cloud.telemetry.tracing import enable_google_cloud_telemetry
 
-        # Call with force_dev_export=True (the default)
         enable_google_cloud_telemetry(force_dev_export=True)
 
-        # Verify exporter was created and added
+        from genkit.telemetry import OtelInstrumentation, is_instrumented_by
+
         mock_gcp_exporter.assert_called_once()
         mock_add_exporter.assert_called_once()
+        assert is_instrumented_by(OtelInstrumentation)
 
 
 def test_enable_google_cloud_telemetry_disable_traces() -> None:
@@ -185,9 +201,12 @@ def test_enable_google_cloud_telemetry_disable_traces() -> None:
         # Call with disable_traces=True (JS/Go: disableTraces)
         enable_google_cloud_telemetry(disable_traces=True)
 
+        from genkit.telemetry import OtelInstrumentation, is_instrumented_by
+
         # Verify trace exporter was NOT created
         mock_gcp_exporter.assert_not_called()
         mock_add_exporter.assert_not_called()
+        assert not is_instrumented_by(OtelInstrumentation)
 
 
 def test_enable_google_cloud_telemetry_disable_metrics() -> None:
@@ -389,3 +408,49 @@ def test_enable_google_cloud_telemetry_is_fail_safe() -> None:
 
         # Verify error handler was called
         mock_handler.assert_called_once()
+
+
+def test_enable_in_prod_installs_otel() -> None:
+    """enable_google_cloud_telemetry() in prod is enough to create Genkit spans."""
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config.add_custom_exporter'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        from genkit_google_cloud.telemetry.tracing import enable_google_cloud_telemetry
+
+        from genkit.telemetry import OtelInstrumentation, is_instrumented_by
+
+        enable_google_cloud_telemetry(project_id='my-project')
+        assert is_instrumented_by(OtelInstrumentation)
+
+
+def test_enable_under_genkit_start_does_not_install_otel() -> None:
+    """Under genkit start, enable leaves Developer UI inject to Genkit()."""
+    with (
+        mock.patch.dict(
+            os.environ,
+            {_GENKIT_ENV: _ENV_DEV, 'GENKIT_TELEMETRY_SERVER': 'http://127.0.0.1:4033'},
+            clear=False,
+        ),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config.add_custom_exporter'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        from genkit_google_cloud.telemetry.tracing import enable_google_cloud_telemetry
+
+        from genkit.telemetry import OtelInstrumentation, is_instrumented_by
+
+        enable_google_cloud_telemetry(force_dev_export=True, project_id='my-project')
+        assert not is_instrumented_by(OtelInstrumentation)

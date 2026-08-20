@@ -42,6 +42,7 @@ from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import ModelRef
+from genkit._core._otel_instrumentation import connect_developer_ui_collector
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInit, AgentInput
 
@@ -106,7 +107,8 @@ class ActionRunner:
 
     async def on_trace_start(self, tid: str, sid: str) -> None:
         self.trace_id, self.span_id = tid, sid
-        if task := asyncio.current_task():
+        # Empty ids aren't a run the Developer UI can cancel.
+        if tid and (task := asyncio.current_task()):
             self.active_actions[tid] = task
         self.trace_ready.set()
 
@@ -265,7 +267,18 @@ def create_reflection_asgi_app(
     async def envs(_: Request) -> JSONResponse:
         return JSONResponse(['dev'])
 
-    async def notify(_: Request) -> JSONResponse:
+    async def notify(req: Request) -> JSONResponse:
+        url: str | None = None
+        try:
+            body = await req.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            raw = body.get('telemetryServerUrl')
+            if isinstance(raw, str) and raw:
+                url = raw
+        if url:
+            connect_developer_ui_collector(url=url)
         return JSONResponse({}, headers={'x-genkit-version': version})
 
     async def cancel(req: Request) -> JSONResponse:

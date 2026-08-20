@@ -27,13 +27,11 @@ Usage:
     from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
-    # 1. Enable telemetry with default settings (PII redaction enabled)
     enable_google_cloud_telemetry(project_id='my-project')
 
     # 2. All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
-    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
 Requirements:
@@ -69,14 +67,17 @@ def enable_google_cloud_telemetry(
     # Legacy parameter name for backwards compatibility
     force_export: bool | None = None,
 ) -> None:
-    """Configure GCP telemetry export for traces and metrics.
+    """Attach Cloud Trace and Cloud Monitoring exporters.
 
-    This function sets up OpenTelemetry export to Google Cloud Trace and
-    Cloud Monitoring. By default, model inputs and outputs are redacted
-    for privacy protection.
+    This is enough for Cloud Trace. If you already configured
+    ``OtelInstrumentation``, the Cloud exporter hangs on that provider
+    (your ``tracer_provider`` if you passed one). Under ``genkit start``,
+    ``Genkit()`` still attaches the Developer UI collector.
 
-    Options control which Cloud Trace, Cloud Monitoring, and Cloud Logging
-    exports are enabled, and whether model inputs and outputs are redacted.
+    Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
+    ``force_dev_export=False``, or when ``disable_traces=True``. Model
+    inputs and outputs are redacted unless you pass
+    ``log_input_and_output=True``.
 
     Args:
         project_id: Google Cloud project ID. If provided, takes precedence over
@@ -93,22 +94,20 @@ def enable_google_cloud_telemetry(
         log_input_and_output: If True, preserve model input/output in traces
             and logs. Defaults to False (redact for privacy). Only enable this
             in trusted environments where PII exposure is acceptable.
-        force_dev_export: If True, export telemetry even in the dev environment.
-            Defaults to True. Set to False for production-only telemetry.
+        force_dev_export: If True, export Cloud telemetry even when
+            ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, metrics will not be exported. Traces and
             logs may still be exported. Defaults to False.
         disable_traces: If True, traces will not be exported. Metrics and
             logs may still be exported. Defaults to False.
         metric_export_interval_ms: Metrics export interval in milliseconds.
-            Cloud Monitoring requires a minimum of 5000ms. Defaults to 5000ms
-            in development and 300000ms in production.
+            GCP requires a minimum of 5000ms. Defaults to 60000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
         force_export: Deprecated. Use force_dev_export instead.
 
     Example:
         ```python
-        # Default: PII redaction enabled
         enable_google_cloud_telemetry()
 
         # Enable input/output logging (disable PII redaction)

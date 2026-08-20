@@ -38,7 +38,7 @@ from genkit._core._trace._log_exporter import (
     put_poison_pill,
     reset_log_export,
 )
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._tracing import run_in_new_span
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_build_log_record_stamps_active_span() -> None:
     """A record under a span carries lowercase hex ids."""
     captured: dict[str, str] = {}
 
-    def go() -> None:
+    async def go(_span: object) -> None:
         record = build_log_record(level=logging.INFO, event='inside', attrs={})
         trace_id = record['traceId']
         span_id = record['spanId']
@@ -125,11 +125,18 @@ def test_build_log_record_stamps_active_span() -> None:
         captured['traceId'] = trace_id
         captured['spanId'] = span_id
 
-    from genkit._core._tracing import init_provider
+    import asyncio
 
-    init_provider()
-    with run_in_new_span(metadata=SpanMetadata(name='demo')):
-        go()
+    from genkit._core._tracing import init_provider
+    from genkit.telemetry import OtelInstrumentation, configure_instrumentation, reset_instrumentation
+
+    provider = init_provider()
+    reset_instrumentation()
+    configure_instrumentation(OtelInstrumentation(tracer_provider=provider))
+    try:
+        asyncio.run(run_in_new_span('demo', go))
+    finally:
+        reset_instrumentation()
 
     assert len(captured['traceId']) == 32
     assert len(captured['spanId']) == 16
@@ -327,7 +334,7 @@ def test_handshake_enables_log_export_when_env_url_missing() -> None:
     from genkit._core._reflection_v2 import ReflectionServerV2
     from genkit._core._registry import Registry
 
-    with patch('genkit._core._reflection_v2.add_custom_exporter'):
+    with patch('genkit._core._reflection_v2.connect_developer_ui_collector'):
         server = ReflectionServerV2(registry=Registry(), ws_url='ws://localhost:1')
         server.apply_handshake_telemetry('http://localhost:4033')
         assert log_export_is_enabled() is True

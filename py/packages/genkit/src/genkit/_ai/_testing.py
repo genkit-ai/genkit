@@ -25,7 +25,7 @@ from typing import Any, TypedDict, cast
 from pydantic import BaseModel, Field
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._instrumentation import run_in_new_span
 from genkit._core._typing import (
     Media,
     MediaPart,
@@ -370,40 +370,57 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
 
     report: TestReport = []
 
-    with run_in_new_span(SpanMetadata(name='testModels', type='testSuite')):
-        for test_name, test_fn in tests.items():
-            with run_in_new_span(SpanMetadata(name=test_name, type='testCase')):
-                case_report: TestCaseReport = {
-                    'description': test_name,
-                    'models': [],
+    async def run_case(_span: object, test_name: str = '', test_fn: Any = None) -> TestCaseReport:  # noqa: ANN401
+        case_report: TestCaseReport = {
+            'description': test_name,
+            'models': [],
+        }
+
+        for model in models:
+            model_result: ModelTestResult = {
+                'name': model,
+                'passed': True,
+            }
+
+            try:
+                await test_fn(model)
+            except SkipTestError:
+                model_result['passed'] = False
+                model_result['skipped'] = True
+            except AssertionError as e:
+                model_result['passed'] = False
+                model_result['error'] = {
+                    'message': str(e),
+                    'stack': None,
+                }
+            except Exception as e:
+                model_result['passed'] = False
+                model_result['error'] = {
+                    'message': str(e),
+                    'stack': None,
                 }
 
-                for model in models:
-                    model_result: ModelTestResult = {
-                        'name': model,
-                        'passed': True,
-                    }
+            case_report['models'].append(model_result)
 
-                    try:
-                        await test_fn(model)
-                    except SkipTestError:
-                        model_result['passed'] = False
-                        model_result['skipped'] = True
-                    except AssertionError as e:
-                        model_result['passed'] = False
-                        model_result['error'] = {
-                            'message': str(e),
-                            'stack': None,
-                        }
-                    except Exception as e:
-                        model_result['passed'] = False
-                        model_result['error'] = {
-                            'message': str(e),
-                            'stack': None,
-                        }
+        return case_report
 
-                    case_report['models'].append(model_result)
+    async def run_suite(_span: object) -> TestReport:
+        for test_name, test_fn in tests.items():
 
-                report.append(case_report)
+            async def body(
+                span: object,
+                n: str = test_name,
+                f: Any = test_fn,  # noqa: ANN401
+            ) -> TestCaseReport:
+                return await run_case(span, n, f)
 
-    return report
+            report.append(
+                await run_in_new_span(
+                    test_name,
+                    body,
+                    action_type='testCase',
+                )
+            )
+        return report
+
+    return await run_in_new_span('testModels', run_suite, action_type='testSuite')

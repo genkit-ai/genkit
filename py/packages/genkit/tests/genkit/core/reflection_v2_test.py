@@ -48,6 +48,7 @@ from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
+from genkit._core._otel_instrumentation import init_provider
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -56,6 +57,16 @@ from genkit._core._reflection_v2 import (
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInit, AgentInput
 from genkit.model import model_ref
+from genkit.telemetry import OtelInstrumentation, configure_instrumentation, reset_instrumentation
+
+
+@pytest.fixture(autouse=True)
+def _otel_for_reflection_ids() -> object:
+    """Dev UI cancel/state uses trace ids; reflection tests need a real provider."""
+    reset_instrumentation()
+    configure_instrumentation(OtelInstrumentation(tracer_provider=init_provider()))
+    yield
+    reset_instrumentation()
 
 
 class FakeReflectionManager:
@@ -851,3 +862,38 @@ def test_reflection_run_action_params_accepts_dev_ui_telemetry_labels() -> None:
         'telemetryLabels': {'genkitx:ignore-trace': 'true'},
     })
     assert p.telemetry_labels == {'genkitx:ignore-trace': 'true'}
+
+
+@pytest.mark.asyncio
+async def test_empty_trace_id_is_not_registered_for_cancel() -> None:
+    """Empty ids must not become a shared cancel key."""
+    from genkit._core._reflection import ActionRunner
+
+    async def noop() -> None:
+        return None
+
+    active: dict[str, asyncio.Task[Any]] = {}
+    runner = ActionRunner(
+        action=Action(name='noop', kind=ActionKind.CUSTOM, fn=noop),
+        payload={},
+        stream=False,
+        active_actions=active,
+    )
+    await runner.on_trace_start('', 'span')
+    assert '' not in active
+
+
+@pytest.mark.asyncio
+async def test_empty_trace_id_does_not_notify_run_action_state() -> None:
+    """An empty tid is not a run the Developer UI can display or cancel."""
+    notified: list[tuple[str, str]] = []
+    server = ReflectionServerV2(Registry(), 'ws://127.0.0.1:1')
+
+    async def fake_notify(sid: str, tid: str) -> None:
+        notified.append((sid, tid))
+
+    server.notify_run_action_state = fake_notify  # type: ignore[method-assign]
+    cb = server.trace_start_callback('sid-1', [None], register_for_cancel=True)
+    await cb('', 'span')
+    assert '' not in server.active_actions
+    assert notified == []
