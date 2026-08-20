@@ -28,11 +28,9 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Libraries that log every HTTP request or poll. Under Dev UI, health checks
-# and span exports generate noise unless GENKIT_LOG=debug is explicitly set.
+# Health-check access logs on the reflection server under genkit start.
+# Collector posts use urllib so we do not set the process httpx logger.
 QUIET_LOGGERS = (
-    'httpx',
-    'httpcore',
     'uvicorn.access',
     'uvicorn.error',
 )
@@ -90,7 +88,7 @@ def configure_structlog_level() -> bool:
 
 
 def configure_logging(*, shared_tty: bool | None = None) -> None:
-    """Configure genkit console logging and mute noisy HTTP/health poll loggers.
+    """Configure genkit console logging and mute reflection access logs on a shared TTY.
 
     Safe to call more than once. Default level is ``info``; override with
     ``GENKIT_LOG=debug|info|warn|error``.
