@@ -43,6 +43,7 @@ Example:
 
 Requirements:
     - Requires the ``OPENAI_API_KEY`` environment variable or explicit ``api_key``.
+    - The xAI provider requires ``XAI_API_KEY`` or explicit ``api_key``.
 
 See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
@@ -50,6 +51,7 @@ See Also:
 
 from .openai_plugin import OpenAI, openai_model
 from .typing import OpenAIConfig
+from .xai import XAI, XAIConfig, XAIImageConfig, xai_model
 
 
 def package_name() -> str:
@@ -57,4 +59,13 @@ def package_name() -> str:
     return 'genkit_openai'
 
 
-__all__ = ['OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
+__all__ = [
+    'OpenAI',
+    'OpenAIConfig',
+    'XAI',
+    'XAIConfig',
+    'XAIImageConfig',
+    'openai_model',
+    'package_name',
+    'xai_model',
+]
