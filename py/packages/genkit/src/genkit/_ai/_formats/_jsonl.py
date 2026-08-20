@@ -46,13 +46,11 @@ class JsonlFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='jsonl',
-                schema={
-                    'type': 'array',
-                    'items': {'type': 'object', 'properties': ...}
-                }
-            )
+            output_format='jsonl',
+            output_schema={
+                'type': 'array',
+                'items': {'type': 'object', 'properties': ...}
+            }
         )
     """
 

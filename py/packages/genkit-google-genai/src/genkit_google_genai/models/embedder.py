@@ -31,6 +31,7 @@ from google.genai import types as genai_types
 from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
 from genkit._core._typing import DocumentData, MediaPart, TextPart
 from genkit.embedder import EmbedderOptions, EmbedderSupports
+from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 
 
@@ -171,12 +172,13 @@ class Embedder:
                 'Embed request input is empty: provide at least one document with content '
                 '(for example input: [{"content": [{"text": "your text here"}]}]).'
             )
-        if self._is_multimodal():
-            return await self._generate_multimodal(request)
+        model = self._embed_model(request)
+        if self._is_multimodal(model):
+            return await self._generate_multimodal(request, model)
         contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
         response = await self._client.aio.models.embed_content(
-            model=self._version,
+            model=model,
             contents=cast(genai_types.ContentListUnion, contents),
             config=config,
         )
@@ -184,7 +186,14 @@ class Embedder:
         embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
 
-    def _is_multimodal(self) -> bool:
+    def _embed_model(self, request: EmbedRequest) -> str:
+        """API model id: options.version overlays the action's registered id."""
+        overlay = (request.options or {}).get('version')
+        if overlay:
+            return strip_ref_prefixes(str(overlay))
+        return str(self._version)
+
+    def _is_multimodal(self, model: str) -> bool:
         """Whether this embedder uses the Vertex multimodal ``:predict`` API.
 
         The google-genai ``embed_content`` API only accepts text on Vertex (it
@@ -192,9 +201,9 @@ class Embedder:
         ``predict`` endpoint with structured ``{text, image, video}`` instances
         instead. This mirrors the JS plugin's vertexai embedder.
         """
-        return 'multimodalembedding' in str(self._version).lower()
+        return 'multimodalembedding' in model.lower()
 
-    async def _generate_multimodal(self, request: EmbedRequest) -> EmbedResponse:
+    async def _generate_multimodal(self, request: EmbedRequest, model: str) -> EmbedResponse:
         """Embed text/image/video via the Vertex multimodal ``:predict`` endpoint.
 
         ``multimodalembedding@001`` accepts only one instance per ``:predict``
@@ -204,13 +213,14 @@ class Embedder:
 
         Args:
             request: Genkit embed request.
+            model: API model id (action id, or options.version overlay).
 
         Returns:
             EmbedResponse
         """
         if not self._is_vertex:
             raise ValueError(
-                f'{self._version} embedding is only available on Vertex AI; '
+                f'{model} embedding is only available on Vertex AI; '
                 'it is not supported by the Gemini Developer API. Use the VertexAI plugin instead.'
             )
         if len(request.input) > 1:
@@ -237,7 +247,7 @@ class Embedder:
             )
         http_response = await api_client.async_request(
             http_method='post',
-            path=f'publishers/google/models/{self._version}:predict',
+            path=f'publishers/google/models/{model}:predict',
             request_dict=payload,
         )
         body = json.loads(http_response.body) if http_response.body else {}

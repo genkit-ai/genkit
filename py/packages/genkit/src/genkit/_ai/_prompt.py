@@ -43,6 +43,7 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
+    ModelRef,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -60,13 +61,12 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig, OutputConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
-    OutputConfig,
     Part,
     Resume,
     Role,
@@ -624,6 +624,9 @@ async def to_generate_action_options(
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
     resolved = resolve_call_model(model=options.model, config=options.config, registry=registry)
     model = resolved.name
+    default_model = registry.lookup_value('defaultModel', 'defaultModel')
+    uses_ref = isinstance(options.model, ModelRef) or isinstance(default_model, ModelRef)
+    config = resolved.config if uses_ref else options.config
 
     ri: dict[str, Any] = {}
     cache = PromptCache()
@@ -666,7 +669,7 @@ async def to_generate_action_options(
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=resolved.config,
+        config=config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
@@ -720,7 +723,7 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
         # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
-        json_schema=options.output.json_schema if options.output else None,  # pyright: ignore[reportCallIssue]
+        json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
     return ModelRequest(
@@ -730,10 +733,7 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         docs=options.docs if options.docs else None,  # type: ignore[arg-type]
         tools=tool_defs,
         tool_choice=options.tool_choice,
-        output_format=output_config.format,
-        output_schema=output_config.json_schema,
-        output_constrained=output_config.constrained,
-        output_content_type=output_config.content_type,
+        output=output_config,
     )
 
 
