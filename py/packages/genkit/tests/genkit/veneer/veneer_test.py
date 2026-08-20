@@ -1809,6 +1809,7 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
         'supports': {
             'multiturn': True,
             'systemRole': True,
+            'longRunning': True,
         },
     }
 

@@ -33,6 +33,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
+from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -703,13 +704,25 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if input is None and self._first_arg_optional:
             return input
         payload: object = input
-        # If input is a BaseModel of a different type (e.g. ModelRequest[dict] vs
-        # ModelRequest[PluginConfig]), Pydantic rejects direct class validation.
-        # Dump to a plain dict so we can re-parse into the action's schema.
+        # A differently-typed ModelRequest with a mapping config is dumped and
+        # re-parsed into the plugin class. A Pydantic config instance of the
+        # wrong class is a caller mistake — dump would silently coerce it.
         if isinstance(input, BaseModel):
             try:
                 return self._input_type.validate_python(input)
             except ValidationError:
+                config = getattr(input, 'config', None)
+                if isinstance(config, BaseModel):
+                    expected = declared_config_type(self._input_class) if self._input_class is not None else None
+                    want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
+                    raise GenkitError(
+                        message=(
+                            f"Invalid input for action '{self.name}': "
+                            f'config must be {want} or a mapping, '
+                            f'got {config_type_path(type(config))}'
+                        ),
+                        status='INVALID_ARGUMENT',
+                    ) from None
                 payload = input.model_dump(mode='python')
 
         try:

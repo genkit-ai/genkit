@@ -104,6 +104,7 @@ DEFAULT_VEO_SUPPORT = Supports(
     tools=False,
     system_role=True,
     output=['media'],
+    long_running=True,
 )
 
 

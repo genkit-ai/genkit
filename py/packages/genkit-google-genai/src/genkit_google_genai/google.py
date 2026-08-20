@@ -657,7 +657,6 @@ class GoogleAI(Plugin):
 
         if is_unroutable_model_id(clean_name):
             return None
-
         # One annotated closure per family. Action validates request.config
         # from the fn annotation; a single _run cannot switch schemas at runtime.
         if is_imagen_model_name(clean_name):

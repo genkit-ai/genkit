@@ -3,7 +3,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""define_model request-annotation contract: allowed shapes vs rejected antipatterns."""
+"""define_model accepts ModelRequest / ModelRequest[Cfg] and rejects the rest."""
 
 from typing import Annotated, Any, Optional
 
@@ -35,6 +35,8 @@ def ai() -> Genkit:
 
 
 def test_typed_annotation_allowed(ai: Genkit) -> None:
+    """define_model(fn with ModelRequest[Cfg]) registers."""
+
     async def fn(request: ModelRequest[Cfg], ctx: ActionRunContext) -> ModelResponse:
         return OK
 
@@ -42,6 +44,8 @@ def test_typed_annotation_allowed(ai: Genkit) -> None:
 
 
 def test_bare_annotation_allowed(ai: Genkit) -> None:
+    """define_model(fn with ModelRequest) registers. Config stays a dict."""
+
     async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         return OK
 
@@ -49,6 +53,8 @@ def test_bare_annotation_allowed(ai: Genkit) -> None:
 
 
 def test_unannotated_allowed(ai: Genkit) -> None:
+    """define_model(fn with no request annotation) still registers."""
+
     async def fn(request, ctx: ActionRunContext) -> ModelResponse:  # noqa: ANN001
         return OK
 
@@ -56,6 +62,8 @@ def test_unannotated_allowed(ai: Genkit) -> None:
 
 
 def test_annotated_wrapper_unwrapped_and_allowed(ai: Genkit) -> None:
+    """Annotated[ModelRequest[Cfg], ...] is treated as ModelRequest[Cfg]."""
+
     async def fn(request: Annotated[ModelRequest[Cfg], 'doc'], ctx: ActionRunContext) -> ModelResponse:
         return OK
 
@@ -63,7 +71,7 @@ def test_annotated_wrapper_unwrapped_and_allowed(ai: Genkit) -> None:
 
 
 def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
-    """ModelRequest[dict] / ModelRequest[Any] are real classes; permitted, not recommended."""
+    """ModelRequest[dict] and ModelRequest[Any] still register; they do not validate a schema."""
 
     async def fn_d(request: ModelRequest[dict], ctx: ActionRunContext) -> ModelResponse:
         return OK
@@ -79,7 +87,7 @@ def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
 
 
 def test_union_with_none_rejected(ai: Genkit) -> None:
-    """generate() never passes None; the union silently disables typed construction."""
+    """ModelRequest[Cfg] | None is rejected — generate never passes None."""
 
     async def fn(request: ModelRequest[Cfg] | None, ctx: ActionRunContext) -> ModelResponse:
         return OK
@@ -89,6 +97,8 @@ def test_union_with_none_rejected(ai: Genkit) -> None:
 
 
 def test_optional_spelling_rejected(ai: Genkit) -> None:
+    """Optional[ModelRequest[Cfg]] is the same reject as ModelRequest[Cfg] | None."""
+
     async def fn(request: Optional[ModelRequest[Cfg]], ctx: ActionRunContext) -> ModelResponse:  # noqa: UP045
         return OK
 
@@ -97,7 +107,7 @@ def test_optional_spelling_rejected(ai: Genkit) -> None:
 
 
 def test_dict_annotation_rejected(ai: Genkit) -> None:
-    """The model contract is ModelRequest; raw-dict handlers only worked by accident."""
+    """A handler annotated dict is rejected. The request is a ModelRequest."""
 
     async def fn(request: dict, ctx: ActionRunContext) -> ModelResponse:
         return OK
@@ -107,6 +117,8 @@ def test_dict_annotation_rejected(ai: Genkit) -> None:
 
 
 def test_arbitrary_class_rejected(ai: Genkit) -> None:
+    """A handler annotated with some other class is rejected. The request is a ModelRequest."""
+
     class NotARequest(BaseModel):
         pass
 

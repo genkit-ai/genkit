@@ -577,6 +577,9 @@ async def test_vertexai_resolve_veo_background_model(mock_list_models: MagicMock
     assert start is not None
     assert start.kind == ActionKind.BACKGROUND_MODEL
     assert start.name == 'vertexai/veo-3.0-generate-001'
+    model_meta = cast('dict[str, object]', start.metadata['model'])
+    supports = cast('dict[str, object]', model_meta['supports'])
+    assert supports['longRunning'] is True
     assert check is not None
     assert check.kind == ActionKind.CHECK_OPERATION
     assert check.name == 'vertexai/veo-3.0-generate-001/check'

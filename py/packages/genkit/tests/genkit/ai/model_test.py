@@ -411,6 +411,7 @@ def test_bare_model_request_keeps_dict_config() -> None:
 
 
 def test_parameterized_model_request_coerces_dict_to_plugin_config() -> None:
+    """ModelRequest[PluginConfig](config={'api_key': 'k'}) builds a PluginConfig."""
     request = ModelRequest[PluginConfig](
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config={'api_key': 'k'},
@@ -420,6 +421,8 @@ def test_parameterized_model_request_coerces_dict_to_plugin_config() -> None:
 
 
 def test_parameterized_model_request_rejects_mismatched_config_instance() -> None:
+    """ModelRequest[PluginConfig](config=OtherConfig()) is a ValidationError."""
+
     class OtherConfig(BaseModel):
         top_k: int | None = None
 
@@ -431,7 +434,8 @@ def test_parameterized_model_request_rejects_mismatched_config_instance() -> Non
 
 
 def test_model_request_rejects_non_model_non_dict_config() -> None:
-    with pytest.raises(ValidationError, match='config must be a BaseModel or dict'):
+    """ModelRequest(config='not-a-config') is a ValidationError."""
+    with pytest.raises(ValidationError, match='config must be a BaseModel or mapping'):
         ModelRequest(
             messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
             config='not-a-config',  # pyright: ignore[reportArgumentType]
