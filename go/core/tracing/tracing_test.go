@@ -379,6 +379,31 @@ func TestRunInNewSpanWithMetadata(t *testing.T) {
 			expectedPath:    "/{generate,t:action,s:model}",
 		},
 		{
+			name:     "Util span",
+			spanName: "generate",
+			isRoot:   true,
+			metadata: &SpanMetadata{
+				Name: "generate",
+				Type: "util", // A tool-loop turn: no subtype, so nothing follows the type.
+			},
+			expectedType:    "util",
+			expectedSubtype: "",
+			expectedPath:    "/{generate,t:util}",
+		},
+		{
+			name:     "Util action span",
+			spanName: "generate",
+			isRoot:   true,
+			metadata: &SpanMetadata{
+				Name:    "generate",
+				Type:    "action", // /util/generate is an action first,
+				Subtype: "util",   // so util is its subtype, not its type.
+			},
+			expectedType:    "action",
+			expectedSubtype: "util",
+			expectedPath:    "/{generate,t:action,s:util}",
+		},
+		{
 			name:     "Nil metadata",
 			spanName: "testSpan",
 			isRoot:   true,
