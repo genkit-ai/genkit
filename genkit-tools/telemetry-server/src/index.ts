@@ -218,12 +218,17 @@ export async function startTelemetryServer(params: {
 
   api.get('/api/logs', async (request, response, next) => {
     try {
-      const { limit, continuationToken } = request.query;
+      const { limit, continuationToken, severityText, severityNumber } =
+        request.query;
       response.json(
         await params.logStore.list({
           limit: limit ? Number.parseInt(limit.toString()) : 100,
           continuationToken: continuationToken
             ? continuationToken.toString()
+            : undefined,
+          severityText: severityText ? severityText.toString() : undefined,
+          severityNumber: severityNumber
+            ? Number.parseInt(severityNumber.toString())
             : undefined,
         })
       );
@@ -234,7 +239,8 @@ export async function startTelemetryServer(params: {
 
   api.get('/api/traces/:traceId/logs', async (request, response, next) => {
     try {
-      const { limit, continuationToken } = request.query;
+      const { limit, continuationToken, severityText, severityNumber } =
+        request.query;
       const { traceId } = request.params;
       response.json(
         await params.logStore.list({
@@ -243,6 +249,10 @@ export async function startTelemetryServer(params: {
             ? continuationToken.toString()
             : undefined,
           traceId,
+          severityText: severityText ? severityText.toString() : undefined,
+          severityNumber: severityNumber
+            ? Number.parseInt(severityNumber.toString())
+            : undefined,
         })
       );
     } catch (e) {
@@ -254,7 +264,8 @@ export async function startTelemetryServer(params: {
     '/api/traces/:traceId/spans/:spanId/logs',
     async (request, response, next) => {
       try {
-        const { limit, continuationToken } = request.query;
+        const { limit, continuationToken, severityText, severityNumber } =
+          request.query;
         const { traceId, spanId } = request.params;
         response.json(
           await params.logStore.list({
@@ -264,6 +275,10 @@ export async function startTelemetryServer(params: {
               : undefined,
             traceId,
             spanId,
+            severityText: severityText ? severityText.toString() : undefined,
+            severityNumber: severityNumber
+              ? Number.parseInt(severityNumber.toString())
+              : undefined,
           })
         );
       } catch (e) {

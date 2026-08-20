@@ -50,6 +50,8 @@ export const LogQuerySchema = z.object({
   continuationToken: z.string().optional(),
   traceId: z.string().optional(),
   spanId: z.string().optional(),
+  severityText: z.string().optional(),
+  severityNumber: z.number().optional(),
 });
 
 export type LogQuery = z.infer<typeof LogQuerySchema>;
