@@ -431,7 +431,7 @@ def test_parameterized_model_request_rejects_mismatched_config_instance() -> Non
 
 
 def test_model_request_rejects_non_model_non_dict_config() -> None:
-    with pytest.raises(ValidationError, match='config must be a BaseModel or dict'):
+    with pytest.raises(ValidationError, match='config must be a BaseModel or mapping'):
         ModelRequest(
             messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
             config='not-a-config',  # pyright: ignore[reportArgumentType]

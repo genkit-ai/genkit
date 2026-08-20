@@ -8,7 +8,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit._core._model import ModelRequest, OutputConfig
+from genkit._core._model import ModelRequest, OutputConfig, config_type_path
 
 
 class CarrierCfg(BaseModel):
@@ -84,3 +84,18 @@ def test_bad_config_type_raises_validation_error() -> None:
     """config=5 on the constructor is a ValidationError."""
     with pytest.raises(ValidationError):
         ModelRequest[CarrierCfg](messages=[], config=5)  # type: ignore[arg-type]
+
+
+def test_foreign_config_class_raises_validation_error() -> None:
+    """OpenAIConfig on ModelRequest[GeminiCfg] is a ValidationError. Pass a mapping."""
+    with pytest.raises(ValidationError, match=r'config must be .+\.PluginCfg or a mapping, got .+\.CarrierCfg'):
+        ModelRequest[PluginCfg](messages=[], config=CarrierCfg())
+
+
+def test_config_type_path_uses_plugin_package_export() -> None:
+    """Error strings use the package import, not the defining submodule."""
+    from genkit_google_genai import GeminiConfigSchema
+    from genkit_openai import OpenAIConfig
+
+    assert config_type_path(GeminiConfigSchema) == 'genkit_google_genai.GeminiConfigSchema'
+    assert config_type_path(OpenAIConfig) == 'genkit_openai.OpenAIConfig'

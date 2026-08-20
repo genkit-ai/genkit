@@ -388,16 +388,31 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
 
 
 @pytest.mark.asyncio
-async def test_action_revalidates_cross_typed_model_request() -> None:
-    """The plugin handler sees its own config class, not the caller's.
+async def test_action_rejects_foreign_config_class() -> None:
+    """OpenAIConfig on a Gemini plugin is a raise. Pass a mapping to coerce."""
 
-    generate and wrap_model may build the request with a different config
-    type. The plugin still gets PluginCfg and the JSON-mode settings, not a
-    type miss or unconstrained text.
-    """
-
-    class CarrierCfg(BaseModel):
+    class OpenAICfg(BaseModel):
         temperature: float | None = None
+
+    class GeminiCfg(BaseModel):
+        temperature: float | None = None
+
+    async def model_fn(request: ModelRequest[GeminiCfg]) -> str:
+        return 'ok'
+
+    action = Action(name='gemini', kind=ActionKind.MODEL, fn=model_fn)
+    request = ModelRequest[OpenAICfg](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config=OpenAICfg(temperature=0.5),
+    )
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.GeminiCfg or a mapping, got .+\.OpenAICfg'):
+        await action.run(input=request)
+
+
+@pytest.mark.asyncio
+async def test_action_coerces_dict_config_from_other_request_type() -> None:
+    """A mapping on ModelRequest[dict] still becomes the plugin class."""
 
     class PluginCfg(BaseModel):
         temperature: float | None = None
@@ -405,20 +420,18 @@ async def test_action_revalidates_cross_typed_model_request() -> None:
     seen: dict[str, Any] = {}
 
     async def model_fn(request: ModelRequest[PluginCfg]) -> str:
-        seen['request'] = request
+        seen['config'] = request.config
         return 'ok'
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
-    request = ModelRequest[CarrierCfg](
+    request = ModelRequest[dict](
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
-        config=CarrierCfg(temperature=0.5),
+        config={'temperature': 0.5},
         output=OutputConfig(format='json', constrained=True),
     )
-    assert isinstance(request.config, CarrierCfg)
+    assert type(request.config) is dict
 
     result = await action.run(input=request)
     assert result.response == 'ok'
-    assert isinstance(seen['request'].config, PluginCfg)
-    assert seen['request'].config.temperature == 0.5
-    assert seen['request'].output_format == 'json'
-    assert seen['request'].output_constrained is True
+    assert isinstance(seen['config'], PluginCfg)
+    assert seen['config'].temperature == 0.5
