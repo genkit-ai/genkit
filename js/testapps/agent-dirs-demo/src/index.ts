@@ -17,6 +17,13 @@
 /**
  * Serves every directory agent under `agents/` for interactive chat.
  *
+ * This file is the optional host-code path. It is not required to run the
+ * agents: `agent-dirs serve ./agents` (`pnpm server:zero`) serves the same
+ * folder with zero host code and is the intended default. Write an entry
+ * point like this one only to make choices the zero-code runner doesn't
+ * expose - a different model provider, mounting on your own express app,
+ * a stream manager for durable reconnects.
+ *
  * - Dev UI: `GCLOUD_PROJECT=<project> pnpm genkit:dev` - chat with agents
  *   directly.
  * - HTTP: `GCLOUD_PROJECT=<project> pnpm server` - each agent at
