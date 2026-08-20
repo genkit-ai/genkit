@@ -33,10 +33,13 @@ from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionRunContext
+from genkit._core._instrumentation import reset_instrumentation
+from genkit._core._otel_instrumentation import OtelInstrumentation
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import Attr, metadata_key
 from genkit._core._typing import AgentInput, AgentResult, MessageData, Part, SessionState, TextPart
 from genkit.agent import AgentFinishReason, InMemorySessionStore
+from genkit.telemetry import configure_instrumentation
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 SESSION_ID_ATTR = metadata_key('agent:sessionId')
@@ -52,10 +55,13 @@ def exporter() -> Generator[InMemorySpanExporter, None, None]:
     exp = InMemorySpanExporter()
     processor = SimpleSpanProcessor(exp)
     provider.add_span_processor(processor)
+    reset_instrumentation()
+    configure_instrumentation(OtelInstrumentation(tracer_provider=provider))
     try:
         yield exp
     finally:
         exp.clear()
+        reset_instrumentation()
         if hasattr(provider, '_active_span_processor'):
             provider._active_span_processor._span_processors = tuple(
                 p for p in provider._active_span_processor._span_processors if p is not processor

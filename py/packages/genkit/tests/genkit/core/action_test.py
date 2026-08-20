@@ -238,8 +238,30 @@ async def test_action_raises_errors() -> None:
         await action.run()
 
     assert 'stack' in e.value.details
-    assert 'trace_id' in e.value.details
+    # Default-off: no provider → empty/absent trace id.
+    assert not e.value.trace_id
     assert str(e.value.cause) == 'oops'
+
+
+@pytest.mark.asyncio
+async def test_action_error_includes_trace_id_when_instrumented() -> None:
+    from genkit._core._otel_instrumentation import init_provider
+    from genkit.telemetry import OtelInstrumentation, configure_instrumentation, reset_instrumentation
+
+    reset_instrumentation()
+    configure_instrumentation(OtelInstrumentation(tracer_provider=init_provider()))
+    try:
+
+        async def foo(_: str | None, ctx: ActionRunContext) -> None:
+            raise Exception('oops')
+
+        action = Action(name='fooAction', kind=ActionKind.CUSTOM, fn=foo)
+        with pytest.raises(GenkitError) as e:
+            await action.run()
+        assert e.value.trace_id
+        assert 'trace_id' in e.value.details
+    finally:
+        reset_instrumentation()
 
 
 @pytest.mark.asyncio

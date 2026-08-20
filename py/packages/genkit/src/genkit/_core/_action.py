@@ -33,9 +33,9 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
+from genkit._core._instrumentation import SpanContext, run_in_new_span
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -741,38 +741,40 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     extra_metadata['context'] = json.dumps(cleaned_context)
                 except Exception:
                     extra_metadata['context'] = str(ctx.context)
-        span_meta = SpanMetadata(
-            name=self._name,
-            type='action',
-            subtype=str(self._kind),
-            input=input,
-            init=ctx.init,
-            metadata=extra_metadata or None,
-            telemetry_labels={k: str(v) for k, v in (telemetry_labels or {}).items()} or None,
-        )
 
         trace_id = ''
-        try:
-            with run_in_new_span(span_meta) as span:
-                # OpenTelemetry standard hex format.
-                trace_id = format(span.get_span_context().trace_id, '032x')
-                span_id = format(span.get_span_context().span_id, '016x')
-                if on_trace_start:
-                    await on_trace_start(trace_id, span_id)
+        span_id = ''
 
-                if execute is not None:
-                    output = await execute()
-                else:
-                    output = await self._invoke(input, ctx)
-                output = cast(OutputT, _record_latency(output, start_time))
-                # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
-                span_meta.output = output
-                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+        async def body(span: SpanContext) -> OutputT:
+            nonlocal trace_id, span_id
+            trace_id = span.trace_id
+            span_id = span.span_id
+            if on_trace_start:
+                await on_trace_start(trace_id, span_id)
+
+            if execute is not None:
+                output = await execute()
+            else:
+                output = await self._invoke(input, ctx)
+            return cast(OutputT, _record_latency(output, start_time))
+
+        try:
+            output = await run_in_new_span(
+                self._name,
+                body,
+                action_type='action',
+                input=input,
+                attributes={k: str(v) for k, v in (telemetry_labels or {}).items()} or None,
+                subtype=str(self._kind),
+                init=ctx.init,
+                metadata=extra_metadata or None,
+            )
+            return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
         except GenkitError:
             raise
         except Exception as e:
-            # Wrap outside the with-block so we don't clobber ``genkit:error`` (which
-            # ``run_in_new_span`` already set to ``str(original_e)``).
+            # Wrap outside the span so we don't clobber ``genkit:error`` (which
+            # the renderer already set to ``str(original_e)``).
             raise GenkitError(
                 cause=e,
                 message=f'Error while running action {self._name}',

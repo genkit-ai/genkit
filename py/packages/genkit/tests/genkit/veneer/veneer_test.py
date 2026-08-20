@@ -39,6 +39,7 @@ from genkit._core._typing import (
     EvalFnResponse,
     EvalRequest,
     EvalResponse,
+    EvalStatusEnum,
     FinishReason,
     ModelInfo,
     Operation,
@@ -1770,6 +1771,47 @@ async def test_evaluate(setup_test: SetupFixture) -> None:
     assert response.root[0].test_case_id == 'case1'
     assert isinstance(response.root[0].evaluation, Score)
     assert response.root[0].evaluation.score is True
+    assert response.root[1].test_case_id == 'case2'
+    assert isinstance(response.root[1].evaluation, Score)
+    assert response.root[1].evaluation.score is True
+
+
+@pytest.mark.asyncio
+async def test_evaluator_records_fail_then_still_runs_the_next_row(
+    setup_test: SetupFixture,
+) -> None:
+    """A row that raises is recorded as FAIL; the next row still runs."""
+    ai, *_ = setup_test
+
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        if datapoint.test_case_id == 'case1':
+            raise RuntimeError('row boom')
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=Score(score=True),
+        )
+
+    ai.define_evaluator(
+        name='my_eval',
+        display_name='Test evaluator',
+        definition='records FAIL then keeps going',
+        fn=my_eval_fn,
+    )
+
+    response = await ai.evaluate(
+        evaluator='my_eval',
+        dataset=[
+            BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
+            BaseDataPoint(input='bye', output='bye', test_case_id='case2'),
+        ],
+    )
+
+    assert isinstance(response, EvalResponse)
+    assert len(response.root) == 2
+    first = response.root[0].evaluation
+    assert isinstance(first, Score)
+    assert first.status == EvalStatusEnum.FAIL
+    assert first.error is not None
     assert response.root[1].test_case_id == 'case2'
     assert isinstance(response.root[1].evaluation, Score)
     assert response.root[1].evaluation.score is True

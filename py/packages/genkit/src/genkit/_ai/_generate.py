@@ -47,6 +47,7 @@ from genkit._core._action import (
     ActionRunContext,
 )
 from genkit._core._error import GenkitError
+from genkit._core._instrumentation import run_in_new_span
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -65,7 +66,6 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
@@ -487,9 +487,9 @@ async def generate_action(
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
     """
-    span_name = 'generate'
-    with run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request)) as span:
-        result = await generate_with_request(
+
+    async def body(_span: object) -> ModelResponse:
+        return await generate_with_request(
             registry=registry,
             raw_request=raw_request,
             abort_signal=abort_signal,
@@ -498,9 +498,8 @@ async def generate_action(
             current_turn=current_turn,
             context=context,
         )
-        with contextlib.suppress(Exception):
-            span.set_attribute('genkit:output', result.model_dump_json(by_alias=True, exclude_none=True))
-        return result
+
+    return await run_in_new_span('generate', body, action_type='util', input=raw_request)
 
 
 async def generate_with_request(

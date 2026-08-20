@@ -50,10 +50,9 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
+from genkit._core._otel_instrumentation import connect_developer_ui_collector
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
-from genkit._core._trace._default_exporter import TraceServerExporter
-from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
     AgentInput,
     ReflectionCancelActionParams,
@@ -147,19 +146,16 @@ class ReflectionServerV2:
         self.reflection_handshake_telemetry_applied = False
 
     def apply_handshake_telemetry(self, url: str | None) -> None:
-        """Use the Dev UI trace server URL from the reflection handshake.
+        """Point telemetry at the handshake collector URL.
 
-        The CLI manager returns ``telemetryServerUrl`` on ``register`` and may send it
-        again on ``configure``. We need that base URL so OpenTelemetry spans can be
-        POSTed to ``{url}/api/traces`` (see ``TraceServerExporter``).
+        Same wiring as HTTP ``/api/notify``. Under ``GENKIT_ENV=dev`` this
+        turns tracing on when nothing is minting yet. Already minting
+        with no collector in env hangs the mailbox only.
         """
-        if not url or os.environ.get('GENKIT_TELEMETRY_SERVER'):
-            return
-        if self.reflection_handshake_telemetry_applied:
+        if not url or self.reflection_handshake_telemetry_applied:
             return
         self.reflection_handshake_telemetry_applied = True
-        # Register HTTP export to this URL on the global OTel provider.
-        add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
+        connect_developer_ui_collector(url=url)
         logger.debug('reflection V2: connected to telemetry server', url=url)
 
     async def run_forever(self) -> None:
@@ -447,6 +443,9 @@ class ReflectionServerV2:
     ) -> Callable[[str, str], Awaitable[None]]:
         async def on_trace_start(tid: str, span_id: str) -> None:
             trace_holder[0] = tid
+            # Empty ids aren't a run the Developer UI can cancel or display.
+            if not tid:
+                return
             if register_for_cancel and (t := asyncio.current_task()):
                 self.active_actions[tid] = t
             await self.notify_run_action_state(sid, tid)
