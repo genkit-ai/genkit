@@ -12,7 +12,7 @@ from genkit._core._model import ModelRequest, OutputConfig, config_type_path
 
 
 class CarrierCfg(BaseModel):
-    """Permissive stand-in for the sending side of a cross-typed handoff."""
+    """Stand-in for a different plugin's config class."""
 
     model_config = {'extra': 'allow'}
 
@@ -56,7 +56,7 @@ def test_output_always_present_on_wire() -> None:
 
 
 def test_cross_config_revalidation_preserves_output() -> None:
-    """Re-reading a request built with one config class yields the plugin's config class."""
+    """model_validate of a dumped request rebuilds config as the target plugin class."""
     req = ModelRequest[CarrierCfg](
         messages=[],
         config={'temperature': 0.5},
@@ -87,13 +87,13 @@ def test_bad_config_type_raises_validation_error() -> None:
 
 
 def test_foreign_config_class_raises_validation_error() -> None:
-    """OpenAIConfig on ModelRequest[GeminiCfg] is a ValidationError. Pass a mapping."""
+    """ModelRequest[PluginCfg](config=CarrierCfg()) is a ValidationError. Pass a dict."""
     with pytest.raises(ValidationError, match=r'config must be .+\.PluginCfg or a mapping, got .+\.CarrierCfg'):
         ModelRequest[PluginCfg](messages=[], config=CarrierCfg())
 
 
 def test_config_type_path_uses_plugin_package_export() -> None:
-    """Error strings use the package import, not the defining submodule."""
+    """Error strings say genkit_openai.OpenAIConfig, not genkit_openai.typing.OpenAIConfig."""
     from genkit_google_genai import GeminiConfigSchema
     from genkit_openai import OpenAIConfig
 

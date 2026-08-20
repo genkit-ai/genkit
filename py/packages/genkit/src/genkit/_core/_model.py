@@ -75,7 +75,9 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 # Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
 # ModelConfig subclasses without forcing everything through GenerationCommonConfig.
-ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
+# Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
+# ModelRequest[ModelConfig] you can assign a ModelConfig into.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT')
 
 
 def declared_config_type(cls: type) -> type | None:
@@ -398,11 +400,23 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     @field_validator('docs', mode='before')
     @classmethod
     def _wrap_docs(cls, v: list[DocumentData] | None) -> list[Document] | None:
-        """Wrap DocumentData in Document veneer for convenience methods."""
+        """Wrap DocumentData in Document veneer for convenience methods.
+
+        A dumped request sends docs as dicts. Messages already take a mapping;
+        this wrap has to as well or a bad config plus docs= never reaches the
+        GenkitError for the config.
+        """
         if v is None:
             return None
-        # pyrefly: ignore[bad-return]
-        return [d if isinstance(d, Document) else Document(d.content, d.metadata) for d in v]
+        wrapped: list[Document] = []
+        for d in v:
+            if isinstance(d, Document):
+                wrapped.append(d)
+            elif isinstance(d, dict):
+                wrapped.append(Document(d.get('content') or [], d.get('metadata')))
+            else:
+                wrapped.append(Document(d.content, d.metadata))
+        return wrapped
 
     # Flat accessors: the plugin-author convenience surface over nested output.
 
