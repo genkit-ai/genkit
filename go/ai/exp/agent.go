@@ -623,9 +623,10 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*Ses
 // agent's name waits through [AgentHandle.WaitForSnapshot] instead.
 //
 // A snapshot that failed, aborted, or expired is returned like any other, so a
-// non-nil error means the wait itself could not proceed: a read failed, or ctx
-// ended and its error is returned. Bound the wait with [context.WithTimeout]
-// and read the snapshot afterwards to learn where it stands.
+// non-nil error means the wait itself could not proceed: reads failed past the
+// wait's transient-retry budget, or ctx ended and its error is returned. Bound
+// the wait with [context.WithTimeout] and read the snapshot afterwards to
+// learn where it stands.
 //
 // It returns FAILED_PRECONDITION on a client-managed agent (no store) and
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
@@ -702,14 +703,10 @@ func (a *Agent[State]) Register(r api.Registry) {
 	// registry consumers recover them by key (genkit.LookupAction) rather
 	// than by reaching through the agent action; see newSnapshotActions.
 	a.action.Register(r)
-	if a.getSnapshot != nil {
-		a.getSnapshot.Register(r)
-	}
-	if a.wait != nil {
-		a.wait.Register(r)
-	}
-	if a.abort != nil {
-		a.abort.Register(r)
+	for _, companion := range []api.Action{a.getSnapshot, a.wait, a.abort} {
+		if companion != nil {
+			companion.Register(r)
+		}
 	}
 }
 
@@ -2866,7 +2863,9 @@ func (a *Agent[State]) Connect(
 	ctx context.Context,
 	opts ...InvocationOption[State],
 ) (*AgentConnection[State], error) {
-	init, err := a.resolveOptions(opts)
+	// The merge rules live in resolveInvocationInit (option.go), shared with
+	// the untyped [AgentHandle] surface.
+	init, err := resolveInvocationInit(a.action.Name(), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -2913,13 +2912,6 @@ func (a *Agent[State]) RunText(
 	return a.Run(ctx, &AgentInput{
 		Message: ai.NewUserTextMessage(text),
 	}, opts...)
-}
-
-// resolveOptions applies invocation options and returns the init struct; the
-// merge rules live in resolveInvocationInit (option.go), shared with the
-// untyped [AgentHandle] surface.
-func (a *Agent[State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
-	return resolveInvocationInit(a.action.Name(), opts)
 }
 
 // --- AgentConnection ---
