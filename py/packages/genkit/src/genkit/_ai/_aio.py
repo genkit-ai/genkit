@@ -92,9 +92,9 @@ from genkit._core._background import (
     CancelModelOpFn,
     CheckModelOpFn,
     StartModelOpFn,
+    cancel_operation,
     check_operation,
     define_background_model,
-    lookup_background_action,
 )
 from genkit._core._channel import Channel, run_loop
 from genkit._core._dap import (
@@ -1627,20 +1627,13 @@ class Genkit:
                 # the exception details.
                 raise
 
-    async def check_operation(self, operation: Operation) -> Operation:
+    async def check_operation(self, operation: Operation | Mapping[str, Any]) -> Operation:
         """Check the status of a long-running background operation."""
         return await check_operation(self.registry, operation)
 
-    async def cancel_operation(self, operation: Operation) -> Operation:
+    async def cancel_operation(self, operation: Operation | Mapping[str, Any]) -> Operation:
         """Cancel a long-running background operation."""
-        if not operation.action:
-            raise ValueError('Provided operation is missing original request information')
-
-        background_action = await lookup_background_action(self.registry, operation.action)
-        if background_action is None:
-            raise ValueError(f'Failed to resolve background action from original request: {operation.action}')
-
-        return await background_action.cancel(operation)
+        return await cancel_operation(self.registry, operation)
 
     @overload
     async def generate_operation(

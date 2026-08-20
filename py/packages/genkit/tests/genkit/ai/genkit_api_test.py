@@ -12,6 +12,8 @@ import pytest
 
 from genkit import Genkit
 from genkit._core._action import _action_context
+from genkit._core._error import GenkitError
+from genkit._core._model import ModelResponse
 from genkit._core._typing import Operation
 
 
@@ -67,8 +69,9 @@ async def test_genkit_check_operation_no_action() -> None:
     ai = Genkit()
     op = Operation(id='123', done=False)  # action is None
 
-    with pytest.raises(ValueError, match='Provided operation is missing original request information'):
+    with pytest.raises(GenkitError, match='Provided operation is missing original request information') as exc_info:
         await ai.check_operation(op)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
@@ -78,8 +81,147 @@ async def test_genkit_check_operation_not_found() -> None:
     op = Operation(id='123', done=False, action='missing')
     ai.registry.resolve_action_by_key = AsyncMock(return_value=None)  # type: ignore[assignment]
 
-    with pytest.raises(ValueError, match='Failed to resolve background action from original request: missing'):
+    with pytest.raises(
+        GenkitError, match='Failed to resolve background action from original request: missing'
+    ) as exc_info:
         await ai.check_operation(op)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_rejects_boxed_response() -> None:
+    """Poll the handle, not the generate() envelope. Pass response.operation."""
+    ai = Genkit()
+    op = Operation(id='123', done=False, action='/background-model/test_action')
+
+    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+        await ai.check_operation(ModelResponse(operation=op))  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_rejects_empty_response() -> None:
+    ai = Genkit()
+    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+        await ai.check_operation(ModelResponse())  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_accepts_dumped_operation() -> None:
+    """A persisted dump still polls, even with leftover keys like latencyMs."""
+    ai = Genkit()
+    dumped = {
+        'id': '123',
+        'done': False,
+        'action': '/background-model/test_action',
+        'latencyMs': 42,
+    }
+    mock_background_action = MagicMock()
+    mock_background_action.check = AsyncMock(return_value=Operation(id='123', done=True))
+
+    with mock.patch(
+        'genkit._core._background.lookup_background_action',
+        new=AsyncMock(return_value=mock_background_action),
+    ):
+        updated = await ai.check_operation(dumped)
+
+    assert updated.done is True
+
+
+@pytest.mark.asyncio
+async def test_check_operation_rejects_dumped_response() -> None:
+    """A dumped generate() envelope is not a handle."""
+    ai = Genkit()
+    dumped = {
+        'operation': {
+            'id': '123',
+            'done': False,
+            'action': '/background-model/test_action',
+        },
+        'finishReason': 'stop',
+    }
+
+    with pytest.raises(GenkitError, match="got a generate\\(\\) envelope; pass the 'operation' field") as exc_info:
+        await ai.check_operation(dumped)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_rejects_envelope_with_wrapper_id() -> None:
+    """A persist wrapper with its own id is still an envelope, not the handle."""
+    ai = Genkit()
+    dumped = {
+        'id': 'job-99',
+        'action': '/background-model/test_action',
+        'operation': {
+            'id': '123',
+            'done': False,
+            'action': '/background-model/test_action',
+        },
+    }
+
+    with pytest.raises(GenkitError, match="got a generate\\(\\) envelope; pass the 'operation' field") as exc_info:
+        await ai.check_operation(dumped)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_rejects_unreadable_handle() -> None:
+    ai = Genkit()
+    with pytest.raises(GenkitError, match='got str, expected Operation \\| Mapping') as exc_info:
+        await ai.check_operation('not-an-op')  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_cancel_operation_accepts_dumped_operation() -> None:
+    """Cancel accepts the same persisted Operation dump as check."""
+    ai = Genkit()
+    dumped = {
+        'id': '123',
+        'done': False,
+        'action': '/background-model/test_action',
+        'latencyMs': 42,
+    }
+    mock_background_action = MagicMock()
+    mock_background_action.cancel = AsyncMock(return_value=Operation(id='123', done=True))
+
+    with mock.patch(
+        'genkit._core._background.lookup_background_action',
+        new=AsyncMock(return_value=mock_background_action),
+    ):
+        updated = await ai.cancel_operation(dumped)
+
+    assert updated.done is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_operation_rejects_boxed_response() -> None:
+    ai = Genkit()
+    op = Operation(id='123', done=False, action='/background-model/test_action')
+
+    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+        await ai.cancel_operation(ModelResponse(operation=op))  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
+    ai = Genkit()
+    op = Operation(id='123', done=False, action='/background-model/test_action')
+    mock_background_action = MagicMock()
+    mock_background_action.supports_cancel = False
+    mock_background_action.cancel = AsyncMock()
+
+    with mock.patch(
+        'genkit._core._background.lookup_background_action',
+        new=AsyncMock(return_value=mock_background_action),
+    ):
+        with pytest.raises(GenkitError, match='does not support cancellation') as exc_info:
+            await ai.cancel_operation(op)
+    assert exc_info.value.status == 'UNIMPLEMENTED'
+    mock_background_action.cancel.assert_not_awaited()
 
 
 @pytest.mark.asyncio
