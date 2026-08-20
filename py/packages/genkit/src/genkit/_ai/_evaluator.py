@@ -16,7 +16,6 @@
 
 """Evaluator type definitions for the Genkit framework."""
 
-import json
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine
@@ -26,10 +25,10 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from genkit._core._action import Action, ActionKind
+from genkit._core._instrumentation import SpanContext, run_in_new_span
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
@@ -128,77 +127,45 @@ def define_evaluator(
         eval_responses: list[EvalFnResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
-            if datapoint.test_case_id is None:
-                datapoint.test_case_id = str(uuid.uuid4())
-            span_metadata = SpanMetadata(
-                name=f'Test Case {datapoint.test_case_id}',
-                type='evaluator',
-                input=datapoint,
-                metadata={'evaluator:evalRunId': req.eval_run_id},
-            )
+            case_id = datapoint.test_case_id or str(uuid.uuid4())
+            datapoint.test_case_id = case_id
             try:
-                # Try to run with tracing, but fallback if tracing infrastructure fails
-                # (e.g., in environments with NonRecordingSpans like pre-commit)
-                try:
-                    with run_in_new_span(span_metadata) as span:
-                        span_id = format(span.get_span_context().span_id, '016x')
-                        trace_id = format(span.get_span_context().trace_id, '032x')
-                        try:
-                            input_json = (
-                                datapoint.model_dump_json(by_alias=True, exclude_none=True)
-                                if isinstance(datapoint, BaseModel)
-                                else json.dumps(datapoint)
-                            )
-                            span.set_attribute('genkit:input', input_json)
-                            test_case_output = await fn(datapoint, req.options)
-                            test_case_output.span_id = span_id
-                            test_case_output.trace_id = trace_id
-                            output_json = (
-                                test_case_output.model_dump_json(by_alias=True, exclude_none=True)
-                                if isinstance(test_case_output, BaseModel)
-                                else json.dumps(test_case_output)
-                            )
-                            span.set_attribute('genkit:output', output_json)
-                            eval_responses.append(test_case_output)
-                        except Exception as e:
-                            logger.debug(f'eval_stepper_fn error: {e!s}')
-                            logger.debug(traceback.format_exc())
-                            evaluation = Score(
-                                error=f'Evaluation of test case {datapoint.test_case_id} failed: \n{e!s}',
-                                status=EvalStatusEnum.FAIL,
-                            )
-                            eval_responses.append(
-                                # The ty type checker only recognizes aliases, so we use them
-                                # to pass both ty check and runtime validation.
-                                EvalFnResponse(
-                                    span_id=span_id,
-                                    trace_id=trace_id,
-                                    test_case_id=datapoint.test_case_id,
-                                    evaluation=evaluation,
-                                )
-                            )
-                            # Raise to mark span as failed
-                            raise e
-                except (AttributeError, UnboundLocalError):
-                    # Fallback: run without span
+
+                async def body(
+                    span: SpanContext, point: BaseDataPoint = datapoint, test_case_id: str = case_id
+                ) -> EvalFnResponse:
                     try:
-                        test_case_output = await fn(datapoint, req.options)
-                        eval_responses.append(test_case_output)
+                        test_case_output = await fn(point, req.options)
+                        test_case_output.span_id = span.span_id
+                        test_case_output.trace_id = span.trace_id
+                        return test_case_output
                     except Exception as e:
                         logger.debug(f'eval_stepper_fn error: {e!s}')
                         logger.debug(traceback.format_exc())
                         evaluation = Score(
-                            error=f'Evaluation of test case {datapoint.test_case_id} failed: \n{e!s}',
+                            error=f'Evaluation of test case {test_case_id} failed: \n{e!s}',
                             status=EvalStatusEnum.FAIL,
                         )
                         eval_responses.append(
                             EvalFnResponse(
-                                test_case_id=datapoint.test_case_id,
+                                span_id=span.span_id,
+                                trace_id=span.trace_id,
+                                test_case_id=test_case_id,
                                 evaluation=evaluation,
                             )
                         )
+                        raise e
+
+                eval_responses.append(
+                    await run_in_new_span(
+                        f'Test Case {datapoint.test_case_id}',
+                        body,
+                        action_type='evaluator',
+                        input=datapoint,
+                        metadata={'evaluator:evalRunId': req.eval_run_id},
+                    )
+                )
             except Exception:  # noqa: S112 - intentionally continue processing other datapoints
-                # Continue to process other points
                 continue
         return EvalResponse(eval_responses)
 

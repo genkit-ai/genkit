@@ -27,13 +27,10 @@ Usage:
     from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
-    # 1. Enable telemetry with default settings (PII redaction enabled)
     enable_google_cloud_telemetry(project_id='my-project')
 
-    # 2. All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
     await ai.generate(prompt='Hello, world!')
-    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
 Requirements:
@@ -69,14 +66,17 @@ def enable_google_cloud_telemetry(
     # Legacy parameter name for backwards compatibility
     force_export: bool | None = None,
 ) -> None:
-    """Configure GCP telemetry export for traces and metrics.
+    """Attach Cloud Trace and Cloud Monitoring exporters.
 
-    This function sets up OpenTelemetry export to Google Cloud Trace and
-    Cloud Monitoring. By default, model inputs and outputs are redacted
-    for privacy protection.
+    This is enough for Cloud Trace. If you already configured
+    ``OtelInstrumentation``, the Cloud exporter hangs on that provider
+    (your ``tracer_provider`` if you passed one). Under ``genkit start``,
+    ``Genkit()`` still attaches the Developer UI collector.
 
-    Configuration options match the JavaScript (GcpTelemetryConfigOptions) and
-    Go (FirebaseTelemetryOptions/GoogleCloudTelemetryOptions) implementations.
+    Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
+    ``force_dev_export=False``, or when ``disable_traces=True``. Model
+    inputs and outputs are redacted unless you pass
+    ``log_input_and_output=True``.
 
     Args:
         project_id: Google Cloud project ID. If provided, takes precedence over
@@ -93,29 +93,20 @@ def enable_google_cloud_telemetry(
         log_input_and_output: If True, preserve model input/output in traces
             and logs. Defaults to False (redact for privacy). Only enable this
             in trusted environments where PII exposure is acceptable.
-            Maps to JS: !disableLoggingInputAndOutput
-        force_dev_export: If True, export telemetry even in dev environment.
-            Defaults to True. Set to False for production-only telemetry.
-            Maps to JS: forceDevExport
+        force_dev_export: If True, export Cloud telemetry even when
+            ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, metrics will not be exported. Traces and
             logs may still be exported. Defaults to False.
-            Maps to JS/Go: disableMetrics
         disable_traces: If True, traces will not be exported. Metrics and
             logs may still be exported. Defaults to False.
-            Maps to JS/Go: disableTraces
         metric_export_interval_ms: Metrics export interval in milliseconds.
             GCP requires a minimum of 5000ms. Defaults to 60000ms.
-            Dev environment uses 5000ms, production uses 300000ms by default
-            in JS/Go (but we use 60000ms for consistent behavior).
-            Maps to JS/Go: metricExportIntervalMillis
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
-            Maps to JS/Go: metricExportTimeoutMillis
         force_export: Deprecated. Use force_dev_export instead.
 
     Example:
         ```python
-        # Default: PII redaction enabled
         enable_google_cloud_telemetry()
 
         # Enable input/output logging (disable PII redaction)
@@ -136,15 +127,6 @@ def enable_google_cloud_telemetry(
             credentials={'type': 'service_account', ...},
         )
         ```
-
-    Note:
-        This matches the JavaScript implementation's GcpTelemetryConfigOptions
-        and Go's FirebaseTelemetryOptions/GoogleCloudTelemetryOptions.
-
-    See Also:
-        - JS: js/plugins/google-cloud/src/types.ts (GcpTelemetryConfigOptions)
-        - Go: go/plugins/firebase/telemetry.go (FirebaseTelemetryOptions)
-        - Go: go/plugins/googlecloud/types.go (GoogleCloudTelemetryOptions)
     """
     # Handle legacy force_export parameter
     if force_export is not None:
