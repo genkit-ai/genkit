@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
@@ -101,27 +102,38 @@ func (a *Agent[State]) Handle() *AgentHandle {
 // or carries none. It handles both in-process descriptors (typed metadata) and
 // descriptors decoded from JSON (map form), so callers can inspect an agent's
 // capabilities ([AgentMetadata.StateManagement], [AgentMetadata.Abortable])
-// without knowing where the action came from. The returned value is a copy;
-// mutating it does not affect the descriptor.
+// without knowing where the action came from.
+//
+// The returned value is a copy: mutating its fields, [AgentMetadata.StateSchema]
+// included, does not affect the descriptor. Values nested inside the schema are
+// shared, so treat what it points at as read-only.
+//
+// A wire descriptor that does not decode reports as nil rather than partially.
+// Every field here is a capability a caller gates on, and a zero value reads as
+// a definite "no": an agent whose abortable field arrived mistyped would be
+// refused background work it can do, and told why in terms that are not true.
+// Absent metadata is the honest answer, and callers already treat it as
+// "unknown" and fall back to asking the runtime.
 func AgentMetadataOf(a api.Action) *AgentMetadata {
 	if a == nil {
 		return nil
 	}
 	switch m := a.Desc().Metadata["agent"].(type) {
 	case AgentMetadata:
+		m.StateSchema = maps.Clone(m.StateSchema)
 		return &m
 	case *AgentMetadata:
 		if m == nil {
 			return nil
 		}
 		copied := *m
+		copied.StateSchema = maps.Clone(copied.StateSchema)
 		return &copied
 	case map[string]any:
-		// Best-effort decode: encoding/json fills every well-typed field
-		// before reporting the first type error, so one mistyped field in a
-		// wire descriptor leaves that field zero instead of erasing the
-		// capabilities that did decode.
-		meta, _ := base.MapToStruct[AgentMetadata](m)
+		meta, err := base.MapToStruct[AgentMetadata](m)
+		if err != nil {
+			return nil
+		}
 		return &meta
 	}
 	return nil
@@ -132,7 +144,8 @@ func (h *AgentHandle) Name() string { return h.name }
 
 // Metadata returns the agent's capability metadata (who manages state, whether
 // background work can be aborted), or nil when the agent's descriptor carries
-// none. Treat the returned value as read-only; it is shared across calls.
+// none or did not decode. The handle holds one copy, detached from the
+// descriptor but shared across calls, so treat it as read-only.
 func (h *AgentHandle) Metadata() *AgentMetadata { return h.meta }
 
 // Run starts a single-turn invocation with the given input and returns the
@@ -300,8 +313,13 @@ func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string) (
 // subtypes included (e.g. [ErrSnapshotNotFound] is a [status.ErrNotFound]).
 func (h *AgentHandle) snapshotVia(ctx context.Context, act api.Action, verb string, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
 	if act == nil {
+		// State what is known. A handle built by name binds each companion by
+		// its own registry lookup, so a missing one means only that the agent
+		// does not publish it; no session store is the usual cause, not a fact
+		// the handle can check. The middleware relays this text to a model.
 		return nil, status.Errorf(ErrSessionStoreNotConfigured,
-			"agent %q has no session store, so it keeps no snapshots to %s", h.name, verb)
+			"agent %q publishes no action to %s a snapshot; an agent publishes one only when it has a session store",
+			h.name, verb)
 	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -335,7 +353,9 @@ func (h *AgentHandle) Abort(ctx context.Context, snapshotID string) (SnapshotSta
 	}
 	if h.abort == nil {
 		if h.getSnapshot == nil {
-			return "", status.Errorf(ErrSessionStoreNotConfigured, "agent %q: Abort requires a session store", h.name)
+			return "", status.Errorf(ErrSessionStoreNotConfigured,
+				"agent %q publishes no action to abort background work; an agent publishes one only when it has a session store that can observe aborts",
+				h.name)
 		}
 		return "", status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: the session store does not support abort (it does not implement SnapshotSubscriber)", h.name)

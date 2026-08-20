@@ -461,9 +461,10 @@ mux := http.NewServeMux()
 for _, r := range genkitx.AllAgentRoutes(g) {
     mux.HandleFunc(r.Pattern(), r.Handler())
 }
-// POST /agents/chat                one turn per request (?stream=true for SSE)
-// POST /agents/chat/getSnapshot    read a snapshot by ID
-// POST /agents/chat/abort          abort background work
+// POST /agents/chat                     one turn per request (?stream=true for SSE)
+// POST /agents/chat/getSnapshot         read a snapshot by ID
+// POST /agents/chat/waitForSnapshot     block until a snapshot settles
+// POST /agents/chat/abort               abort background work
 log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 ```
 
