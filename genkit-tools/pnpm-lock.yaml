@@ -171,9 +171,6 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.20.3
-      uuid:
-        specifier: ^9.0.1
-        version: 9.0.1
       winston:
         specifier: ^3.11.0
         version: 3.19.0
@@ -229,9 +226,6 @@ importers:
       '@types/node':
         specifier: ^20.11.19
         version: 20.19.37
-      '@types/uuid':
-        specifier: ^9.0.8
-        version: 9.0.8
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -1246,9 +1240,6 @@ packages:
 
   '@types/triple-beam@1.3.5':
     resolution: {integrity: sha512-6WaYesThRMCl19iryMYP7/x2OVgCtbIVflDGFpWnb9irXI3UjYE4AzmYuiUKY1AJstGijoY+MgUszMgRxIYTYw==}
-
-  '@types/uuid@9.0.8':
-    resolution: {integrity: sha512-jg+97EGIcY9AGHJJRaaPVgetKDsrTgbRjQ5Msgjh/DQKEFl0DtyRr/VCOyD1T2R1MNeWPK/u7JoGhlDZnKBAfA==}
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
@@ -4661,8 +4652,6 @@ snapshots:
   '@types/tough-cookie@4.0.5': {}
 
   '@types/triple-beam@1.3.5': {}
-
-  '@types/uuid@9.0.8': {}
 
   '@types/ws@8.18.1':
     dependencies:
