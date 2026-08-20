@@ -1632,6 +1632,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+amazon-bedrock = [
+    { name = "genkit-amazon-bedrock" },
+]
+anthropic = [
+    { name = "genkit-anthropic" },
+]
+django = [
+    { name = "genkit-django" },
+]
+evaluators = [
+    { name = "genkit-evaluators" },
+]
+fastapi = [
+    { name = "genkit-fastapi" },
+]
 flask = [
     { name = "genkit-flask" },
 ]
@@ -1640,6 +1655,9 @@ google-cloud = [
 ]
 google-genai = [
     { name = "genkit-google-genai" },
+]
+middleware = [
+    { name = "genkit-middleware" },
 ]
 ollama = [
     { name = "genkit-ollama" },
@@ -1656,9 +1674,15 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
     { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
+    { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
+    { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
+    { name = "genkit-django", marker = "extra == 'django'", editable = "packages/genkit-django" },
+    { name = "genkit-evaluators", marker = "extra == 'evaluators'", editable = "packages/genkit-evaluators" },
+    { name = "genkit-fastapi", marker = "extra == 'fastapi'", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
@@ -1682,7 +1706,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", "vertex-ai"]
+provides-extras = ["amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-amazon-bedrock"
