@@ -34,11 +34,10 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
-  "genkit-plugin-firebase",
-  "genkit-plugin-google-genai",
-  "genkit-plugin-google-cloud",
-  "genkit-plugin-ollama",
-  "genkit-plugin-vertex-ai",
+  "genkit-google-genai",
+  "genkit-google-cloud",
+  "genkit-ollama",
+  "genkit-vertexai",
   "strenum>=0.4.15; python_version < '3.11'",
 ]
 description = "Packaging smoke test"

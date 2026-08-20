@@ -55,9 +55,9 @@ source = { virtual = "samples/agents" }
 dependencies = [
     { name = "fastapi" },
     { name = "genkit" },
-    { name = "genkit-plugin-fastapi" },
-    { name = "genkit-plugin-google-genai" },
-    { name = "genkit-plugin-middleware" },
+    { name = "genkit-fastapi" },
+    { name = "genkit-google-genai" },
+    { name = "genkit-middleware" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
@@ -67,9 +67,9 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "genkit-plugin-fastapi" },
-    { name = "genkit-plugin-google-genai" },
-    { name = "genkit-plugin-middleware" },
+    { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
@@ -1604,7 +1604,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1632,6 +1632,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+amazon-bedrock = [
+    { name = "genkit-amazon-bedrock" },
+]
+anthropic = [
+    { name = "genkit-anthropic" },
+]
+django = [
+    { name = "genkit-django" },
+]
+evaluators = [
+    { name = "genkit-evaluators" },
+]
+fastapi = [
+    { name = "genkit-fastapi" },
+]
 flask = [
     { name = "genkit-flask" },
 ]
@@ -1640,6 +1655,9 @@ google-cloud = [
 ]
 google-genai = [
     { name = "genkit-google-genai" },
+]
+middleware = [
+    { name = "genkit-middleware" },
 ]
 ollama = [
     { name = "genkit-ollama" },
@@ -1656,9 +1674,15 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
     { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
+    { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
+    { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
+    { name = "genkit-django", marker = "extra == 'django'", editable = "packages/genkit-django" },
+    { name = "genkit-evaluators", marker = "extra == 'evaluators'", editable = "packages/genkit-evaluators" },
+    { name = "genkit-fastapi", marker = "extra == 'fastapi'", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
@@ -1682,11 +1706,11 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", "vertex-ai"]
+provides-extras = ["amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-amazon-bedrock"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-amazon-bedrock" }
 dependencies = [
     { name = "boto3" },
@@ -1705,7 +1729,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-anthropic"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1720,7 +1744,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-django"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-django" }
 dependencies = [
     { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1738,7 +1762,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-evaluators"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1753,7 +1777,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-fastapi"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1770,7 +1794,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-flask"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-flask" }
 dependencies = [
     { name = "flask" },
@@ -1789,7 +1813,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-cloud"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
@@ -1812,7 +1836,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-genai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1833,7 +1857,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-middleware"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-middleware" }
 dependencies = [
     { name = "genkit" },
@@ -1861,7 +1885,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-ollama"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1878,7 +1902,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-openai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-openai" }
 dependencies = [
     { name = "genkit" },
@@ -1894,51 +1918,8 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-plugin-fastapi"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "genkit" },
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/06/6e/50277d9baf6ae376178d2f5ea643d25fe79f931476161adda14bc601294c/genkit_plugin_fastapi-0.7.0.tar.gz", hash = "sha256:fa17606cd6c725ad1a8458f525d74a5727bc2988ffeeeaed942c0abeb31eb534", size = 8443, upload-time = "2026-06-09T22:47:00.421Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/1e/8ed7316853d7181389bc855615c5f7f32045ee7cb9ae04898fab66859a3d/genkit_plugin_fastapi-0.7.0-py3-none-any.whl", hash = "sha256:b31f186b8c4ef1a37336202cf25bb3691c9536a4b2f1011028bf5be1f230ab9d", size = 9587, upload-time = "2026-06-09T22:46:49.316Z" },
-]
-
-[[package]]
-name = "genkit-plugin-google-genai"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genkit" },
-    { name = "google-cloud-aiplatform" },
-    { name = "google-genai" },
-    { name = "strenum", marker = "python_full_version < '3.11'" },
-    { name = "structlog" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/41/f0/15f74a7e84435bd70a6c8e3afbe750d5fa271bd6ac42f4a14beacc2edd4a/genkit_plugin_google_genai-0.7.0.tar.gz", hash = "sha256:2f743901f58443f5ef8701107719be5ceec2d0b4ccadec1f308c3ff79a7b0212", size = 67618, upload-time = "2026-06-09T22:47:02.891Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/09/6b52ba321e67b9e0814ab302667612a24962bb39d5c43adca03b8206f396/genkit_plugin_google_genai-0.7.0-py3-none-any.whl", hash = "sha256:7c6e553ae9ce0e25c65ab8d35d1053a1d06b403eaf4b1782f9ad48e520c8a8c5", size = 65711, upload-time = "2026-06-09T22:46:52.785Z" },
-]
-
-[[package]]
-name = "genkit-plugin-middleware"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genkit" },
-    { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/d5/de3cf7d9290c26c63a119fdc517c9ff87ca8a8d562a7f3141ecfe7a11628/genkit_plugin_middleware-0.7.0.tar.gz", hash = "sha256:821482927ca96b9c736ab0d1dc1989da29def3a4a13ea186a90f7156f073a962", size = 17860, upload-time = "2026-06-10T15:53:05.982Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/b1/aacd0e43db84d9f75c8ac8a1abd42606aa990bfd70e859dac18fb0f2be56/genkit_plugin_middleware-0.7.0-py3-none-any.whl", hash = "sha256:fee53c68869bf8931258692c3ba4b178ca5209fedaf163883384c7f5535660d4", size = 20066, upload-time = "2026-06-10T15:53:03.748Z" },
-]
-
-[[package]]
 name = "genkit-vertexai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "anthropic" },
