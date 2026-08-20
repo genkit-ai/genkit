@@ -126,6 +126,8 @@ def resolve_model_arg(
 
     An empty string is treated as omitted so ``model=os.getenv('MODEL')``
     still picks up the constructor default when the env var is unset.
+    An empty constructor default is omitted the same way: not a model
+    name, and not a type error.
     Anything else that is not a name or ModelRef is a hard error — a
     leftover int or action must not silently run the default model.
     """
@@ -143,7 +145,7 @@ def resolve_model_arg(
         return cast(ModelArg, resolved)
     if isinstance(resolved, str) and resolved:
         return resolved
-    if resolved is not None:
+    if resolved is not None and resolved != '':
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(f'defaultModel is {type(resolved).__name__}, expected str or ModelRef.'),
