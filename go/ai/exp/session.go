@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -320,7 +321,22 @@ const (
 	// wait would freeze on one rather than surface the read error. It is
 	// generous, because it guards against a hang and not against a slow store.
 	snapshotWaitReadTimeout = 30 * time.Second
+	// snapshotWaitReadRetries is how many consecutive in-wait re-read failures
+	// a wait rides out, at its own re-read cadence, before surfacing the error.
+	// A wait runs for as long as the work does, so one store blip must not
+	// fail it; dead ends (see waitReadDeadEnd) are surfaced at once.
+	snapshotWaitReadRetries = 3
 )
+
+// waitReadDeadEnd reports whether an in-wait re-read failure cannot be helped
+// by retrying: the row is gone or the request itself is rejected. Anything
+// else (a store blip, a read that hit snapshotWaitReadTimeout) is presumed
+// transient.
+func waitReadDeadEnd(err error) bool {
+	return errors.Is(err, status.ErrNotFound) ||
+		errors.Is(err, status.ErrInvalidArgument) ||
+		errors.Is(err, status.ErrFailedPrecondition)
+}
 
 // waitSnapshot resolves a snapshot exactly as [readSnapshot] does and then
 // blocks until it settles, returning the terminal snapshot with the same
@@ -334,6 +350,13 @@ const (
 // leaves the row pending and only its heartbeat goes stale, so no subscription
 // can report it. Without a subscriber that same interval is the whole
 // mechanism, so it is much shorter.
+//
+// An in-wait re-read that fails transiently is retried at that same cadence,
+// up to snapshotWaitReadRetries consecutive failures, so a store blip does not
+// fail a long wait; a dead end (the row is gone, the request is rejected)
+// surfaces at once. The initial read is never retried: it prices the common
+// already-terminal case at exactly one read, and its failures reach the caller
+// unchanged (e.g. NOT_FOUND for an unknown snapshot).
 //
 // Cancelling ctx ends the wait with ctx's error. Callers bound a wait with
 // [context.WithTimeout] and re-read the row afterwards to learn where it stands.
@@ -356,18 +379,12 @@ func waitSnapshot[State any](
 	if snap.Status.Terminal() {
 		return snap, nil
 	}
-	// Anchor the wait on the row the read resolved, not on the request, so a
-	// store that mints its own ID is still followed by that ID.
-	id := snap.SnapshotID
-	if id == "" {
-		id = snapshotID
-	}
 
 	var statusCh <-chan SnapshotStatus
 	if sub, ok := store.(SnapshotSubscriber); ok {
 		subCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		statusCh = sub.OnSnapshotStatusChange(subCtx, id)
+		statusCh = sub.OnSnapshotStatusChange(subCtx, snapshotID)
 	}
 	interval := snapshotWaitPollInterval
 	if statusCh != nil {
@@ -378,8 +395,21 @@ func waitSnapshot[State any](
 
 	start := time.Now()
 	lastProgress := start
+	readFailures := 0
+	// retryRead decides what a failed in-wait re-read means: a dead end or
+	// exhausted retries surface the error, anything else is ridden out at the
+	// wait's own re-read cadence (the next tick retries).
+	retryRead := func(err error) error {
+		if waitReadDeadEnd(err) || readFailures >= snapshotWaitReadRetries {
+			return err
+		}
+		readFailures++
+		logger.Debug(ctx, "snapshot re-read failed inside a wait; retrying",
+			"snapshotId", snapshotID, "failures", readFailures, "error", err)
+		return nil
+	}
 	logger.Debug(ctx, "waiting for snapshot to settle",
-		"snapshotId", id, "subscribed", statusCh != nil)
+		"snapshotId", snapshotID, "subscribed", statusCh != nil)
 	for {
 		select {
 		case <-ctx.Done():
@@ -397,20 +427,33 @@ func waitSnapshot[State any](
 				continue
 			}
 			// The subscription carries a status, not the row: re-read to
-			// return the settled snapshot with its cumulative state.
-			return read(id, "")
-		case <-ticker.C:
-			cur, err := read(id, "")
+			// return the settled snapshot with its cumulative state. A
+			// transient failure here falls through to the next tick, whose
+			// re-read finds the same settled row.
+			cur, err := read(snapshotID, "")
 			if err != nil {
-				return nil, err
+				if err := retryRead(err); err != nil {
+					return nil, err
+				}
+				continue
 			}
+			return cur, nil
+		case <-ticker.C:
+			cur, err := read(snapshotID, "")
+			if err != nil {
+				if err := retryRead(err); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			readFailures = 0
 			if cur.Status.Terminal() {
 				return cur, nil
 			}
 			if time.Since(lastProgress) >= snapshotWaitProgressInterval {
 				lastProgress = time.Now()
 				logger.Debug(ctx, "still waiting for snapshot",
-					"snapshotId", id, "elapsedMs", time.Since(start).Milliseconds())
+					"snapshotId", snapshotID, "elapsedMs", time.Since(start).Milliseconds())
 			}
 		}
 	}
