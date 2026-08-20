@@ -70,9 +70,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -335,10 +335,6 @@ func slowBackend(ctx context.Context, d time.Duration) error {
 // unknownService names the services that exist instead of failing the turn,
 // so a guessed name costs one tool call rather than the investigation.
 func unknownService(name string, known map[string]string) string {
-	names := make([]string, 0, len(known))
-	for service := range known {
-		names = append(names, service)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(known))
 	return fmt.Sprintf("No records for %q. Known services: %s.", name, strings.Join(names, ", "))
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
@@ -154,9 +155,11 @@ type Agents struct {
 	// defaults to "delegate_to" (tools become delegate_to_<agent>); a pointer to
 	// the empty string uses bare agent names. An explicitly set, non-empty
 	// prefix also namespaces the [Agents.Async] background-task tools (e.g.
-	// research_check_background_tasks), so two Async instances with distinct
-	// prefixes can share one generate call. New rejects a configuration whose
-	// generated tool names collide.
+	// research_check_background_tasks). Two Async instances in one generate
+	// call therefore need distinct, explicitly set prefixes: left at the
+	// default they both emit the bare background-task tool names, and the
+	// generate call is rejected for duplicate tools. New rejects colliding
+	// names within one instance; it cannot see a sibling.
 	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the async background-task tools."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
@@ -329,11 +332,14 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Contex
 
 // beginDelegation is the prologue every delegation shares, synchronous or
 // background: it enforces MaxDelegations, reserves the delegation's invocation
-// number, and resolves the sub-agent, refunding the reserved slot when
-// resolution fails. A non-nil refusal is the tool result to return as-is: the
-// model-facing text for a cap refusal or a resolution failure. conversation is
-// the captured message list for optional history forwarding (see
-// reserveDelegation); background launches ignore it.
+// number, and resolves the sub-agent. A non-nil refusal is the tool result to
+// return as-is: the model-facing text for a cap refusal or a resolution
+// failure. conversation is the captured message list for optional history
+// forwarding (see reserveDelegation); background launches ignore it.
+//
+// A resolution failure keeps its slot. The agent is misconfigured or missing,
+// so every retry fails the same way, and refunding would mean the cap never
+// bites on exactly the runaway loop it exists to stop.
 func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState) (invocationNum int, conversation []*ai.Message, agent *aix.AgentHandle, refusal *delegationResult) {
 	invocationNum, conversation, ok := a.reserveDelegation(st)
 	if !ok {
@@ -344,7 +350,6 @@ func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agen
 
 	agent, err := resolveAgent(genkit.FromContext(ctx), ref)
 	if err != nil {
-		a.releaseDelegation(st)
 		logger.Warn(ctx, "sub-agent resolution failed", "agent", ref.Name, "error", err)
 		return 0, nil, nil, &delegationResult{Response: "Error: " + err.Error()}
 	}
@@ -376,8 +381,8 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 		// The agent runtime resolves failures and interrupts gracefully (see
 		// foldDelegationOutput), so this only fires for exceptions outside
 		// that handling (e.g. a rejected init payload). Surface it as tool
-		// output; the slot goes back because no sub-agent work ran.
-		a.releaseDelegation(st)
+		// output and keep the slot: the payload is built the same way every
+		// time, so a retry is refused the same way.
 		logger.Warn(ctx, "sub-agent call failed", "agent", ref.Name, "error", err)
 		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
 	}
@@ -406,12 +411,20 @@ func (a *Agents) reserveDelegation(st *agentsState) (invocationNum int, conversa
 	return st.seq, st.conversation, true
 }
 
-// releaseDelegation returns a reserved cap slot for a delegation that failed
-// before any sub-agent work ran (a resolution failure, a hard call error, or
-// a pre-detach rejection), so the cap only counts delegations that did
-// something. The released slot's invocation number is never reissued (the
-// allocator is the separate seq counter), so a concurrent live delegation
-// cannot end up sharing an artifact namespace with a later one.
+// releaseDelegation returns a reserved cap slot to a delegation whose refusal
+// names a retry that can succeed, which today means only one thing: a
+// background launch refused because the sub-agent cannot detach, whose refusal
+// tells the model to delegate synchronously instead. That retry must not be
+// turned away by a cap the refusal itself consumed.
+//
+// Every other refusal keeps its slot. A refusal that will repeat identically
+// (an unresolvable agent, a rejected init payload, a sub-agent that fails on
+// its own) is precisely the runaway MaxDelegations exists to bound, and
+// refunding those would leave the cap unable to bite at all.
+//
+// The released slot's invocation number is never reissued (the allocator is
+// the separate seq counter), so a concurrent live delegation cannot end up
+// sharing an artifact namespace with a later one.
 func (a *Agents) releaseDelegation(st *agentsState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -612,8 +625,14 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 
 // discoverDescription returns the agent's description from its action
 // descriptor, falling back to the backing prompt's description, or "" if none.
+// The keys are built with [api.KeyFromName] rather than by hand: a prompt
+// registers under "executable-prompt", not "prompt", so a literal key silently
+// finds nothing.
 func discoverDescription(g *genkit.Genkit, name string) string {
-	for _, key := range []string{"/agent/" + name, "/prompt/" + name} {
+	for _, key := range []string{
+		api.KeyFromName(api.ActionTypeAgent, name),
+		api.KeyFromName(api.ActionTypeExecutablePrompt, name),
+	} {
 		if action := genkit.LookupAction(g, key); action != nil {
 			if d := action.Desc().Description; d != "" {
 				return d

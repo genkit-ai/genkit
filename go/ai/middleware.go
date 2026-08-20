@@ -291,11 +291,24 @@ type namedHooks struct {
 // from a file-reading New, or a cancelled context as a caller mistake). Only
 // unclassified errors default to INVALID_ARGUMENT, since a bare error from a
 // New is overwhelmingly config validation.
+//
+// The classified case re-states the message on a status error of its own rather
+// than wrapping with fmt.Errorf. Serialization resolves to the outermost
+// *status.Error, so a plain wrap would hand the client the inner message alone,
+// with nothing naming the middleware that failed. Building the envelope here
+// also keeps it non-public, so a New that returns a PublicErrorf does not have
+// its text forwarded to clients by a path that never chose to publish it. The
+// cause stays reachable, so errors.Is still matches the middleware's sentinel.
 func wrapBuildError(name string, err error) error {
-	if _, ok := status.Classified(err); ok {
-		return fmt.Errorf("ai: failed to build middleware %q: %w", name, err)
+	s, ok := status.Classified(err)
+	if !ok {
+		return status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", name, err)
 	}
-	return status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", name, err)
+	return (&status.Error{
+		Status:   s,
+		Message:  fmt.Sprintf("ai: failed to build middleware %q: %v", name, err),
+		HTTPCode: s.HTTPCode(),
+	}).WithCause(err)
 }
 
 // resolveRefs resolves [MiddlewareRef] entries to named [Hooks] bundles. If

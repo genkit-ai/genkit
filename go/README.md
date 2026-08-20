@@ -446,7 +446,9 @@ Detach requires a store that implements `SnapshotSubscriber` (both bundled local
 > [!WARNING]
 > This API is in preview and may experience breaking changes in minor releases.
 
-The experimental `Agents` middleware (in `plugins/middleware/exp`) lets one agent delegate to others. It injects one `delegate_to_<name>` tool per sub-agent and a `<sub-agents>` listing into the orchestrator's system prompt, then runs the chosen sub-agent and returns its result when the model calls the tool. Each sub-agent's `aix.WithDescription` (captured by `agent.Ref()`) tells the orchestrator when to reach for it:
+The experimental `Agents` middleware (in `plugins/middleware/exp`) lets one agent delegate to others. It injects one `delegate_to_<name>` tool per sub-agent and a `<sub-agents>` listing into the orchestrator's system prompt, then runs the chosen sub-agent and returns its result when the model calls the tool. Each sub-agent's `aix.WithDescription` (captured by `agent.Ref()`) tells the orchestrator when to reach for it.
+
+Set `Async: true` to let the orchestrator keep working while a sub-agent runs: each delegation tool gains a `background` flag that returns a task ID instead of waiting, and two shared tools, `check_background_tasks` and `wait_for_background_tasks`, collect the results. Background delegation needs a sub-agent whose session store supports it (see `AgentMetadata.Abortable`).
 
 ```go
 import (

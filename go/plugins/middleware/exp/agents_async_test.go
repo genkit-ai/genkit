@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -242,6 +243,106 @@ func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
 	}
 	if res.TimedOut {
 		t.Errorf("wait should settle without timing out, got %+v", res)
+	}
+}
+
+// TestAgentsWaitTimeoutKeepsUnresolvableErrors covers the two halves of what a
+// timed-out wait must report. A task that is genuinely still running comes back
+// pending, because the wait ran out of time rather than learning anything. A
+// handle that can never resolve keeps its error, because nothing about the
+// deadline makes it more likely to settle later; reporting it as pending would
+// send the orchestrator back to re-check it forever.
+func TestAgentsWaitTimeoutKeepsUnresolvableErrors(t *testing.T) {
+	g := newTestGenkit(t)
+
+	// The sub-agent never finishes, so its task is pending for the whole wait.
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+				}
+				return nil, ctx.Err()
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := toolModel(t, g, "test/orch-wait-timeout", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_researcher",
+				Input: map[string]any{"task": "dig into X", "background": true},
+			}), nil
+		case len(waits) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name: waitBackgroundTasksToolName,
+				Input: map[string]any{
+					"taskIds":        []string{lenientDelegation(launches[0]).TaskID, "ghost:whatever"},
+					"timeoutSeconds": float64(1),
+				},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+	if len(res.Tasks) != 2 {
+		t.Fatalf("expected 2 task reports, got %+v", res.Tasks)
+	}
+	if !res.TimedOut {
+		t.Errorf("TimedOut = false, want true with a task still running: %+v", res)
+	}
+	if got := res.Tasks[0]; got.Status != string(aix.SnapshotStatusPending) || got.Error != "" {
+		t.Errorf("running task: want pending with no error, got %+v", got)
+	}
+	if got := res.Tasks[1]; got.Status != taskStatusUnknown ||
+		!strings.Contains(got.Error, "does not match any configured agent") {
+		t.Errorf("unconfigured agent: want unknown with its error kept past the deadline, got %+v", got)
+	}
+}
+
+// TestAwaitTaskKeepsUnresolvableErrorPastCancellation isolates the half of the
+// timed-out wait that a full generate call cannot stage reliably: a report that
+// failed for a reason ctx had nothing to do with, produced while ctx is already
+// over. Deciding "still pending" from ctx alone would blank the error here and
+// send the orchestrator back to re-check a handle that can never settle.
+func TestAwaitTaskKeepsUnresolvableErrorPastCancellation(t *testing.T) {
+	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}}
+	st := &agentsState{settledReports: map[string]backgroundTaskReport{}}
+
+	over, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// The handle names no configured agent, so it fails before any I/O and
+	// stays unresolvable however long anyone waits.
+	got := a.awaitTask(over, nil, st, "ghost:whatever", time.Now())
+	if got.Status != taskStatusUnknown {
+		t.Errorf("Status = %q, want %q", got.Status, taskStatusUnknown)
+	}
+	if !strings.Contains(got.Error, "does not match any configured agent") {
+		t.Errorf("Error = %q, want the resolution failure kept", got.Error)
 	}
 }
 
