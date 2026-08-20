@@ -35,6 +35,12 @@ def get_version() -> str:
 # warnings and re-export to the new genkit-* packages.
 PLUGINS = [
     {
+        'old_dist': 'genkit-plugin-amazon-bedrock',
+        'new_dist': 'genkit-amazon-bedrock',
+        'old_import': 'amazon_bedrock',
+        'new_import': 'genkit_amazon_bedrock',
+    },
+    {
         'old_dist': 'genkit-plugin-anthropic',
         'new_dist': 'genkit-anthropic',
         'old_import': 'anthropic',
