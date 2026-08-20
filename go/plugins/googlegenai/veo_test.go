@@ -427,21 +427,25 @@ func TestResolveVeoActions(t *testing.T) {
 
 	const modelName = "veo-3.0-generate-001"
 	startKey := api.KeyFromName(api.ActionTypeBackgroundModel, api.NewName(googleAIProvider, modelName))
-	checkKey := api.KeyFromName(api.ActionTypeCheckOperation, api.NewName(googleAIProvider, modelName))
+	checkKey := api.KeyFromName(api.ActionTypeCheckOperation, api.NewName(googleAIProvider, modelName+"/check"))
+	cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, api.NewName(googleAIProvider, modelName+"/cancel"))
 
 	// Resolving either key yields the background model bundle, and registering
 	// it makes both the start and check actions resolvable.
 	for _, tc := range []struct {
 		name  string
 		atype api.ActionType
+		// id is what the registry hands the resolver: the bare model for the
+		// start action, the model plus its operation for the check companion.
+		id string
 	}{
-		{"resolved as background model", api.ActionTypeBackgroundModel},
-		{"resolved as check operation", api.ActionTypeCheckOperation},
+		{"resolved as background model", api.ActionTypeBackgroundModel, modelName},
+		{"resolved as check operation", api.ActionTypeCheckOperation, modelName + "/check"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			action := resolveAction(client, catalog{provider: googleAIProvider}, tc.atype, modelName)
+			action := resolveAction(client, catalog{provider: googleAIProvider}, tc.atype, tc.id)
 			if action == nil {
-				t.Fatalf("resolveAction(%s, %q) = nil", tc.atype, modelName)
+				t.Fatalf("resolveAction(%s, %q) = nil", tc.atype, tc.id)
 			}
 
 			r := registry.New()
@@ -451,6 +455,14 @@ func TestResolveVeoActions(t *testing.T) {
 				if r.LookupAction(key) == nil {
 					t.Errorf("action %q not registered", key)
 				}
+			}
+
+			// Veo passes no cancel function, so the bundle carries no cancel
+			// companion and resolveAction answers no cancel-operation key.
+			// Giving a googlegenai background model a cancel function has to
+			// teach the resolver that key as well; this is what catches it.
+			if r.LookupAction(cancelKey) != nil {
+				t.Errorf("action %q registered, so resolveAction must answer cancel-operation keys too", cancelKey)
 			}
 		})
 	}
@@ -468,9 +480,13 @@ func TestResolveVeoActions(t *testing.T) {
 	})
 
 	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
-		for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
-			if action := resolveAction(client, catalog{provider: googleAIProvider}, atype, "gemini-flash-latest"); action != nil {
-				t.Errorf("resolveAction(%s, gemini-flash-latest) = %v, want nil", atype, action)
+		for _, id := range []string{"gemini-flash-latest", "gemini-flash-latest/check", "gemini-flash-latest/cancel"} {
+			for _, atype := range []api.ActionType{
+				api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation, api.ActionTypeCancelOperation,
+			} {
+				if action := resolveAction(client, catalog{provider: googleAIProvider}, atype, id); action != nil {
+					t.Errorf("resolveAction(%s, %q) = %v, want nil", atype, id, action)
+				}
 			}
 		}
 	})
