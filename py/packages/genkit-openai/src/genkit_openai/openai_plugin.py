@@ -226,7 +226,11 @@ class OpenAI(Plugin):
         request shapes, so binding OpenAIConfig to them would let chat-only
         keys like frequency_penalty ride into the wrong endpoint.
         """
-        local = _strip_ref_prefixes(str(name))
+        # str(None) is 'None', and that classifies as chat, so a non-string
+        # would mint a real-looking ref instead of failing here.
+        if not isinstance(name, str):
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name must be a string.')
+        local = _strip_ref_prefixes(name)
         if not local:
             raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
         model_type = _classify_model(local)

@@ -88,7 +88,11 @@ class Anthropic(Plugin):
         plugin learns their names; every Anthropic generate model takes
         AnthropicConfig.
         """
-        local = _strip_ref_prefixes(str(name))
+        # str(None) is 'None', and unknown ids are allowed, so a non-string
+        # would mint a real-looking ref instead of failing here.
+        if not isinstance(name, str):
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name must be a string.')
+        local = _strip_ref_prefixes(name)
         if not local:
             raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
         return model_ref(local, config_schema=AnthropicConfig, namespace=ANTHROPIC_PLUGIN_NAME, config=config)

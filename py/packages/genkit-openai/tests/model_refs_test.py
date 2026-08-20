@@ -102,6 +102,19 @@ def test_gpt_model_requires_a_name() -> None:
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
+def test_gpt_model_rejects_non_string_name() -> None:
+    """A non-string must not become a name via str() (None → 'None')."""
+    with pytest.raises(GenkitError) as exc_info:
+        OpenAI.gpt_model(None)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'must be a string' in str(exc_info.value)
+
+    with pytest.raises(GenkitError) as exc_info:
+        OpenAI.gpt_model(123)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'must be a string' in str(exc_info.value)
+
+
 def test_known_gpt_matches_catalog() -> None:
     """Quote autocomplete and the chat catalog are the same set of ids."""
     assert set(get_args(KnownGpt)) == set(SUPPORTED_OPENAI_MODELS)
