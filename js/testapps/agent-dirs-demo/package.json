@@ -7,7 +7,8 @@
   "scripts": {
     "server": "tsx src/index.ts",
     "server:zero": "agent-dirs serve ./agents",
-    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts",
+    "genkit:dev:zero": "genkit start -- agent-dirs serve ./agents --watch"
   },
   "license": "Apache-2.0",
   "dependencies": {

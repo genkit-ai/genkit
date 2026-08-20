@@ -38,6 +38,9 @@ pnpm server
 
 # 3. Dev UI - chat with the agents interactively:
 pnpm genkit:dev
+
+# 3b. Dev UI without the host entry point - same UI, zero-code runner:
+pnpm genkit:dev:zero
 ```
 
 `genkit:dev` starts the app under the Genkit CLI and prints a Dev UI URL
