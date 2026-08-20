@@ -87,31 +87,40 @@ func delegateOnceModel(t *testing.T, g *genkit.Genkit, name, toolName, task stri
 	})
 }
 
-// decodeDelegation re-decodes a tool response output into a delegationResult,
-// tolerating either the raw struct or a JSON-normalized map.
-func decodeDelegation(t *testing.T, v any) delegationResult {
+// toolOutputs collects the raw outputs of every tool response for toolName.
+func toolOutputs(msgs []*ai.Message, toolName string) []any {
+	var out []any
+	for _, m := range msgs {
+		for _, p := range m.Content {
+			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == toolName {
+				out = append(out, p.ToolResponse.Output)
+			}
+		}
+	}
+	return out
+}
+
+// decodeToolOutput re-decodes a tool response output into T, tolerating either
+// the raw struct or a JSON-normalized map.
+func decodeToolOutput[T any](t *testing.T, v any) T {
 	t.Helper()
+	var decoded T
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal tool output: %v", err)
 	}
-	var dr delegationResult
-	if err := json.Unmarshal(b, &dr); err != nil {
-		t.Fatalf("unmarshal delegationResult: %v", err)
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal %T: %v", decoded, err)
 	}
-	return dr
+	return decoded
 }
 
 // delegationResponses collects every delegation tool response for toolName.
 func delegationResponses(t *testing.T, msgs []*ai.Message, toolName string) []delegationResult {
 	t.Helper()
 	var out []delegationResult
-	for _, m := range msgs {
-		for _, p := range m.Content {
-			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == toolName {
-				out = append(out, decodeDelegation(t, p.ToolResponse.Output))
-			}
-		}
+	for _, v := range toolOutputs(msgs, toolName) {
+		out = append(out, decodeToolOutput[delegationResult](t, v))
 	}
 	return out
 }

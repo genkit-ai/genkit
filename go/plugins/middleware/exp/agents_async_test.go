@@ -30,37 +30,9 @@ import (
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
-// toolOutputs collects the raw outputs of every tool response for toolName.
-func toolOutputs(msgs []*ai.Message, toolName string) []any {
-	var out []any
-	for _, m := range msgs {
-		for _, p := range m.Content {
-			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == toolName {
-				out = append(out, p.ToolResponse.Output)
-			}
-		}
-	}
-	return out
-}
-
-// decodeTaskReports re-decodes a tool response output into a
-// backgroundTasksResult, tolerating either the raw struct or a JSON-normalized
-// map.
-func decodeTaskReports(t *testing.T, v any) backgroundTasksResult {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal tool output: %v", err)
-	}
-	var res backgroundTasksResult
-	if err := json.Unmarshal(b, &res); err != nil {
-		t.Fatalf("unmarshal backgroundTasksResult: %v", err)
-	}
-	return res
-}
-
 // lenientDelegation decodes a delegation tool output without failing the test,
-// for use inside model functions.
+// for use inside model functions, where t.Fatalf would fire on the wrong
+// goroutine.
 func lenientDelegation(v any) delegationResult {
 	var dr delegationResult
 	if b, err := json.Marshal(v); err == nil {
@@ -167,7 +139,7 @@ func TestAgentsAsyncDelegationLifecycle(t *testing.T) {
 	if len(checkOuts) != 1 {
 		t.Fatalf("expected 1 check response, got %d", len(checkOuts))
 	}
-	check := decodeTaskReports(t, checkOuts[0])
+	check := decodeToolOutput[backgroundTasksResult](t, checkOuts[0])
 	if len(check.Tasks) != 1 || check.Tasks[0].Status != "pending" {
 		t.Errorf("check while gated: want 1 pending task, got %+v", check.Tasks)
 	}
@@ -176,7 +148,7 @@ func TestAgentsAsyncDelegationLifecycle(t *testing.T) {
 	if len(waitOuts) != 1 {
 		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
 	}
-	wait := decodeTaskReports(t, waitOuts[0])
+	wait := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
 	if len(wait.Tasks) != 1 {
 		t.Fatalf("expected 1 waited task, got %+v", wait.Tasks)
 	}
@@ -251,7 +223,7 @@ func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
 	if len(waitOuts) != 1 {
 		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
 	}
-	res := decodeTaskReports(t, waitOuts[0])
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
 	if len(res.Tasks) != 3 {
 		t.Fatalf("expected 3 task reports, got %+v", res.Tasks)
 	}
@@ -410,7 +382,7 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 	if len(waitOuts) != 1 {
 		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
 	}
-	res := decodeTaskReports(t, waitOuts[0])
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
 	if res.TimedOut {
 		t.Errorf("overflowed timeout must behave as unbounded, got timedOut result: %+v", res)
 	}
