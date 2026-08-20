@@ -3,7 +3,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed-request fast path through generate: happy path, error contract, escape hatch."""
+"""What a plugin handler sees after ai.generate: typed config, extras, errors, output."""
 
 import pytest
 from pydantic import BaseModel
@@ -16,21 +16,21 @@ from genkit._core._typing import Part, Role, TextPart
 
 
 class ConformingCfg(BaseModel):
-    """Follows the extra='allow' convention: the escape hatch stays open."""
+    """Unknown keys are kept."""
 
     model_config = {'extra': 'allow'}
     temperature: float | None = None
 
 
 class StrictCfg(BaseModel):
-    """Deliberately closes the hatch — a legitimate plugin choice."""
+    """Unknown keys are rejected."""
 
     model_config = {'extra': 'forbid'}
     temperature: float | None = None
 
 
 class PluginOnlyCfg(ModelConfig):
-    """A field the common config does not have. The plugin schema owns it."""
+    """A knob the common config does not have."""
 
     duration_seconds: int | None = None
 
@@ -45,6 +45,7 @@ def ai_and_seen() -> tuple[Genkit, dict]:
 
     async def conforming(request: ModelRequest[ConformingCfg], ctx: ActionRunContext) -> ModelResponse:
         seen['config'] = request.config
+        seen['request'] = request
         return OK
 
     async def strict(request: ModelRequest[StrictCfg], ctx: ActionRunContext) -> ModelResponse:
@@ -68,7 +69,7 @@ def ai_and_seen() -> tuple[Genkit, dict]:
 
 @pytest.mark.asyncio
 async def test_typed_plugin_receives_typed_config(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """Fast path: the dict config arrives parsed into the plugin's class."""
+    """ai.generate(config={'temperature': 0.7}) arrives as MyConfig.temperature."""
     ai, seen = ai_and_seen
     await ai.generate(model='conforming', prompt='hi', config={'temperature': 0.7})
     assert isinstance(seen['config'], ConformingCfg)
@@ -79,12 +80,7 @@ async def test_typed_plugin_receives_typed_config(ai_and_seen: tuple[Genkit, dic
 async def test_typed_plugin_receives_plugin_only_fields_from_instance(
     ai_and_seen: tuple[Genkit, dict],
 ) -> None:
-    """Plugin-only knobs are legal because the action parses its schema.
-
-    ``duration_seconds`` is not on the common config. Passing the object or a
-    dict both land as ``PluginOnlyCfg.duration_seconds`` — not because generate
-    kept the instance, because ``ModelRequest[PluginOnlyCfg]`` rehydrated it.
-    """
+    """A field only the plugin schema owns still arrives, from an instance or a dict."""
     ai, seen = ai_and_seen
     cfg = PluginOnlyCfg(duration_seconds=8)
 
@@ -99,7 +95,7 @@ async def test_typed_plugin_receives_plugin_only_fields_from_instance(
 
 @pytest.mark.asyncio
 async def test_bare_plugin_receives_raw_dict(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """Pass-through carrier: bare ModelRequest never transforms config."""
+    """A handler annotated ModelRequest (no type param) still sees the raw dict."""
     ai, seen = ai_and_seen
     await ai.generate(model='bare', prompt='hi', config={'temperature': 0.7, 'anything': 1})
     assert seen['config'] == {'temperature': 0.7, 'anything': 1}
@@ -108,7 +104,7 @@ async def test_bare_plugin_receives_raw_dict(ai_and_seen: tuple[Genkit, dict]) -
 
 @pytest.mark.asyncio
 async def test_omitted_config_yields_empty_typed_config(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """The request is never None; absent config means an empty typed config."""
+    """Omitting config still gives the plugin an empty MyConfig, not None."""
     ai, seen = ai_and_seen
     await ai.generate(model='conforming', prompt='hi')
     assert isinstance(seen['config'], ConformingCfg)
@@ -117,7 +113,7 @@ async def test_omitted_config_yields_empty_typed_config(ai_and_seen: tuple[Genki
 
 @pytest.mark.asyncio
 async def test_unknown_keys_reach_plugin_via_model_extra(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """D1 escape hatch, end to end: unknown keys survive to model_extra."""
+    """A key the plugin schema does not declare still reaches model_extra."""
     ai, seen = ai_and_seen
     await ai.generate(model='conforming', prompt='hi', config={'thinking': {'budget': 8192}})
     assert seen['config'].model_extra == {'thinking': {'budget': 8192}}
@@ -125,7 +121,7 @@ async def test_unknown_keys_reach_plugin_via_model_extra(ai_and_seen: tuple[Genk
 
 @pytest.mark.asyncio
 async def test_invalid_value_raises_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """Error contract: bad values in declared fields surface as GenkitError, never raw ValidationError."""
+    """A bad value on a declared field is GenkitError, not a raw ValidationError."""
     ai, _ = ai_and_seen
     with pytest.raises(GenkitError, match="Invalid input for action 'conforming'"):
         await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
@@ -133,7 +129,22 @@ async def test_invalid_value_raises_genkit_error(ai_and_seen: tuple[Genkit, dict
 
 @pytest.mark.asyncio
 async def test_strict_config_rejects_unknown_keys_as_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """A plugin that closes the hatch (extra='forbid') gets a loud, wrapped error — its choice."""
+    """extra='forbid' rejects unknown keys as GenkitError — the plugin opted in."""
     ai, _ = ai_and_seen
     with pytest.raises(GenkitError, match="Invalid input for action 'strict'"):
         await ai.generate(model='strict', prompt='hi', config={'thinking': True})
+
+
+@pytest.mark.asyncio
+async def test_output_format_reaches_the_plugin(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(output_format='json') is what the plugin reads as request.output_format."""
+    ai, seen = ai_and_seen
+    await ai.generate(
+        model='conforming',
+        prompt='hi',
+        output_format='json',
+        output_schema={'type': 'object'},
+    )
+    assert seen['request'].output_format == 'json'
+    assert seen['request'].output_schema == {'type': 'object'}
+    assert seen['request'].output.format == 'json'

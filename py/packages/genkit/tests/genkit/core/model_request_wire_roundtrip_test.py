@@ -3,7 +3,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""ModelRequest wire-format round-trip and config type-contract tests."""
+"""Dumping a ModelRequest and reading it back keeps output settings and config."""
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -24,7 +24,7 @@ class PluginCfg(BaseModel):
 
 
 def test_wire_roundtrip_preserves_output_fields() -> None:
-    """dump -> validate must be an identity for the output settings."""
+    """JSON mode written as OutputConfig comes back as output_format / schema on the wire."""
     req = ModelRequest[CarrierCfg](
         messages=[],
         config={'temperature': 0.5},
@@ -50,18 +50,13 @@ def test_wire_roundtrip_preserves_output_fields() -> None:
 
 
 def test_output_always_present_on_wire() -> None:
-    """A built request always includes an output object, even when empty.
-
-    This matches how the JS SDK's generate path builds requests: an output
-    object is always present (empty when no output options are set), even
-    though the wire schema marks the field optional for hand-built requests.
-    """
+    """A built request always has an output object, even when nobody asked for JSON."""
     req = ModelRequest[CarrierCfg](messages=[])
     assert req.model_dump(mode='python')['output'] == {}
 
 
 def test_cross_config_revalidation_preserves_output() -> None:
-    """The _validate_input fallback scenario: ModelRequest[CarrierCfg] -> ModelRequest[PluginCfg]."""
+    """Re-reading a request built with one config class yields the plugin's config class."""
     req = ModelRequest[CarrierCfg](
         messages=[],
         config={'temperature': 0.5},
@@ -76,7 +71,7 @@ def test_cross_config_revalidation_preserves_output() -> None:
 
 
 def test_flat_properties_read_and_write_nested_storage() -> None:
-    """The flat accessors are a live view over output (plugin tests mutate them)."""
+    """Assigning request.output_format writes the nested output object."""
     req = ModelRequest[CarrierCfg](messages=[])
     req.output_format = 'json'
     req.output_schema = {'type': 'integer'}
@@ -86,6 +81,6 @@ def test_flat_properties_read_and_write_nested_storage() -> None:
 
 
 def test_bad_config_type_raises_validation_error() -> None:
-    """Wrong config type must surface as ValidationError, never bare TypeError."""
+    """config=5 on the constructor is a ValidationError."""
     with pytest.raises(ValidationError):
         ModelRequest[CarrierCfg](messages=[], config=5)  # type: ignore[arg-type]
