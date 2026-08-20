@@ -60,7 +60,9 @@ from google.genai.types import HttpOptions, HttpOptionsDict
 import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
+from genkit._core._background import define_background_model
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._registry import Registry
 from genkit._core._typing import Operation
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
@@ -338,43 +340,25 @@ def _create_veo_background_action(
     prefix = f'{plugin_name}/'
     clean_name = name.removeprefix(prefix)
     full_name = f'{prefix}{clean_name}'
-    action_key = f'/background-model/{full_name}'
 
-    async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
+    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
-        op = await veo.start(request, ctx)
-        op.action = action_key
-        return op
+        return await veo.start(request, ctx)
 
-    async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
+    async def check(op: Operation) -> Operation:
         veo = VeoModel(clean_name, client_getter())
-        updated = await veo.check(op)
-        updated.action = action_key
-        return updated
+        return await veo.check(op)
 
-    info = veo_model_info(clean_name).model_dump(by_alias=True)
-
-    start_action = Action(
-        kind=ActionKind.BACKGROUND_MODEL,
+    # Same helper as ai.define_background_model: action key, latency, and
+    # the longRunning flag generate_operation checks.
+    return define_background_model(
+        registry=Registry(),
         name=full_name,
-        fn=_start,
-        metadata={
-            'model': {**info, 'customOptions': to_json_schema(VeoConfigSchema)},
-            'type': 'background-model',
-        },
-    )
-
-    check_action = Action(
-        kind=ActionKind.CHECK_OPERATION,
-        name=f'{full_name}/check',
-        fn=_check,
-        metadata={'type': 'check-operation'},
-    )
-
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=None,
+        start=start,
+        check=check,
+        info=veo_model_info(clean_name),
+        config_schema=VeoConfigSchema,
+        metadata={'type': 'background-model'},
     )
 
 
