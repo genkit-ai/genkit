@@ -23,6 +23,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // AgentHandle is the untyped caller-side view of an agent: its run action and
@@ -116,17 +117,12 @@ func AgentMetadataOf(a api.Action) *AgentMetadata {
 		copied := *m
 		return &copied
 	case map[string]any:
-		b, err := json.Marshal(m)
-		if err != nil {
-			return nil
-		}
-		meta := &AgentMetadata{}
 		// Best-effort decode: encoding/json fills every well-typed field
 		// before reporting the first type error, so one mistyped field in a
 		// wire descriptor leaves that field zero instead of erasing the
 		// capabilities that did decode.
-		_ = json.Unmarshal(b, meta)
-		return meta
+		meta, _ := base.MapToStruct[AgentMetadata](m)
+		return &meta
 	}
 	return nil
 }
@@ -266,9 +262,10 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string) (*Sess
 // read per tick.
 //
 // A snapshot that failed, aborted, or expired is returned like any other, so a
-// non-nil error means the wait itself could not proceed: a read failed, or ctx
-// ended and its error is returned. Bound the wait with [context.WithTimeout],
-// then call [AgentHandle.GetSnapshot] to learn where the task stands.
+// non-nil error means the wait itself could not proceed: reads failed past the
+// wait's transient-retry budget, or ctx ended and its error is returned. Bound
+// the wait with [context.WithTimeout], then call [AgentHandle.GetSnapshot] to
+// learn where the task stands.
 //
 // It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
 // agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
@@ -390,8 +387,8 @@ func (t *DetachedTask) Poll(ctx context.Context) (*SessionSnapshot[json.RawMessa
 // caller neither picks a cadence nor pays a dispatch per tick. A task that
 // failed, aborted, or expired still returns its snapshot rather than an error
 // (inspect [SessionSnapshot.Status] and [SessionSnapshot.Error]), so a non-nil
-// error means the wait itself could not proceed: a read failed, or ctx ended
-// and its error is returned.
+// error means the wait itself could not proceed: reads failed past the wait's
+// transient-retry budget, or ctx ended and its error is returned.
 //
 // Use [context.WithTimeout] to bound the wait; on the deadline the wait returns
 // ctx's error, and [DetachedTask.Poll] then reports where the task stands.

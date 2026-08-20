@@ -266,7 +266,7 @@ type invocationOptions[State any] struct {
 // applyInvocation merges o into opts, rejecting duplicate options.
 // Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
 // checked once, after all options are applied, in
-// [Agent.resolveOptions].
+// resolveInvocationInit.
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
 		if opts.state != nil {
@@ -339,10 +339,9 @@ func WithSessionID[State any](id string) InvocationOption[State] {
 // enforcing the per-option duplicate checks and the mutual-exclusivity rules:
 // WithState excludes both WithSessionID and WithSnapshotID (a client-managed
 // conversation's identity rides inside the state itself), while WithSessionID
-// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] (via
-// resolveOptions) and [AgentHandle.Run], so typed and untyped callers reject
-// the same inputs with the same wording; name is the agent's, woven into the
-// errors.
+// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] and
+// [AgentHandle.Run], so typed and untyped callers reject the same inputs with
+// the same wording; name is the agent's, woven into the errors.
 //
 // It returns (nil, nil) when no option set anything: "no init" is decided
 // here, next to the merge a new option must extend, so a caller-side field
