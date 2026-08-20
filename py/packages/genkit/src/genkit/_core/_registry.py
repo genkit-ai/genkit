@@ -767,6 +767,11 @@ class Registry:
         """
         action = await self.resolve_action(ActionKind.MODEL, name)
         if action is None:
+            # Models registered with define_background_model live under this
+            # kind. Callers still pass the same name they would for a normal
+            # model.
+            action = await self.resolve_action(ActionKind.BACKGROUND_MODEL, name)
+        if action is None:
             return None
         return cast(
             Action[ModelRequest, ModelResponse, ModelResponseChunk],
