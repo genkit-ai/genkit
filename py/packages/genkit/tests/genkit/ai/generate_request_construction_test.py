@@ -6,9 +6,10 @@
 """What a plugin handler sees after ai.generate: typed config, extras, errors, output."""
 
 import pytest
-from pydantic import BaseModel
+from genkit_openai import OpenAIConfig
+from pydantic import BaseModel, ValidationError
 
-from genkit import Genkit
+from genkit import Document, Genkit
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
@@ -77,6 +78,23 @@ async def test_typed_plugin_receives_typed_config(ai_and_seen: tuple[Genkit, dic
 
 
 @pytest.mark.asyncio
+async def test_matching_config_instance_passes_through(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(config=MyConfig(...)) arrives as that same class. MyConfig subclasses ModelConfig."""
+    ai, seen = ai_and_seen
+    await ai.generate(model='plugin_only', prompt='hi', config=PluginOnlyCfg(duration_seconds=8))
+    assert type(seen['config']) is PluginOnlyCfg
+    assert seen['config'].duration_seconds == 8
+
+
+@pytest.mark.asyncio
+async def test_plain_basemodel_config_rejected_at_generate(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(config=) accepts a dict or a ModelConfig. A plain BaseModel is a ValidationError here."""
+    ai, _ = ai_and_seen
+    with pytest.raises(ValidationError):
+        await ai.generate(model='conforming', prompt='hi', config=ConformingCfg(temperature=0.7))
+
+
+@pytest.mark.asyncio
 async def test_typed_plugin_receives_plugin_only_fields_from_instance(
     ai_and_seen: tuple[Genkit, dict],
 ) -> None:
@@ -128,6 +146,19 @@ async def test_invalid_value_raises_genkit_error(ai_and_seen: tuple[Genkit, dict
 
 
 @pytest.mark.asyncio
+async def test_invalid_config_with_docs_is_still_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(docs=..., config={'temperature': 'high'}) is GenkitError, not AttributeError."""
+    ai, _ = ai_and_seen
+    with pytest.raises(GenkitError, match="Invalid input for action 'conforming'"):
+        await ai.generate(
+            model='conforming',
+            prompt='hi',
+            docs=[Document.from_text('ctx')],
+            config={'temperature': 'high'},
+        )
+
+
+@pytest.mark.asyncio
 async def test_strict_config_rejects_unknown_keys_as_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
     """extra='forbid' rejects unknown keys as GenkitError — the plugin opted in."""
     ai, _ = ai_and_seen
@@ -137,13 +168,13 @@ async def test_strict_config_rejects_unknown_keys_as_genkit_error(ai_and_seen: t
 
 @pytest.mark.asyncio
 async def test_foreign_config_class_raises_genkit_error(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ModelConfig on a plugin that wants ConformingCfg is a raise. Pass a mapping."""
+    """ai.generate(config=OpenAIConfig(...)) on a ConformingCfg plugin is GenkitError. Pass a dict."""
     ai, _ = ai_and_seen
     with pytest.raises(
         GenkitError,
-        match=r'config must be .+\.ConformingCfg or a mapping, got .+\.GenerationCommonConfig',
+        match=r'config must be .+\.ConformingCfg or a mapping, got genkit_openai\.OpenAIConfig',
     ):
-        await ai.generate(model='conforming', prompt='hi', config=ModelConfig(temperature=0.7))
+        await ai.generate(model='conforming', prompt='hi', config=OpenAIConfig(temperature=0.7))
 
 
 @pytest.mark.asyncio

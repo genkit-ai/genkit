@@ -361,7 +361,7 @@ async def test_run_defaulted_input_arg_allows_none_with_ctx() -> None:
 
 @pytest.mark.asyncio
 async def test_action_revalidates_bare_model_request_into_plugin_config() -> None:
-    """A bare ModelRequest with a dict config arrives as the plugin's config class."""
+    """Action.run: a bare ModelRequest with a dict config arrives as the plugin class."""
 
     class PluginConfig(BaseModel):
         model_config = ConfigDict(extra='allow')
@@ -389,7 +389,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
 
 @pytest.mark.asyncio
 async def test_action_rejects_foreign_config_class() -> None:
-    """OpenAIConfig on a Gemini plugin is a raise. Pass a mapping to coerce."""
+    """Action.run: a request already carrying OpenAICfg is not dumped into GeminiCfg."""
 
     class OpenAICfg(BaseModel):
         temperature: float | None = None
@@ -412,7 +412,7 @@ async def test_action_rejects_foreign_config_class() -> None:
 
 @pytest.mark.asyncio
 async def test_action_coerces_dict_config_from_other_request_type() -> None:
-    """A mapping on ModelRequest[dict] still becomes the plugin class."""
+    """Action.run: a mapping on ModelRequest[dict] still becomes the plugin class."""
 
     class PluginCfg(BaseModel):
         temperature: float | None = None
