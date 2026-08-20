@@ -2,9 +2,7 @@
 
 - Status: retrospective RFC. Written after building the prototype, so the
   claims below describe what the code actually does, not a proposal on paper.
-- Artifacts: `@genkit-ai/agent-dirs` (this package), `testapps/agent-dirs-demo`,
-  [FRICTION.md](./FRICTION.md) (API gaps hit along the way, with file:line
-  evidence).
+- Artifacts: `@genkit-ai/agent-dirs` (this package), `testapps/agent-dirs-demo`.
 
 ## Summary
 
@@ -18,7 +16,7 @@ every compiled agent can be written by hand in roughly ten lines, so the
 convention adds no runtime and locks nobody in.
 
 Where it didn't just work, the gaps were small and specific, and they're the
-substance of this RFC and the associated friction log: agent HTTP serving is
+substance of this RFC: agent HTTP serving is
 hand-rolled per agent today, agents can't be looked up by name, `AgentConfig`
 isn't exported, and there's no session-store default that survives
 deployment.
@@ -69,8 +67,7 @@ hand-writing three `expressHandler` routes per agent (primary,
 no helper exists, and the cost shows inside the repo itself:
 `testapps/agents/src/index.ts:126-141` hand-rolls exactly the wiring the
 docs describe, and this package's demo had to do the same. The remaining
-gaps are itemised with file:line evidence in [FRICTION.md](./FRICTION.md)
-and addressed in priority order under "Possible upstreaming."
+gaps are addressed in priority order under "Possible upstreaming."
 
 ## Design decisions (and what the prototype showed)
 
