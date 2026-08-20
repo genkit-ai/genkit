@@ -361,7 +361,7 @@ async def test_run_defaulted_input_arg_allows_none_with_ctx() -> None:
 
 @pytest.mark.asyncio
 async def test_action_revalidates_bare_model_request_into_plugin_config() -> None:
-    """Bare ModelRequest with a dict config is re-parsed as ModelRequest[PluginConfig]."""
+    """A bare ModelRequest with a dict config arrives as the plugin's config class."""
 
     class PluginConfig(BaseModel):
         model_config = ConfigDict(extra='allow')
@@ -374,7 +374,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
         return 'ok'
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
-    # Mimic generate constructing a bare request that keeps the dict until Action runs.
+    # generate may hand the action a bare request that still has a dict config.
     request = ModelRequest(
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config={'api_key': 'k'},

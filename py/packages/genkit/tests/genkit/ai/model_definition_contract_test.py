@@ -3,7 +3,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""define_model request-annotation contract: allowed shapes vs rejected antipatterns."""
+"""define_model accepts ModelRequest / ModelRequest[Cfg] and rejects the rest."""
 
 from typing import Annotated, Any, Optional
 
@@ -63,7 +63,7 @@ def test_annotated_wrapper_unwrapped_and_allowed(ai: Genkit) -> None:
 
 
 def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
-    """ModelRequest[dict] / ModelRequest[Any] are real classes; permitted, not recommended."""
+    """ModelRequest[dict] and ModelRequest[Any] still register; they do not validate a schema."""
 
     async def fn_d(request: ModelRequest[dict], ctx: ActionRunContext) -> ModelResponse:
         return OK
@@ -79,7 +79,7 @@ def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
 
 
 def test_union_with_none_rejected(ai: Genkit) -> None:
-    """generate() never passes None; the union silently disables typed construction."""
+    """ModelRequest[Cfg] | None is rejected — generate never passes None."""
 
     async def fn(request: ModelRequest[Cfg] | None, ctx: ActionRunContext) -> ModelResponse:
         return OK
@@ -97,7 +97,7 @@ def test_optional_spelling_rejected(ai: Genkit) -> None:
 
 
 def test_dict_annotation_rejected(ai: Genkit) -> None:
-    """The model contract is ModelRequest; raw-dict handlers only worked by accident."""
+    """A handler annotated dict is rejected. The request is a ModelRequest."""
 
     async def fn(request: dict, ctx: ActionRunContext) -> ModelResponse:
         return OK
