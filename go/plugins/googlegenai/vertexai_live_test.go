@@ -171,4 +171,143 @@ func TestVertexAILive(t *testing.T) {
 		}
 		t.Error("no image media part found in VTO response")
 	})
+
+	t.Run("virtual try-on registration", func(t *testing.T) {
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		if m == nil {
+			t.Fatal("virtual-try-on-001 model was not registered")
+		}
+	})
+
+	t.Run("virtual try-on generation", func(t *testing.T) {
+		personPart, productPart := vtoPartsFromEnv(t)
+
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(personPart, productPart)),
+			ai.WithConfig(&genai.RecontextImageConfig{NumberOfImages: genai.Ptr[int32](1)}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertTryOnImages(t, resp, 1)
+	})
+
+	// Two config fields the service does not default to, so a config that
+	// never reached the API fails here rather than passing on the defaults.
+	// The MIME type is the sturdier of the two: it holds even if the model
+	// only ever returns a single image.
+	t.Run("virtual try-on honors config", func(t *testing.T) {
+		personPart, productPart := vtoPartsFromEnv(t)
+
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(personPart, productPart)),
+			ai.WithConfig(&genai.RecontextImageConfig{
+				NumberOfImages: genai.Ptr[int32](2),
+				OutputMIMEType: "image/jpeg",
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertTryOnImages(t, resp, 2)
+		for _, part := range resp.Message.Content {
+			if part.Kind == ai.PartMedia && part.ContentType != "image/jpeg" {
+				t.Errorf("content type = %q, want image/jpeg (outputMimeType was not applied)", part.ContentType)
+			}
+		}
+	})
+
+	// gs:// inputs take a different branch than inline bytes and are only
+	// resolvable by the service, so they need a live call to verify. These are
+	// the public sample images from the generative-ai docs bucket.
+	t.Run("virtual try-on from gcs uris", func(t *testing.T) {
+		personPart := ai.NewMediaPart("image/png", "gs://cloud-samples-data/generative-ai/image/person.png")
+		personPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypePersonImage}
+		productPart := ai.NewMediaPart("image/jpeg", "gs://cloud-samples-data/generative-ai/image/shirt.jpg")
+		productPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypeProductImage}
+
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(personPart, productPart)),
+			ai.WithConfig(&genai.RecontextImageConfig{NumberOfImages: genai.Ptr[int32](1)}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertTryOnImages(t, resp, 1)
+	})
+}
+
+// vtoPartsFromEnv builds the person and product parts the virtual try-on
+// models are addressed with from local files, skipping the test when they are
+// not configured.
+func vtoPartsFromEnv(t *testing.T) (person, product *ai.Part) {
+	t.Helper()
+
+	personPath := os.Getenv("GENKIT_VERTEX_VTO_PERSON_IMAGE")
+	productPath := os.Getenv("GENKIT_VERTEX_VTO_PRODUCT_IMAGE")
+	if personPath == "" || productPath == "" {
+		t.Skip("GENKIT_VERTEX_VTO_PERSON_IMAGE and GENKIT_VERTEX_VTO_PRODUCT_IMAGE must point to local JPEG/PNG files")
+	}
+
+	build := func(path, typ string) *ai.Part {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mime := "image/jpeg"
+		if strings.HasSuffix(strings.ToLower(path), ".png") {
+			mime = "image/png"
+		}
+		p := ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(data))
+		p.Metadata = map[string]any{"type": typ}
+		return p
+	}
+
+	return build(personPath, googlegenai.PartMetadataTypePersonImage),
+		build(productPath, googlegenai.PartMetadataTypeProductImage)
+}
+
+// assertTryOnImages checks the response carries the expected number of image
+// parts and that each one has a payload. A part whose data URL decodes to
+// nothing counts as a failure: an empty media part is the shape a dropped
+// image takes, and it is indistinguishable from a real one by content type
+// alone.
+func assertTryOnImages(t *testing.T, resp *ai.ModelResponse, want int) {
+	t.Helper()
+
+	if resp.FinishReason != ai.FinishReasonStop {
+		t.Errorf("finish reason = %s, want %s (%s)", resp.FinishReason, ai.FinishReasonStop, resp.FinishMessage)
+	}
+
+	got := 0
+	for _, part := range resp.Message.Content {
+		if part.Kind != ai.PartMedia || !strings.HasPrefix(part.ContentType, "image/") {
+			continue
+		}
+		got++
+
+		_, payload, found := strings.Cut(part.Text, ";base64,")
+		if !found {
+			t.Errorf("media part is not a base64 data URL: %.60q", part.Text)
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			t.Errorf("media part payload is not valid base64: %v", err)
+			continue
+		}
+		if len(data) == 0 {
+			t.Error("media part decoded to zero bytes")
+		}
+	}
+
+	if got != want {
+		t.Errorf("image parts = %d, want %d", got, want)
+	}
 }
