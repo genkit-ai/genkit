@@ -114,25 +114,21 @@ func AgentRoutes[State any](a *aix.Agent[State]) []Route {
 // ref's accessors).
 func buildAgentRoutes(name string, run, snapshot, wait, abort api.Action) []Route {
 	routes := []Route{{Method: http.MethodPost, Path: agentBasePath + "/" + name, Action: run}}
-	if snapshot != nil {
+	for _, companion := range []struct {
+		suffix string
+		action api.Action
+	}{
+		{"/getSnapshot", snapshot},
+		{"/waitForSnapshot", wait},
+		{"/abort", abort},
+	} {
+		if companion.action == nil {
+			continue
+		}
 		routes = append(routes, Route{
 			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/getSnapshot",
-			Action: snapshot,
-		})
-	}
-	if wait != nil {
-		routes = append(routes, Route{
-			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/waitForSnapshot",
-			Action: wait,
-		})
-	}
-	if abort != nil {
-		routes = append(routes, Route{
-			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/abort",
-			Action: abort,
+			Path:   agentBasePath + "/" + name + companion.suffix,
+			Action: companion.action,
 		})
 	}
 	return routes
