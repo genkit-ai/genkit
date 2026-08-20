@@ -72,6 +72,7 @@ from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -766,7 +767,7 @@ async def _generate_action_turn(
             request = _augment_with_context(request)
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
-            return (
+            raw = (
                 await model.run(
                     input=params.request,
                     context=c.custom_context,
@@ -774,6 +775,11 @@ async def _generate_action_turn(
                     abort_signal=c.abort_signal,
                 )
             ).response
+            # start() returns a poll handle. wrap_model is documented as
+            # seeing a ModelResponse, so wrap before the hook runs.
+            if isinstance(raw, Operation):
+                return ModelResponse(operation=raw, request=params.request)
+            return raw
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
@@ -781,6 +787,11 @@ async def _generate_action_turn(
                 ctx,
                 next_fn,
             )
+
+        if model_response.operation is not None:
+            if model_response.request is None:
+                model_response.request = request
+            return model_response
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
