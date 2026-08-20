@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,6 +341,117 @@ func TestWaitSnapshot_UnknownSnapshot(t *testing.T) {
 	}
 	if got, want := err.Error(), "waitForSnapshot: "; len(got) < len(want) || got[:len(want)] != want {
 		t.Errorf("error = %q, want it to name the operation that failed", got)
+	}
+}
+
+// scriptedStore answers each GetSnapshot from a fixed script, so a test can
+// stage read failures inside a wait deterministically: read n gets entry n-1,
+// and the last entry repeats. It deliberately implements no [SnapshotSubscriber],
+// and the other store methods are never reached by a wait on a snapshot ID.
+type scriptedStore struct {
+	mu     sync.Mutex
+	reads  int
+	script []scriptedRead
+}
+
+type scriptedRead struct {
+	snap *SessionSnapshot[any]
+	err  error
+}
+
+func (s *scriptedStore) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	entry := s.script[min(s.reads, len(s.script))-1]
+	return entry.snap, entry.err
+}
+
+func (s *scriptedStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
+	return nil, errors.New("scriptedStore: GetLatestSnapshot is not scripted")
+}
+
+func (s *scriptedStore) SaveSnapshot(ctx context.Context, snapshotID string, fn func(*SessionSnapshot[any]) (*SessionSnapshot[any], error)) (*SessionSnapshot[any], error) {
+	return nil, errors.New("scriptedStore: SaveSnapshot is not scripted")
+}
+
+func (s *scriptedStore) readCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads
+}
+
+// scriptedPending is a pending row with a live heartbeat, so a scripted read
+// reports it as genuinely pending rather than expired.
+func scriptedPending() *SessionSnapshot[any] {
+	beat := time.Now()
+	return &SessionSnapshot[any]{SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat}
+}
+
+func TestWaitSnapshot_TransientReadFailuresAreRetried(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	blip := errors.New("store blip")
+	store := &scriptedStore{script: []scriptedRead{
+		{snap: scriptedPending()}, // the wait's initial read
+		{err: blip},               // two consecutive in-wait blips, both
+		{err: blip},               // within the retry budget
+		{snap: &SessionSnapshot[any]{SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusCompleted}},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusCompleted {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
+	}
+	if got := store.readCount(); got != 4 {
+		t.Errorf("reads = %d, want 4 (initial, two retried blips, settled)", got)
+	}
+}
+
+func TestWaitSnapshot_PersistentReadFailureSurfaces(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	down := errors.New("store down")
+	store := &scriptedStore{script: []scriptedRead{{snap: scriptedPending()}, {err: down}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	if !errors.Is(err, down) {
+		t.Fatalf("waitSnapshot error = %v, want the store's own error", err)
+	}
+	// The initial read, the retried failures, and the one that surfaced.
+	if got, want := store.readCount(), 2+snapshotWaitReadRetries; got != want {
+		t.Errorf("reads = %d, want %d (retry budget exhausted)", got, want)
+	}
+}
+
+func TestWaitSnapshot_DeadEndReadFailureFailsFast(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	// The row disappears mid-wait: the re-read reports NOT_FOUND, which no
+	// retry can help, so it surfaces at once instead of burning the budget.
+	store := &scriptedStore{script: []scriptedRead{{snap: scriptedPending()}, {}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	if !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("waitSnapshot error = %v, want ErrSnapshotNotFound", err)
+	}
+	if got := store.readCount(); got != 2 {
+		t.Errorf("reads = %d, want 2 (dead ends are not retried)", got)
 	}
 }
 
