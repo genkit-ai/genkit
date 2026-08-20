@@ -63,6 +63,14 @@ export interface ServeAgentsOptions {
    * streams are plain per-request SSE.
    */
   streamManager?: StreamManager;
+  /**
+   * Also expose subagents. The directory convention registers
+   * `subagents/<child>/` as `<parent>.<child>`, and any dotted name is
+   * treated as a subagent here. Default `false`: subagents are reachable
+   * through their parent's delegation tools, and these endpoints carry no
+   * auth, so exposing internal specialists directly is opt-in.
+   */
+  includeSubagents?: boolean;
 }
 
 /** The result of {@link serveAgents}. */
@@ -91,7 +99,12 @@ export async function serveAgents(
   ai: Genkit,
   options: ServeAgentsOptions = {}
 ): Promise<AgentServer> {
-  const agents = await listAgents(ai);
+  const all = await listAgents(ai);
+  const agents = Object.fromEntries(
+    Object.entries(all).filter(
+      ([name]) => options.includeSubagents || !name.includes('.')
+    )
+  );
   const names = Object.keys(agents);
   if (names.length === 0) {
     logger.warn('[agent-dirs] serveAgents: no agents are registered');

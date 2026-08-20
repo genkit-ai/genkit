@@ -82,7 +82,23 @@ agents/
     knowledge/
       carriers.md     # Open Knowledge Format bundle (flat or nested .md)
     agent.ts          # optional code override: (config) => config
+    subagents/
+      refunds/        # same shape, nested; registers as 'support.refunds'
+        ...
 ```
+
+### Subagents
+
+`subagents/<child>/` holds a full agent directory of the same shape,
+recursively. Nesting implies delegation: the parent automatically gets a
+`delegate_to_<parent>.<child>` tool for each direct subagent, no frontmatter
+needed. The child registers as `<parent>.<child>` (which is why `.` is
+reserved - a directory name containing one is an authoring error), and
+`serveAgents` does not expose subagents over HTTP by default: they are
+internal specialists, reachable through their parent
+(`includeSubagents: true` opts in). Use a subagent when the specialist is
+private to one parent; use a top-level sibling plus `delegates:` when
+several agents share it.
 
 A tool file - `defineDirTool` takes exactly `ai.defineTool`'s `(config, fn)`
 arguments, with `name` optional (defaults to the filename). The fn receives
@@ -135,6 +151,7 @@ work with no extra wiring:
 | `skills/<name>/SKILL.md` | `use: [skills({skillPaths})]` (`@genkit-ai/middleware`) |
 | `knowledge/` (OKF bundle) | `use: [okfKnowledge({knowledgePaths})]` (this package) |
 | frontmatter `delegates: [agent]` | `use: [agents({agents})]` - `delegate_to_<name>` tools |
+| `subagents/<child>/` | a nested agent registered as `<parent>.<child>`, auto-added to the parent's delegates |
 | frontmatter `requireApproval: [tool]` | `use: [toolApproval(...)]` - listed tools interrupt for approval |
 
 ### Frontmatter reference (`instructions.md`)
@@ -145,7 +162,7 @@ work with no extra wiring:
 | `model` | string | e.g. `vertexai/gemini-2.5-flash`; when omitted: the plugin's `defaultModel` option, else the `genkit({ model })` instance default, else `vertexai/gemini-3.5-flash` |
 | `config` | object | model config (temperature, ...) |
 | `tools` | string[] | names of tools registered elsewhere |
-| `delegates` | string[] | other agent directory names; validated |
+| `delegates` | string[] | agent short names, resolved against the agent's own subagents first, then its sibling directories; unmatched names pass through for code-registered agents |
 | `requireApproval` | string[] | model-visible tool names to gate; validated, fail-closed |
 
 The markdown body is the agent's **system prompt**, passed to the model
@@ -192,8 +209,9 @@ survive - snapshots persist to the store). Under a hand-written entry point,
 
 `serveAgents(ai)` exposes every registered agent: `POST /api/<name>` (turns,
 streaming), `/getSnapshot`, `/abort` - the exact contract `remoteAgent`
-expects. Options: `port`, `pathPrefix`, `cors`, `app` (mount on your own
-express app), `streamManager` (durable stream reconnects). Nothing in it is
+expects. Subagents (dotted names) are skipped by default. Options: `port`,
+`pathPrefix`, `cors`, `app` (mount on your own express app),
+`streamManager` (durable stream reconnects), `includeSubagents`. Nothing in it is
 directory-specific; its natural upstream home is `@genkit-ai/express` as a
 sibling of the flows-only `startFlowServer`.
 

@@ -166,6 +166,14 @@ const CAPABILITIES: Capability[] = [
 ];
 
 /**
+ * Separator joining a parent agent's name to a `subagents/` child's name in
+ * the registry (`support.shipping`). A dot rather than `/`: the framework
+ * shows the model only the segment after the last `/` of a tool name, so a
+ * slash inside `delegate_to_<name>` would garble the delegation tools.
+ */
+export const SUBAGENT_SEPARATOR = '.';
+
+/**
  * Scans `options.dir` and registers one agent per sub-directory. See the
  * package README for the directory layout.
  */
@@ -178,28 +186,82 @@ export async function compileAgentDirs(
     logger.warn(`[agent-dirs] agents directory not found: ${rootDir}`);
     return;
   }
-  const agentNames = readdirSync(rootDir, { withFileTypes: true })
+  await compileLevel(ai, rootDir, undefined, options);
+}
+
+/**
+ * Registers one agent per sub-directory of `dir`. For `subagents/` levels,
+ * `parent` is the enclosing agent's registered name and each child registers
+ * as `<parent>.<child>`.
+ */
+async function compileLevel(
+  ai: GenkitBeta,
+  dir: string,
+  parent: string | undefined,
+  options: AgentDirsOptions
+): Promise<void> {
+  const names = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => e.name);
-  for (const name of agentNames) {
-    await compileAgentDir(ai, path.join(rootDir, name), name, {
+  for (const name of names) {
+    await compileAgentDir(ai, path.join(dir, name), name, {
       options,
-      siblingAgents: agentNames,
+      siblingAgents: names,
+      parent,
     });
   }
 }
 
+/**
+ * Maps frontmatter `delegates:` short names to registered agent names: the
+ * agent's own subagent `x` -> `<self>.x`, a sibling directory `y` -> the
+ * sibling's registered name at the same level. Anything else passes through
+ * untouched - it may be a code-registered agent, and the delegation
+ * middleware resolves names at runtime anyway.
+ */
+export function resolveDelegates(
+  declared: string[],
+  scope: {
+    /** The agent's own registered name. */
+    self: string;
+    /** Registered name of the enclosing agent, for subagents. */
+    parent?: string;
+    /** Directory short names at the agent's own level. */
+    siblings: string[];
+    /** The agent's own direct subagent short names. */
+    subagents: string[];
+  }
+): string[] {
+  return declared.map((name) => {
+    if (scope.subagents.includes(name)) {
+      return `${scope.self}${SUBAGENT_SEPARATOR}${name}`;
+    }
+    if (scope.siblings.includes(name)) {
+      return scope.parent
+        ? `${scope.parent}${SUBAGENT_SEPARATOR}${name}`
+        : name;
+    }
+    return name;
+  });
+}
+
 interface CompileContext {
   options: AgentDirsOptions;
+  /** Directory short names at this level (delegation targets by short name). */
   siblingAgents: string[];
+  /** Registered name of the enclosing agent, for `subagents/` levels. */
+  parent?: string;
 }
 
 async function compileAgentDir(
   ai: GenkitBeta,
   agentPath: string,
-  agentName: string,
+  shortName: string,
   ctx: CompileContext
 ): Promise<void> {
+  const agentName = ctx.parent
+    ? `${ctx.parent}${SUBAGENT_SEPARATOR}${shortName}`
+    : shortName;
   const strict = ctx.options.strict ?? true;
   const fail = (message: string): false => {
     const full = `[agent-dirs] agent '${agentName}': ${message}`;
@@ -208,15 +270,54 @@ async function compileAgentDir(
     return false;
   };
 
+  if (shortName.includes(SUBAGENT_SEPARATOR)) {
+    fail(
+      `directory name contains '${SUBAGENT_SEPARATOR}', which is reserved ` +
+        `as the subagent namespace separator`
+    );
+    return;
+  }
+
   const parsed = parseInstructions(agentPath, agentName, fail);
   if (!parsed) return;
 
+  // subagents/ - same shape, nested. Children compile first so the parent's
+  // registration log reads bottom-up; order doesn't otherwise matter, since
+  // delegation resolves through the registry at runtime.
+  const subagentsDir = path.join(agentPath, 'subagents');
+  const subagentNames = existsSync(subagentsDir)
+    ? readdirSync(subagentsDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+    : [];
+  if (subagentNames.length > 0) {
+    await compileLevel(ai, subagentsDir, agentName, ctx.options);
+  }
+
   const frontmatter = validateFrontmatter(
     parsed.frontmatter,
-    ctx.siblingAgents,
+    [...ctx.siblingAgents, ...subagentNames],
     fail
   );
   if (!frontmatter) return;
+
+  // Nesting implies delegation: every direct subagent becomes a delegate
+  // without frontmatter. Declared delegates resolve short names first.
+  const resolved = resolveDelegates(
+    (frontmatter.delegates as string[] | undefined) ?? [],
+    {
+      self: agentName,
+      parent: ctx.parent,
+      siblings: ctx.siblingAgents,
+      subagents: subagentNames,
+    }
+  );
+  const autoDelegates = subagentNames
+    .map((s) => `${agentName}${SUBAGENT_SEPARATOR}${s}`)
+    .filter((n) => !resolved.includes(n));
+  if (resolved.length + autoDelegates.length > 0) {
+    frontmatter.delegates = [...resolved, ...autoDelegates];
+  }
 
   if (/\{\{/.test(parsed.body)) {
     logger.warn(
@@ -425,7 +526,13 @@ function finalToolNames(
   for (const tool of config.tools ?? []) {
     if (typeof tool === 'string') {
       names.add(shortName(tool));
-    } else if (typeof tool === 'object' && tool !== null && '__action' in tool) {
+    } else if (
+      // Registered actions are callable functions carrying __action, so a
+      // typeof check must accept 'function' as well as plain objects.
+      tool !== null &&
+      (typeof tool === 'object' || typeof tool === 'function') &&
+      '__action' in tool
+    ) {
       names.add(shortName((tool as RegisteredTool).__action.name));
     }
   }

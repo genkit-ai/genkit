@@ -25,7 +25,9 @@ Concretely, `agents/<name>/` compiles to one `ai.defineAgent(...)` call:
 `instructions.md` supplies model, config and system prompt; `tools/*.ts` supply
 tools; `skills/` and `knowledge/` folders and the `delegates:` /
 `requireApproval:` frontmatter keys each compile to an entry on the standard
-`use: [...]` chain; `serveAgents(ai)` exposes every registered agent over
+`use: [...]` chain; `subagents/<child>/` nests a full agent directory,
+registered as `<parent>.<child>` and auto-wired as a delegate of its parent
+(not served over HTTP by default); `serveAgents(ai)` exposes every registered agent over
 HTTP in the contract `remoteAgent` already expects.
 
 ## Motivation
