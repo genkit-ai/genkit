@@ -42,16 +42,23 @@
 //   - Neither investigator is told anything about this conversation. History
 //     is never forwarded to a sub-agent that has a store, so the task text has
 //     to stand alone and each investigator pulls its own input with tools.
-//   - WithMaxTurns. Launching, posting, waiting, posting and waiting again are
-//     all tool rounds, so an orchestrator that collects in the background
-//     needs a higher ceiling than one that blocks on each delegation.
+//   - read_status_board is work the commander can do with the time background
+//     delegation gives it back. A blocking orchestrator has no such time: its
+//     turn is inside the sub-agent call. The board answers with one useful
+//     line and one useless one, drawn at random, so the commander has to read
+//     it more than once and has to judge what it gets.
+//   - WithMaxTurns. Launching, posting, reading the board, waiting, posting
+//     and waiting again are all tool rounds, so an orchestrator that collects
+//     in the background needs a higher ceiling than one that blocks on each
+//     delegation.
 //
 // Try it with:
 //
 //	checkout-api is throwing 500s and customers can't pay
 //
 // Watch the order of the tool call lines: two delegations, then post_status,
-// then the waits. The task IDs are visible in the wait tool's input.
+// then the waits, with read_status_board filling the time in between. The task
+// IDs are visible in the wait tool's input.
 //
 // The snapshot outlives the process but the worker does not. Quit while a task
 // is still pending and its heartbeat goes stale, so a later check reports it
@@ -63,6 +70,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -115,6 +124,34 @@ var statusPage struct {
 	updates []string
 }
 
+// What other responders drop into the incident channel while the commander
+// waits. A real channel carries both kinds at once, and the commander cannot
+// tell which it is about to get, so read_status_board returns one of each at
+// random: the point of the tool is that reading the board is worth a turn even
+// though most reads are not.
+var (
+	// usefulChatter changes what the commander knows. Each line is a fact
+	// neither investigator can reach: they read logs and deploys, not people.
+	usefulChatter = []string{
+		"@s.okafor: staging ran the same rollout an hour ago and is fine. staging runs 2 pods though, not 12.",
+		"@r.patel: the pool change was mine. i sized it off the old instance type and nobody caught it in review.",
+		"@m.lindqvist: payments-api is only failing on calls that go through checkout. its own health checks are green.",
+		"@on-call-db: connection count on the primary is flat at 60. the pool is the ceiling, the database is bored.",
+		"@t.abara: rolling back v2026.8.19-a1 in staging brought p99 back to 200ms in about a minute.",
+	}
+	// noiseChatter is the rest of the channel: real, well meant, and not
+	// actionable. It is here so the commander has to sort signal from volume
+	// rather than treating every read as a finding.
+	noiseChatter = []string{
+		"@j.reyes: is this why my dashboard looks weird?",
+		"@k.tran: +1, seeing it too",
+		"@d.singh: should we open a bridge call for this?",
+		"@a.novak: who is running point? i lost the thread above.",
+		"@support: three customer tickets so far, all about checkout. linking them here for later.",
+		"@b.cho: reminder that the release freeze starts friday, unrelated but worth flagging",
+	}
+)
+
 // defineCommanderAgent registers the incident tools, two investigator
 // sub-agents, and the commander that runs them in the background.
 func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
@@ -146,6 +183,12 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 				return unknownService(in.Service, serviceDeploys), nil
 			}
 			return deploys, nil
+		})
+
+	readStatusBoard := genkitx.DefineTool(g, "read_status_board",
+		"Reads the incident channel: the updates posted so far, plus whatever other responders have said since. Cheap and safe to call while waiting on an investigation.",
+		func(ctx context.Context, in struct{}) (string, error) {
+			return renderStatusBoard(), nil
 		})
 
 	postStatus := genkitx.DefineTool(g, "post_status",
@@ -199,11 +242,12 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 	return genkitx.DefineAgent(g, "commander",
 		aix.InlinePrompt{
 			ai.WithModel(model),
-			ai.WithTools(postStatus),
+			ai.WithTools(postStatus, readStatusBoard),
 			// Collecting in the background costs tool rounds a blocking
-			// delegation does not: launch, post, wait, post, wait, post is six
-			// before the commander says anything. The default cap is five.
-			ai.WithMaxTurns(12),
+			// delegation does not: launch, post, wait, read the board, post,
+			// wait, post is seven before the commander says anything, and it
+			// may read the board more than once. The default cap is five.
+			ai.WithMaxTurns(15),
 			// The middleware already explains how background delegation works,
 			// so the runbook says only when to use it. Without a rule this
 			// explicit the model often delegates synchronously, which is
@@ -217,7 +261,8 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 				"2. Post the first status update as soon as the investigations are running. " +
 				"Never hold the first update back for a result.\n" +
 				"3. Then wait for the tasks with timeoutSeconds 10. If the wait times out, " +
-				"post an interim update naming what is still outstanding, then wait again " +
+				"read the status board, post an interim update naming what is still " +
+				"outstanding, and fold in anything the board told you. Then wait again " +
 				"with no timeout.\n" +
 				"4. When the results are in, post a final update with the cause and the fix, " +
 				"then give the user the same answer in two or three lines.\n" +
@@ -242,6 +287,37 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 		aix.WithSessionStore(mustStore[any]("commander")),
 		aix.WithDescription[any]("Incident commander (runs sub-agents in the background via the agents middleware)"),
 	)
+}
+
+// renderStatusBoard renders the incident channel: the updates the commander
+// has posted, then one useful line and one useless one from the other
+// responders, in an order it cannot predict. Reading the board is therefore
+// worth doing more than once and never reliably worth doing twice in a row,
+// which is the judgement call the tool exists to pose.
+func renderStatusBoard() string {
+	statusPage.Lock()
+	posted := slices.Clone(statusPage.updates)
+	statusPage.Unlock()
+
+	var b strings.Builder
+	b.WriteString("Updates you have posted:\n")
+	if len(posted) == 0 {
+		b.WriteString("  (none yet)\n")
+	}
+	for i, update := range posted {
+		fmt.Fprintf(&b, "  %d. %s\n", i+1, update)
+	}
+
+	chatter := []string{
+		usefulChatter[rand.IntN(len(usefulChatter))],
+		noiseChatter[rand.IntN(len(noiseChatter))],
+	}
+	rand.Shuffle(len(chatter), func(i, j int) { chatter[i], chatter[j] = chatter[j], chatter[i] })
+	b.WriteString("\nSince you last looked:\n")
+	for _, line := range chatter {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	return b.String()
 }
 
 // slowBackend blocks for d, or returns early if the task is aborted. An
