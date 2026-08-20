@@ -73,16 +73,14 @@ var (
 	// image editing models. The person and product images are selected by part
 	// metadata, not by role, and the model takes no prompt at all.
 	//
-	// SystemRole is true only so that validateSupport does not reject a
-	// request carrying a system message; such a message is then ignored.
-	// Setting it false would be more honest, but it makes the middleware
-	// simulate the system prompt as an extra message, which then trips the
-	// Multiturn check - so it needs testing against a live model, not a
-	// one-line flip.
+	// SystemRole is false because the model has no use for one. A caller who
+	// sends a system message gets an error rather than silent truncation:
+	// simulateSystemPrompt runs first and expands it into a user/model pair,
+	// which then fails the Multiturn check.
 	VirtualTryOnSupports = ai.ModelSupports{
 		Multiturn:  false,
 		Tools:      false,
-		SystemRole: true,
+		SystemRole: false,
 		Media:      true,
 		Output:     []string{"media"},
 	}
