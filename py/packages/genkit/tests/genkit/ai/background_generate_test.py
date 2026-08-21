@@ -256,3 +256,4 @@ async def test_check_action_accepts_dumped_operation_with_extra_keys(ai: Genkit)
 
     assert result.response.id == 'bg-op-123'
     assert result.response.action == '/background-model/bg-model'
+    assert 'latencyMs' not in result.response.model_dump()

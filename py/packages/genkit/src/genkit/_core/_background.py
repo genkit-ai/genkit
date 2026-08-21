@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, ClassVar, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-from pydantic.alias_generators import to_camel
+from pydantic import BaseModel, ValidationError
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
@@ -31,7 +30,6 @@ from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
-    Error,
     ModelInfo,
     Operation,
 )
@@ -184,20 +182,6 @@ class DefineBackgroundModelOptions(BaseModel):
     config_schema: type | dict[str, Any] | None = None
 
 
-class OperationInput(Operation):
-    """Poll handle. Leftover dump keys like latencyMs are ignored."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel,
-        extra='ignore',
-        populate_by_name=True,
-        json_schema_extra={'title': 'Operation'},
-    )
-
-
-OperationInput.model_rebuild(_types_namespace={'Error': Error})
-
-
 def define_background_model(
     registry: Registry,
     name: str,
@@ -289,8 +273,8 @@ def define_background_model(
         return op
 
     # Wrap the check function (no ctx parameter)
-    async def wrapped_check(op: OperationInput, ctx: ActionRunContext) -> Operation:
-        updated = await check(operation_from_handle(op))
+    async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
+        updated = await check(op)
         # Preserve action key
         updated.action = action_key
         return updated
@@ -319,8 +303,8 @@ def define_background_model(
         # Capture cancel in local scope for the nested function
         cancel_fn = cancel
 
-        async def wrapped_cancel(op: OperationInput, ctx: ActionRunContext) -> Operation:
-            cancelled = await cancel_fn(operation_from_handle(op))
+        async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+            cancelled = await cancel_fn(op)
             cancelled.action = action_key
             return cancelled
 
@@ -388,45 +372,20 @@ async def lookup_background_action(
 def operation_from_handle(value: object) -> Operation:
     """Read a persisted poll handle.
 
-    Callers save the Operation (or a dump of it) and pass it back. A
-    generate() ModelResponse is not a handle — pass response.operation.
-    Extra keys from a dump are ignored so a persist/reload does not 500.
+    The Dev UI posts start output back here with leftover keys like
+    latencyMs that aren't on the Operation wire format. We ignore extras
+    instead of failing loudly: persist the handle as a dict, then
+    revalidate it on ai.check_operation() — leftover keys shouldn't 500
+    that path.
     """
-    if isinstance(value, ModelResponse):
+    try:
+        return Operation.model_validate(value)
+    except ValidationError as exc:
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message='got ModelResponse; pass response.operation',
-        )
-    if isinstance(value, Operation):
-        return Operation.model_validate(value.model_dump())
-    if isinstance(value, Mapping):
-        mapping = cast('Mapping[str, object]', value)
-        nested = mapping.get('operation')
-        if isinstance(nested, Operation | Mapping):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message="got a generate() envelope; pass the 'operation' field",
-            )
-        try:
-            known = {key: item for key, item in mapping.items() if is_operation_field(key)}
-            return Operation.model_validate(known)
-        except ValidationError as exc:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message='Provided operation is not a valid Operation.',
-                cause=exc,
-            ) from exc
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'got {type(value).__name__}, expected Operation | Mapping',
-    )
-
-
-def is_operation_field(key: str) -> bool:
-    fields = Operation.model_fields
-    if key in fields:
-        return True
-    return any(field.alias == key for field in fields.values())
+            message='Provided operation is not a valid Operation.',
+            cause=exc,
+        ) from exc
 
 
 async def resolve_operation_action(

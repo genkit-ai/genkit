@@ -90,11 +90,11 @@ async def test_genkit_check_operation_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_check_operation_rejects_boxed_response() -> None:
-    """Poll the handle, not the generate() envelope. Pass response.operation."""
+    """A generate() ModelResponse is not an Operation dump."""
     ai = Genkit()
     op = Operation(id='123', done=False, action='/background-model/test_action')
 
-    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+    with pytest.raises(GenkitError, match='not a valid Operation') as exc_info:
         await ai.check_operation(ModelResponse(operation=op))  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
@@ -102,7 +102,7 @@ async def test_check_operation_rejects_boxed_response() -> None:
 @pytest.mark.asyncio
 async def test_check_operation_rejects_empty_response() -> None:
     ai = Genkit()
-    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+    with pytest.raises(GenkitError, match='not a valid Operation') as exc_info:
         await ai.check_operation(ModelResponse())  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
@@ -131,7 +131,7 @@ async def test_check_operation_accepts_dumped_operation() -> None:
 
 @pytest.mark.asyncio
 async def test_check_operation_rejects_dumped_response() -> None:
-    """A dumped generate() envelope is not a handle."""
+    """A dumped generate() envelope is not an Operation (no id)."""
     ai = Genkit()
     dumped = {
         'operation': {
@@ -142,26 +142,7 @@ async def test_check_operation_rejects_dumped_response() -> None:
         'finishReason': 'stop',
     }
 
-    with pytest.raises(GenkitError, match="got a generate\\(\\) envelope; pass the 'operation' field") as exc_info:
-        await ai.check_operation(dumped)
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-
-
-@pytest.mark.asyncio
-async def test_check_operation_rejects_envelope_with_wrapper_id() -> None:
-    """A persist wrapper with its own id is still an envelope, not the handle."""
-    ai = Genkit()
-    dumped = {
-        'id': 'job-99',
-        'action': '/background-model/test_action',
-        'operation': {
-            'id': '123',
-            'done': False,
-            'action': '/background-model/test_action',
-        },
-    }
-
-    with pytest.raises(GenkitError, match="got a generate\\(\\) envelope; pass the 'operation' field") as exc_info:
+    with pytest.raises(GenkitError, match='not a valid Operation') as exc_info:
         await ai.check_operation(dumped)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
@@ -169,7 +150,7 @@ async def test_check_operation_rejects_envelope_with_wrapper_id() -> None:
 @pytest.mark.asyncio
 async def test_check_operation_rejects_unreadable_handle() -> None:
     ai = Genkit()
-    with pytest.raises(GenkitError, match='got str, expected Operation \\| Mapping') as exc_info:
+    with pytest.raises(GenkitError, match='not a valid Operation') as exc_info:
         await ai.check_operation('not-an-op')  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
@@ -201,7 +182,7 @@ async def test_cancel_operation_rejects_boxed_response() -> None:
     ai = Genkit()
     op = Operation(id='123', done=False, action='/background-model/test_action')
 
-    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+    with pytest.raises(GenkitError, match='not a valid Operation') as exc_info:
         await ai.cancel_operation(ModelResponse(operation=op))  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 

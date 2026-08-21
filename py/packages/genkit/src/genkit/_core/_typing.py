@@ -567,7 +567,7 @@ class MultipartToolResponse(GenkitModel):
 class Operation(GenkitModel):
     """Model for operation data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='ignore', populate_by_name=True)
     action: str | None = None
     id: str = Field(...)
     done: bool | None = None
