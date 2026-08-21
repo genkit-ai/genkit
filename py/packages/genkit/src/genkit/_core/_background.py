@@ -129,6 +129,7 @@ class BackgroundAction(Generic[OutputT]):
         Returns:
             Updated Operation with current status.
         """
+        operation = require_operation(value=operation)
         result = await self.check_action.run(operation)
         return result.response
 
@@ -144,6 +145,7 @@ class BackgroundAction(Generic[OutputT]):
         Raises:
             GenkitError: If this action does not implement cancel.
         """
+        operation = require_operation(value=operation)
         if self.cancel_action is None:
             raise GenkitError(
                 status='UNIMPLEMENTED',

@@ -221,6 +221,52 @@ async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_action_check_rejects_non_operation() -> None:
+    """BackgroundAction.check uses the same require_operation gate as the veneer."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='1', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai = Genkit()
+    action = ai.define_background_model(name='bg-check', start=start, check=check)
+    dumped = {'id': '1', 'action': '/background-model/bg-check'}
+    boxed = ModelResponse(operation=Operation(id='1', action='/background-model/bg-check'))
+
+    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as dump_exc:
+        await action.check(dumped)  # type: ignore[arg-type]
+    assert dump_exc.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as box_exc:
+        await action.check(boxed)  # type: ignore[arg-type]
+    assert box_exc.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError, match='got str, expected Operation') as str_exc:
+        await action.check('not-an-op')  # type: ignore[arg-type]
+    assert str_exc.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_background_action_cancel_rejects_non_operation() -> None:
+    """A dump must not AttributeError on .action before UNIMPLEMENTED."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='1', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai = Genkit()
+    action = ai.define_background_model(name='no-cancel', start=start, check=check)
+
+    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
+        await action.cancel({'id': '1', 'action': '/background-model/no-cancel'})  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
 async def test_current_context() -> None:
     """Test Genkit.current_context method."""
     # current_context is a static method
