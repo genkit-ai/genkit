@@ -8,6 +8,7 @@
     "build:js-chatbot": "cd js-chatbot && npm install && npm run setup && npm run build",
     "build:js-coffee-shop": "cd js-coffee-shop && npm install && npm run build",
     "build:js-menu": "cd js-menu && npm install && npm run build",
+    "build:js-openui": "cd js-openui && npm install && npm run build",
     "build:js-prompts": "cd js-prompts && npm install && npm run build",
     "build:js-schoolAgent": "cd js-schoolAgent && npm install && npm run build",
     "build:js-gemini": "cd js-gemini && npm install && npm run build",

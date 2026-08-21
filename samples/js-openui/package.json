@@ -1,0 +1,40 @@
+{
+  "name": "genkit-openui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A streaming generative UI chat sample powered by Genkit and OpenUI",
+  "scripts": {
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.server.json",
+    "dev": "concurrently -k -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "tsx watch src/server.ts",
+    "start": "node dist-server/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
+  },
+  "dependencies": {
+    "@genkit-ai/compat-oai": "1.41.0",
+    "@openuidev/react-headless": "0.9.7",
+    "@openuidev/react-lang": "0.2.11",
+    "@openuidev/react-ui": "0.13.6",
+    "express": "5.2.1",
+    "genkit": "1.41.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "zod": "4.1.12",
+    "zustand": "4.5.7"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.6",
+    "@types/react-dom": "19.1.6",
+    "@vitejs/plugin-react": "4.5.2",
+    "concurrently": "9.1.2",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3",
+    "vite": "6.4.3",
+    "vitest": "3.2.7"
+  }
+}
