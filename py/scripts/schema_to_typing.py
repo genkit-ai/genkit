@@ -133,6 +133,16 @@ def _models_allowing_extra(schema: dict) -> set[str]:
     return result
 
 
+def _extra_policy(name: str, allow: set[str]) -> str:
+    if name in allow:
+        return 'allow'
+    # A saved handle dump can carry leftover keys that aren't Operation
+    # fields. Drop them so Operation.model_validate(saved) does not 500.
+    if name == 'Operation':
+        return 'ignore'
+    return 'forbid'
+
+
 def _typed_map_aliases(defs: dict) -> dict[str, str]:
     """Inline object schemas with typed scalar ``additionalProperties`` -> Python dict alias.
 
@@ -274,7 +284,8 @@ def _emit_model(
         req = req - omit - {_camel_to_snake(k) for k in omit}
     ext = ', protected_namespaces=()' if any(_camel_to_snake(k) in ('schema', 'schema_') for k in props) else ''
     frz = ', frozen=True' if name == 'PathMetadata' else ''
-    cfg = f"ConfigDict(alias_generator=to_camel, extra='{'allow' if name in allow else 'forbid'}', populate_by_name=True{ext}{frz})"
+    extra = _extra_policy(name, allow)
+    cfg = f"ConfigDict(alias_generator=to_camel, extra='{extra}', populate_by_name=True{ext}{frz})"
     lines = [
         f'class {name}(GenkitModel):',
         f'    """Model for {name.lower().replace("_", " ")} data."""',
