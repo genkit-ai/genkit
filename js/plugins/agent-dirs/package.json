@@ -1,0 +1,69 @@
+{
+  "name": "@genkit-ai/agent-dirs",
+  "description": "Experimental Genkit plugin: define agents as directories of files (prompt, tools, skills)",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "agents",
+    "ai",
+    "genai",
+    "generative-ai"
+  ],
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "node --import tsx --test tests/*_test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/agent-dirs"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "bin": {
+    "agent-dirs": "lib/cli.js"
+  },
+  "dependencies": {
+    "@genkit-ai/middleware": "workspace:*",
+    "@genkit-ai/express": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "yaml": "^2.7.0"
+  },
+  "peerDependencies": {
+    "genkit": "workspace:^",
+    "tsx": "^4.19.2"
+  },
+  "peerDependenciesMeta": {
+    "tsx": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21"
+  },
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./lib/index.js",
+      "default": "./lib/index.js",
+      "import": "./lib/index.mjs",
+      "types": "./lib/index.d.ts"
+    }
+  }
+}
