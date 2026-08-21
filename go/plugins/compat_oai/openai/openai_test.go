@@ -231,6 +231,72 @@ func TestEmbedderPerRequestAPIKey(t *testing.T) {
 	}
 }
 
+// TestInitSendsOpenAIEnvIdentity pins that this plugin, alone among the
+// compat_oai plugins, still speaks OpenAI's environment. The base plugin drops
+// the identity the SDK reads from OPENAI_API_KEY, OPENAI_ORG_ID, and
+// OPENAI_PROJECT_ID so no plugin serving another provider forwards it; this
+// plugin serves OpenAI, so it applies the same three itself and they must
+// reach the wire unchanged. Opts still override them.
+func TestInitSendsOpenAIEnvIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		opts        []option.RequestOption
+		wantOrg     string
+		wantProject string
+	}{
+		{
+			name:        "from the environment",
+			wantOrg:     "org-from-env",
+			wantProject: "proj-from-env",
+		},
+		{
+			name: "opts win",
+			opts: []option.RequestOption{
+				option.WithOrganization("org-from-opts"),
+				option.WithProject("proj-from-opts"),
+			},
+			wantOrg:     "org-from-opts",
+			wantProject: "proj-from-opts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var header http.Header
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				header = r.Header.Clone()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{
+					"id":"c1","object":"chat.completion","created":1,"model":"gpt-4o",
+					"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+					"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+				}`)
+			}))
+			defer server.Close()
+
+			t.Setenv("OPENAI_API_KEY", "plugin-key")
+			t.Setenv("OPENAI_ORG_ID", "org-from-env")
+			t.Setenv("OPENAI_PROJECT_ID", "proj-from-env")
+
+			opts := append([]option.RequestOption{option.WithBaseURL(server.URL)}, tt.opts...)
+			g := genkit.Init(context.Background(), genkit.WithPlugins(&OpenAI{Opts: opts}))
+			if _, err := genkit.Generate(context.Background(), g,
+				ai.WithModelName("openai/gpt-4o"), ai.WithPrompt("hi")); err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+
+			if got := header.Get("Authorization"); got != "Bearer plugin-key" {
+				t.Errorf("Authorization = %q, want the environment's key", got)
+			}
+			if got := header.Get("OpenAI-Organization"); got != tt.wantOrg {
+				t.Errorf("OpenAI-Organization = %q, want %q", got, tt.wantOrg)
+			}
+			if got := header.Get("OpenAI-Project"); got != tt.wantProject {
+				t.Errorf("OpenAI-Project = %q, want %q", got, tt.wantProject)
+			}
+		})
+	}
+}
+
 // TestEmbedderBase64EncodingFormat pins that the base64 encoding the config
 // advertises actually works: the API returns the vector as a base64 string of
 // little-endian float32s, which the plugin decodes.

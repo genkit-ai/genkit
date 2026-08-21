@@ -170,9 +170,17 @@ type OpenAICompatible struct {
 	// see https://github.com/openai/openai-go
 	client *openai.Client
 
-	// Opts contains request options for the OpenAI client.
-	// Required: Must include at least WithAPIKey for authentication.
+	// Opts contains request options for the OpenAI client, applied after
+	// APIKey and BaseURL so an option here wins over those fields.
+	// Required: authentication, either here via WithAPIKey or in APIKey.
 	// Optional: Can include other options like WithOrganization, WithBaseURL, etc.
+	//
+	// The OpenAI SDK reads OPENAI_API_KEY, OPENAI_ORG_ID, and OPENAI_PROJECT_ID
+	// from the environment for every client it builds. None of the three are
+	// inherited, so a plugin serving another provider cannot send OpenAI's
+	// identity to it: the key it authenticates with is the one configured
+	// here or in APIKey, and the organization and project headers are sent
+	// only if an option here sets them.
 	Opts []option.RequestOption
 
 	// Provider is a unique identifier for the plugin.
@@ -209,13 +217,17 @@ func (o *OpenAICompatible) Init(ctx context.Context) []api.Action {
 		panic("compat_oai.Init already called")
 	}
 
-	if o.APIKey != "" {
-		o.Opts = append([]option.RequestOption{option.WithAPIKey(o.APIKey)}, o.Opts...)
-	}
-
+	// The scrub goes first so everything below wins over it, and it is folded
+	// into Opts rather than passed to NewClient alone so the per-request
+	// clients clientForKey builds carry it too.
+	opts := clearInheritedOpenAIIdentity()
 	if o.BaseURL != "" {
-		o.Opts = append([]option.RequestOption{option.WithBaseURL(o.BaseURL)}, o.Opts...)
+		opts = append(opts, option.WithBaseURL(o.BaseURL))
 	}
+	if o.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(o.APIKey))
+	}
+	o.Opts = append(opts, o.Opts...)
 
 	// create client
 	client := openai.NewClient(o.Opts...)
@@ -223,6 +235,31 @@ func (o *OpenAICompatible) Init(ctx context.Context) []api.Action {
 	o.initted = true
 
 	return []api.Action{}
+}
+
+// clearInheritedOpenAIIdentity returns the options that undo the OpenAI
+// credentials [openai.NewClient] reads from the environment. The SDK prepends
+// OPENAI_API_KEY, OPENAI_ORG_ID, and OPENAI_PROJECT_ID to the options of every
+// client it builds, so without this a plugin pointed at another vendor sends
+// OpenAI's identity to that vendor's endpoint: the organization and project
+// headers always, and the bearer token whenever the plugin configures no key
+// of its own. Nothing about the credentials says who they belong to, so the
+// receiving provider cannot reject them and the caller never learns they went
+// out.
+//
+// Each of the three is cleared twice over, because the option that sets one
+// writes both a field on the request config and a header, and setting an
+// empty value leaves the header in place rather than removing it.
+//
+// This is a scrub of what leaks in, not a ban: it applies before anything a
+// plugin composes, so a plugin that wants any of the three sets it and wins.
+// The openai plugin does exactly that, and is the only one that should.
+func clearInheritedOpenAIIdentity() []option.RequestOption {
+	return []option.RequestOption{
+		option.WithAPIKey(""), option.WithHeaderDel("Authorization"),
+		option.WithOrganization(""), option.WithHeaderDel("OpenAI-Organization"),
+		option.WithProject(""), option.WithHeaderDel("OpenAI-Project"),
+	}
 }
 
 // Name implements genkit.Plugin.
