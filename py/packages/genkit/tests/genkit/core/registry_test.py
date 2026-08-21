@@ -12,10 +12,11 @@ functionality, ensuring proper registration and management of Genkit resources.
 import pytest
 
 from genkit import Genkit, Plugin
-from genkit._core._action import Action, ActionKind, create_action_key
+from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
 from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata
+from genkit._core._typing import ActionMetadata, Operation
 
 
 async def _identity(x: object) -> object:
@@ -438,3 +439,75 @@ def test_registry_satisfies_registry_like() -> None:
     from genkit._core._registry import Registry
 
     assert isinstance(Registry(None), RegistryLike)
+
+
+async def _bg_start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    return Operation(id='bg-op', done=False)
+
+
+async def _bg_check(op: Operation) -> Operation:
+    return op
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_finds_background_model() -> None:
+    """A name registered only as a background model is still findable."""
+    ai = Genkit()
+    action = ai.define_background_model(name='bg-model', start=_bg_start, check=_bg_check)
+
+    got = await ai.registry.resolve_model('bg-model')
+
+    assert got is not None
+    assert got is action.start_action
+    assert got.kind == ActionKind.BACKGROUND_MODEL
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_prefers_foreground_when_both_exist() -> None:
+    """A normal model of the same name wins. The fallback is only for names that have no MODEL."""
+
+    async def fg(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse()
+
+    ai = Genkit()
+    foreground = ai.define_model(name='same-name', fn=fg)
+    ai.define_background_model(name='same-name', start=_bg_start, check=_bg_check)
+
+    got = await ai.registry.resolve_model('same-name')
+
+    assert got is not None
+    assert got is foreground
+    assert got.kind == ActionKind.MODEL
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_missing_is_none() -> None:
+    """Unknown names stay None. This is not NOT_FOUND — callers decide the error."""
+    ai = Genkit()
+    assert await ai.registry.resolve_model('no-such-model') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_finds_plugin_background_model() -> None:
+    """A plugin MODEL miss still lets the BACKGROUND_MODEL start action through."""
+
+    class VeoPlugin(Plugin):
+        name = 'plug'
+
+        async def init(self) -> list[Action]:
+            return []
+
+        async def list_actions(self) -> list[ActionMetadata]:
+            return []
+
+        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+            if action_type != ActionKind.BACKGROUND_MODEL:
+                return None
+            return Action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=_bg_start)
+
+    ai = Genkit(plugins=[VeoPlugin()])
+    got = await ai.registry.resolve_model('plug/veo-2.0-generate-001')
+
+    assert got is not None
+    assert got.kind == ActionKind.BACKGROUND_MODEL
+    assert got.name == 'plug/veo-2.0-generate-001'
