@@ -457,6 +457,7 @@ async def test_resolve_model_finds_background_model() -> None:
 
     got = await ai.registry.resolve_model('bg-model')
 
+    assert got is not None
     assert got is action.start_action
     assert got.kind == ActionKind.BACKGROUND_MODEL
 
@@ -474,6 +475,7 @@ async def test_resolve_model_prefers_foreground_when_both_exist() -> None:
 
     got = await ai.registry.resolve_model('same-name')
 
+    assert got is not None
     assert got is foreground
     assert got.kind == ActionKind.MODEL
 
@@ -483,3 +485,29 @@ async def test_resolve_model_missing_is_none() -> None:
     """Unknown names stay None. This is not NOT_FOUND — callers decide the error."""
     ai = Genkit()
     assert await ai.registry.resolve_model('no-such-model') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_finds_plugin_background_model() -> None:
+    """A plugin MODEL miss still lets the BACKGROUND_MODEL start action through."""
+
+    class VeoPlugin(Plugin):
+        name = 'plug'
+
+        async def init(self) -> list[Action]:
+            return []
+
+        async def list_actions(self) -> list[ActionMetadata]:
+            return []
+
+        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+            if action_type != ActionKind.BACKGROUND_MODEL:
+                return None
+            return Action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=_bg_start)
+
+    ai = Genkit(plugins=[VeoPlugin()])
+    got = await ai.registry.resolve_model('plug/veo-2.0-generate-001')
+
+    assert got is not None
+    assert got.kind == ActionKind.BACKGROUND_MODEL
+    assert got.name == 'plug/veo-2.0-generate-001'
