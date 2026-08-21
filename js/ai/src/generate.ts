@@ -651,11 +651,11 @@ export async function toGenerateActionOptions<
     tools,
     resources,
     toolChoice: options.toolChoice,
-    config: {
+    config: stripUndefinedOptions({
       version: resolvedModel?.version,
       ...stripUndefinedOptions(resolvedModel?.config),
       ...stripUndefinedOptions(options.config),
-    },
+    }),
     output: options.output && {
       ...options.output,
       format: options.output.format,
