@@ -23,8 +23,8 @@
 //   - chat has a session store, so the server keeps the state. Each turn
 //     persists a snapshot and the response carries sessionId and snapshotId;
 //     resume with {"init": {"sessionId": ...}}. The store also brings the
-//     companion actions, served under the agent's own path as getSnapshot and
-//     abort.
+//     companion actions, served under the agent's own path as getSnapshot,
+//     waitForSnapshot, and abort.
 //   - statelessChat has no store, so the client keeps the state. The response
 //     carries the whole thing; send it back as {"init": {"state": ...}}.
 //
@@ -62,14 +62,21 @@
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "Suggest three day trips from Tokyo."}]}}}'
 //
 // Or detach, which returns immediately with finishReason "detached" and a
-// pending snapshotId while the turn keeps running. Poll getSnapshot until its
-// status leaves "pending", or abort it:
+// pending snapshotId while the turn keeps running. Read where it stands with
+// getSnapshot, block until it settles with waitForSnapshot, or abort it:
 //
 //	curl -X POST http://localhost:8080/agents/chat \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "Plan a two-week Japan itinerary."}]}, "detach": true}}'
 //
 //	curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
+//
+// waitForSnapshot takes the same payload but answers only once the turn has
+// settled, so one request replaces a polling loop:
+//
+//	curl -X POST http://localhost:8080/agents/chat/waitForSnapshot \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
 //
@@ -139,10 +146,11 @@ func main() {
 	// agent, following each one's capabilities, so the store-backed and
 	// client-managed agents can be served side by side from one call:
 	//
-	//     POST /agents/chat                one turn per request
-	//     POST /agents/chat/getSnapshot    read a snapshot by ID
-	//     POST /agents/chat/abort          abort background work
-	//     POST /agents/statelessChat       one turn per request
+	//     POST /agents/chat                     one turn per request
+	//     POST /agents/chat/getSnapshot         read a snapshot by ID
+	//     POST /agents/chat/waitForSnapshot     block until a snapshot settles
+	//     POST /agents/chat/abort               abort background work
+	//     POST /agents/statelessChat            one turn per request
 	//
 	// route.Pattern() is its "METHOD /path" and route.Handler() builds the
 	// genkit.Handler, so any router works the same way. For a subset use

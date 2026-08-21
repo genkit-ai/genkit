@@ -20,11 +20,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -39,6 +42,16 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 		return state, nil
 	}
 	return t(ctx, state)
+}
+
+// Terminal reports whether the status is settled: no further transition will
+// happen on its own. [SnapshotStatusPending] is the only non-terminal status
+// (an empty status counts as [SnapshotStatusCompleted], matching the
+// documented default), so waiters stop on completed, failed, aborted, and
+// expired alike. An expired snapshot's raw store row is still pending, but its
+// worker is presumed dead, so nothing will finalize it.
+func (s SnapshotStatus) Terminal() bool {
+	return s != SnapshotStatusPending
 }
 
 // --- Session store ---
@@ -176,41 +189,23 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 
 // --- Snapshot companion actions ---
 
-// newSnapshotActions creates the agent's companion actions, without
-// registering them, when the agent has a [SessionStore] configured:
-//
-//   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
-//     the remote counterpart to [SnapshotReader.GetSnapshot] (by snapshot
-//     ID) and [SnapshotReader.GetLatestSnapshot] (by session ID) for Dev UI
-//     and non-Go clients. Local Go callers use the store reference directly.
-//
-//   - The agent's name under [api.ActionTypeAgentAbort] — abort,
-//     created only when the store also implements [SnapshotSubscriber], so the
-//     runtime can react to the abort it writes via SaveSnapshot.
-//
-// When the agent is client-managed (no store configured), neither action
-// is created: there is no server-side snapshot to fetch or abort.
-// Surfacing actions only when the underlying capabilities exist keeps the
-// reflected API aligned with what the agent can actually do.
-//
-// The [Agent] retains the returned actions (an absent one is nil) and
-// registers them alongside its run action; see [Agent.Register],
-// [Agent.GetSnapshotAction], and [Agent.AbortAction].
 // readSnapshot resolves a snapshot by ID, or by the session's latest when
 // snapshotID is empty, and returns a normalized copy shaped for a client:
 // the documented defaults are applied (empty status means completed, zero
 // UpdatedAt means CreatedAt), a pending row whose heartbeat has gone stale is
 // surfaced as [SnapshotStatusExpired] (computed on read, never written back),
-// and transform shapes the outbound state. It backs both the getSnapshot
-// companion action and the typed [Agent.GetSnapshot] / [Agent.GetLatestSnapshot],
-// so Go callers, the Dev UI, and non-Go clients all observe identically shaped
-// snapshots. At least one of snapshotID / sessionID must be non-empty; callers
-// validate that before calling.
+// and transform shapes the outbound state. It backs the getSnapshot and
+// waitForSnapshot companion actions and the typed [Agent.GetSnapshot] /
+// [Agent.GetLatestSnapshot], so Go callers, the Dev UI, and non-Go clients all
+// observe identically shaped snapshots. At least one of snapshotID / sessionID
+// must be non-empty; callers validate that before calling. op names the
+// operation the read serves, so a failure reports the caller's own name rather
+// than always the read's.
 func readSnapshot[State any](
 	ctx context.Context,
 	store SnapshotReader[State],
 	transform StateTransform[State],
-	snapshotID, sessionID string,
+	op, snapshotID, sessionID string,
 ) (*SessionSnapshot[State], error) {
 	// Resolve the snapshot. A snapshot ID fetches that exact row; a session ID
 	// alone fetches the session's latest row (whatever its status). When both
@@ -223,22 +218,22 @@ func readSnapshot[State any](
 	if snapshotID != "" {
 		snap, err = store.GetSnapshot(ctx, snapshotID)
 		if err != nil {
-			return nil, fmt.Errorf("getSnapshot: %w", err)
+			return nil, fmt.Errorf("%s: %w", op, err)
 		}
 		if snap == nil {
-			return nil, status.PublicErrorf(ErrSnapshotNotFound, "getSnapshot: snapshot %q not found", snapshotID)
+			return nil, status.PublicErrorf(ErrSnapshotNotFound, "%s: snapshot %q not found", op, snapshotID)
 		}
 		if sessionID != "" && snap.SessionID != sessionID {
 			return nil, status.Errorf(status.ErrInvalidArgument,
-				"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", snapshotID, sessionID, snap.SessionID)
+				"%s: snapshot %q does not belong to session %q (snapshot's session: %q)", op, snapshotID, sessionID, snap.SessionID)
 		}
 	} else {
 		snap, err = store.GetLatestSnapshot(ctx, sessionID)
 		if err != nil {
-			return nil, fmt.Errorf("getSnapshot: %w", err)
+			return nil, fmt.Errorf("%s: %w", op, err)
 		}
 		if snap == nil {
-			return nil, status.PublicErrorf(ErrSnapshotNotFound, "getSnapshot: no snapshot found for session %q", sessionID)
+			return nil, status.PublicErrorf(ErrSnapshotNotFound, "%s: no snapshot found for session %q", op, sessionID)
 		}
 	}
 
@@ -281,13 +276,226 @@ func readSnapshot[State any](
 	return &resp, nil
 }
 
+// Cadences of [waitSnapshot]'s re-reads. Package-level so tests can shorten
+// them.
+var (
+	// snapshotWaitPollInterval is how often a wait re-reads a pending row when
+	// the store cannot push status changes.
+	snapshotWaitPollInterval = 2 * time.Second
+	// snapshotWaitLivenessInterval is how often a subscribed wait re-reads a
+	// pending row to notice a heartbeat that has gone stale. One missed beat is
+	// already the expiry threshold, so beat-rate checks are frequent enough.
+	snapshotWaitLivenessInterval = defaultHeartbeatInterval
+)
+
+const (
+	// snapshotWaitProgressInterval is how often a still-blocked [waitSnapshot]
+	// logs progress, so a long wait stays visible in the logs and in its span
+	// without a line per check.
+	snapshotWaitProgressInterval = 30 * time.Second
+	// snapshotWaitReadTimeout bounds one store read inside a wait. A wait is
+	// long by design and a read is not, and only the wait can tell the two
+	// apart, so this is where a hung store is caught: without it an unbounded
+	// wait would freeze on one rather than surface the read error. It is
+	// generous, because it guards against a hang and not against a slow store.
+	snapshotWaitReadTimeout = 30 * time.Second
+	// snapshotWaitReadRetries is how many consecutive in-wait re-read failures
+	// a wait rides out, at its own re-read cadence, before surfacing the error.
+	// A wait runs for as long as the work does, so one store blip must not
+	// fail it; dead ends (see waitReadDeadEnd) are surfaced at once.
+	snapshotWaitReadRetries = 3
+)
+
+// waitReadDeadEnd reports whether an in-wait re-read failure cannot be helped
+// by retrying: the row is gone or the request itself is rejected. Anything
+// else (a store blip, a read that hit snapshotWaitReadTimeout) is presumed
+// transient.
+func waitReadDeadEnd(err error) bool {
+	// One chain walk, and the set reads as the policy it is. Subtypes carry
+	// their base's status (ErrSnapshotNotFound is a NOT_FOUND), so they land
+	// here too; an unclassified failure is presumed transient.
+	if s, ok := status.Classified(err); ok {
+		return slices.Contains(waitReadDeadEndStatuses, s)
+	}
+	return false
+}
+
+// waitReadDeadEndStatuses are the read failures no retry can help.
+var waitReadDeadEndStatuses = []status.Name{
+	status.NotFound,
+	status.InvalidArgument,
+	status.FailedPrecondition,
+}
+
+// waitSnapshot resolves a snapshot exactly as [readSnapshot] does and then
+// blocks until it settles, returning the terminal snapshot with the same
+// shaping a read applies. A snapshot that is already terminal returns at once,
+// so the wait costs one read in the common case.
+//
+// Where the store implements [SnapshotSubscriber] the wait is push-driven: it
+// subscribes before it would re-read, so a settlement racing the subscription
+// is still delivered (the channel yields the status at subscription time). It
+// still re-reads on an interval, because expiry is not a write: a dead worker
+// leaves the row pending and only its heartbeat goes stale, so no subscription
+// can report it. Without a subscriber that same interval is the whole
+// mechanism, so it is much shorter.
+//
+// A read that fails transiently is retried at that same cadence, up to
+// snapshotWaitReadRetries consecutive failures, so a store blip does not fail
+// a long wait; a dead end (the row is gone, the request is rejected) surfaces
+// at once, including on the first read. The success path is unaffected: an
+// already-terminal snapshot still costs exactly one read.
+//
+// Cancelling ctx ends the wait with ctx's error. Callers bound a wait with
+// [context.WithTimeout] and re-read the row afterwards to learn where it stands.
+func waitSnapshot[State any](
+	ctx context.Context,
+	store SessionStore[State],
+	transform StateTransform[State],
+	op, snapshotID, sessionID string,
+) (*SessionSnapshot[State], error) {
+	read := func(snapshotID, sessionID string) (*SessionSnapshot[State], error) {
+		readCtx, cancel := context.WithTimeout(ctx, snapshotWaitReadTimeout)
+		defer cancel()
+		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID)
+	}
+
+	// The first read prices the common already-terminal case at exactly one
+	// read. A dead end reaches the caller unchanged (e.g. NOT_FOUND for an
+	// unknown snapshot); a transient failure falls into the wait below and is
+	// retried there on the wait's own cadence, because a store blip at the
+	// moment a wait starts is no more fatal than one in the middle of it.
+	readFailures := 0
+	snap, err := read(snapshotID, sessionID)
+	switch {
+	case err == nil && snap.Status.Terminal():
+		return snap, nil
+	case err != nil && waitReadDeadEnd(err):
+		return nil, err
+	case err != nil:
+		readFailures = 1
+		logger.Debug(ctx, "first snapshot read failed inside a wait; retrying",
+			"snapshotId", snapshotID, "error", err)
+	}
+
+	var statusCh <-chan SnapshotStatus
+	if sub, ok := store.(SnapshotSubscriber); ok {
+		subCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		statusCh = sub.OnSnapshotStatusChange(subCtx, snapshotID)
+	}
+	interval := snapshotWaitPollInterval
+	if statusCh != nil {
+		interval = snapshotWaitLivenessInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	start := time.Now()
+	lastProgress := start
+	// retryRead decides what a failed in-wait re-read means: a dead end or
+	// exhausted retries surface the error, anything else is ridden out at the
+	// wait's own re-read cadence (the next tick retries).
+	retryRead := func(err error) error {
+		if waitReadDeadEnd(err) || readFailures >= snapshotWaitReadRetries {
+			return err
+		}
+		readFailures++
+		logger.Debug(ctx, "snapshot re-read failed inside a wait; retrying",
+			"snapshotId", snapshotID, "failures", readFailures, "error", err)
+		return nil
+	}
+	logger.Debug(ctx, "waiting for snapshot to settle",
+		"snapshotId", snapshotID, "subscribed", statusCh != nil)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case snapStatus, ok := <-statusCh:
+			if !ok {
+				// The subscription ended under us (the row was removed, or the
+				// store dropped it). Fall back to re-reading, which reports
+				// whatever the row says now, at the unsubscribed cadence.
+				statusCh = nil
+				interval = snapshotWaitPollInterval
+				ticker.Reset(interval)
+				continue
+			}
+			// A notification carries a status, not the row, so it only means
+			// "re-read now": the row is what the caller gets back, and the
+			// shared re-read below is what decides the wait is over.
+			if !snapStatus.Terminal() {
+				continue
+			}
+		case <-ticker.C:
+		}
+
+		// One re-read serves both wakeups. It keeps sessionID, so the
+		// ownership assertion the caller made holds for the whole wait and not
+		// just its first read, and it settles the wait only on a row that says
+		// so: a store may notify before the write is visible to a reader, and
+		// answering a wait with a pending row would break its contract.
+		cur, err := read(snapshotID, sessionID)
+		if err != nil {
+			if err := retryRead(err); err != nil {
+				return nil, err
+			}
+			// Retry soon rather than on the next liveness beat. A subscribed
+			// wait's terminal notification fires once and has already been
+			// consumed, so after a failure the re-read is the only path left
+			// to the settled row and must not be 30s away.
+			ticker.Reset(snapshotWaitPollInterval)
+			continue
+		}
+		if readFailures > 0 {
+			readFailures = 0
+			ticker.Reset(interval)
+		}
+		if cur.Status.Terminal() {
+			return cur, nil
+		}
+		if time.Since(lastProgress) >= snapshotWaitProgressInterval {
+			lastProgress = time.Now()
+			logger.Debug(ctx, "still waiting for snapshot",
+				"snapshotId", snapshotID, "elapsedMs", time.Since(start).Milliseconds())
+		}
+	}
+}
+
+// newSnapshotActions creates the agent's companion actions, without
+// registering them, when the agent has a [SessionStore] configured:
+//
+//   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
+//     the remote counterpart to [SnapshotReader.GetSnapshot] (by snapshot
+//     ID) and [SnapshotReader.GetLatestSnapshot] (by session ID) for Dev UI
+//     and non-Go clients. Local Go callers use the store reference directly.
+//
+//   - The agent's name under [api.ActionTypeAgentWait] — waitForSnapshot,
+//     getSnapshot's blocking counterpart: it resolves the same request and
+//     returns once the snapshot settles. It is how a caller that holds only
+//     actions follows a detached invocation without re-dispatching a read per
+//     tick, which is one call and one span instead of a stream of them.
+//
+//   - The agent's name under [api.ActionTypeAgentAbort] — abort,
+//     created only when the store also implements [SnapshotSubscriber], so the
+//     runtime can react to the abort it writes via SaveSnapshot.
+//
+// When the agent is client-managed (no store configured), no action is created:
+// there is no server-side snapshot to fetch, follow, or abort. Surfacing
+// actions only when the underlying capabilities exist keeps the reflected API
+// aligned with what the agent can actually do.
+//
+// The [Agent] retains the returned actions (an absent one is nil) and
+// registers them alongside its run action; see [Agent.Register],
+// [Agent.GetSnapshotAction], [Agent.WaitForSnapshotAction], and
+// [Agent.AbortAction].
 func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
-) (getSnapshot, abort api.Action) {
+) (getSnapshot, waitForSnapshot, abort api.Action) {
 	if store == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	getSnapshotAction := core.NewActionOf(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
@@ -295,13 +503,27 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			return readSnapshot(ctx, store, transform, req.SnapshotID, req.SessionID)
+			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID)
+		})
+
+	// waitForSnapshot takes getSnapshot's request, so a caller switching from
+	// one to the other keeps its payload, but it requires the snapshot ID: a
+	// session's latest row is whichever one is latest at resolution time, and
+	// waiting on that is a race with the session's next turn. A session ID may
+	// still accompany the snapshot ID, where it asserts ownership exactly as it
+	// does on a read.
+	waitAction := core.NewActionOf(api.ActionTypeAgentWait, agentName, nil,
+		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
+			if req == nil || req.SnapshotID == "" {
+				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+			}
+			return waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID)
 		})
 
 	if _, ok := store.(SnapshotSubscriber); !ok {
 		// Without a subscriber the runtime cannot react to an abort, so the
 		// abort lifecycle is unsupported; don't surface the action.
-		return getSnapshotAction, nil
+		return getSnapshotAction, waitAction, nil
 	}
 	abortAction := core.NewActionOf(api.ActionTypeAgentAbort, agentName, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
@@ -319,7 +541,7 @@ func newSnapshotActions[State any](
 			}
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})
-	return getSnapshotAction, abortAction
+	return getSnapshotAction, waitAction, abortAction
 }
 
 // --- Session ---

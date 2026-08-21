@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // --- AgentOption ---
@@ -265,7 +266,7 @@ type invocationOptions[State any] struct {
 // applyInvocation merges o into opts, rejecting duplicate options.
 // Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
 // checked once, after all options are applied, in
-// [Agent.resolveOptions].
+// resolveInvocationInit.
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
 		if opts.state != nil {
@@ -330,4 +331,42 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 // empty ID is an error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
+}
+
+// resolveInvocationInit merges opts into the invocation's [AgentInit],
+// enforcing the per-option duplicate checks and the mutual-exclusivity rules:
+// WithState excludes both WithSessionID and WithSnapshotID (a client-managed
+// conversation's identity rides inside the state itself), while WithSessionID
+// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] and
+// [AgentHandle.Run], so typed and untyped callers reject the same inputs with
+// the same wording; name is the agent's, woven into the errors.
+//
+// It returns (nil, nil) when no option set anything: "no init" is decided
+// here, next to the merge a new option must extend, so a caller-side field
+// check cannot silently drop a future [AgentInit] field. A nil init runs the
+// invocation with a fresh session, identical to a zero-valued one.
+func resolveInvocationInit[State any](name string, opts []InvocationOption[State]) (*AgentInit[State], error) {
+	invOpts := &invocationOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyInvocation(invOpts); err != nil {
+			return nil, fmt.Errorf("Agent %q: %w", name, err)
+		}
+	}
+
+	if invOpts.state != nil && invOpts.snapshotID != "" {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", name)
+	}
+	if invOpts.state != nil && invOpts.sessionIDSet {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", name)
+	}
+
+	if invOpts.state == nil && invOpts.snapshotID == "" && !invOpts.sessionIDSet {
+		return nil, nil
+	}
+
+	return &AgentInit[State]{
+		SessionID:  invOpts.sessionID,
+		SnapshotID: invOpts.snapshotID,
+		State:      invOpts.state,
+	}, nil
 }
