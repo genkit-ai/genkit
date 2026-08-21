@@ -32,7 +32,7 @@ import { EmbedderArgument } from 'genkit/embedder';
 import { Document } from 'genkit/retriever';
 
 // Import your actual source code
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { Column, PostgresEngine } from '../src/engine';
 import {
   configurePostgresIndexer,
@@ -181,9 +181,9 @@ describe('configurePostgresRetriever Integration Tests', () => {
 
       // --- Populate Test Data ---
       // Insert some test documents into the table
-      const doc1Id = uuidv4();
-      const doc2Id = uuidv4();
-      const doc3Id = uuidv4();
+      const doc1Id = randomUUID();
+      const doc2Id = randomUUID();
+      const doc3Id = randomUUID();
       await engine.pool.raw(`
        INSERT INTO ${SCHEMA_NAME}.${TEST_TABLE} (${ID_COLUMN}, ${CONTENT_COLUMN}, ${EMBEDDING_COLUMN}, page, source, metadata_json)
        VALUES
@@ -477,7 +477,7 @@ describe('configurePostgresIndexer Integration Tests', () => {
   });
 
   test('should use existing ID from metadata if provided', async () => {
-    const testId = uuidv4();
+    const testId = randomUUID();
     const testDoc = new Document({
       content: [{ text: 'Test with ID' }],
       metadata: { [ID_COLUMN]: testId, source: 'id-test' },

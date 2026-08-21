@@ -23,7 +23,7 @@ import {
   indexerRef,
   retrieverRef,
 } from 'genkit/retriever';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { PostgresEngine } from './engine.js';
 import { DistanceStrategy, type QueryOptions } from './indexes.js';
 
@@ -448,7 +448,7 @@ export function configurePostgresIndexer<
           }
 
           const insertData = chunk.map((doc, index) => ({
-            [idColumn]: doc.metadata?.[idColumn] || uuidv4(),
+            [idColumn]: doc.metadata?.[idColumn] || randomUUID(),
             [contentColumn]: texts[index],
             [embeddingColumn]: JSON.stringify(embeddings[index].embedding),
             ...(metadataJsonColumn && {
