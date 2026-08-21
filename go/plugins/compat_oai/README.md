@@ -198,8 +198,8 @@ describes every model it resolves with one permissive capability set. `Models`
 is how a caller narrows one. Follow that shape for a gateway, and the curated
 shape above for a vendor.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
-`xai`, and `zai` directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `meta`,
+`openrouter`, `xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -213,6 +213,7 @@ export KIMI_API_KEY=<your-kimi-key>
 export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
 export OPENROUTER_API_KEY=<your-openrouter-key>
+export MODEL_API_KEY=<your-meta-model-api-key>
 ```
 
 Run all tests:
@@ -245,6 +246,9 @@ go test -v ./deepseek
 
 # OpenRouter tests
 go test -v ./openrouter
+
+# Meta Model API tests
+go test -v ./meta
 ```
 
 Note: Tests will be skipped if the required API keys are not set.
