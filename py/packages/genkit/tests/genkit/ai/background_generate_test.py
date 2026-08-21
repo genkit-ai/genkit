@@ -73,6 +73,37 @@ async def test_generate_operation_with_background_model(ai: Genkit) -> None:
     assert operation.action == '/background-model/bg-model'
 
 
+@pytest.mark.asyncio
+async def test_generate_returns_the_job_without_polling(ai: Genkit) -> None:
+    """generate() hands back the job now. It does not wait until the job is done.
+
+    A background model (video, and anything registered with
+    ``define_background_model``) starts a job and returns a handle. You
+    poll later with ``check_operation``. ``generate()`` and
+    ``generate_operation()`` only start; they must not call ``check``
+    on the way out, or a long render would block the first call.
+    """
+    checks = 0
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-123', done=False)
+
+    async def check(op: Operation) -> Operation:
+        nonlocal checks
+        checks += 1
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+
+    response = await ai.generate(model='bg-model', prompt='a cat surfing')
+    operation = await ai.generate_operation(model='bg-model', prompt='a cat surfing')
+
+    assert response.operation is not None
+    assert response.operation.done is False
+    assert operation.done is False
+    assert checks == 0
+
+
 class ReadsMessage(BaseMiddleware):
     async def wrap_model(
         self,
