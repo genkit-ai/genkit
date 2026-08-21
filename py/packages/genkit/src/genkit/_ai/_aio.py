@@ -67,6 +67,7 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     define_model,
+    reject_wrong_config_class,
     resolve_call_model,
 )
 from genkit._ai._prompt import (
@@ -1271,6 +1272,7 @@ class Genkit:
         await register_tools(child_registry, tools)
         refs = register_middleware(child_registry, use)
         resolved = resolve_call_model(model=model, config=config, registry=child_registry)
+        await reject_wrong_config_class(config=config, model=model, registry=child_registry)
         prompt_config = PromptConfig(
             model=resolved.name,
             prompt=prompt,
@@ -1446,6 +1448,7 @@ class Genkit:
             await register_tools(child_registry, tools)
             refs = register_middleware(child_registry, use)
             resolved = resolve_call_model(model=model, config=config, registry=child_registry)
+            await reject_wrong_config_class(config=config, model=model, registry=child_registry)
             prompt_config = PromptConfig(
                 model=resolved.name,
                 prompt=prompt,
@@ -1716,6 +1719,7 @@ class Genkit:
             registry=self.registry,
             message='No model specified for generate_operation.',
         )
+        await reject_wrong_config_class(config=config, model=model, registry=self.registry)
 
         model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:

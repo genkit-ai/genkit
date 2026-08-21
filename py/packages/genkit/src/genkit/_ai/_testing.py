@@ -162,6 +162,7 @@ def define_echo_model(
     ai: Genkit,
     name: str = 'echoModel',
     stream_countdown: bool = False,
+    config_schema: type[BaseModel] | None = None,
 ) -> tuple[EchoModel, Action]:
     echo = EchoModel(stream_countdown=stream_countdown)
 
@@ -171,7 +172,7 @@ def define_echo_model(
     ) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
-    action = ai.define_model(name=name, fn=model_fn)
+    action = ai.define_model(name=name, fn=model_fn, config_schema=config_schema)
 
     return (echo, action)
 
