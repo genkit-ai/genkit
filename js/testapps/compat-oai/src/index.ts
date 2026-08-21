@@ -267,6 +267,33 @@ const RpgCharacterSchema = z.object({
   class: z.enum(['RANGER', 'WIZZARD', 'TANK', 'HEALER', 'ENGINEER']),
 });
 
+const StrictStructuredOutputSchema = z
+  .object({
+    answer: z.string(),
+    confidence: z.number(),
+  })
+  .strict();
+
+export const strictStructuredOutputFlow = ai.defineFlow(
+  {
+    name: 'strict-structured-output',
+    inputSchema: z
+      .string()
+      .default('Genkit is a framework for AI applications.'),
+    outputSchema: StrictStructuredOutputSchema,
+  },
+  async (text) => {
+    const { output } = await ai.generate({
+      model: openAI.model('gpt-5'),
+      prompt: `Summarize this statement and estimate your confidence from 0 to 1:\n${text}`,
+      output: { schema: StrictStructuredOutputSchema },
+      config: { strict: true },
+    });
+
+    return output!;
+  }
+);
+
 // A simple example of structured output.
 ai.defineFlow(
   {
@@ -439,5 +466,5 @@ ai.defineFlow(
 );
 
 startFlowServer({
-  flows: [jokeFlow, embedFlow],
+  flows: [jokeFlow, embedFlow, strictStructuredOutputFlow],
 });

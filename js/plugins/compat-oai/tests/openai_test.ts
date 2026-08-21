@@ -23,6 +23,7 @@ import {
   defineCompatOpenAIModel,
   toOpenAIRequestBody,
 } from '../src/model';
+import { SUPPORTED_GPT_MODELS } from '../src/openai/gpt';
 
 describe('gptModel', () => {
   afterEach(() => {
@@ -105,6 +106,28 @@ describe('gptModel', () => {
         media: true,
         systemRole: true,
         output: ['text', 'json'],
+      },
+    });
+  });
+
+  it('should correctly define gpt-5', () => {
+    const gpt5 = defineCompatOpenAIModel({
+      name: 'openai/gpt-5',
+      client: {} as OpenAI,
+      modelRef: SUPPORTED_GPT_MODELS['gpt-5'],
+    });
+    expect({
+      name: gpt5.__action.name,
+      supports: gpt5.__action.metadata?.model.supports,
+    }).toStrictEqual({
+      name: 'openai/gpt-5',
+      supports: {
+        multiturn: true,
+        tools: true,
+        media: true,
+        systemRole: true,
+        output: ['text', 'json'],
+        constrained: 'all',
       },
     });
   });
