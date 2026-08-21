@@ -20,13 +20,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
 // agentsMarker tags the system prompt part injected by this middleware. The
@@ -53,22 +58,20 @@ const (
 	ArtifactStrategySession ArtifactStrategy = "session"
 )
 
-// resolveAgent looks the agent up by name through g. Resolution goes through
-// the Genkit instance (the sanctioned path for third-party middleware) rather
-// than the registry directly.
-func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
+// resolveAgent looks the agent up by name through g and returns its handle.
+// Resolution goes through the Genkit instance (the sanctioned path for
+// third-party middleware) rather than the registry directly; the handle
+// carries the agent's companion actions and capability metadata along with
+// the run surface. Both delegation and background-task reads resolve through
+// it.
+func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) {
 	if g == nil {
-		return nil, fmt.Errorf("no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
+		// A failed precondition: a wiring gap in how the middleware runs, not
+		// anything the caller sent.
+		return nil, status.Errorf(status.ErrFailedPrecondition,
+			"no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
 	}
-	action := genkit.LookupAction(g, "/agent/"+ref.Name)
-	if action == nil {
-		return nil, fmt.Errorf("agent %q not found in registry", ref.Name)
-	}
-	agent, ok := action.(api.BidiAction)
-	if !ok {
-		return nil, fmt.Errorf("%q is registered but is not an agent", ref.Name)
-	}
-	return agent, nil
+	return genkitx.LookupAgent(g, ref.Name)
 }
 
 // Agents is a middleware that enables sub-agent delegation.
@@ -95,6 +98,28 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // orchestrator as a normal tool response, not propagated as an interrupt: there
 // is no stateful sub-agent runtime to resume into, so interactive sub-agent
 // interaction is a future feature.
+//
+// With [Agents.Async] set, delegation tools additionally accept a "background"
+// flag. A background delegation starts the sub-agent through its detach support
+// ([aix.AgentInput.Detach]): the sub-agent's runtime persists a pending
+// snapshot, hands back a task ID immediately, and keeps working in the
+// background, so the orchestrator can continue calling tools and collect the
+// result later through the added check_background_tasks and
+// wait_for_background_tasks tools. The pending snapshot (heartbeated while the
+// worker lives, finalized in place with the cumulative state when the work
+// settles) is the durable record, and task IDs are self-contained
+// ("<agent>:<snapshotId>"), so a re-instantiated orchestrator can pick results
+// up using nothing but the IDs recorded in its conversation history. Background
+// delegation requires server-managed sub-agents whose stores implement
+// [aix.SnapshotSubscriber] (e.g. the localstore stores); launches on other
+// agents are rejected by the sub-agent runtime and reported as tool text.
+//
+// Task handles are not access-scoped: the background-task tools read any
+// snapshot ID belonging to a configured sub-agent, whether or not this
+// conversation launched it (mirroring the sub-agent's getSnapshot companion
+// action, which is itself unscoped). In multi-tenant deployments treat
+// snapshot IDs as capability-like secrets: text that reaches the orchestrator
+// model can steer these tools at any ID it names.
 //
 // The middleware resolves agents through genkit.FromContext, which is seeded by
 // genkit.Generate and by agents defined via the genkit/exp constructors
@@ -128,8 +153,14 @@ type Agents struct {
 	Agents []aix.AgentRef `json:"agents,omitempty" jsonschema_description:"Sub-agents available for delegation. At least one is required."`
 	// ToolPrefix is the prefix for generated delegation tool names. A nil value
 	// defaults to "delegate_to" (tools become delegate_to_<agent>); a pointer to
-	// the empty string uses bare agent names.
-	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names."`
+	// the empty string uses bare agent names. An explicitly set, non-empty
+	// prefix also namespaces the [Agents.Async] background-task tools (e.g.
+	// research_check_background_tasks). Two Async instances in one generate
+	// call therefore need distinct, explicitly set prefixes: left at the
+	// default they both emit the bare background-task tool names, and the
+	// generate call is rejected for duplicate tools. New rejects colliding
+	// names within one instance; it cannot see a sibling.
+	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the async background-task tools."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
 	MaxDelegations int `json:"maxDelegations,omitempty" jsonschema_description:"Caps the number of sub-agent delegations per generate call, preventing runaway delegation loops. Defaults to 0, which means unlimited."`
@@ -141,6 +172,14 @@ type Agents struct {
 	// ArtifactStrategy controls how sub-agent artifacts are surfaced. Defaults to
 	// ArtifactStrategyInline.
 	ArtifactStrategy ArtifactStrategy `json:"artifactStrategy,omitempty" jsonschema_description:"How sub-agent artifacts are surfaced. \"inline\" adds artifact content to the delegation tool result and merges it into the parent session. \"session\" merges into the session only. Defaults to \"inline\"."`
+	// Async enables background delegation. Delegation tools gain a "background"
+	// input flag that starts the sub-agent through its detach support and
+	// returns a task ID immediately, and two shared tools are added:
+	// check_background_tasks (non-blocking status and results) and
+	// wait_for_background_tasks (blocks until the listed tasks settle).
+	// Background delegation requires server-managed sub-agents whose stores
+	// implement [aix.SnapshotSubscriber].
+	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
 }
 
 func (a Agents) Name() string { return provider + "/agents" }
@@ -153,9 +192,23 @@ type agentsState struct {
 	// delegations counts delegations made so far, enforcing MaxDelegations and
 	// providing the per-invocation number used to namespace artifacts.
 	delegations int
+	// seq allocates invocation numbers and never decreases, unlike the
+	// delegations cap counter above: a refunded delegation's number must not
+	// be reissued, because under parallel tool calls the reissued number can
+	// belong to a still-running delegation, and two delegations sharing an
+	// invocation ID overwrite each other's artifacts (AddArtifacts replaces
+	// by name).
+	seq int
 	// conversation is the latest request message list, captured each turn for
 	// optional history forwarding.
 	conversation []*ai.Message
+	// settledReports caches terminal background-task reports by task ID for
+	// the rest of the generate call: completed, failed, and aborted rows
+	// never change, so later re-checks skip the snapshot fetch and artifact
+	// re-merge (and cannot clobber a merged artifact the orchestrator has
+	// since edited). Pending, expired, and unresolvable reports are never
+	// cached; those can still change.
+	settledReports map[string]backgroundTaskReport
 }
 
 // New validates the configuration and returns the hooks: a delegation tool per
@@ -163,24 +216,60 @@ type agentsState struct {
 // captures conversation history.
 func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	if len(a.Agents) == 0 {
-		return nil, fmt.Errorf("agents middleware requires at least one agent in the \"agents\" option")
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"agents middleware requires at least one agent in the \"agents\" option")
 	}
 	for _, ref := range a.Agents {
 		if ref.Name == "" {
-			return nil, fmt.Errorf("agents middleware: every agent reference must have a name")
+			return nil, status.Errorf(status.ErrInvalidArgument,
+				"agents middleware: every agent reference must have a name")
 		}
 	}
 
 	prefix := a.prefix()
-	st := &agentsState{}
+	st := &agentsState{settledReports: make(map[string]backgroundTaskReport)}
 
-	tools := make([]ai.Tool, 0, len(a.Agents))
+	// Every generated tool name is validated against the set as it is built:
+	// a collision (two agents mapping to one delegation tool name, or a
+	// delegation tool landing on a background-task tool's name) would
+	// otherwise surface only at generate time as a duplicate-tool rejection
+	// of the whole request.
+	names := make(map[string]string, len(a.Agents)+2)
+	claimName := func(name, owner string) error {
+		if prev, ok := names[name]; ok {
+			return status.Errorf(status.ErrInvalidArgument,
+				"agents middleware: tool name %q for %s collides with %s; use a different ToolPrefix or agent name", name, owner, prev)
+		}
+		names[name] = owner
+		return nil
+	}
+
+	tools := make([]ai.Tool, 0, len(a.Agents)+2)
 	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" {
 			desc = fmt.Sprintf("Delegates a task to the %q sub-agent.", ref.Name)
 		}
-		tools = append(tools, aix.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
+		name := makeToolName(prefix, ref.Name)
+		if err := claimName(name, fmt.Sprintf("agent %q", ref.Name)); err != nil {
+			return nil, err
+		}
+		// The async variant carries the extra "background" input flag, so the
+		// two modes need distinct input schemas (tool schemas are static).
+		if a.Async {
+			tools = append(tools, aix.NewTool(name, desc, a.delegateAsync(ref, st)))
+		} else {
+			tools = append(tools, aix.NewTool(name, desc, a.delegate(ref, st)))
+		}
+	}
+	if a.Async {
+		checkName, waitName := a.backgroundToolNames()
+		for _, n := range []string{checkName, waitName} {
+			if err := claimName(n, "the background-task tools"); err != nil {
+				return nil, err
+			}
+		}
+		tools = append(tools, a.backgroundTaskTools(st)...)
 	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
@@ -192,7 +281,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		st.conversation = params.Request.Messages
 		st.mu.Unlock()
 
-		instructions := buildAgentsInstructions(genkit.FromContext(ctx), a.Agents, prefix)
+		instructions := a.buildInstructions(genkit.FromContext(ctx))
 		params.Request = injectSystemText(params.Request, agentsMarker, instructions)
 		return next(ctx, params)
 	}
@@ -210,11 +299,20 @@ type delegateInput struct {
 
 // delegationResult is the output of a delegation tool.
 type delegationResult struct {
-	// Response is the sub-agent's text response.
+	// Response is the sub-agent's text response. For a background delegation it
+	// describes the launch instead; the sub-agent's response arrives later via
+	// the background-task tools.
 	Response string `json:"response"`
 	// Artifacts are the sub-agent's artifacts. Content is populated only under
 	// ArtifactStrategyInline.
 	Artifacts []delegatedArtifact `json:"artifacts,omitempty"`
+	// TaskID is the background task handle ("<agent>:<snapshotId>") when the
+	// delegation was started with background=true; empty otherwise. It is the
+	// input to check_background_tasks / wait_for_background_tasks.
+	TaskID string `json:"taskId,omitempty"`
+	// Status is "pending" when a background delegation was started; empty for
+	// synchronous delegations.
+	Status string `json:"status,omitempty"`
 }
 
 type delegatedArtifact struct {
@@ -228,104 +326,173 @@ type delegatedArtifact struct {
 // agent resolution, sub-agent execution, and artifact merging.
 func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {
 	return func(ctx context.Context, in delegateInput) (delegationResult, error) {
-		// Guard rail: enforce the delegation cap and reserve this delegation's
-		// number, atomically, before doing any work.
-		st.mu.Lock()
-		if a.MaxDelegations > 0 && st.delegations >= a.MaxDelegations {
-			st.mu.Unlock()
-			return delegationResult{Response: fmt.Sprintf(
-				"Delegation limit reached (%d). Complete the task using information already gathered.",
-				a.MaxDelegations)}, nil
-		}
-		st.delegations++
-		invocationNum := st.delegations
-		history := recentTextHistory(st.conversation, a.HistoryLength)
-		st.mu.Unlock()
-
-		agent, err := resolveAgent(genkit.FromContext(ctx), ref)
-		if err != nil {
-			return delegationResult{Response: "Error: " + err.Error()}, nil
-		}
-
-		// History rides in client-managed init state, which server-managed
-		// agents reject; forward it only to client-managed sub-agents.
-		if len(history) > 0 && !isClientManaged(agent) {
-			history = nil
-		}
-
-		out, err := runSubAgent(ctx, agent, in.Task, history)
-		if err != nil {
-			// The agent runtime resolves failures and interrupts gracefully (see
-			// below), so this only fires for exceptions outside that handling
-			// (e.g. a rejected init payload). Surface it as tool output.
-			return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
-		}
-
-		switch out.FinishReason {
-		case aix.AgentFinishReasonInterrupted:
-			// Reported as text, not propagated: there is no stateful sub-agent
-			// runtime to resume into, so the orchestrator could never satisfy it.
-			return delegationResult{Response: fmt.Sprintf(
-				"Sub-agent %q interrupted for additional input and could not complete the "+
-					"task. Interactive sub-agent interrupts are not currently supported; try "+
-					"delegating a more self-contained task.", ref.Name)}, nil
-		case aix.AgentFinishReasonFailed:
-			msg := "Unknown sub-agent failure."
-			if out.Error != nil && out.Error.Message != "" {
-				msg = out.Error.Message
-			}
-			return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %s", ref.Name, msg)}, nil
-		}
-
-		result := delegationResult{Response: messageText(out.Message)}
-		if result.Response == "" {
-			result.Response = "(no response)"
-		}
-
-		subArtifacts := namedArtifacts(out.Artifacts)
-		if len(subArtifacts) > 0 {
-			invocationID := fmt.Sprintf("%s_%d", ref.Name, invocationNum)
-			// Merge into the parent session under both strategies (no-op if there
-			// is no active session, e.g. a plain genkit.Generate call).
-			mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
-			result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
-		}
-		return result, nil
+		return a.runDelegation(ctx, ref, st, in.Task)
 	}
 }
 
-// runSubAgent runs the agent one-shot with the task. Agents are bidi actions,
-// so this always goes through RunBidiJSON: with no history the init is empty (a
-// fresh one-shot session); with history it carries the messages as client-
-// managed init state, which callers forward only to client-managed agents. The
-// output is decoded with json.RawMessage as the custom-state type since the
-// sub-agent's State is unknown here.
-func runSubAgent(ctx context.Context, agent api.BidiAction, task string, history []*ai.Message) (*aix.AgentOutput[json.RawMessage], error) {
-	inputJSON, err := json.Marshal(&aix.AgentInput{Message: ai.NewUserTextMessage(task)})
-	if err != nil {
-		return nil, err
+// beginDelegation is the prologue every delegation shares, synchronous or
+// background: it enforces MaxDelegations, reserves the delegation's invocation
+// number, and resolves the sub-agent. A non-nil refusal is the tool result to
+// return as-is: the model-facing text for a cap refusal or a resolution
+// failure. conversation is the captured message list for optional history
+// forwarding (see reserveDelegation); background launches ignore it.
+//
+// A resolution failure keeps its slot. The agent is misconfigured or missing,
+// so every retry fails the same way, and refunding would mean the cap never
+// bites on exactly the runaway loop it exists to stop.
+func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState) (invocationNum int, conversation []*ai.Message, agent *aix.AgentHandle, refusal *delegationResult) {
+	invocationNum, conversation, ok := a.reserveDelegation(st)
+	if !ok {
+		logger.Warn(ctx, "delegation refused, limit reached", "agent", ref.Name, "limit", a.MaxDelegations)
+		return 0, nil, nil, &delegationResult{Response: fmt.Sprintf(
+			"Delegation limit reached (%d). Complete the task using information already gathered.", a.MaxDelegations)}
 	}
 
-	var initJSON json.RawMessage
+	agent, err := resolveAgent(genkit.FromContext(ctx), ref)
+	if err != nil {
+		logger.Warn(ctx, "sub-agent resolution failed", "agent", ref.Name, "error", err)
+		return 0, nil, nil, &delegationResult{Response: "Error: " + err.Error()}
+	}
+	return invocationNum, conversation, agent, nil
+}
+
+// runDelegation is the synchronous delegation body, shared by the plain
+// delegation tool and the async-enabled variant when the model does not
+// request background execution.
+func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
+	invocationNum, conversation, agent, refusal := a.beginDelegation(ctx, ref, st)
+	if refusal != nil {
+		return *refusal, nil
+	}
+
+	// History rides in client-managed init state, which server-managed
+	// agents reject; forward it only to client-managed sub-agents. The
+	// filtering copy runs outside the state mutex.
+	var history []*ai.Message
+	if isClientManaged(agent) {
+		history = recentTextHistory(conversation, a.HistoryLength)
+	}
+
+	logger.Debug(ctx, "delegating to sub-agent",
+		"agent", ref.Name, "invocation", invocationNum, "historyMessages", len(history))
+	start := time.Now()
+	out, err := runSubAgent(ctx, agent, task, history, false)
+	if err != nil {
+		// The agent runtime resolves failures and interrupts gracefully (see
+		// foldDelegationOutput), so this only fires for exceptions outside
+		// that handling (e.g. a rejected init payload). Surface it as tool
+		// output and keep the slot: the payload is built the same way every
+		// time, so a retry is refused the same way.
+		logger.Warn(ctx, "sub-agent call failed", "agent", ref.Name, "error", err)
+		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
+	}
+
+	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+	logger.Debug(ctx, "sub-agent delegation finished",
+		"agent", ref.Name, "finishReason", string(out.FinishReason),
+		"durationMs", time.Since(start).Milliseconds(), "artifacts", len(result.Artifacts))
+	return result, nil
+}
+
+// reserveDelegation enforces MaxDelegations and reserves the next delegation's
+// invocation number, atomically, before any work happens. ok is false when the
+// cap is reached. The returned conversation is the raw captured message list
+// for optional history forwarding: treat it as read-only (the generate hook
+// replaces the slice header wholesale under the mutex; messages are never
+// mutated in place), and filter it outside the lock.
+func (a *Agents) reserveDelegation(st *agentsState) (invocationNum int, conversation []*ai.Message, ok bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if a.MaxDelegations > 0 && st.delegations >= a.MaxDelegations {
+		return 0, nil, false
+	}
+	st.delegations++
+	st.seq++
+	return st.seq, st.conversation, true
+}
+
+// releaseDelegation returns a reserved cap slot to a delegation whose refusal
+// names a retry that can succeed, which today means only one thing: a
+// background launch refused because the sub-agent cannot detach, whose refusal
+// tells the model to delegate synchronously instead. That retry must not be
+// turned away by a cap the refusal itself consumed.
+//
+// Every other refusal keeps its slot. A refusal that will repeat identically
+// (an unresolvable agent, a rejected init payload, a sub-agent that fails on
+// its own) is precisely the runaway MaxDelegations exists to bound, and
+// refunding those would leave the cap unable to bite at all.
+//
+// The released slot's invocation number is never reissued (the allocator is
+// the separate seq counter), so a concurrent live delegation cannot end up
+// sharing an artifact namespace with a later one.
+func (a *Agents) releaseDelegation(st *agentsState) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.delegations--
+}
+
+// foldDelegationOutput turns a settled sub-agent output into a delegation tool
+// result: interrupts and failures become explanatory text, and artifacts are
+// merged into the parent session under invocationID and surfaced per the
+// configured strategy.
+func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationID string) delegationResult {
+	switch out.FinishReason {
+	case aix.AgentFinishReasonInterrupted:
+		// Reported as text, not propagated: there is no stateful sub-agent
+		// runtime to resume into, so the orchestrator could never satisfy it.
+		return delegationResult{Response: interruptedResponse(ref.Name)}
+	case aix.AgentFinishReasonFailed:
+		return delegationResult{Response: fmt.Sprintf(
+			"Error calling agent %q: %s", ref.Name, subAgentFailureMessage(out.Error))}
+	}
+
+	result := delegationResult{Response: messageText(out.Message)}
+	if result.Response == "" {
+		result.Response = "(no response)"
+	}
+
+	subArtifacts := namedArtifacts(out.Artifacts)
+	if len(subArtifacts) > 0 {
+		// Merge into the parent session under both strategies (no-op if there
+		// is no active session, e.g. a plain genkit.Generate call).
+		mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
+		result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
+	}
+	return result
+}
+
+// interruptedResponse is the tool text reported when a sub-agent interrupted
+// for input the orchestrator can never provide.
+func interruptedResponse(agentName string) string {
+	return fmt.Sprintf(
+		"Sub-agent %q interrupted for additional input and could not complete the "+
+			"task. Interactive sub-agent interrupts are not currently supported; try "+
+			"delegating a more self-contained task.", agentName)
+}
+
+// subAgentFailureMessage extracts a human-readable message from a sub-agent's
+// structured failure.
+func subAgentFailureMessage(err *status.Error) string {
+	if err != nil && err.Message != "" {
+		return err.Message
+	}
+	return "Unknown sub-agent failure."
+}
+
+// runSubAgent runs the agent one-shot with the task. With no history the
+// invocation starts a fresh session; with history the messages ride as
+// client-managed init state ([aix.WithState]), which callers forward only to
+// client-managed agents. With detach set, the input asks the sub-agent
+// runtime to move the work to the background immediately: the returned output
+// then carries the pending snapshot's ID and [aix.AgentFinishReasonDetached]
+// while the sub-agent keeps working. Custom state is json.RawMessage
+// throughout ([aix.AgentHandle]) since the sub-agent's State is unknown here.
+func runSubAgent(ctx context.Context, agent *aix.AgentHandle, task string, history []*ai.Message, detach bool) (*aix.AgentOutput[json.RawMessage], error) {
+	var opts []aix.InvocationOption[json.RawMessage]
 	if len(history) > 0 {
-		initJSON, err = json.Marshal(aix.AgentInit[json.RawMessage]{
-			State: &aix.SessionState[json.RawMessage]{Messages: history},
-		})
-		if err != nil {
-			return nil, err
-		}
+		opts = append(opts, aix.WithState(&aix.SessionState[json.RawMessage]{Messages: history}))
 	}
-
-	res, err := agent.RunBidiJSON(ctx, inputJSON, nil, &api.BidiJSONOptions{Init: initJSON})
-	if err != nil {
-		return nil, err
-	}
-
-	var out aix.AgentOutput[json.RawMessage]
-	if err := json.Unmarshal(res.Result, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return agent.Run(ctx, &aix.AgentInput{Detach: detach, Message: ai.NewUserTextMessage(task)}, opts...)
 }
 
 // isClientManaged reports whether the agent owns its state on the client (no
@@ -337,22 +504,9 @@ func runSubAgent(ctx context.Context, agent api.BidiAction, task string, history
 // forwards history unless state management is explicitly "server"; for
 // genkit-defined agents the metadata is always set, so the two agree in
 // practice.
-func isClientManaged(agent api.BidiAction) bool {
-	meta := agent.Desc().Metadata
-	if meta == nil {
-		return false
-	}
-	switch m := meta["agent"].(type) {
-	case aix.AgentMetadata:
-		return m.StateManagement == aix.AgentStateManagementClient
-	case *aix.AgentMetadata:
-		return m != nil && m.StateManagement == aix.AgentStateManagementClient
-	case map[string]any:
-		s, _ := m["stateManagement"].(string)
-		return aix.AgentStateManagement(s) == aix.AgentStateManagementClient
-	default:
-		return false
-	}
+func isClientManaged(agent *aix.AgentHandle) bool {
+	meta := agent.Metadata()
+	return meta != nil && meta.StateManagement == aix.AgentStateManagementClient
 }
 
 // mergeArtifacts namespaces the sub-agent's artifacts by invocation ID, tags
@@ -366,9 +520,7 @@ func mergeArtifacts(ctx context.Context, source, invocationID string, arts []*ai
 	namespaced := make([]*aix.Artifact, 0, len(arts))
 	for _, a := range arts {
 		md := make(map[string]any, len(a.Metadata)+2)
-		for k, v := range a.Metadata {
-			md[k] = v
-		}
+		maps.Copy(md, a.Metadata)
 		md["source"] = source
 		md["invocationId"] = invocationID
 		namespaced = append(namespaced, &aix.Artifact{
@@ -402,6 +554,20 @@ func (a *Agents) prefix() string {
 	return *a.ToolPrefix
 }
 
+// backgroundToolNames returns the names of the shared background-task tools
+// for this configuration. They are the bare well-known names by default and
+// prefixed with an explicitly set [Agents.ToolPrefix], so two Async instances
+// with distinct prefixes can coexist on one generate call without colliding
+// on the shared names (the default delegate_to prefix is a delegation verb,
+// not an instance namespace, so it is deliberately not applied here).
+func (a *Agents) backgroundToolNames() (check, wait string) {
+	if a.ToolPrefix == nil {
+		return checkBackgroundTasksToolName, waitBackgroundTasksToolName
+	}
+	return makeToolName(*a.ToolPrefix, checkBackgroundTasksToolName),
+		makeToolName(*a.ToolPrefix, waitBackgroundTasksToolName)
+}
+
 // strategy resolves the artifact strategy, defaulting to inline.
 func (a *Agents) strategy() ArtifactStrategy {
 	if a.ArtifactStrategy == ArtifactStrategySession {
@@ -419,14 +585,16 @@ func makeToolName(prefix, agentName string) string {
 	return prefix + "_" + agentName
 }
 
-// buildAgentsInstructions renders the <sub-agents> system prompt block. g may be
+// buildInstructions renders the <sub-agents> system prompt block. g may be
 // nil (e.g. outside an agent/Generate context), in which case only configured
-// descriptions are used.
-func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix string) string {
+// descriptions are used. With [Agents.Async] set, the block also explains
+// background delegation and names this configuration's background-task tools.
+func (a *Agents) buildInstructions(g *genkit.Genkit) string {
+	prefix := a.prefix()
 	var b strings.Builder
 	b.WriteString("<sub-agents>\n")
 	b.WriteString("You can delegate tasks to specialized sub-agents using their delegation tools:\n")
-	for _, ref := range refs {
+	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" && g != nil {
 			desc = discoverDescription(g, ref.Name)
@@ -439,14 +607,32 @@ func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix strin
 	b.WriteString("\n")
 	b.WriteString("When a task is better handled by a specialized agent, delegate it using the ")
 	b.WriteString("appropriate tool. Provide a clear, self-contained task description.\n")
+	if a.Async {
+		checkName, waitName := a.backgroundToolNames()
+		b.WriteString("\n")
+		b.WriteString("Delegations can run in the background: set \"background\": true on a ")
+		b.WriteString("delegation tool call to get a taskId back immediately while the ")
+		b.WriteString("sub-agent keeps working. Continue with other work, then collect ")
+		b.WriteString("results with " + checkName + " (returns current ")
+		b.WriteString("status without waiting) or " + waitName + " ")
+		b.WriteString("(blocks until the tasks settle). Background tasks keep running ")
+		b.WriteString("across turns, and task IDs from earlier tool results stay valid: ")
+		b.WriteString("check them before delegating the same work again.\n")
+	}
 	b.WriteString("</sub-agents>")
 	return b.String()
 }
 
 // discoverDescription returns the agent's description from its action
 // descriptor, falling back to the backing prompt's description, or "" if none.
+// The keys are built with [api.KeyFromName] rather than by hand: a prompt
+// registers under "executable-prompt", not "prompt", so a literal key silently
+// finds nothing.
 func discoverDescription(g *genkit.Genkit, name string) string {
-	for _, key := range []string{"/agent/" + name, "/prompt/" + name} {
+	for _, key := range []string{
+		api.KeyFromName(api.ActionTypeAgent, name),
+		api.KeyFromName(api.ActionTypeExecutablePrompt, name),
+	} {
 		if action := genkit.LookupAction(g, key); action != nil {
 			if d := action.Desc().Description; d != "" {
 				return d

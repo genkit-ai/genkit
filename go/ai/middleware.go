@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 
 	"github.com/firebase/genkit/go/core"
@@ -275,6 +276,33 @@ type namedHooks struct {
 	hooks *Hooks
 }
 
+// wrapBuildError prefixes a middleware build failure with the middleware's
+// name. An error the middleware's New already classified keeps its status
+// (status.Of reports the outermost classified error, so reclassifying here
+// would rebrand e.g. an UNAVAILABLE from a network-backed New, a disk error
+// from a file-reading New, or a cancelled context as a caller mistake). Only
+// unclassified errors default to INVALID_ARGUMENT, since a bare error from a
+// New is overwhelmingly config validation.
+//
+// The classified case re-states the message on a status error of its own rather
+// than wrapping with fmt.Errorf. Serialization resolves to the outermost
+// *status.Error, so a plain wrap would hand the client the inner message alone,
+// with nothing naming the middleware that failed. Building the envelope here
+// also keeps it non-public, so a New that returns a PublicErrorf does not have
+// its text forwarded to clients by a path that never chose to publish it. The
+// cause stays reachable, so errors.Is still matches the middleware's sentinel.
+func wrapBuildError(name string, err error) error {
+	s, ok := status.Classified(err)
+	if !ok {
+		return status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", name, err)
+	}
+	return (&status.Error{
+		Status:   s,
+		Message:  fmt.Sprintf("ai: failed to build middleware %q: %v", name, err),
+		HTTPCode: s.HTTPCode(),
+	}).WithCause(err)
+}
+
 // resolveRefs resolves [MiddlewareRef] entries to named [Hooks] bundles. If
 // ref.Config is a [Middleware] value, its New method is invoked directly
 // (local fast path). Otherwise the descriptor is looked up in the registry
@@ -289,7 +317,7 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 		if mw, ok := ref.Config.(Middleware); ok {
 			h, err := mw.New(ctx)
 			if err != nil {
-				return nil, status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", ref.Name, err)
+				return nil, wrapBuildError(ref.Name, err)
 			}
 			if h == nil {
 				return nil, status.Errorf(status.ErrInternal, "ai: middleware %q returned nil hooks", ref.Name)
@@ -311,7 +339,7 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 		}
 		h, err := d.buildFromJSON(ctx, configJSON)
 		if err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", ref.Name, err)
+			return nil, wrapBuildError(ref.Name, err)
 		}
 		if h == nil {
 			return nil, status.Errorf(status.ErrInternal, "ai: middleware %q factory returned nil", ref.Name)
