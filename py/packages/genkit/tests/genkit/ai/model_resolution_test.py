@@ -172,6 +172,26 @@ def test_resolve_model_name_empty_string_falls_back_to_default() -> None:
     assert resolve_model_name(model='', registry=registry) == 'default-model'
 
 
+def test_resolve_model_name_empty_default_means_not_configured() -> None:
+    """An empty constructor default is the same as having no default.
+
+    A common setup is ``Genkit(model=os.getenv('MODEL') or '')``. When
+    ``MODEL`` is unset, that stores an empty string as the instance
+    default. A later ``generate(model='')`` (or ``generate()`` with no
+    model) treats the call as omitted and looks up that default.
+
+    An empty default is not a model name. The error is the same
+    ``No model configured.`` you get when nothing was registered, not
+    ``defaultModel is str``.
+    """
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', '')
+    with pytest.raises(GenkitError, match='No model configured'):
+        resolve_model_name(model='', registry=registry)
+    with pytest.raises(GenkitError, match='No model configured'):
+        resolve_model_name(model=None, registry=registry)
+
+
 def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
     """GenkitModel dump must keep an explicit None so merge can clear defaults."""
     assert normalize_config(config=ModelConfig(temperature=None)) == {'temperature': None}
