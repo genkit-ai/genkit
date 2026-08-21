@@ -788,7 +788,20 @@ async def _generate_action_turn(
                 next_fn,
             )
 
-        if model_response.operation is not None:
+        # A background start is a poll handle, not a conversation turn.
+        # define_model LRO replies that also carry a message still go
+        # through persist and the tool loop.
+        if model.kind == ActionKind.BACKGROUND_MODEL:
+            if model_response.operation is None:
+                # wrap_model may read .message. The job id lives on
+                # .operation; a rebuild that only copies message /
+                # finish_reason drops it.
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        'wrap_model returned no operation for a background model; pass through response.operation'
+                    ),
+                )
             if model_response.request is None:
                 model_response.request = request
             return model_response
