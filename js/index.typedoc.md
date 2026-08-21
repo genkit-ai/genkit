@@ -57,6 +57,7 @@ This reference documents the following packages:
 | **[@genkit-ai/compat-oai](modules/_genkit-ai_compat-oai.html)**                       | OpenAI-compatible model plugin.                                          |
 | **[@genkit-ai/fetch](modules/_genkit-ai_fetch.html)**                                 | HTTP fetch utilities for plugins.                                        |
 | **[@genkit-ai/middleware](modules/_genkit-ai_middleware.html)**                       | Model middleware plugin (retry, caching, etc.).                          |
+| **[@genkit-ai/minimax](modules/_genkit-ai_minimax.html)**                             | MiniMax music generation model plugin.                                   |
 
 The `genkit` package also provides subpath imports for specific functionality:
 
