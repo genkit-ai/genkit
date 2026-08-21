@@ -159,7 +159,7 @@ export abstract class BaseRuntimeManager {
     }
     if (filter?.severityText) {
       if (query !== '') query += '&';
-      query += `severityText=${filter.severityText}`;
+      query += `severityText=${encodeURIComponent(filter.severityText)}`;
     }
     if (filter?.severityNumber) {
       if (query !== '') query += '&';

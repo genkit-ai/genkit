@@ -63,8 +63,16 @@ export const logList = new Command('log:list')
           filter.severityText = options.severity;
         }
 
+        const limit = Number.parseInt(options.limit, 10);
+        if (Number.isNaN(limit) || limit <= 0) {
+          logger.error(
+            `Invalid limit: "${options.limit}". It must be a positive integer.`
+          );
+          return;
+        }
+
         const listRequest = {
-          limit: Number.parseInt(options.limit, 10),
+          limit,
           continuationToken: options.continuationToken,
           filter: Object.keys(filter).length > 0 ? filter : undefined,
         };
@@ -123,8 +131,16 @@ export const logList = new Command('log:list')
 
 function formatBody(value: unknown): string {
   if (value === undefined || value === null) return '';
-  const strValue =
-    typeof value === 'object' ? JSON.stringify(value) : String(value);
+  let strValue: string;
+  if (typeof value === 'object') {
+    try {
+      strValue = JSON.stringify(value);
+    } catch {
+      strValue = '[Object]';
+    }
+  } else {
+    strValue = String(value);
+  }
 
   // If it's a long string and doesn't match patterns, limit it
   return strValue.length > 100 ? strValue.substring(0, 100) + '...' : strValue;
