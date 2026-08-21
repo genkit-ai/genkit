@@ -72,6 +72,7 @@ from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -766,7 +767,7 @@ async def _generate_action_turn(
             request = _augment_with_context(request)
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
-            return (
+            raw = (
                 await model.run(
                     input=params.request,
                     context=c.custom_context,
@@ -774,6 +775,11 @@ async def _generate_action_turn(
                     abort_signal=c.abort_signal,
                 )
             ).response
+            # start() returns a poll handle. wrap_model is documented as
+            # seeing a ModelResponse, so wrap before the hook runs.
+            if isinstance(raw, Operation):
+                return ModelResponse(operation=raw, request=params.request)
+            return raw
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
@@ -781,6 +787,21 @@ async def _generate_action_turn(
                 ctx,
                 next_fn,
             )
+
+        # A background start is a poll handle, not a conversation turn.
+        # define_model LRO replies that also carry a message still go
+        # through persist and the tool loop.
+        if model.kind == ActionKind.BACKGROUND_MODEL:
+            if model_response.operation is None:
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        'wrap_model returned no operation for a background model; pass through response.operation'
+                    ),
+                )
+            if model_response.request is None:
+                model_response.request = request
+            return model_response
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
@@ -891,7 +912,13 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    if model.kind == ActionKind.BACKGROUND_MODEL and response.operation is None:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=('wrap_generate returned no operation for a background model; pass through response.operation'),
+        )
+    return response
 
 
 def apply_format(
