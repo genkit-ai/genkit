@@ -150,18 +150,10 @@ MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
 def _model_supports_long_running(model_action: Action) -> bool:
     """Check if a model action supports long-running operations."""
     model_info = model_action.metadata.get('model') if model_action.metadata else None
-    if not model_info:
+    if not isinstance(model_info, dict):
         return False
-    # Handle ModelInfo object
-    if hasattr(model_info, 'supports'):
-        supports = getattr(model_info, 'supports', None)
-        return bool(getattr(supports, 'long_running', False)) if supports else False
-    # Handle dict (cast needed because isinstance narrows too much for type checkers)
-    if isinstance(model_info, dict):
-        model_dict = cast(dict[str, Any], model_info)
-        supports = model_dict.get('supports')
-        return bool(supports.get('longRunning', False)) if isinstance(supports, dict) else False
-    return False
+    supports = cast(dict[str, Any], model_info).get('supports')
+    return bool(supports.get('longRunning', False)) if isinstance(supports, dict) else False
 
 
 class Genkit:
@@ -1627,11 +1619,11 @@ class Genkit:
                 # the exception details.
                 raise
 
-    async def check_operation(self, operation: Operation | Mapping[str, Any]) -> Operation:
+    async def check_operation(self, operation: Operation) -> Operation:
         """Check the status of a long-running background operation."""
         return await check_operation(self.registry, operation)
 
-    async def cancel_operation(self, operation: Operation | Mapping[str, Any]) -> Operation:
+    async def cancel_operation(self, operation: Operation) -> Operation:
         """Cancel a long-running background operation."""
         return await cancel_operation(self.registry, operation)
 
@@ -1745,8 +1737,7 @@ class Genkit:
             docs=docs,
         )
 
-        # Extract operation from response
-        if not hasattr(response, 'operation') or not response.operation:
+        if not response.operation:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message=f"Model '{model_action.name}' did not return an operation.",

@@ -136,9 +136,8 @@ def _models_allowing_extra(schema: dict) -> set[str]:
 def _extra_policy(name: str, allow: set[str]) -> str:
     if name in allow:
         return 'allow'
-    # Dev UI posts start output (latencyMs) back into check. That key
-    # isn't on the Operation wire format; ignore extras so a persisted
-    # dict can revalidate on check_operation.
+    # A saved handle dump can carry leftover keys that aren't Operation
+    # fields. Drop them so Operation.model_validate(saved) does not 500.
     if name == 'Operation':
         return 'ignore'
     return 'forbid'

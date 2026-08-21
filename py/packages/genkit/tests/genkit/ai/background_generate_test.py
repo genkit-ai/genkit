@@ -243,7 +243,7 @@ def test_model_response_eq_includes_operation() -> None:
 
 @pytest.mark.asyncio
 async def test_check_action_accepts_dumped_operation_with_extra_keys(ai: Genkit) -> None:
-    """The Dev UI check action ignores leftover dump keys like latencyMs."""
+    """A persisted dump still checks, even with leftover keys like latencyMs."""
     action = await register_bg_model(ai)
     dumped = {
         'id': 'bg-op-123',
