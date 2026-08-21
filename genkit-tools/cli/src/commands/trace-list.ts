@@ -92,7 +92,9 @@ export const traceList = new Command('trace:list')
           return;
         }
 
-        console.log(`Found ${response.traces.length} traces:\n`);
+        console.log(
+          `Found ${response.traces.length} trace${response.traces.length === 1 ? '' : 's'}:\n`
+        );
 
         response.traces.forEach((trace) => {
           let duration = 'unknown';

@@ -157,6 +157,14 @@ export abstract class BaseRuntimeManager {
       if (query !== '') query += '&';
       query += `continuationToken=${continuationToken}`;
     }
+    if (filter?.severityText) {
+      if (query !== '') query += '&';
+      query += `severityText=${encodeURIComponent(filter.severityText)}`;
+    }
+    if (filter?.severityNumber) {
+      if (query !== '') query += '&';
+      query += `severityNumber=${filter.severityNumber}`;
+    }
 
     const fullUrl = query !== '' ? `${url}?${query}` : url;
 
