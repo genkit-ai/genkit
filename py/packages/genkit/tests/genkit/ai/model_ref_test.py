@@ -200,6 +200,11 @@ def test_model_config_dict_accepts_none_clear() -> None:
     assert config['temperature'] is None
 
 
+def test_model_config_dict_keys_match_generation_common_config() -> None:
+    """Autocomplete knobs stay in lockstep with the runtime schema."""
+    assert set(ModelConfigDict.__annotations__) == set(ModelConfig.model_fields)
+
+
 def test_public_config_import_contract() -> None:
     """App code gets ModelConfigDict; ModelConfig lives on plugin_api."""
     from genkit import ModelConfigDict as VeneerModelConfigDict, PromptGenerateOptions
