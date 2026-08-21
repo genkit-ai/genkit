@@ -24,7 +24,7 @@ from genkit import Genkit, Message
 from genkit._core._action import ActionRunContext
 from genkit._core._background import BackgroundAction
 from genkit._core._error import GenkitError
-from genkit._core._middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import (
     FinishReason,
@@ -165,6 +165,29 @@ async def test_generate_fails_when_wrap_model_drops_operation(ai: Genkit) -> Non
 
     assert op_exc.value.status == 'FAILED_PRECONDITION'
     assert 'did not return an operation' not in str(op_exc.value)
+
+
+class DropsGenerate(BaseMiddleware):
+    async def wrap_generate(
+        self,
+        params: GenerateHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        resp = await next_fn(params, ctx)
+        return ModelResponse(message=resp.message, finish_reason=resp.finish_reason)
+
+
+@pytest.mark.asyncio
+async def test_generate_fails_when_wrap_generate_drops_operation(ai: Genkit) -> None:
+    """wrap_generate can still rebuild the final response; dropping the handle must not blame the model."""
+    await register_bg_model(ai)
+
+    with pytest.raises(GenkitError, match='wrap_generate returned no operation') as exc_info:
+        await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'did not return an operation' not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

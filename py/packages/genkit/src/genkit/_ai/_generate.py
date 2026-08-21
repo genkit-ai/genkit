@@ -793,9 +793,6 @@ async def _generate_action_turn(
         # through persist and the tool loop.
         if model.kind == ActionKind.BACKGROUND_MODEL:
             if model_response.operation is None:
-                # wrap_model may read .message. The job id lives on
-                # .operation; a rebuild that only copies message /
-                # finish_reason drops it.
                 raise GenkitError(
                     status='FAILED_PRECONDITION',
                     message=(
@@ -915,7 +912,13 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    if model.kind == ActionKind.BACKGROUND_MODEL and response.operation is None:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=('wrap_generate returned no operation for a background model; pass through response.operation'),
+        )
+    return response
 
 
 def apply_format(
