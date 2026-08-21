@@ -77,6 +77,8 @@ var (
 	geminiConfigSchema = configToMap(genai.GenerateContentConfig{})
 	imagenConfigSchema = configToMap(genai.GenerateImagesConfig{})
 	veoConfigSchema    = configToMap(genai.GenerateVideosConfig{})
+
+	lyriaConfigSchema = configToMap(LyriaConfig{})
 )
 
 // Default options for unknown models of each type. Every catalog entry is
@@ -100,6 +102,12 @@ var (
 		Supports:     &VeoSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: veoConfigSchema,
+	}
+
+	defaultLyriaOpts = ai.ModelOptions{
+		Supports:     &Media,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(LyriaConfig{}),
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
@@ -157,6 +165,8 @@ const (
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 	veo31LiteGeneratePreview = "veo-3.1-lite-generate-preview"
 
+	lyria002 = "lyria-002"
+
 	textembedding005             = "text-embedding-005"
 	textembedding004             = "text-embedding-004"
 	textmultilingualembedding002 = "text-multilingual-embedding-002"
@@ -193,6 +203,8 @@ var (
 		veo31Generate001,
 		veo31FastGenerate001,
 		veo31LiteGenerate001,
+
+		lyria002,
 	}
 
 	googleAIModels = []string{
@@ -363,6 +375,15 @@ var (
 		},
 	}
 
+	supportedLyriaModels = map[string]ai.ModelOptions{
+		lyria002: {
+			Label:    "Lyria 002",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+	}
+
 	supportedImagenModels = map[string]ai.ModelOptions{
 		imagen40FastGenerate001: {
 			Label:    "Imagen 4 Fast Generate 001",
@@ -501,6 +522,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if !ok {
 			opts = defaultVeoOpts
 		}
+	case ModelTypeLyria:
+		opts, ok = supportedLyriaModels[name]
+		if !ok {
+			opts = defaultLyriaOpts
+		}
 	default:
 		opts = defaultGeminiOpts
 	}
@@ -561,6 +587,7 @@ type genaiModels struct {
 	imagen    []string
 	embedders []string
 	veo       []string
+	lyria     []string
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
@@ -590,6 +617,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		if strings.Contains(name, "veo") {
 			models.veo = append(models.veo, name)
+			continue
+		}
+
+		if strings.HasPrefix(name, "lyria") {
+			models.lyria = append(models.lyria, name)
 			continue
 		}
 

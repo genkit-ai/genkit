@@ -299,6 +299,32 @@ func TestVertexAILive(t *testing.T) {
 			t.Error("no media found in the response message")
 		}
 	})
+	t.Run("lyria music generation", func(t *testing.T) {
+		m := googlegenai.VertexAIModel(g, "lyria-002")
+		if m == nil {
+			t.Fatal("lyria-002 model was not registered")
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserTextMessage("A short upbeat jazz piano riff")),
+			ai.WithConfig(&googlegenai.LyriaConfig{SampleCount: 1}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Message.Content) == 0 {
+			t.Fatal("empty response")
+		}
+		foundAudio := false
+		for _, part := range resp.Message.Content {
+			if part.Kind == ai.PartMedia && strings.HasPrefix(part.ContentType, "audio/") {
+				foundAudio = true
+			}
+		}
+		if !foundAudio {
+			t.Error("no audio media part found in Lyria response")
+		}
+	})
 	t.Run("constrained generation", func(t *testing.T) {
 		type outFormat struct {
 			Country string

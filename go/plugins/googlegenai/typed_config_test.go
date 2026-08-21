@@ -51,6 +51,7 @@ func TestConfigSchemaMatchesDefaultConfig(t *testing.T) {
 		"gemini": ModelTypeGemini,
 		"imagen": ModelTypeImagen,
 		"veo":    ModelTypeVeo,
+		"lyria":  ModelTypeLyria,
 	} {
 		if !reflect.DeepEqual(mt.configSchema(), configToMap(mt.DefaultConfig())) {
 			t.Errorf("%s: configSchema() diverges from configToMap(DefaultConfig())", name)
