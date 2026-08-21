@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, TypeVar
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
@@ -340,11 +340,32 @@ async def lookup_background_action(
     )
 
 
+def require_operation(*, value: object) -> Operation:
+    """A poll handle is an Operation. A dump or generate() box is not."""
+    if isinstance(value, Operation):
+        return value
+    if isinstance(value, ModelResponse):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='got ModelResponse; pass response.operation',
+        )
+    if isinstance(value, Mapping):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='got a dump; pass Operation.model_validate(...)',
+        )
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'got {type(value).__name__}, expected Operation',
+    )
+
+
 async def resolve_operation_action(
     registry: Registry,
     operation: Operation,
 ) -> tuple[Operation, BackgroundAction]:
     """Turn a poll handle into the background action that owns it."""
+    operation = require_operation(value=operation)
     if not operation.action:
         raise GenkitError(
             status='INVALID_ARGUMENT',

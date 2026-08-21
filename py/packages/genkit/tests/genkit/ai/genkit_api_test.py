@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from genkit import Genkit
-from genkit._core._action import _action_context
+from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError
+from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import Operation
 
 
@@ -110,6 +111,42 @@ async def test_check_operation_accepts_dumped_operation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_operation_dump_is_invalid_argument() -> None:
+    """A saved dict is not an Operation until model_validate."""
+    ai = Genkit()
+    dumped = {
+        'id': '123',
+        'done': False,
+        'action': '/background-model/test_action',
+        'latencyMs': 42,
+    }
+
+    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
+        await ai.check_operation(dumped)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_boxed_response_is_invalid_argument() -> None:
+    """generate() returns a ModelResponse; the handle is response.operation."""
+    ai = Genkit()
+    boxed = ModelResponse(operation=Operation(id='123', action='/background-model/test_action'))
+
+    with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
+        await ai.check_operation(boxed)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_str_is_invalid_argument() -> None:
+    ai = Genkit()
+
+    with pytest.raises(GenkitError, match='got str, expected Operation') as exc_info:
+        await ai.check_operation('not-an-op')  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
 async def test_cancel_operation_accepts_dumped_operation() -> None:
     """Cancel accepts the same persisted Operation dump as check."""
     ai = Genkit()
@@ -132,6 +169,21 @@ async def test_cancel_operation_accepts_dumped_operation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_operation_dump_is_invalid_argument() -> None:
+    ai = Genkit()
+    dumped = {
+        'id': '123',
+        'done': False,
+        'action': '/background-model/test_action',
+        'latencyMs': 42,
+    }
+
+    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
+        await ai.cancel_operation(dumped)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
 async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     ai = Genkit()
     op = Operation(id='123', done=False, action='/background-model/test_action')
@@ -147,6 +199,25 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
             await ai.cancel_operation(op)
     assert exc_info.value.status == 'UNIMPLEMENTED'
     mock_background_action.cancel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
+    """A real no-cancel BackgroundAction raises UNIMPLEMENTED from .cancel."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='1', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai = Genkit()
+    action = ai.define_background_model(name='no-cancel', start=start, check=check)
+    op = Operation(id='1', action='/background-model/no-cancel')
+
+    with pytest.raises(GenkitError, match='does not support cancellation') as exc_info:
+        await action.cancel(op)
+    assert exc_info.value.status == 'UNIMPLEMENTED'
 
 
 @pytest.mark.asyncio
