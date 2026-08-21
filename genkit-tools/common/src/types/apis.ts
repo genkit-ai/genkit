@@ -175,6 +175,7 @@ export type CancelActionRequest = z.infer<typeof CancelActionRequestSchema>;
 export const CreatePromptRequestSchema = z.object({
   model: z.string(),
   messages: z.array(MessageSchema),
+  picoSchema: z.boolean().optional(),
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
   use: z.array(MiddlewareRefSchema).optional(),
