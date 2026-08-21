@@ -49,6 +49,7 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     normalize_config,
+    reject_wrong_config_class,
     resolve_call_model,
 )
 from genkit._ai._tools import Tool
@@ -370,8 +371,13 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         )
         return cast(ModelResponse[OutputT], result)
 
-    def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
+    async def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
+        await reject_wrong_config_class(
+            config=opts.get('config'),
+            model=opts.get('model') or self._model,
+            registry=self._registry,
+        )
         output_opts = opts.get('output') or {}
         merged_config: Mapping[str, Any] | BaseModel | None
         if opts.get('config') is not None:
@@ -605,7 +611,7 @@ async def _prepare(
         * ``gen_options`` — the resolved request the engine consumes.
     """
     await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
-    prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
+    prompt_config = await ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
     child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
     await register_tools(child_registry, prompt_config.tools)
     refs = register_middleware(child_registry, prompt_config.use)

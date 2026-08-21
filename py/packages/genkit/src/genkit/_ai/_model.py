@@ -322,12 +322,56 @@ def define_model(
     model_meta['model'] = model_options
 
     model_description = get_func_description(fn, description)
-    return registry.register_action(
+    action = registry.register_action(
         name=name,
         kind=ActionKind.MODEL,
         fn=fn,
         metadata=model_meta,
         description=model_description,
+    )
+    attach_config_schema(action=action, config_schema=config_schema)
+    return action
+
+
+def attach_config_schema(*, action: Action, config_schema: type | dict[str, Any] | None) -> None:
+    """Keep the Python class on the action so generate can isinstance-check config=."""
+    if isinstance(config_schema, type) and issubclass(config_schema, BaseModel):
+        action._config_schema = config_schema
+
+
+async def expected_config_schema(*, model: object | None, registry: Registry) -> type[BaseModel] | None:
+    """Python config class for a name or ModelRef, if one exists."""
+    try:
+        resolved = resolve_model_arg(model=model, registry=registry)
+    except GenkitError:
+        return None
+    if isinstance(resolved, ModelRef):
+        schema = resolved.config_schema
+        return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+    action = await registry.resolve_model(resolved)
+    raw = getattr(action, '_config_schema', None) if action is not None else None
+    return raw if isinstance(raw, type) and issubclass(raw, BaseModel) else None
+
+
+async def reject_wrong_config_class(
+    *,
+    config: object,
+    model: object | None,
+    registry: Registry,
+) -> None:
+    """A Pydantic config instance must match the resolved model's schema.
+
+    Dicts stay legal. Omit / ``None`` skip this. A model with no Python schema
+    class (JSON-only or unset) cannot be checked.
+    """
+    if not isinstance(config, BaseModel):
+        return
+    expected = await expected_config_schema(model=model, registry=registry)
+    if expected is None or isinstance(config, expected):
+        return
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'config must be {expected.__name__} or a mapping, got {type(config).__name__}',
     )
 
 

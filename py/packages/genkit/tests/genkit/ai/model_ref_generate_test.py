@@ -981,3 +981,127 @@ async def test_constructor_string_default_has_no_ref_bag() -> None:
     assert echo.last_request is not None
     assert _config_value(echo.last_request.config, 'temperature') is None
     assert _config_value(echo.last_request.config, 'version') is None
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_wrong_config_class_on_ref() -> None:
+    """A Pydantic instance must match the ModelRef schema."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await ai.generate(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_wrong_config_class_on_string_model() -> None:
+    """A string model still has the class from define_model."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await ai.generate(model='flash', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_matching_class_on_string_model() -> None:
+    """The matching class still dumps and reaches the plugin."""
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    await ai.generate(model='flash', prompt='hi', config=CustomConfig(temperature=0.4))
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.4
+
+
+@pytest.mark.asyncio
+async def test_generate_wrong_family_dict_still_legal() -> None:
+    """A dict is never rejected by the class check."""
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    await ai.generate(model='flash', prompt='hi', config={'frequency_penalty': 0.2})
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'frequency_penalty') == 0.2
+
+
+@pytest.mark.asyncio
+async def test_prompt_rejects_wrong_config_class() -> None:
+    """joke(config=WrongClass) uses the same check as generate."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+    joke = ai.define_prompt(name='joke', prompt='hi', model=ref)
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_wrong_class_on_constructor_ref() -> None:
+    """Omitting model= still checks against the constructor ModelRef."""
+    flash = model_ref('flash', config_schema=CustomConfig)
+    ai = Genkit(model=flash)
+    define_echo_model(ai, name='flash')
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await ai.generate(prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_same_name_string_ignores_constructor_schema_when_action_has_none() -> None:
+    """Lane C checks the action. No class on define_model means no class check.
+
+    Constructor flash has CustomConfig; the registered model does not.
+    """
+    flash = model_ref('flash', config_schema=CustomConfig)
+    ai = Genkit(model=flash)
+    echo, _ = define_echo_model(ai, name='flash')
+
+    await ai.generate(model='flash', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'frequency_penalty') == 0.2
+
+
+@pytest.mark.asyncio
+async def test_prompt_model_beats_constructor_and_rejects_wrong_class() -> None:
+    """A prompt that named a model does not inherit the constructor ref."""
+    flash = model_ref(
+        'flash',
+        config_schema=CustomConfig,
+        config=CustomConfig(temperature=0.7),
+    )
+    gpt = model_ref(
+        'gpt',
+        config_schema=OtherFamilyConfig,
+        config=OtherFamilyConfig(frequency_penalty=0.5),
+    )
+    ai = Genkit(model=gpt)
+    echo, _ = define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
+    joke = ai.define_prompt(name='joke', prompt='hi', model=flash)
+
+    await joke()
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.7
+    assert _config_value(echo.last_request.config, 'frequency_penalty') is None
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_prompt_without_model_rejects_wrong_class_on_constructor_ref() -> None:
+    """A prompt with no model= still checks against the constructor ModelRef."""
+    flash = model_ref('flash', config_schema=CustomConfig)
+    ai = Genkit(model=flash)
+    define_echo_model(ai, name='flash')
+    joke = ai.define_prompt(name='joke', prompt='hi')
+
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await joke(config=OtherFamilyConfig(frequency_penalty=0.2))

@@ -283,6 +283,8 @@ def define_background_model(
         metadata=model_meta,
         description=description or f'Background model: {label}',
     )
+    if isinstance(config_schema, type) and issubclass(config_schema, BaseModel):
+        start_action._config_schema = config_schema
 
     # Register the check action
     check_action = registry.register_action(

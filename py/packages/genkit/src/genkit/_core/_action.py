@@ -428,6 +428,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._name: str = name
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
+        # Python config class from define_model. Not in metadata — that bag is JSON.
+        self._config_schema: type[BaseModel] | None = None
         self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
         # Optional matcher function for resource actions
         self.matches: Callable[[object], bool] | None = None
