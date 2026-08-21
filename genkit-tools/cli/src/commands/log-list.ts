@@ -16,8 +16,12 @@
 
 import type { LogQueryFilter } from '@genkit-ai/tools-common';
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
-import { Command } from 'commander';
+import {
+  findProjectRoot,
+  forceStderr,
+  logger,
+} from '@genkit-ai/tools-common/utils';
+import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
 
 export interface LogListOptions {
@@ -26,7 +30,7 @@ export interface LogListOptions {
   spanId?: string;
   severity?: string;
   continuationToken?: string;
-  verbose?: boolean;
+  format: 'text' | 'jsonl';
 }
 
 /**
@@ -42,12 +46,14 @@ export const logList = new Command('log:list')
     '--severity <severity>',
     'filter by severity (e.g., INFO, ERROR, WARNING)'
   )
-  .option(
-    '-v, --verbose',
-    'display the full JSON log instead of the preview message'
+  .addOption(
+    new Option('-f, --format <format>', 'output format')
+      .choices(['text', 'jsonl'])
+      .default('text')
   )
   .option('--continuation-token <token>', 'continuation token for pagination')
   .action(async (options: LogListOptions) => {
+    if (options.format === 'jsonl') forceStderr();
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -86,10 +92,9 @@ export const logList = new Command('log:list')
 
         const logs = response.logs;
 
-        if (options.verbose) {
+        if (options.format === 'jsonl') {
           logs.forEach((log) => {
-            console.log(JSON.stringify(log, null, 2));
-            console.log('---');
+            console.log(JSON.stringify(log));
           });
         } else {
           console.log(
@@ -107,6 +112,10 @@ export const logList = new Command('log:list')
             const attributes = formatAttributes(log.attributes);
 
             console.log(`ID:       ${id}`);
+            if (!options.traceId && log.traceId)
+              console.log(`Trace ID: ${log.traceId}`);
+            if (!options.spanId && log.spanId)
+              console.log(`Span ID:  ${log.spanId}`);
             console.log(`Severity: ${severity}`);
             console.log(`Time:     ${time}`);
             if (message) console.log(`Message:  ${message}`);
@@ -117,9 +126,15 @@ export const logList = new Command('log:list')
         }
 
         if (response.continuationToken) {
-          console.log(
-            `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
-          );
+          if (options.format === 'jsonl') {
+            logger.info(
+              `To get the next page, use: --continuation-token ${response.continuationToken}`
+            );
+          } else {
+            console.log(
+              `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
+            );
+          }
         }
       } catch (e) {
         logger.error(`Error listing logs: ${e}`);

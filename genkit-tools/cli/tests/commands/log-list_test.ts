@@ -156,6 +156,8 @@ describe('log:list command', () => {
       logs: [
         {
           logId: 'log-123',
+          traceId: 'trace-123',
+          spanId: 'span-123',
           timestamp: 1718302195000,
           severityText: 'WARN',
           body: 'A'.repeat(110),
@@ -180,6 +182,8 @@ describe('log:list command', () => {
     ]);
 
     expect(console.log).toHaveBeenCalledWith('ID:       log-123');
+    expect(console.log).toHaveBeenCalledWith('Trace ID: trace-123');
+    expect(console.log).toHaveBeenCalledWith('Span ID:  span-123');
     expect(console.log).toHaveBeenCalledWith('Severity: WARN');
     expect(console.log).toHaveBeenCalledWith(
       `Time:     ${new Date(1718302195000).toLocaleString()}`
@@ -188,12 +192,12 @@ describe('log:list command', () => {
     expect(console.log).toHaveBeenCalledWith('Attrs:    key=value');
   });
 
-  it('should output full logs as json in verbose mode', async () => {
+  it('should output logs in jsonl format', async () => {
     mockManager.listLogs.mockResolvedValue({
       logs: [
         {
           timestamp: 1718302195000,
-          body: 'Verbose log',
+          body: 'JSONL log',
         },
       ],
     });
@@ -201,7 +205,8 @@ describe('log:list command', () => {
     await logList.parseAsync([
       'node',
       'log:list',
-      '--verbose',
+      '--format',
+      'jsonl',
       '--limit',
       '15',
       '--severity',
@@ -220,12 +225,8 @@ describe('log:list command', () => {
       filter: undefined,
     });
 
-    // In verbose mode, it dumps the full JSON using JSON.stringify(log, null, 2)
     expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('"body": "Verbose log"')
-    );
-    expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('"timestamp": 1718302195000')
+      JSON.stringify({ timestamp: 1718302195000, body: 'JSONL log' })
     );
   });
 
