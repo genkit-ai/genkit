@@ -658,14 +658,14 @@ async def generate_image(data: ImageInput) -> dict[str, object]:
         config={'aspect_ratio': data.aspect_ratio, 'output_format': data.output_format},
     )
     media = response.media
-    if not media:
+    if media is None:
         raise RuntimeError(f'Bedrock returned no images for {data.model}.')
-    url = media[0].url
+    url = media.url
     _, _, payload = url.partition(',')
     return {
         'model': data.model,
-        'images': len(media),
-        'content_type': media[0].content_type,
+        'images': 1,
+        'content_type': media.content_type,
         'approx_kilobytes': round(len(payload) * 3 / 4 / 1024),
         'data_url_preview': f'{url[:48]}...',
     }
