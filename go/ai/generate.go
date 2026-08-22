@@ -196,9 +196,10 @@ type ModelOptions struct {
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
-			// The request and response are recorded on the action's trace span;
-			// no need to duplicate them here.
-			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
+			// The action's own span records the request and response, and
+			// stands in for the first turn's: opening one would nest a
+			// duplicate "generate" span directly inside it.
+			return generateWithRequest(ctx, r, actionOpts, nil, cb, false /* spanTurnZero */)
 		})
 	a.Register(r)
 	return (*generateAction)(a)
@@ -320,6 +321,13 @@ func LookupModel(r api.Registry, name string) Model {
 
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
 func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback) (*ModelResponse, error) {
+	return generateWithRequest(ctx, r, opts, mmws, cb, true /* spanTurnZero */)
+}
+
+// generateWithRequest runs the tool loop. spanTurnZero reports whether the
+// first turn opens its own "generate" span; the generate action passes false
+// because its own span already serves as that one.
+func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
 			opts.Model = defaultModel
@@ -485,157 +493,168 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	runTool := buildToolRunner(mws)
 
 	var generate func(context.Context, *ModelRequest, int, int) (*ModelResponse, error)
-	var runGenerate func(context.Context, *GenerateParams) (*ModelResponse, error)
 
-	runGenerate = func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
-		name := params.Options.StepName
+	runTurn := func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+		req := params.Request
+		currentTurn := params.Iteration
+		messageIndex := params.MessageIndex
+		var wrappedCb ModelStreamCallback
+		currentRole := RoleModel
+		currentIndex := messageIndex
+
+		if cb != nil {
+			wrappedCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
+				if chunk.Role != currentRole && chunk.Role != "" {
+					currentIndex++
+					currentRole = chunk.Role
+				}
+				chunk.Index = currentIndex
+				if chunk.Role == "" {
+					chunk.Role = RoleModel
+				}
+				chunk.formatHandler = streamingHandler
+				return cb(ctx, chunk)
+			}
+		}
+
+		// Resume on the first turn is handled here so that restarted tool
+		// execution is both wrapped by WrapGenerate and recorded under this
+		// turn's span (generate > tool > generate > model > tool).
+		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
+			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
+			if err != nil {
+				return nil, err
+			}
+
+			if resumeOutput.interruptedResponse != nil {
+				return nil, status.Errorf(status.ErrFailedPrecondition,
+					"One or more tools triggered an interrupt during a restarted execution.")
+			}
+
+			opts = resumeOutput.revisedRequest
+
+			if resumeOutput.toolMessage != nil && wrappedCb != nil {
+				if err := wrappedCb(ctx, &ModelResponseChunk{
+					Content: resumeOutput.toolMessage.Content,
+					Role:    RoleTool,
+				}); err != nil {
+					return nil, fmt.Errorf("streaming callback failed for resumed tool message: %w", err)
+				}
+			}
+
+			resumeReq := &ModelRequest{
+				Messages:   opts.Messages,
+				Config:     req.Config,
+				Docs:       req.Docs,
+				ToolChoice: req.ToolChoice,
+				Tools:      req.Tools,
+				Output:     req.Output,
+			}
+			return generate(ctx, resumeReq, currentTurn+1, currentIndex)
+		}
+
+		logger.Debug(ctx, "calling model", "model", opts.Model, "turn", currentTurn, "messages", len(req.Messages))
+		resp, err := fn(ctx, req, wrappedCb)
+		if err != nil {
+			return nil, err
+		}
+
+		// ToolRequests allocates a scan of the message, so only build the
+		// log arguments when a handler accepts debug records.
+		if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+			modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
+			if resp.Usage != nil {
+				modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
+			}
+			logger.Debug(ctx, "model responded", modelArgs...)
+		}
+
+		// Ensure all tool requests have unique refs for matching during resume.
+		ensureToolRequestRefs(resp.Message)
+
+		// If this is a long-running operation response, return it immediately without further processing
+		if bm != nil && resp.Operation != nil {
+			return resp, nil
+		}
+
+		if formatHandler != nil {
+			resp.formatHandler = streamingHandler
+			switch resp.FinishReason {
+			case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
+				// A termination known to be abnormal carries no conforming
+				// output, and a schema error here would mask the
+				// FinishReason and FinishMessage the caller needs to
+				// handle it, so the response passes through as-is.
+				// FinishReasonUnknown is not in this set on purpose:
+				// plugins map unrecognized provider reasons to it, and
+				// ParseMessage is the only place the output schema is
+				// enforced, so skipping it on an unclassified reason would
+				// silently drop validation for output the model may well
+				// have completed.
+				logger.Warn(ctx, "model finished abnormally, skipping output parsing",
+					"model", opts.Model,
+					"finishReason", resp.FinishReason,
+					"finishMessage", resp.FinishMessage)
+			default:
+				// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
+				resp.Message, err = formatHandler.ParseMessage(resp.Message)
+				if err != nil {
+					logger.Debug(ctx, "model output does not match the expected schema", "model", opts.Model, "error", err)
+					return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
+				}
+			}
+		}
+
+		if len(resp.ToolRequests()) == 0 || opts.ReturnToolRequests {
+			return resp, nil
+		}
+
+		if currentTurn+1 > maxTurns {
+			return nil, status.Errorf(ErrMaxTurnsExceeded, "exceeded maximum tool call iterations (%d)", maxTurns)
+		}
+
+		newReq, interruptMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
+		if err != nil {
+			return nil, err
+		}
+		if interruptMsg != nil {
+			logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
+			resp.FinishReason = "interrupted"
+			resp.FinishMessage = "One or more tool calls resulted in interrupts."
+			resp.Message = interruptMsg
+			return resp, nil
+		}
+		if newReq == nil {
+			return resp, nil
+		}
+
+		return generate(ctx, newReq, currentTurn+1, currentIndex+1)
+	}
+
+	// runGenerate opens the turn's span around runTurn. The span records the
+	// messages this turn sends rather than the ones the call started with, and
+	// is built after the WrapGenerate hooks so it includes theirs.
+	runGenerate := func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+		if params.Iteration == 0 && !spanTurnZero {
+			return runTurn(ctx, params)
+		}
+		name := opts.StepName
 		if name == "" {
 			name = "generate"
 		}
+		// No subtype, as in TypeScript: the type says it all, and a subtype
+		// would annotate the trace path as well.
 		spanMetadata := &tracing.SpanMetadata{
-			Name:    name,
-			Type:    "util",
-			Subtype: "util",
+			Name: name,
+			Type: "util",
 		}
+		spanInput := turnOptions(opts)
+		spanInput.Messages = params.Request.Messages
 
-		return tracing.RunInNewSpan(ctx, spanMetadata, params.Options, func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
-			req := params.Request
-			currentTurn := params.Iteration
-			messageIndex := params.MessageIndex
-			var wrappedCb ModelStreamCallback
-			currentRole := RoleModel
-			currentIndex := messageIndex
-
-			if cb != nil {
-				wrappedCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
-					if chunk.Role != currentRole && chunk.Role != "" {
-						currentIndex++
-						currentRole = chunk.Role
-					}
-					chunk.Index = currentIndex
-					if chunk.Role == "" {
-						chunk.Role = RoleModel
-					}
-					chunk.formatHandler = streamingHandler
-					return cb(ctx, chunk)
-				}
-			}
-
-			// Handle resume on the first iteration inside this span so that
-			// restarted tool execution is both wrapped by WrapGenerate (from
-			// the outer middleware chain) and recorded as a child of the
-			// current generate span (lifecycle: generate > tool > generate >
-			// model > tool).
-			if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
-				resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
-				if err != nil {
-					return nil, err
-				}
-
-				if resumeOutput.interruptedResponse != nil {
-					return nil, status.Errorf(status.ErrFailedPrecondition,
-						"One or more tools triggered an interrupt during a restarted execution.")
-				}
-
-				opts = resumeOutput.revisedRequest
-
-				if resumeOutput.toolMessage != nil && wrappedCb != nil {
-					if err := wrappedCb(ctx, &ModelResponseChunk{
-						Content: resumeOutput.toolMessage.Content,
-						Role:    RoleTool,
-					}); err != nil {
-						return nil, fmt.Errorf("streaming callback failed for resumed tool message: %w", err)
-					}
-				}
-
-				resumeReq := &ModelRequest{
-					Messages:   opts.Messages,
-					Config:     req.Config,
-					Docs:       req.Docs,
-					ToolChoice: req.ToolChoice,
-					Tools:      req.Tools,
-					Output:     req.Output,
-				}
-				return generate(ctx, resumeReq, currentTurn+1, currentIndex)
-			}
-
-			logger.Debug(ctx, "calling model", "model", opts.Model, "turn", currentTurn, "messages", len(req.Messages))
-			resp, err := fn(ctx, req, wrappedCb)
-			if err != nil {
-				return nil, err
-			}
-
-			// ToolRequests allocates a scan of the message, so only build the
-			// log arguments when a handler accepts debug records.
-			if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
-				modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
-				if resp.Usage != nil {
-					modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
-				}
-				logger.Debug(ctx, "model responded", modelArgs...)
-			}
-
-			// Ensure all tool requests have unique refs for matching during resume.
-			ensureToolRequestRefs(resp.Message)
-
-			// If this is a long-running operation response, return it immediately without further processing
-			if bm != nil && resp.Operation != nil {
-				return resp, nil
-			}
-
-			if formatHandler != nil {
-				resp.formatHandler = streamingHandler
-				switch resp.FinishReason {
-				case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
-					// A termination known to be abnormal carries no conforming
-					// output, and a schema error here would mask the
-					// FinishReason and FinishMessage the caller needs to
-					// handle it, so the response passes through as-is.
-					// FinishReasonUnknown is not in this set on purpose:
-					// plugins map unrecognized provider reasons to it, and
-					// ParseMessage is the only place the output schema is
-					// enforced, so skipping it on an unclassified reason would
-					// silently drop validation for output the model may well
-					// have completed.
-					logger.Warn(ctx, "model finished abnormally, skipping output parsing",
-						"model", opts.Model,
-						"finishReason", resp.FinishReason,
-						"finishMessage", resp.FinishMessage)
-				default:
-					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
-					resp.Message, err = formatHandler.ParseMessage(resp.Message)
-					if err != nil {
-						logger.Debug(ctx, "model output does not match the expected schema", "model", opts.Model, "error", err)
-						return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
-					}
-				}
-			}
-
-			if len(resp.ToolRequests()) == 0 || opts.ReturnToolRequests {
-				return resp, nil
-			}
-
-			if currentTurn+1 > maxTurns {
-				return nil, status.Errorf(ErrMaxTurnsExceeded, "exceeded maximum tool call iterations (%d)", maxTurns)
-			}
-
-			newReq, interruptMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
-			if err != nil {
-				return nil, err
-			}
-			if interruptMsg != nil {
-				logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
-				resp.FinishReason = "interrupted"
-				resp.FinishMessage = "One or more tool calls resulted in interrupts."
-				resp.Message = interruptMsg
-				return resp, nil
-			}
-			if newReq == nil {
-				return resp, nil
-			}
-
-			return generate(ctx, newReq, currentTurn+1, currentIndex+1)
-		})
+		return tracing.RunInNewSpan(ctx, spanMetadata, spanInput,
+			func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
+				return runTurn(ctx, params)
+			})
 	}
 
 	// Compose WrapGenerate hooks once; this chain is invoked for every
@@ -644,7 +663,9 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 	generate = func(ctx context.Context, req *ModelRequest, currentTurn int, messageIndex int) (*ModelResponse, error) {
 		return hookedGenerate(ctx, &GenerateParams{
-			Options:      opts,
+			// The hooks get their own copy of the options: a hook writing to
+			// it must reach neither the loop nor the turns after it.
+			Options:      turnOptions(opts),
 			Request:      req,
 			Iteration:    currentTurn,
 			MessageIndex: messageIndex,
@@ -667,6 +688,18 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	logger.Debug(ctx, "generate request resolved", resolvedArgs...)
 
 	return generate(ctx, req, 0, 0)
+}
+
+// turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and
+// the turn's span. Messages and Resume are the fields the loop reads back, so
+// the copy detaches both; everything else is shared.
+func turnOptions(opts *GenerateActionOptions) *GenerateActionOptions {
+	turn := *opts
+	if turn.Resume != nil {
+		resume := *turn.Resume
+		turn.Resume = &resume
+	}
+	return &turn
 }
 
 // middlewareNames returns the names of the resolved middleware in chain
@@ -1417,10 +1450,13 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}
 	}
 
-	newReq := req
+	// The next turn gets its own request value: appending to the current one
+	// would retroactively grow the request a WrapModel or WrapGenerate hook is
+	// still holding.
+	newReq := *req
 	newReq.Messages = append(slices.Clone(req.Messages), resp.Message, toolMsg)
 
-	return newReq, nil, nil
+	return &newReq, nil, nil
 }
 
 // Text returns the contents of the first candidate in a
@@ -2070,20 +2106,15 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	}
 	revisedMessages := append(slices.Clone(messages), toolMessage)
 
+	// Copied rather than rebuilt field by field, so that a field added to
+	// GenerateActionOptions carries through a resume without being listed here.
+	revised := *genOpts
+	revised.Messages = revisedMessages
+	revised.Resume = nil // These directives have now been applied.
+
 	return &resumeOptionOutput{
-		revisedRequest: &GenerateActionOptions{
-			Model:              genOpts.Model,
-			Messages:           revisedMessages,
-			Tools:              genOpts.Tools,
-			MaxTurns:           genOpts.MaxTurns,
-			Config:             genOpts.Config,
-			ToolChoice:         genOpts.ToolChoice,
-			Docs:               genOpts.Docs,
-			ReturnToolRequests: genOpts.ReturnToolRequests,
-			Output:             genOpts.Output,
-			Use:                genOpts.Use,
-		},
-		toolMessage: toolMessage,
+		revisedRequest: &revised,
+		toolMessage:    toolMessage,
 	}, nil
 }
 
