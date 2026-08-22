@@ -86,6 +86,49 @@ The advertised schema is reflected from the openai-go version your build
 links, so a field OpenAI ships tomorrow becomes usable, and validated, by
 bumping `github.com/openai/openai-go` in your own go.mod.
 
+## Text to speech
+
+The plugin registers `tts-1`, `tts-1-hd`, and `gpt-4o-mini-tts`. Speech
+responses contain a base64 data URI in a media part. `gpt-4o-mini-tts` also
+accepts instructions for controlling delivery.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("openai/tts-1"),
+    ai.WithPrompt("Hello from Genkit."),
+    ai.WithConfig(&compat_oai.SpeechConfig{
+        Voice:          openai.AudioSpeechNewParamsVoiceAlloy,
+        ResponseFormat: openai.AudioSpeechNewParamsResponseFormatMP3,
+    }),
+)
+```
+
+## Speech to text
+
+The plugin registers `whisper-1`, `gpt-4o-transcribe`, and
+`gpt-4o-mini-transcribe`. Supply audio as a data URI media part; remote media
+URIs and unsupported audio types are rejected. An optional text part in the
+same message is sent as the transcription prompt. Transcription models
+advertise text output; GPT transcription uses the provider's JSON wire format
+internally. Set `Translate: true` in `WhisperConfig` to translate Whisper
+input into English.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("openai/whisper-1"),
+    ai.WithMessages(ai.NewUserMessage(
+        ai.NewTextPart("Use the provided spelling for Genkit."),
+        ai.NewMediaPart("audio/wav", "data:audio/wav;base64,..."),
+    )),
+    ai.WithConfig(&compat_oai.WhisperConfig{
+        TranscriptionConfig: compat_oai.TranscriptionConfig{
+            ResponseFormat: openai.AudioResponseFormatText,
+        },
+        Translate: true,
+    }),
+)
+```
+
 ## Embedders
 
 `text-embedding-3-large`, `text-embedding-3-small`, and
@@ -114,3 +157,4 @@ Live tests are skipped unless `OPENAI_API_KEY` is set:
 ```bash
 go test -v ./plugins/compat_oai/openai
 ```
+
