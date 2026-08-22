@@ -40,6 +40,26 @@ func main() {
 }
 ```
 
+Hosted or proxied Ollama servers can send extra headers on every request
+(`/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, and `/api/show`):
+
+```go
+o := &ollama.Ollama{
+ ServerAddress: "https://ollama.example.com",
+ RequestHeaders: map[string]string{
+  "Authorization": "Bearer <token>",
+ },
+}
+
+// Or generate headers per request (takes precedence over RequestHeaders):
+o.RequestHeaderFunc = func(ctx context.Context, params ollama.HeaderParams) (map[string]string, error) {
+ return map[string]string{"Authorization": "Bearer <token>"}, nil
+}
+```
+
+`HeaderParams` fields other than `ServerAddress` may be nil depending on the
+call site (for example `/api/tags` has no model).
+
 ## Language Models
 
 Because Ollama models are locally hosted and the available models depend on what the user has pulled (`ollama pull <model>`), the plugin doesn't pre-initialize any default models. You must define them explicitly.

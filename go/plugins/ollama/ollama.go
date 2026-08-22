@@ -108,6 +108,14 @@ func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]
 		return nil, fmt.Errorf("failed to create /api/show request for %q: %w", modelName, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := o.resolveHeaders(ctx, HeaderParams{
+		ServerAddress: o.ServerAddress,
+		Model:         &ModelDefinition{Name: modelName},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve request headers: %w", err)
+	}
+	applyHeaders(req, headers)
 	client := o.client
 	if client == nil {
 		client = http.DefaultClient
@@ -173,6 +181,11 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	headers, err := o.resolveHeaders(ctx, HeaderParams{ServerAddress: o.ServerAddress})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve request headers: %w", err)
+	}
+	applyHeaders(req, headers)
 	resp, err := o.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch local models from Ollama: %w", err)
@@ -226,7 +239,13 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		Versions:     []string{},
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 	}
-	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
+	gen := &generator{
+		model:             model,
+		serverAddress:     o.ServerAddress,
+		timeout:           o.Timeout,
+		requestHeaders:    o.RequestHeaders,
+		requestHeaderFunc: o.RequestHeaderFunc,
+	}
 	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
 }
 
@@ -248,9 +267,11 @@ type ModelDefinition struct {
 }
 
 type generator struct {
-	model         ModelDefinition
-	serverAddress string
-	timeout       int
+	model             ModelDefinition
+	serverAddress     string
+	timeout           int
+	requestHeaders    map[string]string
+	requestHeaderFunc RequestHeaderFunc
 }
 
 type ollamaMessage struct {
@@ -404,6 +425,14 @@ type Ollama struct {
 	ServerAddress string // Server address of oLLama.
 	Timeout       int    // Response timeout in seconds (defaulted to 30 seconds)
 
+	// RequestHeaders are static headers applied to every Ollama HTTP request
+	// (model generate, embed, /api/tags, and /api/show). Useful for authenticating
+	// against hosted or proxied Ollama deployments.
+	RequestHeaders map[string]string
+	// RequestHeaderFunc, when set, is called per request to produce headers and
+	// takes precedence over RequestHeaders (matching the JS static-or-function API).
+	RequestHeaderFunc RequestHeaderFunc
+
 	mu      sync.Mutex   // Guards the plugin's own state below.
 	initted bool         // Whether the plugin has been initialized.
 	client  *http.Client // Shared HTTP client for API calls (e.g., /api/tags).
@@ -509,9 +538,11 @@ func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 	}
 	gen := &generator{
-		model:         ModelDefinition{Name: name, Type: "chat"},
-		serverAddress: o.ServerAddress,
-		timeout:       o.Timeout,
+		model:             ModelDefinition{Name: name, Type: "chat"},
+		serverAddress:     o.ServerAddress,
+		timeout:           o.Timeout,
+		requestHeaders:    o.RequestHeaders,
+		requestHeaderFunc: o.RequestHeaderFunc,
 	}
 	return ai.NewModel(api.NewName(provider, name), meta, gen.generate)
 }
@@ -677,6 +708,15 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := g.resolveHeaders(ctx, HeaderParams{
+		ServerAddress: g.serverAddress,
+		Model:         &g.model,
+		ModelRequest:  input,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve request headers: %w", err)
+	}
+	applyHeaders(req, headers)
 	req = req.WithContext(ctx)
 
 	resp, err := client.Do(req)
