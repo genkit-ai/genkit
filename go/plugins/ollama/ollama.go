@@ -708,9 +708,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	modelCopy := g.model
 	headers, err := g.resolveHeaders(ctx, HeaderParams{
 		ServerAddress: g.serverAddress,
-		Model:         &g.model,
+		Model:         &modelCopy,
 		ModelRequest:  input,
 	})
 	if err != nil {
