@@ -20,6 +20,7 @@ import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { afterEach, describe, it } from 'node:test';
 import {
+  ToolInterruptError,
   defineInterrupt,
   defineTool,
   interrupt,
@@ -31,6 +32,40 @@ import {
 } from '../src/tool.js';
 
 initNodeFeatures();
+
+describe('ToolInterruptError', () => {
+  it('sets a message when no metadata is provided', () => {
+    const err = new ToolInterruptError();
+    assert.strictEqual(err.name, 'ToolInterruptError');
+    assert.strictEqual(err.message, 'tool execution interrupted');
+    assert.strictEqual(String(err), 'ToolInterruptError: tool execution interrupted');
+  });
+
+  it('includes metadata in the message when provided', () => {
+    const metadata = { key: 'value' };
+    const err = new ToolInterruptError(metadata);
+    assert.strictEqual(err.name, 'ToolInterruptError');
+    assert.strictEqual(err.metadata, metadata);
+    assert.strictEqual(
+      err.message,
+      'tool execution interrupted: \n\n{\n  "key": "value"\n}'
+    );
+    assert.ok(String(err).includes('tool execution interrupted'));
+    assert.ok(String(err).includes('"key": "value"'));
+  });
+
+  it('falls back when metadata cannot be serialized', () => {
+    const metadata: Record<string, any> = { key: 'value' };
+    metadata.self = metadata;
+    const err = new ToolInterruptError(metadata);
+    assert.strictEqual(err.name, 'ToolInterruptError');
+    assert.strictEqual(err.metadata, metadata);
+    assert.strictEqual(
+      err.message,
+      'tool execution interrupted: \n\n[unserializable metadata]'
+    );
+  });
+});
 
 describe('defineInterrupt', () => {
   let registry = new Registry();
