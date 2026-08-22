@@ -1438,7 +1438,7 @@ func TestToGeminiContents(t *testing.T) {
 		},
 	}
 
-	contents, err := toGeminiContents(input)
+	contents, err := toGeminiContents(input, -1)
 	if err != nil {
 		t.Fatalf("toGeminiContents failed: %v", err)
 	}

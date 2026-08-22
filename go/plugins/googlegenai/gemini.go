@@ -159,7 +159,7 @@ func generate(
 	}
 	model = resolveVertexModelName(client, model)
 
-	cache, err := handleCache(ctx, client, input, model)
+	cache, cachedThrough, err := handleCache(ctx, client, input, model)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func generate(
 		return nil, err
 	}
 
-	contents, err := toGeminiContents(input)
+	contents, err := toGeminiContents(input, cachedThrough)
 	if err != nil {
 		return nil, err
 	}
@@ -324,9 +324,17 @@ func mergeCandidateMetadata(dst, src *genai.Candidate) {
 // toGeminiContents converts the non-system messages of an [*ai.ModelRequest]
 // to a slice of [*genai.Content]. System messages are handled separately via
 // the request's system instruction.
-func toGeminiContents(input *ai.ModelRequest) ([]*genai.Content, error) {
+//
+// cachedThrough is the inclusive index of the last message stored in a
+// CachedContent resource, or -1 if no cache is in use. Messages at or before
+// that index must not be sent inline — the JS plugin slices the cached span
+// off the request, and sending it here would bill the prefix twice (#6137).
+func toGeminiContents(input *ai.ModelRequest, cachedThrough int) ([]*genai.Content, error) {
 	var contents []*genai.Content
-	for _, m := range input.Messages {
+	for i, m := range input.Messages {
+		if cachedThrough >= 0 && i <= cachedThrough {
+			continue
+		}
 		// system parts are handled separately
 		if m.Role == ai.RoleSystem {
 			continue

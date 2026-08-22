@@ -46,33 +46,33 @@ func handleCache(
 	client *genai.Client,
 	request *ai.ModelRequest,
 	model string,
-) (*genai.CachedContent, error) {
+) (*genai.CachedContent, int, error) {
 	cs, err := findCacheMarker(request)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	if cs == nil {
-		return nil, nil
+		return nil, -1, nil
 	}
 	// no cache mark found
 	if cs.endIndex == -1 {
-		return nil, err
+		return nil, -1, err
 	}
 	// index out of bounds
 	if cs.endIndex < 0 || cs.endIndex >= len(request.Messages) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "end of cached contents, index %d is invalid", cs.endIndex)
+		return nil, -1, status.Errorf(status.ErrInvalidArgument, "end of cached contents, index %d is invalid", cs.endIndex)
 	}
 
 	// since context caching is only available for specific model versions, we
 	// must make sure the configuration has the right version
 	err = validateContextCacheRequest(request, model)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 
 	messages, err := messagesToCache(request.Messages, cs.endIndex)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	hash := calculateCacheHash(messages)
 
@@ -81,14 +81,14 @@ func handleCache(
 		cache, err = lookupCache(ctx, client, cs.name)
 		if err != nil {
 			// TODO: if cache expired or not found, create a fresh one
-			return nil, fmt.Errorf("cache lookup error: %w", wrapAPIError(err))
+			return nil, -1, fmt.Errorf("cache lookup error: %w", wrapAPIError(err))
 		}
 		// make sure the cache contents matches the request messages hash
 		if cache.DisplayName != hash {
-			return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache name: hash mismatch between cached content and request messages")
+			return nil, -1, status.Errorf(status.ErrInvalidArgument, "invalid cache name: hash mismatch between cached content and request messages")
 		}
 
-		return cache, nil
+		return cache, cs.endIndex, nil
 	}
 
 	if cs.ttl > 0 {
@@ -98,11 +98,14 @@ func handleCache(
 			Contents:    messages,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("cache creation error: %w", wrapAPIError(err))
+			return nil, -1, fmt.Errorf("cache creation error: %w", wrapAPIError(err))
 		}
 	}
 
-	return cache, nil
+	if cache == nil {
+		return nil, -1, nil
+	}
+	return cache, cs.endIndex, nil
 }
 
 // messagesToCache collects all the messages that should be cached
