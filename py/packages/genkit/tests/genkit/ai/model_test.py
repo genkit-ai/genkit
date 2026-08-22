@@ -15,6 +15,7 @@ from genkit._ai._model import text_from_content
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
+    DataPart,
     DocumentPart,
     Media,
     MediaPart,
@@ -44,6 +45,56 @@ def test_message_wrapper_text() -> None:
     )
 
     assert wrapper.text == 'hello world'
+
+
+def test_message_media_is_first_or_none() -> None:
+    """Test media property of Message: first part, or None."""
+    lone = Media(url='https://example.com/a.png', content_type='image/png')
+    msg = Message(
+        role='model',
+        content=[Part(root=MediaPart(media=lone))],
+    )
+    assert msg.media is lone
+    assert msg.media.url == 'https://example.com/a.png'
+    assert msg.text == ''
+
+    first = Media(url='https://example.com/first.jpg')
+    second = Media(url='https://example.com/second.jpg')
+    two = Message(
+        role='model',
+        content=[
+            Part(root=MediaPart(media=first)),
+            Part(root=MediaPart(media=second)),
+        ],
+    )
+    assert two.media is first
+    assert two.media.url == 'https://example.com/first.jpg'
+
+    text_only = Message(role='user', content=[Part(root=TextPart(text='hi'))])
+    assert text_only.media is None
+
+    data_only = Message(role='model', content=[Part(root=DataPart(data={'k': 1}))])
+    assert data_only.media is None
+
+
+def test_model_response_media_is_first_or_none() -> None:
+    """Test media property of ModelResponse: first part, or None."""
+    empty = ModelResponse(message=None)
+    assert empty.media is None
+
+    pic = Media(url='https://example.com/out.png', content_type='image/png')
+    extra = Media(url='https://example.com/extra.png')
+    resp = ModelResponse(
+        message=Message(
+            role='model',
+            content=[
+                Part(root=MediaPart(media=pic)),
+                Part(root=MediaPart(media=extra)),
+            ],
+        )
+    )
+    assert resp.media is pic
+    assert resp.media.url == 'https://example.com/out.png'
 
 
 def test_response_wrapper_text() -> None:

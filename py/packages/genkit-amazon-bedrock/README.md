@@ -299,7 +299,7 @@ response = await ai.generate(
     model='bedrock/stability.sd3-5-large-v1:0',
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
-image = response.media[0].url  # data:image/png;base64,...
+image = response.media.url  # data:image/png;base64,...
 ```
 
 Declaring is optional here too. An undeclared ID in one of the two families
