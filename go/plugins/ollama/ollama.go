@@ -748,13 +748,15 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			chunks = append(chunks, chunk)
 			cb(ctx, chunk)
 
-			var counts struct {
-				PromptEvalCount int `json:"prompt_eval_count"`
-				EvalCount       int `json:"eval_count"`
-			}
-			if err := json.Unmarshal(raw, &counts); err == nil {
-				if counts.PromptEvalCount > 0 || counts.EvalCount > 0 {
-					usage = ollamaUsage(counts.PromptEvalCount, counts.EvalCount)
+			if bytes.Contains(raw, []byte(`"prompt_eval_count"`)) || bytes.Contains(raw, []byte(`"eval_count"`)) {
+				var counts struct {
+					PromptEvalCount int `json:"prompt_eval_count"`
+					EvalCount       int `json:"eval_count"`
+				}
+				if err := json.Unmarshal(raw, &counts); err == nil {
+					if counts.PromptEvalCount > 0 || counts.EvalCount > 0 {
+						usage = ollamaUsage(counts.PromptEvalCount, counts.EvalCount)
+					}
 				}
 			}
 		}
