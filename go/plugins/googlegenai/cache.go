@@ -39,8 +39,9 @@ var invalidArgMessages = struct {
 	systemPrompt: "system prompts are not supported with context caching",
 }
 
-// handleCache checks if caching should be used, attempts to find or create the cache,
-// and returns the cached content if applicable.
+// handleCache checks if caching should be used, attempts to find or create the
+// cache, and returns the cached content plus the inclusive index of the last
+// cached message (-1 when no cache is in use).
 func handleCache(
 	ctx context.Context,
 	client *genai.Client,
@@ -111,18 +112,18 @@ func handleCache(
 // messagesToCache collects all the messages that should be cached
 func messagesToCache(m []*ai.Message, cacheEndIdx int) ([]*genai.Content, error) {
 	var messagesToCache []*genai.Content
-	for i := cacheEndIdx; i >= 0; i-- {
-		m := m[i]
-		if m.Role == ai.RoleSystem {
+	for i := 0; i <= cacheEndIdx; i++ {
+		msg := m[i]
+		if msg.Role == ai.RoleSystem {
 			continue
 		}
-		parts, err := toGeminiParts(m.Content)
+		parts, err := toGeminiParts(msg.Content)
 		if err != nil {
 			return nil, err
 		}
 		messagesToCache = append(messagesToCache, &genai.Content{
 			Parts: parts,
-			Role:  string(m.Role),
+			Role:  string(msg.Role),
 		})
 	}
 	return messagesToCache, nil

@@ -249,6 +249,24 @@ func TestToGeminiContents_DropsCachedPrefix(t *testing.T) {
 	}
 }
 
+func TestMessagesToCache_PreservesChronologicalOrder(t *testing.T) {
+	req := []*ai.Message{
+		{Role: ai.RoleUser, Content: []*ai.Part{{Text: "first"}}},
+		{Role: ai.RoleModel, Content: []*ai.Part{{Text: "second"}}},
+		{Role: ai.RoleUser, Content: []*ai.Part{{Text: "third, not cached"}}},
+	}
+	got, err := messagesToCache(req, 1)
+	if err != nil {
+		t.Fatalf("messagesToCache: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Parts[0].Text != "first" || got[1].Parts[0].Text != "second" {
+		t.Errorf("order = %q, %q; want first, second", got[0].Parts[0].Text, got[1].Parts[0].Text)
+	}
+}
+
 func TestFindCacheMarker_NumericTTLForms(t *testing.T) {
 	// ttlSeconds is an int when set from Go code but arrives as float64 or
 	// json.Number after a JSON round-trip (dev UI, reflection server). All
