@@ -20,10 +20,12 @@ import type { StdioServerParameters, Transport } from '../client/index.js';
 function mergeHeaders(
   requestHeaders: HeadersInit | undefined,
   configHeaders: HeadersInit
-): Headers {
+): Record<string, string> {
   const headers = new Headers(requestHeaders);
   new Headers(configHeaders).forEach((value, key) => headers.set(key, value));
-  return headers;
+  const merged: Record<string, string> = {};
+  headers.forEach((value, key) => (merged[key] = value));
+  return merged;
 }
 
 /**
