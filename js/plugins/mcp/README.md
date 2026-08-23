@@ -74,7 +74,64 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
             -   **`args`**: (optional, string[]) Array of string arguments to pass to the command.
             -   **`env`**: (optional, Record<string, string>) Key-value object of environment variables.
         -   **`url`**: (string) The URL of a remote server to connect to using the Streamable HTTP MCP transport.
+        -   **`headers`**: (optional, HeadersInit) Headers sent with every Streamable HTTP request.
+        -   **`requestInit`**: (optional, RequestInit) Additional Streamable HTTP request options.
+        -   **`authProvider`**: (optional, OAuthClientProvider) An MCP OAuth provider.
         -   **`transport`**: An existing MCP transport object for connecting to the server.
+
+
+### Authenticated remote servers
+
+Use `headers` for a fixed credential. Read secrets from the environment. This
+example connects Genkit to the Xquik API MCP server:
+
+```ts
+import { createMcpClient } from '@genkit-ai/mcp';
+
+const apiKey = process.env.XQUIK_API_KEY;
+if (!apiKey) throw new Error('XQUIK_API_KEY is required');
+
+const xquik = createMcpClient({
+  name: 'xquik',
+  mcpServer: {
+    url: 'https://xquik.com/mcp',
+    headers: { 'x-api-key': apiKey },
+  },
+});
+```
+
+Xquik is a third-party service. See its
+[MCP documentation](https://docs.xquik.com/mcp/overview) for authentication and
+available tools.
+
+Treat each client as one authorization context. Create and close a client per
+request when access tokens differ between users. Reuse the Genkit instance:
+
+```ts
+async function generateWithRemoteTools(accessToken: string, prompt: string) {
+  const client = createMcpClient({
+    name: 'remote',
+    mcpServer: {
+      url: 'https://example.com/mcp',
+      headers: { authorization: `Bearer ${accessToken}` },
+    },
+  });
+
+  try {
+    await client.ready();
+    return await ai.generate({
+      prompt,
+      tools: await client.getActiveTools(ai),
+    });
+  } finally {
+    await client.disable();
+  }
+}
+```
+
+Use `requestInit.headers` for advanced Fetch configuration. Top-level
+`headers` override duplicate names from `requestInit.headers`. Use
+`authProvider` when the server supports MCP OAuth.
 
 
 ## MCP Client (Single Server)

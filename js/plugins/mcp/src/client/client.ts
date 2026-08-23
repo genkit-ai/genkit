@@ -63,6 +63,8 @@ export type McpStdioServerConfig = StdioServerParameters & {
 
 export type McpStreamableHttpConfig = {
   url: string;
+  /** Headers sent with every Streamable HTTP request. */
+  headers?: HeadersInit;
   command?: never;
   transport?: never;
 } & Omit<StreamableHTTPClientTransportOptions, 'sessionId'>;
