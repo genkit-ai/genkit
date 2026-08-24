@@ -226,6 +226,32 @@ func TestGenerateStreamToolCall(t *testing.T) {
 	assertToolRequest(t, response.Message.Content[0].ToolRequest)
 }
 
+func TestGenerateStreamDeduplicatesToolCallStarts(t *testing.T) {
+	client := newSSETestClient(t, []string{
+		`{"type":"tool-call-start","index":0,"delta":{"message":{"tool_calls":{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}}}}`,
+		`{"type":"tool-call-start","index":0,"delta":{"message":{"tool_calls":{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}}}}`,
+		`{"type":"tool-call-end","index":0}`,
+	})
+
+	var chunks []*ai.ModelResponseChunk
+	response, err := generate(context.Background(), client, "command-r", &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("weather in Paris")}}},
+	}, ChatOptions{}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("streamed chunks = %d, want 1", len(chunks))
+	}
+	if response.Message == nil || len(response.Message.Content) != 1 {
+		t.Fatalf("aggregate content = %#v, want one tool request", response.Message)
+	}
+	assertToolRequest(t, response.Message.Content[0].ToolRequest)
+}
+
 // TestChatOptionsPassActionSchema guards the action boundary that validates a
 // config after JSON serialization. Using V2ChatRequest here used to inject a
 // stream property that its inferred schema rejected before the API was called.
@@ -482,8 +508,27 @@ func TestToCohereMessages(t *testing.T) {
 	}
 }
 
+func TestToCohereAssistantMessageSkipsNilToolRequest(t *testing.T) {
+	message, err := toCohereAssistantMessage(&ai.Message{Content: []*ai.Part{
+		{Kind: ai.PartToolRequest},
+	}})
+	if err != nil {
+		t.Fatalf("toCohereAssistantMessage: %v", err)
+	}
+	if len(message.ToolCalls) != 0 {
+		t.Fatalf("tool calls = %#v, want none", message.ToolCalls)
+	}
+}
+
+func TestToCohereToolMessageRejectsNilResponse(t *testing.T) {
+	if _, err := toCohereToolMessage(nil); err == nil || err.Error() != "tool response is required" {
+		t.Fatalf("toCohereToolMessage error = %v", err)
+	}
+}
+
 func TestToCohereTools(t *testing.T) {
 	tools := []*ai.ToolDefinition{
+		nil,
 		{
 			Name:        "get_weather",
 			Description: "look up the weather",
@@ -497,7 +542,7 @@ func TestToCohereTools(t *testing.T) {
 		t.Fatalf("toCohereTools: %v", err)
 	}
 	if len(out) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(out))
+		t.Fatalf("expected nil tool to be skipped and 2 tools returned, got %d", len(out))
 	}
 	if out[0].Function.Name != "get_weather" || out[0].Function.Description == nil || *out[0].Function.Description != "look up the weather" {
 		t.Errorf("tool[0] mapped incorrectly: %+v", out[0].Function)

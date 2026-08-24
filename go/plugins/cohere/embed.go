@@ -137,23 +137,29 @@ func embeddingVectors(embeddings *cohere.EmbedByTypeResponseEmbeddings, embeddin
 		return nil, errors.New("cohere: embed response did not contain embeddings")
 	}
 
-	var vectors [][]float32
 	switch embeddingType {
 	case cohere.EmbeddingTypeFloat:
-		vectors = floatVectors(embeddings.Float)
+		if embeddings.Float != nil {
+			return floatVectors(embeddings.Float), nil
+		}
 	case cohere.EmbeddingTypeInt8:
-		vectors = intVectors(embeddings.Int8)
+		if embeddings.Int8 != nil {
+			return intVectors(embeddings.Int8), nil
+		}
 	case cohere.EmbeddingTypeUint8:
-		vectors = intVectors(embeddings.Uint8)
+		if embeddings.Uint8 != nil {
+			return intVectors(embeddings.Uint8), nil
+		}
 	case cohere.EmbeddingTypeBinary:
-		vectors = intVectors(embeddings.Binary)
+		if embeddings.Binary != nil {
+			return intVectors(embeddings.Binary), nil
+		}
 	case cohere.EmbeddingTypeUbinary:
-		vectors = intVectors(embeddings.Ubinary)
+		if embeddings.Ubinary != nil {
+			return intVectors(embeddings.Ubinary), nil
+		}
 	}
-	if vectors == nil {
-		return nil, fmt.Errorf("cohere: embed response did not contain %q embeddings", embeddingType)
-	}
-	return vectors, nil
+	return nil, fmt.Errorf("cohere: embed response did not contain %q embeddings", embeddingType)
 }
 
 // documentText concatenates the text parts of a document.

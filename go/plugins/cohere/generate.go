@@ -188,8 +188,10 @@ func generateStream(
 					}
 				}
 			}
+			if _, exists := tools[idx]; !exists {
+				toolOrder = append(toolOrder, idx)
+			}
 			tools[idx] = acc
-			toolOrder = append(toolOrder, idx)
 
 		case event.ToolCallDelta != nil:
 			idx := derefInt(event.ToolCallDelta.Index)
@@ -352,6 +354,9 @@ func toCohereAssistantMessage(m *ai.Message) (*cohere.AssistantMessage, error) {
 			text.WriteString(p.Text)
 		case p.IsToolRequest():
 			tr := p.ToolRequest
+			if tr == nil {
+				continue
+			}
 			args, err := json.Marshal(tr.Input)
 			if err != nil {
 				return nil, fmt.Errorf("unable to marshal tool request input: %w", err)
@@ -374,6 +379,9 @@ func toCohereAssistantMessage(m *ai.Message) (*cohere.AssistantMessage, error) {
 
 // toCohereToolMessage maps a single tool response to a Cohere tool message.
 func toCohereToolMessage(tr *ai.ToolResponse) (*cohere.ChatMessageV2, error) {
+	if tr == nil {
+		return nil, errors.New("tool response is required")
+	}
 	output, err := json.Marshal(tr.Output)
 	if err != nil {
 		return nil, fmt.Errorf("unable to marshal tool response output: %w", err)
@@ -396,6 +404,9 @@ func toCohereTools(tools []*ai.ToolDefinition) ([]*cohere.ToolV2, error) {
 
 	out := make([]*cohere.ToolV2, 0, len(tools))
 	for _, t := range tools {
+		if t == nil {
+			continue
+		}
 		if t.Name == "" {
 			return nil, errors.New("tool name is required")
 		}

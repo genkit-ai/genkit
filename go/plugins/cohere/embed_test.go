@@ -142,6 +142,19 @@ func TestEmbedRejectsUnsupportedType(t *testing.T) {
 	}
 }
 
+func TestEmbeddingVectorsRejectsMissingRequestedType(t *testing.T) {
+	_, err := embeddingVectors(&cohere.EmbedByTypeResponseEmbeddings{
+		Int8: [][]int{{1, 2}},
+	}, cohere.EmbeddingTypeFloat)
+	if err == nil || !strings.Contains(err.Error(), `did not contain "float" embeddings`) {
+		t.Fatalf("embeddingVectors error = %v", err)
+	}
+
+	if _, err := embeddingVectors(nil, cohere.EmbeddingTypeFloat); err == nil {
+		t.Fatal("embeddingVectors accepted a nil embeddings object")
+	}
+}
+
 func TestNewEmbedderRef(t *testing.T) {
 	config := &EmbedOptions{InputType: "classification", OutputDimension: 512, Truncate: "START", EmbeddingType: cohere.EmbeddingTypeInt8}
 	ref := NewEmbedderRef("embed-v4.0", config)
