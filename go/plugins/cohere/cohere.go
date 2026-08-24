@@ -23,7 +23,6 @@ import (
 	"os"
 	"sync"
 
-	cohere "github.com/cohere-ai/cohere-go/v2"
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
 	"github.com/cohere-ai/cohere-go/v2/option"
 	"github.com/firebase/genkit/go/ai"
@@ -43,7 +42,7 @@ var _ api.DynamicPlugin = (*Cohere)(nil)
 
 // Cohere is a Genkit plugin for interacting with the Cohere API.
 type Cohere struct {
-	APIKey  string // If not provided, defaults to COHERE_API_KEY.
+	APIKey  string // If not provided, defaults to COHERE_API_KEY, then CO_API_KEY.
 	BaseURL string // Optional. If not provided, defaults to COHERE_BASE_URL.
 
 	client  *cohereclient.Client // Cohere client.
@@ -65,12 +64,9 @@ func (c *Cohere) Init(ctx context.Context) []api.Action {
 		panic("cohere.Init: plugin already initialized")
 	}
 
-	apiKey := c.APIKey
+	apiKey := resolveAPIKey(c.APIKey)
 	if apiKey == "" {
-		apiKey = os.Getenv("COHERE_API_KEY")
-	}
-	if apiKey == "" {
-		panic("cohere.Init: requires setting COHERE_API_KEY in the environment")
+		panic("cohere.Init: requires APIKey, COHERE_API_KEY, or CO_API_KEY")
 	}
 
 	opts := []option.RequestOption{option.WithToken(apiKey)}
@@ -87,6 +83,18 @@ func (c *Cohere) Init(ctx context.Context) []api.Action {
 	c.initted = true
 
 	return []api.Action{}
+}
+
+// resolveAPIKey follows the plugin's documented precedence while retaining
+// compatibility with the environment variable used natively by cohere-go.
+func resolveAPIKey(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if apiKey := os.Getenv("COHERE_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("CO_API_KEY")
 }
 
 // ListActions lists the chat models and embedders exposed by the plugin.
@@ -141,7 +149,7 @@ func (c *Cohere) newModel(name string) ai.Model {
 		Supports:     info.Supports,
 		Versions:     info.Versions,
 		Stage:        info.Stage,
-		ConfigSchema: core.InferSchemaMap(cohere.V2ChatRequest{}),
+		ConfigSchema: core.InferSchemaMap(ChatOptions{}),
 	}
 
 	client := c.client

@@ -21,16 +21,21 @@ import (
 g := genkit.Init(ctx, genkit.WithPlugins(&cohere.Cohere{}))
 ```
 
-The plugin reads the API key from the `COHERE_API_KEY` environment variable. You may instead set it
-explicitly, and optionally override the base URL (e.g. to target the OpenAI-Compatibility API or a
-Bedrock-hosted deployment):
+The plugin reads the API key from `COHERE_API_KEY`, falling back to the Cohere SDK's standard
+`CO_API_KEY`. You may instead set it explicitly and optionally override the native Cohere API base
+URL:
 
 ```go
 &cohere.Cohere{
-    APIKey:  "...",                       // defaults to COHERE_API_KEY
+    APIKey:  "...",                       // COHERE_API_KEY, then CO_API_KEY
     BaseURL: "https://api.cohere.com",     // defaults to COHERE_BASE_URL
 }
 ```
+
+`BaseURL` must expose Cohere's native `/v2/chat` and `/v2/embed` API. It does not translate native
+Cohere requests to the OpenAI-compatible API and it does not configure AWS request signing. Use
+Genkit's `compat_oai` plugin for Cohere's OpenAI-compatible endpoint. Bedrock routing requires a
+separately configured AWS client and is not supported by this plugin.
 
 ## Why Chat v2
 
@@ -43,28 +48,33 @@ deprecated and lack these capabilities.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("cohere/command-r-plus"),
+    ai.WithModelName("cohere/command-a-03-2025"),
     ai.WithPrompt("What is the capital of France?"),
 )
 ```
 
-Curated models: `command-a-03-2025`, `command-r-plus`, `command-r`, `command-r7b-12-2024`.
+Curated models: `command-a-plus-05-2026`, `command-a-03-2025`,
+`command-a-reasoning-08-2025`, `command-r-plus-08-2024`, `command-r-08-2024`, and
+`command-r7b-12-2024`.
 Any other valid Cohere chat model name also resolves (with default capabilities), so newly released
 models can be used immediately.
 
 ### Configuration
 
-Pass a `*cohere.V2ChatRequest` (the SDK request type) via `ai.WithConfig` to set any chat parameter.
-Because the whole request struct is accepted, advanced features pass through without extra wiring:
+Pass `*cohere.ChatOptions` via `ai.WithConfig` to set Chat v2 options. Genkit owns the model,
+messages, tools, and streaming fields and constructs the SDK request internally:
 
 ```go
-import sdk "github.com/cohere-ai/cohere-go/v2"
+import (
+    sdk "github.com/cohere-ai/cohere-go/v2"
+    genkitcohere "github.com/firebase/genkit/go/plugins/cohere"
+)
 
 safety := sdk.V2ChatRequestSafetyModeContextual
 maxTokens := 1024
 genkit.Generate(ctx, g,
-    ai.WithModelName("cohere/command-r-plus"),
-    ai.WithConfig(&sdk.V2ChatRequest{
+    ai.WithModelName("cohere/command-a-03-2025"),
+    ai.WithConfig(&genkitcohere.ChatOptions{
         MaxTokens:  &maxTokens,
         SafetyMode: &safety,
         Documents:  []*sdk.V2ChatRequestDocumentsItem{ /* RAG documents */ },

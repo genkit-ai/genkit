@@ -30,6 +30,52 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
+// ChatOptions configures a Cohere Chat v2 request. Model, messages, tools, and
+// streaming are owned by Genkit and are deliberately not configurable here.
+// Keeping those transport fields out of the config also avoids the custom
+// V2ChatRequest marshaler adding them during Genkit schema validation.
+type ChatOptions struct {
+	StrictTools      *bool                                `json:"strict_tools,omitempty"`
+	Documents        []*cohere.V2ChatRequestDocumentsItem `json:"documents,omitempty"`
+	CitationOptions  *cohere.CitationOptions              `json:"citation_options,omitempty"`
+	ResponseFormat   *cohere.ResponseFormatV2             `json:"response_format,omitempty"`
+	SafetyMode       *cohere.V2ChatRequestSafetyMode      `json:"safety_mode,omitempty"`
+	MaxTokens        *int                                 `json:"max_tokens,omitempty"`
+	StopSequences    []string                             `json:"stop_sequences,omitempty"`
+	Temperature      *float64                             `json:"temperature,omitempty"`
+	Seed             *int                                 `json:"seed,omitempty"`
+	FrequencyPenalty *float64                             `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64                             `json:"presence_penalty,omitempty"`
+	K                *int                                 `json:"k,omitempty"`
+	P                *float64                             `json:"p,omitempty"`
+	Logprobs         *bool                                `json:"logprobs,omitempty"`
+	ToolChoice       *cohere.V2ChatRequestToolChoice      `json:"tool_choice,omitempty"`
+	Thinking         *cohere.Thinking                     `json:"thinking,omitempty"`
+	Priority         *int                                 `json:"priority,omitempty"`
+}
+
+func (o ChatOptions) request() *cohere.V2ChatRequest {
+	return &cohere.V2ChatRequest{
+		StrictTools:      o.StrictTools,
+		Documents:        o.Documents,
+		CitationOptions:  o.CitationOptions,
+		ResponseFormat:   o.ResponseFormat,
+		SafetyMode:       o.SafetyMode,
+		MaxTokens:        o.MaxTokens,
+		StopSequences:    o.StopSequences,
+		Temperature:      o.Temperature,
+		Seed:             o.Seed,
+		FrequencyPenalty: o.FrequencyPenalty,
+		PresencePenalty:  o.PresencePenalty,
+		K:                o.K,
+		P:                o.P,
+		Logprobs:         o.Logprobs,
+		ToolChoice:       o.ToolChoice,
+		Thinking:         o.Thinking,
+		Priority:         o.Priority,
+	}
+}
+
 // generate runs a Cohere ChatV2 request. When cb is nil the call is
 // non-streaming; otherwise each delta is dispatched to the callback and the
 // aggregated response is returned at the end.
@@ -244,28 +290,26 @@ func toCohereRequest(input *ai.ModelRequest) (*cohere.V2ChatRequest, error) {
 // configFromRequest converts any supported config value into a
 // [cohere.V2ChatRequest]. An absent config is treated as valid.
 func configFromRequest(input *ai.ModelRequest) (*cohere.V2ChatRequest, error) {
-	var result cohere.V2ChatRequest
-
 	switch config := input.Config.(type) {
-	case cohere.V2ChatRequest:
-		result = config
-	case *cohere.V2ChatRequest:
+	case ChatOptions:
+		return config.request(), nil
+	case *ChatOptions:
 		if config != nil {
-			result = *config
+			return config.request(), nil
 		}
 	case map[string]any:
-		var err error
-		result, err = base.MapToStruct[cohere.V2ChatRequest](config)
+		result, err := base.MapToStruct[ChatOptions](config)
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse config: %w", err)
 		}
+		return result.request(), nil
 	case nil:
 		// Empty configuration is valid.
 	default:
 		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
 	}
 
-	return &result, nil
+	return &cohere.V2ChatRequest{}, nil
 }
 
 // toCohereMessages maps Genkit messages to Cohere ChatV2 messages, splitting

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log"
 
-	cohere "github.com/cohere-ai/cohere-go/v2"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	coheregenkit "github.com/firebase/genkit/go/plugins/cohere"
@@ -33,12 +32,12 @@ func main() {
 
 	maxTokens := 512
 	temperature := 0.3
-	config := &cohere.V2ChatRequest{MaxTokens: &maxTokens, Temperature: &temperature}
+	config := &coheregenkit.ChatOptions{MaxTokens: &maxTokens, Temperature: &temperature}
 
 	// 1. Non-streaming generation.
 	fmt.Println("=== generate ===")
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-r"),
+		ai.WithModelName("cohere/command-a-03-2025"),
 		ai.WithConfig(config),
 		ai.WithPrompt("In one sentence, what is Genkit?"),
 	)
@@ -50,7 +49,7 @@ func main() {
 	// 2. Streaming generation.
 	fmt.Println("\n=== streaming ===")
 	_, err = genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-r"),
+		ai.WithModelName("cohere/command-a-03-2025"),
 		ai.WithConfig(config),
 		ai.WithPrompt("Write a two-line poem about the ocean."),
 		ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
@@ -78,7 +77,7 @@ func main() {
 		},
 	)
 	toolResp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-r-plus"),
+		ai.WithModelName("cohere/command-a-03-2025"),
 		ai.WithConfig(config),
 		ai.WithPrompt("Use the add tool to compute 17 plus 25, then state only the result."),
 		ai.WithTools(addTool),

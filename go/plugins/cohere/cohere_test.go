@@ -17,14 +17,380 @@
 package cohere
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	cohere "github.com/cohere-ai/cohere-go/v2"
+	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
+	"github.com/cohere-ai/cohere-go/v2/option"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/genkit"
 )
+
+func TestResolveAPIKey(t *testing.T) {
+	t.Setenv("COHERE_API_KEY", "cohere-key")
+	t.Setenv("CO_API_KEY", "sdk-key")
+
+	if got := resolveAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("explicit key precedence: got %q", got)
+	}
+	if got := resolveAPIKey(""); got != "cohere-key" {
+		t.Fatalf("COHERE_API_KEY precedence: got %q", got)
+	}
+
+	t.Setenv("COHERE_API_KEY", "")
+	if got := resolveAPIKey(""); got != "sdk-key" {
+		t.Fatalf("CO_API_KEY fallback: got %q", got)
+	}
+
+	t.Setenv("CO_API_KEY", "")
+	if got := resolveAPIKey(""); got != "" {
+		t.Fatalf("empty environment: got %q", got)
+	}
+}
+
+func TestCuratedModelsUseActiveIDs(t *testing.T) {
+	for _, retired := range []string{"command-r", "command-r-plus"} {
+		if _, ok := cohereChatModels[retired]; ok {
+			t.Errorf("retired model %q must not be curated", retired)
+		}
+	}
+	for _, active := range []string{
+		"command-a-plus-05-2026",
+		"command-a-03-2025",
+		"command-a-reasoning-08-2025",
+		"command-r-plus-08-2024",
+		"command-r-08-2024",
+		"command-r7b-12-2024",
+	} {
+		if _, ok := cohereChatModels[active]; !ok {
+			t.Errorf("active model %q is not curated", active)
+		}
+	}
+}
+
+func TestPluginListsAndResolvesActions(t *testing.T) {
+	plugin := &Cohere{}
+	actions := plugin.ListActions(context.Background())
+	want := len(cohereChatModels) + len(cohereEmbedders)
+	if len(actions) != want {
+		t.Fatalf("ListActions returned %d actions, want %d", len(actions), want)
+	}
+	if action := plugin.ResolveAction(api.ActionTypeModel, "command-a-03-2025"); action == nil {
+		t.Fatal("failed to resolve known model")
+	}
+	if action := plugin.ResolveAction(api.ActionTypeEmbedder, "embed-v4.0"); action == nil {
+		t.Fatal("failed to resolve known embedder")
+	}
+	if action := plugin.ResolveAction(api.ActionTypeRetriever, "anything"); action != nil {
+		t.Fatalf("resolved unsupported action type: %T", action)
+	}
+}
+
+func TestPluginInitRequiresAuthAndRejectsSecondInit(t *testing.T) {
+	t.Run("missing auth", func(t *testing.T) {
+		t.Setenv("COHERE_API_KEY", "")
+		t.Setenv("CO_API_KEY", "")
+		defer func() {
+			if recover() == nil {
+				t.Fatal("Init did not panic without authentication")
+			}
+		}()
+		(&Cohere{}).Init(context.Background())
+	})
+
+	t.Run("second init", func(t *testing.T) {
+		plugin := &Cohere{APIKey: "test-key"}
+		plugin.Init(context.Background())
+		defer func() {
+			if recover() == nil {
+				t.Fatal("second Init did not panic")
+			}
+		}()
+		plugin.Init(context.Background())
+	})
+}
+
+func TestModelAndEmbedderOptionFallbacks(t *testing.T) {
+	knownModel := GetModelOptions("command-a-03-2025")
+	if knownModel.Label == "" || knownModel.Supports == nil {
+		t.Fatalf("known model options = %+v", knownModel)
+	}
+	unknownModel := GetModelOptions("future-command")
+	if unknownModel.Label != "Cohere - future-command" || unknownModel.Supports == nil {
+		t.Fatalf("unknown model options = %+v", unknownModel)
+	}
+	knownEmbedder := GetEmbedderOptions("embed-v4.0")
+	if knownEmbedder.Dimensions != 1536 {
+		t.Fatalf("known embedder options = %+v", knownEmbedder)
+	}
+	unknownEmbedder := GetEmbedderOptions("future-embed")
+	if unknownEmbedder.Label != "Cohere - future-embed" || unknownEmbedder.Dimensions != 0 {
+		t.Fatalf("unknown embedder options = %+v", unknownEmbedder)
+	}
+}
+
+// TestGenerateStreamToolCall exercises Cohere's actual SSE decoding path. In
+// particular, it verifies that argument fragments are joined by stream index,
+// emitted once at tool-call-end, and preserved in the aggregate response.
+func TestGenerateStreamToolCall(t *testing.T) {
+	events := []string{
+		`{"type":"tool-call-start","index":0,"delta":{"message":{"tool_calls":{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\""}}}}}`,
+		`{"type":"tool-call-delta","index":0,"delta":{"message":{"tool_calls":{"function":{"arguments":"Paris\"}"}}}}}`,
+		`{"type":"tool-call-end","index":0}`,
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/chat" {
+			t.Errorf("request path = %q, want /v2/chat", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("Authorization = %q, want Bearer test-key", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range events {
+			fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := cohereclient.NewClient(
+		option.WithToken("test-key"),
+		option.WithBaseURL(server.URL),
+	)
+	input := &ai.ModelRequest{Messages: []*ai.Message{{
+		Role:    ai.RoleUser,
+		Content: []*ai.Part{ai.NewTextPart("weather in Paris")},
+	}}}
+
+	var chunks []*ai.ModelResponseChunk
+	response, err := generate(context.Background(), client, "command-r", input,
+		func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+			chunks = append(chunks, chunk)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(chunks) != 1 || len(chunks[0].Content) != 1 || !chunks[0].Content[0].IsToolRequest() {
+		t.Fatalf("streamed chunks = %#v, want one tool request", chunks)
+	}
+	assertToolRequest(t, chunks[0].Content[0].ToolRequest)
+
+	if response.Message == nil || len(response.Message.Content) != 1 || !response.Message.Content[0].IsToolRequest() {
+		t.Fatalf("aggregate content = %#v, want one tool request", response.Message)
+	}
+	assertToolRequest(t, response.Message.Content[0].ToolRequest)
+}
+
+// TestChatOptionsPassActionSchema guards the action boundary that validates a
+// config after JSON serialization. Using V2ChatRequest here used to inject a
+// stream property that its inferred schema rejected before the API was called.
+func TestChatOptionsPassActionSchema(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/chat" {
+			t.Errorf("request path = %q, want /v2/chat", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"response_1","finish_reason":"COMPLETE","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Cohere{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+	}))
+	if !IsDefinedModel(g, "command-r") {
+		t.Fatal("initialized plugin did not define the resolved model")
+	}
+	maxTokens := 32
+	temperature := 0.2
+	response, err := genkit.Generate(ctx, g,
+		ai.WithModel(Model(g, "command-r")),
+		ai.WithConfig(&ChatOptions{MaxTokens: &maxTokens, Temperature: &temperature}),
+		ai.WithPrompt("say ok"),
+	)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got := response.Text(); got != "ok" {
+		t.Fatalf("response text = %q, want ok", got)
+	}
+}
+
+func TestChatOptionsMapEveryField(t *testing.T) {
+	strict := true
+	safety := cohere.V2ChatRequestSafetyModeContextual
+	maxTokens := 128
+	temperature := 0.4
+	seed := 7
+	frequencyPenalty := 0.1
+	presencePenalty := 0.2
+	k := 20
+	p := 0.8
+	logprobs := true
+	toolChoice := cohere.V2ChatRequestToolChoiceRequired
+	priority := 1
+	options := ChatOptions{
+		StrictTools:      &strict,
+		Documents:        []*cohere.V2ChatRequestDocumentsItem{{String: "source"}},
+		CitationOptions:  &cohere.CitationOptions{},
+		ResponseFormat:   &cohere.ResponseFormatV2{Type: "json_object"},
+		SafetyMode:       &safety,
+		MaxTokens:        &maxTokens,
+		StopSequences:    []string{"STOP"},
+		Temperature:      &temperature,
+		Seed:             &seed,
+		FrequencyPenalty: &frequencyPenalty,
+		PresencePenalty:  &presencePenalty,
+		K:                &k,
+		P:                &p,
+		Logprobs:         &logprobs,
+		ToolChoice:       &toolChoice,
+		Thinking:         &cohere.Thinking{},
+		Priority:         &priority,
+	}
+	request := options.request()
+
+	if request.StrictTools != options.StrictTools || len(request.Documents) != 1 || request.Documents[0].String != "source" {
+		t.Errorf("strict tools/documents not mapped: %+v", request)
+	}
+	if request.CitationOptions != options.CitationOptions || request.ResponseFormat != options.ResponseFormat || request.Thinking != options.Thinking {
+		t.Errorf("complex options not mapped: %+v", request)
+	}
+	if request.SafetyMode != options.SafetyMode || request.ToolChoice != options.ToolChoice {
+		t.Errorf("enum options not mapped: %+v", request)
+	}
+	if request.MaxTokens != options.MaxTokens || request.Temperature != options.Temperature || request.Seed != options.Seed ||
+		request.FrequencyPenalty != options.FrequencyPenalty || request.PresencePenalty != options.PresencePenalty ||
+		request.K != options.K || request.P != options.P || request.Logprobs != options.Logprobs || request.Priority != options.Priority {
+		t.Errorf("scalar options not mapped: %+v", request)
+	}
+	if len(request.StopSequences) != 1 || request.StopSequences[0] != "STOP" {
+		t.Errorf("stop sequences = %v", request.StopSequences)
+	}
+}
+
+func TestStructuredOutputOverridesResponseFormat(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+	request, err := toCohereRequest(&ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("answer")}}},
+		Config:   &ChatOptions{ResponseFormat: &cohere.ResponseFormatV2{Type: "text"}},
+		Output:   &ai.ModelOutputConfig{Format: "json", Schema: schema, Constrained: true},
+	})
+	if err != nil {
+		t.Fatalf("toCohereRequest: %v", err)
+	}
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" || request.ResponseFormat.JsonObject == nil {
+		t.Fatalf("response format = %+v", request.ResponseFormat)
+	}
+	if request.ResponseFormat.JsonObject.JsonSchema["type"] != "object" {
+		t.Fatalf("JSON schema = %#v", request.ResponseFormat.JsonObject.JsonSchema)
+	}
+}
+
+func TestGenerateStreamAggregatesReasoningTextCitationsAndUsage(t *testing.T) {
+	client := newSSETestClient(t, []string{
+		`{"type":"content-delta","index":0,"delta":{"message":{"content":{"thinking":"reason "}}}}`,
+		`{"type":"content-delta","index":0,"delta":{"message":{"content":{"thinking":"carefully"}}}}`,
+		`{"type":"content-delta","index":0,"delta":{"message":{"content":{"text":"the answer"}}}}`,
+		`{"type":"citation-start","index":0,"delta":{"message":{"citations":{"start":0,"end":10,"text":"the answer","sources":[],"type":"TEXT_CONTENT"}}}}`,
+		`{"type":"message-end","delta":{"finish_reason":"COMPLETE","usage":{"tokens":{"input_tokens":3,"output_tokens":2}}}}`,
+	})
+
+	var chunks []*ai.ModelResponseChunk
+	response, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("answer")}}},
+	}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(chunks) != 3 || !chunks[0].Content[0].IsReasoning() || !chunks[1].Content[0].IsReasoning() || !chunks[2].Content[0].IsText() {
+		t.Fatalf("chunks = %#v", chunks)
+	}
+	if len(response.Message.Content) != 2 || response.Message.Content[0].Text != "reason carefully" || response.Message.Content[1].Text != "the answer" {
+		t.Fatalf("aggregate content = %#v", response.Message.Content)
+	}
+	if response.FinishReason != ai.FinishReasonStop || response.Usage == nil || response.Usage.InputTokens != 3 || response.Usage.OutputTokens != 2 {
+		t.Fatalf("finish/usage = %q/%+v", response.FinishReason, response.Usage)
+	}
+	custom, ok := response.Custom.(map[string]any)
+	if !ok {
+		t.Fatalf("custom = %T, want map", response.Custom)
+	}
+	citations, ok := custom["citations"].([]*cohere.Citation)
+	if !ok || len(citations) != 1 || citations[0].Text == nil || *citations[0].Text != "the answer" {
+		t.Fatalf("citations = %#v", custom["citations"])
+	}
+}
+
+func TestGenerateStreamReturnsCallbackError(t *testing.T) {
+	client := newSSETestClient(t, []string{
+		`{"type":"content-delta","index":0,"delta":{"message":{"content":{"text":"hello"}}}}`,
+	})
+	want := errors.New("stop streaming")
+	_, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}}},
+	}, func(context.Context, *ai.ModelResponseChunk) error { return want })
+	if !errors.Is(err, want) {
+		t.Fatalf("generate error = %v, want %v", err, want)
+	}
+}
+
+func TestGenerateStreamRejectsMalformedToolArguments(t *testing.T) {
+	client := newSSETestClient(t, []string{
+		`{"type":"tool-call-start","index":0,"delta":{"message":{"tool_calls":{"id":"call_bad","type":"function","function":{"name":"lookup","arguments":"{bad"}}}}}`,
+		`{"type":"tool-call-end","index":0}`,
+	})
+	_, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("lookup")}}},
+	}, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "unable to parse tool call arguments") {
+		t.Fatalf("generate error = %v", err)
+	}
+}
+
+func newSSETestClient(t *testing.T, events []string) *cohereclient.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range events {
+			fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	return cohereclient.NewClient(option.WithToken("test-key"), option.WithBaseURL(server.URL))
+}
+
+func assertToolRequest(t *testing.T, request *ai.ToolRequest) {
+	t.Helper()
+	if request.Ref != "call_1" || request.Name != "get_weather" {
+		t.Fatalf("tool request identity = %+v", request)
+	}
+	input, ok := request.Input.(map[string]any)
+	if !ok || input["city"] != "Paris" {
+		t.Fatalf("tool request input = %#v", request.Input)
+	}
+}
 
 func TestToCohereMessages(t *testing.T) {
 	messages := []*ai.Message{
@@ -252,13 +618,13 @@ func TestConfigFromRequest(t *testing.T) {
 		}
 	})
 	t.Run("struct value", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{Config: cohere.V2ChatRequest{Temperature: &temp}})
+		got, err := configFromRequest(&ai.ModelRequest{Config: ChatOptions{Temperature: &temp}})
 		if err != nil || got.Temperature == nil || *got.Temperature != 0.7 {
 			t.Fatalf("struct config: got %+v, err %v", got, err)
 		}
 	})
 	t.Run("pointer", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{Config: &cohere.V2ChatRequest{Temperature: &temp}})
+		got, err := configFromRequest(&ai.ModelRequest{Config: &ChatOptions{Temperature: &temp}})
 		if err != nil || got.Temperature == nil || *got.Temperature != 0.7 {
 			t.Fatalf("pointer config: got %+v, err %v", got, err)
 		}
@@ -370,7 +736,7 @@ func TestNewModelSchema(t *testing.T) {
 	if (&Cohere{}).newModel("command-r") == nil {
 		t.Fatal("newModel returned nil")
 	}
-	if schema := core.InferSchemaMap(cohere.V2ChatRequest{}); len(schema) == 0 {
+	if schema := core.InferSchemaMap(ChatOptions{}); len(schema) == 0 {
 		t.Fatal("empty config schema")
 	}
 }

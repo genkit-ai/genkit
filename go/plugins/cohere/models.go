@@ -27,7 +27,7 @@ type modelInfo struct {
 }
 
 // defaultChatSupports describes the capabilities shared by the ChatV2 models.
-// Media is left disabled for v1; vision models (command-a-vision) are deferred.
+// Media is disabled because multimodal message mapping is deferred.
 var defaultChatSupports = &ai.ModelSupports{
 	Multiturn:   true,
 	Tools:       true,
@@ -37,25 +37,32 @@ var defaultChatSupports = &ai.ModelSupports{
 	Constrained: ai.ConstrainedSupportAll,
 }
 
-// cohereChatModels is the curated catalogue of Cohere ChatV2 models. The map
-// key is the Genkit action name; Versions lists dated aliases that resolve to
-// the same family on Cohere's side.
+// cohereChatModels is the curated catalogue of active Cohere ChatV2 models.
+// Use dated IDs where Cohere has retired the old undated aliases.
 var cohereChatModels = map[string]modelInfo{
+	"command-a-plus-05-2026": {
+		Label:    cohereLabelPrefix + " - Command A+ (05-2026)",
+		Supports: defaultChatSupports,
+		Stage:    ai.ModelStageStable,
+	},
 	"command-a-03-2025": {
 		Label:    cohereLabelPrefix + " - Command A (03-2025)",
 		Supports: defaultChatSupports,
 		Stage:    ai.ModelStageStable,
 	},
-	"command-r-plus": {
-		Label:    cohereLabelPrefix + " - Command R+",
+	"command-a-reasoning-08-2025": {
+		Label:    cohereLabelPrefix + " - Command A Reasoning (08-2025)",
 		Supports: defaultChatSupports,
-		Versions: []string{"command-r-plus-08-2024", "command-r-plus-04-2024"},
 		Stage:    ai.ModelStageStable,
 	},
-	"command-r": {
-		Label:    cohereLabelPrefix + " - Command R",
+	"command-r-plus-08-2024": {
+		Label:    cohereLabelPrefix + " - Command R+ (08-2024)",
 		Supports: defaultChatSupports,
-		Versions: []string{"command-r-08-2024", "command-r-03-2024"},
+		Stage:    ai.ModelStageStable,
+	},
+	"command-r-08-2024": {
+		Label:    cohereLabelPrefix + " - Command R (08-2024)",
+		Supports: defaultChatSupports,
 		Stage:    ai.ModelStageStable,
 	},
 	"command-r7b-12-2024": {

@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	cohere "github.com/cohere-ai/cohere-go/v2"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	coheregenkit "github.com/firebase/genkit/go/plugins/cohere"
@@ -46,11 +45,11 @@ func TestCohereLive(t *testing.T) {
 
 	maxTokens := 256
 	temperature := 0.3
-	config := &cohere.V2ChatRequest{MaxTokens: &maxTokens, Temperature: &temperature}
+	config := &coheregenkit.ChatOptions{MaxTokens: &maxTokens, Temperature: &temperature}
 
 	t.Run("generate", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r")),
+			ai.WithModel(coheregenkit.Model(g, "command-r-08-2024")),
 			ai.WithConfig(config),
 			ai.WithSystem("be very terse"),
 			ai.WithPrompt("what is the capital of France? answer with one word"),
@@ -67,7 +66,7 @@ func TestCohereLive(t *testing.T) {
 		var out strings.Builder
 		var chunks int
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r")),
+			ai.WithModel(coheregenkit.Model(g, "command-r-08-2024")),
 			ai.WithConfig(config),
 			ai.WithPrompt("count from 1 to 5"),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
@@ -104,13 +103,48 @@ func TestCohereLive(t *testing.T) {
 			},
 		)
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r-plus")),
+			ai.WithModel(coheregenkit.Model(g, "command-r-plus-08-2024")),
 			ai.WithConfig(config),
 			ai.WithPrompt("use the add tool to compute 17 plus 25, then state only the result"),
 			ai.WithTools(addTool),
 		)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.Contains(resp.Text(), "42") {
+			t.Fatalf("want 42 in answer, got: %s", resp.Text())
+		}
+	})
+
+	t.Run("streaming tools", func(t *testing.T) {
+		addTool := genkit.DefineTool(g, "stream_add", "adds two integers",
+			func(toolCtx *ai.ToolContext, input struct {
+				A int `json:"a"`
+				B int `json:"b"`
+			}) (int, error) {
+				return input.A + input.B, nil
+			},
+		)
+		var sawToolRequest bool
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(coheregenkit.Model(g, "command-r-plus-08-2024")),
+			ai.WithConfig(config),
+			ai.WithPrompt("use the stream_add tool to compute 17 plus 25, then state only the result"),
+			ai.WithTools(addTool),
+			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+				for _, part := range chunk.Content {
+					if part.IsToolRequest() {
+						sawToolRequest = true
+					}
+				}
+				return nil
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sawToolRequest {
+			t.Fatal("expected a streamed tool-request chunk")
 		}
 		if !strings.Contains(resp.Text(), "42") {
 			t.Fatalf("want 42 in answer, got: %s", resp.Text())
