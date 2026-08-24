@@ -103,9 +103,8 @@ export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
 const RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
-    // The models support function calling; slice 2 flips this once the runner
-    // maps tool calls.
-    tools: false,
+    tools: true,
+    toolChoice: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],
