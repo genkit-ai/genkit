@@ -277,6 +277,7 @@ describe('toOpenAIResponsesRequestBody', () => {
       max_output_tokens: 128,
       temperature: 0.5,
       top_p: 0.9,
+      include: ['reasoning.encrypted_content'],
       store: false,
     });
   });
@@ -420,33 +421,186 @@ describe('toOpenAIResponsesRequestBody', () => {
     ]);
   });
 
-  test('rejects genkit tools rather than dropping them', () => {
-    expect(() =>
-      toOpenAIResponsesRequestBody('gpt-5-pro', {
-        messages: [],
-        tools: [{ name: 'lookup', description: 'looks things up' }],
-      })
-    ).toThrow(
-      expect.objectContaining({
-        status: 'INVALID_ARGUMENT',
-        message: expect.stringContaining('Tool calling is not yet supported'),
-      })
-    );
+  test('converts genkit tools into flat function tools', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      tools: [
+        {
+          name: 'lookup',
+          description: 'looks things up',
+          inputSchema: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+          },
+        },
+      ],
+      toolChoice: 'required',
+    });
+
+    expect(body.tools).toStrictEqual([
+      {
+        type: 'function',
+        name: 'lookup',
+        description: 'looks things up',
+        parameters: { type: 'object', properties: { q: { type: 'string' } } },
+        strict: null,
+      },
+    ]);
+    expect(body.tool_choice).toBe('required');
   });
 
-  test('rejects roles the transport does not support yet', () => {
-    expect(() =>
-      toOpenAIResponsesRequestBody('gpt-5-pro', {
-        messages: [
-          {
-            role: 'tool',
-            content: [
-              { toolResponse: { name: 'f', ref: '1', output: 'done' } },
-            ],
-          },
+  test('merges config.tools with converted genkit tools', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      tools: [{ name: 'lookup', description: 'looks things up' }],
+      config: { tools: [{ type: 'web_search_preview' }] },
+    });
+
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools![0]).toMatchObject({ type: 'function', name: 'lookup' });
+    expect(body.tools![1]).toStrictEqual({ type: 'web_search_preview' });
+  });
+
+  test('maps tool responses onto function_call_output items', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'f', ref: 'call_1', output: 'done' } },
+            {
+              toolResponse: { name: 'g', ref: 'call_2', output: { ok: true } },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(body.input).toStrictEqual([
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      {
+        type: 'function_call_output',
+        call_id: 'call_2',
+        output: '{"ok":true}',
+      },
+    ]);
+  });
+
+  test('replays tool calls and encrypted reasoning in order', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'thinking',
+              metadata: { itemId: 'rs_1', encryptedContent: 'ENC' },
+            },
+            { reasoning: 'more', metadata: { itemId: 'rs_1' } },
+            {
+              toolRequest: { name: 'lookup', ref: 'call_1', input: { q: 'x' } },
+              metadata: { itemId: 'fc_1' },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'lookup', ref: 'call_1', output: 'done' } },
+          ],
+        },
+      ],
+    });
+
+    expect(body.input).toStrictEqual([
+      {
+        type: 'reasoning',
+        id: 'rs_1',
+        summary: [
+          { type: 'summary_text', text: 'thinking' },
+          { type: 'summary_text', text: 'more' },
         ],
-      })
-    ).toThrow(/not supported by the OpenAI Responses API transport/);
+        encrypted_content: 'ENC',
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'lookup',
+        arguments: '{"q":"x"}',
+        id: 'fc_1',
+      },
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+    ]);
+  });
+
+  test('replays an encrypted reasoning item that has no summary', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: '',
+              metadata: { itemId: 'rs_1', encryptedContent: 'ENC' },
+            },
+            { text: 'answer' },
+          ],
+        },
+      ],
+    });
+
+    expect(body.input).toStrictEqual([
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'ENC' },
+      { role: 'assistant', content: 'answer' },
+    ]);
+  });
+
+  test('preserves text around a tool call instead of dropping it', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        {
+          role: 'model',
+          content: [
+            { text: 'let me check' },
+            { toolRequest: { name: 'lookup', ref: 'call_1', input: {} } },
+          ],
+        },
+      ],
+    });
+
+    expect(body.input).toStrictEqual([
+      { role: 'assistant', content: 'let me check' },
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'lookup',
+        arguments: '{}',
+      },
+    ]);
+  });
+
+  test('requests encrypted reasoning on stateless requests', () => {
+    expect(
+      toOpenAIResponsesRequestBody('gpt-5-pro', { messages: [] }).include
+    ).toStrictEqual(['reasoning.encrypted_content']);
+  });
+
+  test('merges caller include values without duplicating', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { include: ['reasoning.encrypted_content'] },
+    });
+
+    expect(body.include).toStrictEqual(['reasoning.encrypted_content']);
+  });
+
+  test('leaves include alone when the caller opts into server-side storage', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { store: true, include: ['message.output_text.logprobs'] },
+    });
+
+    expect(body.include).toStrictEqual(['message.output_text.logprobs']);
   });
 });
 
@@ -521,9 +675,88 @@ describe('fromOpenAIResponse', () => {
     });
 
     expect(fromOpenAIResponse(response).message?.content).toStrictEqual([
-      { reasoning: 'thinking' },
-      { reasoning: 'more' },
+      { reasoning: 'thinking', metadata: { itemId: 'rs_1' } },
+      { reasoning: 'more', metadata: { itemId: 'rs_1' } },
       { text: 'answer' },
+    ]);
+  });
+
+  test('carries encrypted reasoning on the item first part only', () => {
+    const response = fakeResponse({
+      output: [
+        {
+          id: 'rs_1',
+          type: 'reasoning',
+          encrypted_content: 'ENC',
+          summary: [
+            { type: 'summary_text', text: 'thinking' },
+            { type: 'summary_text', text: 'more' },
+          ],
+        },
+      ],
+    });
+
+    expect(fromOpenAIResponse(response).message?.content).toStrictEqual([
+      {
+        reasoning: 'thinking',
+        metadata: { itemId: 'rs_1', encryptedContent: 'ENC' },
+      },
+      { reasoning: 'more', metadata: { itemId: 'rs_1' } },
+    ]);
+  });
+
+  test('keeps a summary-less encrypted reasoning item as an empty part', () => {
+    const response = fakeResponse({
+      output: [
+        {
+          id: 'rs_1',
+          type: 'reasoning',
+          encrypted_content: 'ENC',
+          summary: [],
+        },
+      ],
+    });
+
+    expect(fromOpenAIResponse(response).message?.content).toStrictEqual([
+      {
+        reasoning: '',
+        metadata: { itemId: 'rs_1', encryptedContent: 'ENC' },
+      },
+    ]);
+  });
+
+  test('drops a reasoning item with neither summary nor encrypted content', () => {
+    const response = fakeResponse({
+      output: [{ id: 'rs_1', type: 'reasoning', summary: [] }],
+    });
+
+    expect(fromOpenAIResponse(response).message?.content).toStrictEqual([]);
+  });
+
+  test('surfaces citation annotations on the text part', () => {
+    const annotation = {
+      type: 'url_citation' as const,
+      url: 'https://example.com',
+      title: 'Example',
+      start_index: 0,
+      end_index: 5,
+    };
+    const response = fakeResponse({
+      output: [
+        {
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [
+            { type: 'output_text', text: 'cited', annotations: [annotation] },
+          ],
+        },
+      ],
+    });
+
+    expect(fromOpenAIResponse(response).message?.content).toStrictEqual([
+      { text: 'cited', metadata: { annotations: [annotation] } },
     ]);
   });
 
@@ -567,7 +800,7 @@ describe('fromOpenAIResponse', () => {
     ).toBe('blocked');
   });
 
-  test('rejects a response that asks for a tool call', () => {
+  test('converts a function call into a tool request part', () => {
     const response = fakeResponse({
       output: [
         {
@@ -575,15 +808,35 @@ describe('fromOpenAIResponse', () => {
           type: 'function_call',
           call_id: 'call_1',
           name: 'lookup',
-          arguments: '{}',
+          arguments: '{"q":"x"}',
         },
       ],
     });
 
+    const converted = fromOpenAIResponse(response);
+    expect(converted.finishReason).toBe('stop');
+    expect(converted.message?.content).toStrictEqual([
+      {
+        toolRequest: { name: 'lookup', ref: 'call_1', input: { q: 'x' } },
+        metadata: { itemId: 'fc_1' },
+      },
+    ]);
+  });
+
+  test('rejects a custom tool call', () => {
+    const item = {
+      id: 'ct_1',
+      type: 'custom_tool_call',
+      call_id: 'call_1',
+      name: 'grep',
+      input: 'foo',
+    } as unknown as OpenAIResponse['output'][number];
+    const response = fakeResponse({ output: [item] });
+
     expect(() => fromOpenAIResponse(response)).toThrow(
       expect.objectContaining({
         status: 'UNIMPLEMENTED',
-        message: expect.stringContaining('function_call'),
+        message: expect.stringContaining('custom_tool_call'),
       })
     );
   });
@@ -701,27 +954,192 @@ describe('openAIResponsesModelRunner', () => {
     expect(request.body).toStrictEqual({
       model: 'gpt-5-pro',
       input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      include: ['reasoning.encrypted_content'],
       store: false,
     });
     expect(response.message?.content).toStrictEqual([{ text: 'hi there' }]);
   });
 
-  test('delivers the completed response as a single chunk when streaming', async () => {
-    server.setNextResponse({ body: textResponse('streamed') });
+  test('streams text and reasoning deltas as chunks', async () => {
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: { id: 'rs_1', type: 'reasoning', summary: [] },
+          sequence_number: 1,
+        },
+        {
+          type: 'response.reasoning_summary_text.delta',
+          item_id: 'rs_1',
+          output_index: 0,
+          summary_index: 0,
+          delta: 'thinking',
+          sequence_number: 2,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 1,
+          item: {
+            id: 'msg_1',
+            type: 'message',
+            role: 'assistant',
+            status: 'in_progress',
+            content: [],
+          },
+          sequence_number: 3,
+        },
+        {
+          type: 'response.content_part.added',
+          item_id: 'msg_1',
+          output_index: 1,
+          content_index: 0,
+          part: { type: 'output_text', text: '', annotations: [] },
+          sequence_number: 4,
+        },
+        {
+          type: 'response.output_text.delta',
+          item_id: 'msg_1',
+          output_index: 1,
+          content_index: 0,
+          delta: 'hel',
+          sequence_number: 5,
+        },
+        {
+          type: 'response.output_text.delta',
+          item_id: 'msg_1',
+          output_index: 1,
+          content_index: 0,
+          delta: 'lo',
+          sequence_number: 6,
+        },
+        {
+          type: 'response.completed',
+          response: textResponse('hello'),
+          sequence_number: 7,
+        },
+      ],
+    });
     const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
     const runner = openAIResponsesModelRunner('gpt-5-pro', client);
     const sendChunk = jest.fn();
 
-    await runner(
+    const response = await runner(
       { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
       { streamingRequested: true, sendChunk }
     );
 
-    expect(sendChunk).toHaveBeenCalledTimes(1);
-    expect(sendChunk).toHaveBeenCalledWith({
-      index: 0,
-      content: [{ text: 'streamed' }],
+    expect(sendChunk.mock.calls.map((call) => call[0])).toStrictEqual([
+      { index: 0, content: [{ reasoning: 'thinking' }] },
+      { index: 1, content: [{ text: 'hel' }] },
+      { index: 1, content: [{ text: 'lo' }] },
+    ]);
+    expect(response.message?.content).toStrictEqual([{ text: 'hello' }]);
+    expect(server.requests[server.requests.length - 1].body.stream).toBe(true);
+  });
+
+  test('streams a function call as accumulating partial tool requests', async () => {
+    const finalResponse = fakeResponse({
+      output: [
+        {
+          id: 'fc_1',
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'lookup',
+          arguments: '{"q":"x"}',
+        },
+      ],
     });
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            id: 'fc_1',
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'lookup',
+            arguments: '',
+            status: 'in_progress',
+          },
+          sequence_number: 1,
+        },
+        {
+          type: 'response.function_call_arguments.delta',
+          item_id: 'fc_1',
+          output_index: 0,
+          delta: '{"q":',
+          sequence_number: 2,
+        },
+        {
+          type: 'response.function_call_arguments.delta',
+          item_id: 'fc_1',
+          output_index: 0,
+          delta: '"x"}',
+          sequence_number: 3,
+        },
+        {
+          type: 'response.completed',
+          response: finalResponse,
+          sequence_number: 4,
+        },
+      ],
+    });
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+    const sendChunk = jest.fn();
+
+    const response = await runner(
+      { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+      { streamingRequested: true, sendChunk }
+    );
+
+    const chunks = sendChunk.mock.calls.map((call) => call[0]);
+    expect(chunks[0]).toStrictEqual({
+      index: 0,
+      content: [
+        {
+          toolRequest: {
+            name: 'lookup',
+            ref: 'call_1',
+            input: {},
+            partial: true,
+          },
+        },
+      ],
+    });
+    expect(chunks[chunks.length - 1]).toStrictEqual({
+      index: 0,
+      content: [
+        {
+          toolRequest: {
+            name: 'lookup',
+            ref: 'call_1',
+            input: { q: 'x' },
+            partial: true,
+          },
+        },
+      ],
+    });
+    expect(response.message?.content).toStrictEqual([
+      {
+        toolRequest: { name: 'lookup', ref: 'call_1', input: { q: 'x' } },
+        metadata: { itemId: 'fc_1' },
+      },
+    ]);
   });
 
   test('converts an APIError into a GenkitError', async () => {
@@ -759,7 +1177,8 @@ describe('defineCompatOpenAIResponsesModel', () => {
     expect(action.__action.name).toBe('openai/gpt-5-pro');
     expect(action.__action.metadata?.model.supports).toStrictEqual({
       multiturn: true,
-      tools: false,
+      tools: true,
+      toolChoice: true,
       media: true,
       systemRole: true,
       output: ['text', 'json'],
@@ -795,14 +1214,19 @@ describe('openAI plugin routing', () => {
     const action = await plugin.model('o3-pro-2025-06-10');
 
     expect(action.__action.name).toBe('openai/o3-pro-2025-06-10');
-    expect(action.__action.metadata?.model.supports?.tools).toBe(false);
+    // Only the Responses config schema declares the transport routing key.
+    expect(
+      Object.keys(action.__action.metadata?.model.customOptions.properties)
+    ).toContain('transport');
   });
 
   test('leaves dual-transport names on Chat Completions', async () => {
     const plugin = openAI({ apiKey: 'key' });
     const action = await plugin.model('gpt-5');
 
-    expect(action.__action.metadata?.model.supports?.tools).toBe(true);
+    expect(
+      Object.keys(action.__action.metadata?.model.customOptions.properties)
+    ).not.toContain('transport');
   });
 
   test('gives Responses-only refs the transport-aware config schema', () => {
@@ -857,6 +1281,54 @@ describe('openAI plugin routing', () => {
     expect(JSON.stringify(sent.body.input)).not.toContain('colour');
   });
 
+  test('runs a full tool-calling loop over the Responses transport', async () => {
+    const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+    const getWeather = ai.defineTool(
+      {
+        name: 'getWeather',
+        description: 'gets the weather',
+        inputSchema: z.object({ city: z.string() }),
+        outputSchema: z.string(),
+      },
+      async ({ city }) => `sunny in ${city}`
+    );
+    server.setNextResponse({
+      body: fakeResponse({
+        output: [
+          {
+            id: 'fc_1',
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'getWeather',
+            arguments: '{"city":"Paris"}',
+          },
+        ],
+      }),
+    });
+    server.setNextResponse({ body: textResponse('It is sunny.') });
+
+    const result = await ai.generate({
+      model: openAI.model('gpt-5-pro'),
+      prompt: 'weather in Paris?',
+      tools: [getWeather],
+    });
+
+    expect(result.text).toBe('It is sunny.');
+    const secondRequest = server.requests[server.requests.length - 1];
+    expect(secondRequest.body.input).toContainEqual({
+      type: 'function_call',
+      call_id: 'call_1',
+      name: 'getWeather',
+      arguments: '{"city":"Paris"}',
+      id: 'fc_1',
+    });
+    expect(secondRequest.body.input).toContainEqual({
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'sunny in Paris',
+    });
+  });
+
   test('sends dual-transport models to the Chat Completions endpoint', async () => {
     const plugin = openAI({ apiKey: 'key' });
     const action = await plugin.model('gpt-4o');
@@ -892,7 +1364,7 @@ describe('openAI plugin routing', () => {
     const [metadata] = await plugin.list!();
 
     expect(metadata.name).toBe('openai/gpt-5-pro');
-    expect(metadata.metadata?.model.supports.tools).toBe(false);
+    expect(metadata.metadata?.model.supports.tools).toBe(true);
     expect(
       Object.keys(metadata.metadata?.model.customOptions.properties)
     ).toContain('transport');

@@ -84,7 +84,8 @@ export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
 const RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
-    tools: false,
+    tools: true,
+    toolChoice: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],

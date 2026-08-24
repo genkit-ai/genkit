@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from '@jest/globals';
+import type { GenerateResponseChunkData, MessageData } from 'genkit';
 import OpenAI from 'openai';
 import { openAIResponsesModelRunner } from '../src/responses';
 
@@ -75,4 +76,82 @@ maybeDescribe('openAI responses live', () => {
     };
     expect(typeof data?.colour).toBe('string');
   }, 120_000);
+
+  test('streams text deltas', async () => {
+    const chunks: GenerateResponseChunkData[] = [];
+    const response = await runner()(
+      {
+        messages: [{ role: 'user', content: [{ text: 'Count from 1 to 5.' }] }],
+        config: { maxOutputTokens: 2048 },
+      },
+      { streamingRequested: true, sendChunk: (chunk) => chunks.push(chunk) }
+    );
+
+    expect(response.finishReason).toBe('stop');
+    const streamedText = chunks
+      .flatMap((chunk) => chunk.content)
+      .map((part) => part.text ?? '')
+      .join('');
+    expect(streamedText).toContain('3');
+  }, 120_000);
+
+  test('round-trips a tool call with encrypted reasoning across turns', async () => {
+    const tools = [
+      {
+        name: 'getWeather',
+        description: 'Returns the current weather for a city.',
+        inputSchema: {
+          type: 'object',
+          properties: { city: { type: 'string' } },
+          required: ['city'],
+          additionalProperties: false,
+        } as Record<string, unknown>,
+      },
+    ];
+    const messages: MessageData[] = [
+      {
+        role: 'user',
+        content: [
+          { text: 'Use the getWeather tool to find the weather in Paris.' },
+        ],
+      },
+    ];
+
+    const first = await runner()({
+      messages,
+      tools,
+      config: { maxOutputTokens: 2048 },
+    });
+
+    const toolRequest = first.message?.content.find((p) => p.toolRequest);
+    expect(toolRequest?.toolRequest?.name).toBe('getWeather');
+    // The stateless default must have carried the reasoning payload back.
+    expect(
+      first.message?.content.some((p) => p.metadata?.encryptedContent)
+    ).toBe(true);
+
+    messages.push(first.message!, {
+      role: 'tool',
+      content: [
+        {
+          toolResponse: {
+            name: 'getWeather',
+            ref: toolRequest!.toolRequest!.ref,
+            output: 'Sunny, 24C',
+          },
+        },
+      ],
+    });
+
+    const second = await runner()({
+      messages,
+      tools,
+      config: { maxOutputTokens: 2048 },
+    });
+
+    expect(second.finishReason).toBe('stop');
+    expect(second.message?.content.map((p) => p.text ?? '').join('')).toMatch(
+      /sunny|24/i
+    );
+  }, 240_000);
 });

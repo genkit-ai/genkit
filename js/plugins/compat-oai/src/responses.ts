@@ -31,14 +31,20 @@ import {
   z,
 } from 'genkit';
 import { parsePartialJson } from 'genkit/extract';
-import type { ModelAction, ModelInfo } from 'genkit/model';
+import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import type OpenAI from 'openai';
 import type {
+  FunctionTool,
   Response as OpenAIResponse,
   ResponseCreateParamsNonStreaming,
+  ResponseIncludable,
   ResponseInput,
   ResponseInputContent,
+  ResponseInputItem,
+  ResponseReasoningItem,
+  ResponseStreamEvent,
+  Tool,
 } from 'openai/resources/responses/responses.mjs';
 import { PluginOptions } from './index.js';
 import {
@@ -125,27 +131,92 @@ export function toOpenAIResponsesContent(
 }
 
 /**
- * Serializes a prior model turn into the text of an assistant input message.
+ * Converts a Genkit ToolDefinition into a Responses API function tool.
+ *
+ * The Responses `FunctionTool` shape is flat and requires `strict`, so the Chat
+ * Completions converter cannot be reused. `strict` stays null: genkit tool
+ * schemas are not authored for OpenAI strict mode, which rejects any schema
+ * missing `additionalProperties: false`.
+ * @param tool The Genkit ToolDefinition to convert.
+ * @returns The corresponding Responses API function tool.
+ */
+export function toOpenAIResponsesTool(tool: ToolDefinition): FunctionTool {
+  return {
+    type: 'function',
+    name: tool.name,
+    description: tool.description,
+    parameters: (tool.inputSchema ?? null) as Record<string, unknown> | null,
+    strict: null,
+  };
+}
+
+/**
+ * Serializes a prior model turn into Responses API input items, preserving the
+ * order of text, tool-call and reasoning parts.
  *
  * Structured output comes back as a `data` part carrying no text, so replaying
  * only the turn's text would send an empty assistant message and lose the
- * model's own previous answer.
+ * model's own previous answer. Reasoning parts replay only through the
+ * encrypted round-trip: the item id and encrypted payload ride `part.metadata`,
+ * and a summary-only reasoning part carries nothing the API can resume from.
  * @param parts The content of the model message.
- * @returns The assistant message text, empty when the turn carries nothing
- * this transport can replay.
+ * @returns The input items, empty when the turn carries nothing this transport
+ * can replay.
  * @throws GenkitError if a part cannot be represented in assistant history.
  */
-function fromModelTurn(parts: Part[]): string {
+function toModelTurnItems(parts: Part[]): ResponseInputItem[] {
+  const items: ResponseInputItem[] = [];
   let text = '';
-  for (const part of parts) {
+  const flushText = () => {
+    if (text) {
+      items.push({ role: 'assistant', content: text });
+      text = '';
+    }
+  };
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
     if (part.text !== undefined) {
       text += part.text;
     } else if (part.data !== undefined) {
       text += JSON.stringify(part.data);
+    } else if (part.toolRequest !== undefined) {
+      flushText();
+      const itemId = part.metadata?.itemId as string | undefined;
+      items.push({
+        type: 'function_call',
+        call_id: part.toolRequest.ref ?? '',
+        name: part.toolRequest.name,
+        arguments: JSON.stringify(part.toolRequest.input ?? {}),
+        ...(itemId ? { id: itemId } : {}),
+      });
     } else if (part.reasoning !== undefined) {
-      // Reasoning is replayed through the encrypted round-trip, which this
-      // slice does not implement; the plain summary adds nothing on its own.
-      continue;
+      const itemId = part.metadata?.itemId as string | undefined;
+      if (!itemId) continue;
+      flushText();
+      // One Responses reasoning item was fanned out into one part per summary;
+      // fold consecutive parts with the same item id back into a single item.
+      const summary: ResponseReasoningItem['summary'] = [];
+      let encrypted: string | undefined;
+      let j = i;
+      for (
+        ;
+        j < parts.length &&
+        parts[j].reasoning !== undefined &&
+        parts[j].metadata?.itemId === itemId;
+        j++
+      ) {
+        if (parts[j].reasoning) {
+          summary.push({ type: 'summary_text', text: parts[j].reasoning! });
+        }
+        encrypted ??= parts[j].metadata?.encryptedContent as string | undefined;
+      }
+      i = j - 1;
+      items.push({
+        type: 'reasoning',
+        id: itemId,
+        summary,
+        ...(encrypted ? { encrypted_content: encrypted } : {}),
+      });
     } else {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -153,7 +224,8 @@ function fromModelTurn(parts: Part[]): string {
       });
     }
   }
-  return text;
+  flushText();
+  return items;
 }
 
 /**
@@ -186,13 +258,27 @@ export function toOpenAIResponsesInput(
           ),
         });
         break;
-      case 'model': {
-        // An assistant message with no content carries nothing and OpenAI
-        // rejects it, so a turn that reduces to nothing is left out entirely.
-        const content = fromModelTurn(msg.content);
-        if (content) input.push({ role: 'assistant', content });
+      case 'model':
+        input.push(...toModelTurnItems(msg.content));
         break;
-      }
+      case 'tool':
+        for (const part of msg.content) {
+          if (part.toolResponse === undefined) {
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message: `Unsupported genkit part fields encountered for current message role: ${JSON.stringify(part)}.`,
+            });
+          }
+          input.push({
+            type: 'function_call_output',
+            call_id: part.toolResponse.ref ?? '',
+            output:
+              typeof part.toolResponse.output === 'string'
+                ? part.toolResponse.output
+                : JSON.stringify(part.toolResponse.output),
+          });
+        }
+        break;
       default:
         throw new GenkitError({
           status: 'UNIMPLEMENTED',
@@ -223,16 +309,6 @@ export function toOpenAIResponsesRequestBody(
   modelName: string,
   request: GenerateRequest
 ): ResponseCreateParamsNonStreaming {
-  // Genkit only warns when a model declares `supports.tools: false`, so without
-  // this the tools would be dropped and the model would answer as if none had
-  // been offered.
-  if (request.tools?.length) {
-    throw new GenkitError({
-      status: 'INVALID_ARGUMENT',
-      message: `Tool calling is not yet supported on the OpenAI Responses API transport (model ${modelName}).`,
-    });
-  }
-
   const { input, instructions } = toOpenAIResponsesInput(
     request.messages,
     request.config?.visualDetailLevel
@@ -247,6 +323,8 @@ export function toOpenAIResponsesRequestBody(
     version: modelVersion,
     store,
     instructions: instructionsFromConfig,
+    tools: toolsFromConfig,
+    include: includeFromConfig,
     // Selects the OpenAI transport; it is a plugin concept, not a wire field.
     transport,
     stream,
@@ -285,6 +363,23 @@ export function toOpenAIResponsesRequestBody(
       .filter(Boolean)
       .join('\n\n') || undefined;
 
+  const tools: Tool[] = request.tools?.map(toOpenAIResponsesTool) ?? [];
+  if (toolsFromConfig) {
+    tools.push(...(toolsFromConfig as Tool[]));
+  }
+
+  const storeValue = store ?? false;
+  // Under the stateless default the encrypted reasoning payload is the only
+  // context a reasoning model can resume from, so it is always requested.
+  const include: ResponseIncludable[] | undefined = storeValue
+    ? (includeFromConfig as ResponseIncludable[] | undefined)
+    : [
+        ...new Set<ResponseIncludable>([
+          ...((includeFromConfig as ResponseIncludable[] | undefined) ?? []),
+          'reasoning.encrypted_content',
+        ]),
+      ];
+
   const body: ResponseCreateParamsNonStreaming = {
     model: modelVersion ?? modelName,
     input,
@@ -292,9 +387,12 @@ export function toOpenAIResponsesRequestBody(
     max_output_tokens,
     temperature,
     top_p,
+    tools: tools.length ? tools : undefined,
+    tool_choice: request.toolChoice,
+    include,
     // The Responses API retains requests and responses server-side by default;
     // pinning it off matches the Chat Completions retention posture.
-    store: store ?? false,
+    store: storeValue,
     ...restOfConfig,
   };
 
@@ -352,13 +450,6 @@ function toFinishInfo(response: OpenAIResponse): {
 }
 
 /**
- * Output items asking the caller to run a tool. Genkit has no way to answer one
- * on this transport yet, and dropping it would leave the caller with an empty
- * response instead of an error.
- */
-const TOOL_CALL_ITEM_TYPES = new Set(['function_call', 'custom_tool_call']);
-
-/**
  * Best-effort conversion of json-mode output text into a data part. A response
  * truncated by `max_output_tokens` or a content filter can end with partial
  * JSON, which must surface through the finish reason rather than as a
@@ -381,7 +472,7 @@ function toJsonData(text: string): Part {
  * @param response The Response to convert.
  * @param jsonMode Whether the response text is expected to be JSON.
  * @returns The converted Genkit GenerateResponseData object.
- * @throws GenkitError if the response failed or asks for a tool call.
+ * @throws GenkitError if the response failed or asks for a custom tool call.
  */
 export function fromOpenAIResponse(
   response: OpenAIResponse,
@@ -402,24 +493,58 @@ export function fromOpenAIResponse(
   let refused = false;
   for (const item of response.output ?? []) {
     if (item.type === 'reasoning') {
-      for (const summary of item.summary ?? []) {
-        if (summary.text) content.push({ reasoning: summary.text });
+      // The item id and encrypted payload ride part metadata so the item can
+      // be reassembled and replayed on the next stateless turn. The payload
+      // rides only the item's first part; the id marks the rest as one item.
+      const meta: Record<string, unknown> = { itemId: item.id };
+      if (item.encrypted_content) {
+        meta.encryptedContent = item.encrypted_content;
+      }
+      const summaries = (item.summary ?? []).filter((s) => s.text);
+      if (summaries.length === 0) {
+        // A reasoning model asked for no summary still returns the item; the
+        // empty part exists purely to carry the payload through history.
+        if (item.encrypted_content) {
+          content.push({ reasoning: '', metadata: meta });
+        }
+      } else {
+        summaries.forEach((summary, index) => {
+          content.push({
+            reasoning: summary.text,
+            metadata: index === 0 ? meta : { itemId: item.id },
+          });
+        });
       }
     } else if (item.type === 'message') {
       for (const contentItem of item.content ?? []) {
         if (contentItem.type === 'output_text') {
-          content.push(
-            jsonMode ? toJsonData(contentItem.text) : { text: contentItem.text }
-          );
+          const part: Part = jsonMode
+            ? toJsonData(contentItem.text)
+            : { text: contentItem.text };
+          if (contentItem.annotations?.length) {
+            part.metadata = { annotations: contentItem.annotations };
+          }
+          content.push(part);
         } else if (contentItem.type === 'refusal') {
           refused = true;
           content.push({ text: contentItem.refusal });
         }
       }
-    } else if (TOOL_CALL_ITEM_TYPES.has(item.type)) {
+    } else if (item.type === 'function_call') {
+      content.push({
+        toolRequest: {
+          name: item.name,
+          ref: item.call_id,
+          input: item.arguments ? JSON.parse(item.arguments) : {},
+        },
+        ...(item.id ? { metadata: { itemId: item.id } } : {}),
+      });
+    } else if ((item.type as string) === 'custom_tool_call') {
+      // The pinned SDK's output-item union predates custom tools, but the live
+      // API can still return one.
       throw new GenkitError({
         status: 'UNIMPLEMENTED',
-        message: `Tool calling is not yet supported on the OpenAI Responses API transport; the model returned a '${item.type}' item.`,
+        message: `Custom tool calls are not supported on the OpenAI Responses API transport; the model returned a 'custom_tool_call' item.`,
       });
     }
     // Records of tools OpenAI ran itself (`web_search_call`, `mcp_call`, ...);
@@ -445,6 +570,91 @@ export function fromOpenAIResponse(
     },
     raw: response,
   };
+}
+
+/**
+ * Accumulates the streamed argument fragments of one function call. The
+ * `response.output_item.added` event carries the call's `name` and `call_id`;
+ * subsequent `response.function_call_arguments.delta` events carry only
+ * fragments of the `arguments` JSON string, keyed by `output_index`.
+ */
+export interface ResponsesToolCallAccumulator {
+  name: string;
+  ref: string;
+  /** Concatenated `arguments` JSON string fragments received so far. */
+  args: string;
+}
+
+/**
+ * Converts one Responses API stream event into a Genkit response chunk.
+ *
+ * Annotation events are deliberately ignored: annotations attach to the final
+ * text part's metadata in {@link fromOpenAIResponse}, which every streamed
+ * request still runs through.
+ * @param event The stream event to convert.
+ * @param toolCalls Per-request function-call accumulators, keyed by
+ * `output_index`. Mutated in place as fragments arrive.
+ * @returns The chunk to emit, or `undefined` for events with no chunk-visible
+ * payload.
+ */
+export function fromOpenAIResponsesStreamEvent(
+  event: ResponseStreamEvent,
+  toolCalls: Map<number, ResponsesToolCallAccumulator>
+): GenerateResponseChunkData | undefined {
+  switch (event.type) {
+    case 'response.output_text.delta':
+      return { index: event.output_index, content: [{ text: event.delta }] };
+    case 'response.refusal.delta':
+      return { index: event.output_index, content: [{ text: event.delta }] };
+    case 'response.reasoning_summary_text.delta':
+      return {
+        index: event.output_index,
+        content: [{ reasoning: event.delta }],
+      };
+    case 'response.output_item.added': {
+      if (event.item.type !== 'function_call') return undefined;
+      const acc: ResponsesToolCallAccumulator = {
+        name: event.item.name,
+        ref: event.item.call_id,
+        args: event.item.arguments ?? '',
+      };
+      toolCalls.set(event.output_index, acc);
+      return {
+        index: event.output_index,
+        content: [
+          {
+            toolRequest: {
+              name: acc.name,
+              ref: acc.ref,
+              input: {},
+              partial: true,
+            },
+          },
+        ],
+      };
+    }
+    case 'response.function_call_arguments.delta': {
+      const acc = toolCalls.get(event.output_index);
+      if (!acc) return undefined;
+      acc.args += event.delta;
+      let input: unknown = {};
+      try {
+        input = acc.args ? parsePartialJson(acc.args) : {};
+      } catch {
+        input = {};
+      }
+      return {
+        index: event.output_index,
+        content: [
+          {
+            toolRequest: { name: acc.name, ref: acc.ref, input, partial: true },
+          },
+        ],
+      };
+    }
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -474,24 +684,25 @@ export function openAIResponsesModelRunner(
       defaultClient
     );
     try {
-      const response = await client.responses.create(
-        toOpenAIResponsesRequestBody(name, request),
-        { signal: options?.abortSignal }
-      );
-      const converted = fromOpenAIResponse(
-        response,
-        request.output?.format === 'json'
-      );
-      // The Responses event protocol is not mapped yet, so a streaming caller
-      // gets the completed response delivered as a single chunk rather than
-      // nothing at all.
-      if (options?.streamingRequested && options.sendChunk) {
-        options.sendChunk({
-          index: 0,
-          content: converted.message?.content ?? [],
+      const body = toOpenAIResponsesRequestBody(name, request);
+      let response: OpenAIResponse;
+      if (options?.streamingRequested) {
+        const stream = client.responses.stream(
+          { ...body, stream: true },
+          { signal: options?.abortSignal }
+        );
+        const toolCalls = new Map<number, ResponsesToolCallAccumulator>();
+        for await (const event of stream) {
+          const chunk = fromOpenAIResponsesStreamEvent(event, toolCalls);
+          if (chunk) options.sendChunk!(chunk);
+        }
+        response = await stream.finalResponse();
+      } else {
+        response = await client.responses.create(body, {
+          signal: options?.abortSignal,
         });
       }
-      return converted;
+      return fromOpenAIResponse(response, request.output?.format === 'json');
     } catch (e) {
       rethrowOpenAIError(e);
     }
@@ -537,7 +748,8 @@ const GENERIC_RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     media: true,
-    tools: false,
+    tools: true,
+    toolChoice: true,
     systemRole: true,
     output: ['text', 'json'],
     // Without this genkit wraps the model in simulateConstrainedGeneration,
