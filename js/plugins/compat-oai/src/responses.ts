@@ -30,6 +30,7 @@ import {
   modelRef,
   z,
 } from 'genkit';
+import { parsePartialJson } from 'genkit/extract';
 import type { ModelAction, ModelInfo } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import type OpenAI from 'openai';
@@ -311,12 +312,8 @@ function toFinishInfo(response: OpenAIResponse): {
       };
     case 'cancelled':
       return { finishReason: 'other', finishMessage: 'Response cancelled.' };
-    case 'failed':
-      return {
-        finishReason: 'other',
-        finishMessage: response.error?.message,
-      };
     default:
+      // 'failed' is unreachable: fromOpenAIResponse throws before mapping it.
       return { finishReason: 'unknown' };
   }
 }
@@ -329,6 +326,24 @@ function toFinishInfo(response: OpenAIResponse): {
 const TOOL_CALL_ITEM_TYPES = new Set(['function_call', 'custom_tool_call']);
 
 /**
+ * Best-effort conversion of json-mode output text into a data part. A response
+ * truncated by `max_output_tokens` or a content filter can end with partial
+ * JSON, which must surface through the finish reason rather than as a
+ * SyntaxError.
+ */
+function toJsonData(text: string): Part {
+  try {
+    return { data: JSON.parse(text) };
+  } catch {
+    try {
+      return { data: parsePartialJson(text) };
+    } catch {
+      return { text };
+    }
+  }
+}
+
+/**
  * Converts an OpenAI Response into Genkit response data.
  * @param response The Response to convert.
  * @param jsonMode Whether the response text is expected to be JSON.
@@ -339,12 +354,14 @@ export function fromOpenAIResponse(
   response: OpenAIResponse,
   jsonMode = false
 ): GenerateResponseData {
-  // A failed response carries its cause in `error` and nothing in `output`, so
-  // returning it as an empty completion would hide the reason entirely.
-  if (response.status === 'failed' && response.error) {
+  // Returning a failed response as an empty completion would hide the failure
+  // entirely: the message object is present, so genkit's validation passes.
+  if (response.status === 'failed') {
     throw new GenkitError({
       status: 'INTERNAL',
-      message: `OpenAI Responses API request failed (${response.error.code}): ${response.error.message}`,
+      message: response.error
+        ? `OpenAI Responses API request failed (${response.error.code}): ${response.error.message}`
+        : 'OpenAI Responses API request failed without an error payload.',
     });
   }
 
@@ -359,9 +376,7 @@ export function fromOpenAIResponse(
       for (const contentItem of item.content ?? []) {
         if (contentItem.type === 'output_text') {
           content.push(
-            jsonMode
-              ? { data: JSON.parse(contentItem.text) }
-              : { text: contentItem.text }
+            jsonMode ? toJsonData(contentItem.text) : { text: contentItem.text }
           );
         } else if (contentItem.type === 'refusal') {
           refused = true;
