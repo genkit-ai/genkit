@@ -476,6 +476,24 @@ function toJsonData(text: string): Part {
 }
 
 /**
+ * Best-effort parse of a function call's `arguments` string. A response
+ * truncated by `max_output_tokens` can end with partial JSON, which must
+ * surface as a `length` finish reason rather than a SyntaxError.
+ */
+function parseFunctionCallArguments(args: string): unknown {
+  if (!args) return {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    try {
+      return parsePartialJson(args);
+    } catch {
+      return args;
+    }
+  }
+}
+
+/**
  * Converts an OpenAI Response into Genkit response data.
  * @param response The Response to convert.
  * @param jsonMode Whether the response text is expected to be JSON.
@@ -543,7 +561,7 @@ export function fromOpenAIResponse(
         toolRequest: {
           name: item.name,
           ref: item.call_id,
-          input: item.arguments ? JSON.parse(item.arguments) : {},
+          input: parseFunctionCallArguments(item.arguments),
         },
         ...(item.id ? { metadata: { itemId: item.id } } : {}),
       });
@@ -700,11 +718,23 @@ export function openAIResponsesModelRunner(
           { signal: options?.abortSignal }
         );
         const toolCalls = new Map<number, ResponsesToolCallAccumulator>();
+        // The SDK's finalResponse() snapshot only folds in `response.completed`,
+        // so a stream ending in `response.incomplete` or `response.failed`
+        // would come back as a stale in-progress response with the truncation
+        // or failure erased. Capture the terminal event's response instead.
+        let terminalResponse: OpenAIResponse | undefined;
         for await (const event of stream) {
+          if (
+            event.type === 'response.completed' ||
+            event.type === 'response.incomplete' ||
+            event.type === 'response.failed'
+          ) {
+            terminalResponse = event.response;
+          }
           const chunk = fromOpenAIResponsesStreamEvent(event, toolCalls);
           if (chunk) options.sendChunk!(chunk);
         }
-        response = await stream.finalResponse();
+        response = terminalResponse ?? (await stream.finalResponse());
       } else {
         response = await client.responses.create(body, {
           signal: options?.abortSignal,

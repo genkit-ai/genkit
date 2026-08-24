@@ -851,6 +851,29 @@ describe('fromOpenAIResponse', () => {
     ]);
   });
 
+  test('survives truncated function-call arguments and reports length', () => {
+    const response = fakeResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [
+        {
+          id: 'fc_1',
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'lookup',
+          arguments: '{"q":',
+          status: 'incomplete',
+        },
+      ],
+    });
+
+    const converted = fromOpenAIResponse(response);
+    expect(converted.finishReason).toBe('length');
+    const part = converted.message?.content[0];
+    expect(part?.toolRequest?.name).toBe('lookup');
+    expect(part?.toolRequest?.ref).toBe('call_1');
+  });
+
   test('rejects a custom tool call', () => {
     const item = {
       id: 'ct_1',
@@ -1168,6 +1191,110 @@ describe('openAIResponsesModelRunner', () => {
         metadata: { itemId: 'fc_1' },
       },
     ]);
+  });
+
+  test('reports truncation from a stream that ends incomplete', async () => {
+    const incompleteResponse = fakeResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      usage: {
+        input_tokens: 10,
+        output_tokens: 4,
+        total_tokens: 14,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      },
+      output: [
+        {
+          id: 'fc_1',
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'lookup',
+          arguments: '{"q":',
+          status: 'incomplete',
+        },
+      ],
+    });
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            id: 'fc_1',
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'lookup',
+            arguments: '',
+            status: 'in_progress',
+          },
+          sequence_number: 1,
+        },
+        {
+          type: 'response.function_call_arguments.delta',
+          item_id: 'fc_1',
+          output_index: 0,
+          delta: '{"q":',
+          sequence_number: 2,
+        },
+        {
+          type: 'response.incomplete',
+          response: incompleteResponse,
+          sequence_number: 3,
+        },
+      ],
+    });
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+
+    const response = await runner(
+      { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+      { streamingRequested: true, sendChunk: jest.fn() }
+    );
+
+    expect(response.finishReason).toBe('length');
+    expect(response.usage?.totalTokens).toBe(14);
+  });
+
+  test('surfaces a failure from a stream that ends failed', async () => {
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.failed',
+          response: fakeResponse({
+            status: 'failed',
+            error: { code: 'server_error', message: 'upstream exploded' },
+          }),
+          sequence_number: 1,
+        },
+      ],
+    });
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+
+    await expect(
+      runner(
+        { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+        { streamingRequested: true, sendChunk: jest.fn() }
+      )
+    ).rejects.toThrow(
+      expect.objectContaining({
+        status: 'INTERNAL',
+        message: expect.stringContaining('upstream exploded'),
+      })
+    );
   });
 
   test('converts an APIError into a GenkitError', async () => {
