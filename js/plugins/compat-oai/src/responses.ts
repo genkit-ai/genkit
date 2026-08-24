@@ -246,6 +246,7 @@ export function toOpenAIResponsesRequestBody(
     visualDetailLevel, // consumed while building the input items above
     version: modelVersion,
     store,
+    instructions: instructionsFromConfig,
     // Selects the OpenAI transport; it is a plugin concept, not a wire field.
     transport,
     apiKey,
@@ -259,10 +260,17 @@ export function toOpenAIResponsesRequestBody(
     });
   }
 
+  // Joined rather than passed through: a passthrough `instructions` landing
+  // after the spread would silently discard every hoisted system message.
+  const mergedInstructions =
+    [instructions, instructionsFromConfig as string | undefined]
+      .filter(Boolean)
+      .join('\n\n') || undefined;
+
   const body: ResponseCreateParamsNonStreaming = {
     model: modelVersion ?? modelName,
     input,
-    instructions,
+    instructions: mergedInstructions,
     max_output_tokens,
     temperature,
     top_p,

@@ -220,6 +220,15 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(withoutSystem).not.toHaveProperty('instructions');
   });
 
+  test('joins config instructions with system messages instead of clobbering them', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [{ role: 'system', content: [{ text: 'You are X' }] }],
+      config: { instructions: 'formatting hint' },
+    });
+
+    expect(body.instructions).toBe('You are X\n\nformatting hint');
+  });
+
   test('maps generation config onto Responses API field names', () => {
     const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
       messages: [],
