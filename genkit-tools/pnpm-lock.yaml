@@ -171,9 +171,6 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.20.3
-      uuid:
-        specifier: ^9.0.1
-        version: 9.0.1
       winston:
         specifier: ^3.11.0
         version: 3.19.0
@@ -229,9 +226,6 @@ importers:
       '@types/node':
         specifier: ^20.11.19
         version: 20.19.37
-      '@types/uuid':
-        specifier: ^9.0.8
-        version: 9.0.8
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1

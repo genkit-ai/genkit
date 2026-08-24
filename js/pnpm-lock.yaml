@@ -68,9 +68,6 @@ importers:
       uri-templates:
         specifier: ^0.2.0
         version: 0.2.0
-      uuid:
-        specifier: ^10.0.0
-        version: 10.0.0
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ~1.25.0
@@ -78,9 +75,6 @@ importers:
       '@types/uri-templates':
         specifier: ^0.1.34
         version: 0.1.34
-      '@types/uuid':
-        specifier: ^9.0.6
-        version: 9.0.8
       npm-run-all:
         specifier: ^4.1.5
         version: 4.1.5
@@ -240,9 +234,6 @@ importers:
       '@genkit-ai/core':
         specifier: workspace:*
         version: link:../core
-      uuid:
-        specifier: ^10.0.0
-        version: 10.0.0
     devDependencies:
       '@types/body-parser':
         specifier: ^1.19.5
@@ -253,9 +244,6 @@ importers:
       '@types/node':
         specifier: ^22.15.3
         version: 22.15.32
-      '@types/uuid':
-        specifier: ^9.0.6
-        version: 9.0.8
       npm-run-all:
         specifier: ^4.1.5
         version: 4.1.5
@@ -385,9 +373,6 @@ importers:
       pg:
         specifier: ^8.15.6
         version: 8.20.0
-      uuid:
-        specifier: ^11.1.0
-        version: 11.1.0
     devDependencies:
       '@jest/globals':
         specifier: ^29.7.0
@@ -395,9 +380,6 @@ importers:
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
-      '@types/uuid':
-        specifier: ^10.0.0
-        version: 10.0.0
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -15920,7 +15902,6 @@ snapshots:
       node-fetch: 3.3.2
       partial-json: 0.1.7
       uri-templates: 0.2.0
-      uuid: 10.0.0
     transitivePeerDependencies:
       - '@google-cloud/firestore'
       - bufferutil
@@ -22593,7 +22574,6 @@ snapshots:
     dependencies:
       '@genkit-ai/ai': 1.39.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.39.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
       '@genkit-ai/core': 1.39.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.39.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
-      uuid: 10.0.0
     transitivePeerDependencies:
       - '@google-cloud/firestore'
       - bufferutil
