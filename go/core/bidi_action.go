@@ -437,16 +437,18 @@ type BidiConnection[In, Out, Stream any] struct {
 	output   Out
 	err      error
 	ctx      context.Context
-	cancel   context.CancelCauseFunc
+	cancelFn context.CancelCauseFunc
+	abortErr error // guarded by mu: why the framework poisoned the session; see cancel
 	mu       sync.Mutex
 	closed   bool
 }
 
 // newBidiConnection creates an idle connection whose context derives from ctx.
 // The caller must start exactly one [BidiConnection.run] goroutine to operate
-// it. The context carries a cancel cause so that an abort reason (e.g. an
-// invalid inbound chunk poisoning the session) survives to Send/Receive/Output
-// instead of flattening to context.Canceled.
+// it. The context carries a cancel cause so that an abort reason recorded by
+// [BidiConnection.cancel] (e.g. an invalid inbound chunk poisoning the
+// session) reaches a function selecting on the context, rather than flattening
+// to context.Canceled.
 func newBidiConnection[In, Out, Stream any](ctx context.Context) *BidiConnection[In, Out, Stream] {
 	ctx, cancel := context.WithCancelCause(ctx)
 	return &BidiConnection[In, Out, Stream]{
@@ -454,8 +456,35 @@ func newBidiConnection[In, Out, Stream any](ctx context.Context) *BidiConnection
 		streamCh: make(chan Stream, 1),
 		doneCh:   make(chan struct{}),
 		ctx:      ctx,
-		cancel:   cancel,
+		cancelFn: cancel,
 	}
+}
+
+// cancel aborts the session, cancelling the action's context. A non-nil err
+// records why the framework poisoned this connection (an invalid inbound
+// chunk, a failed stream marshal, a callback error), which makes it the
+// session's terminal error; the first one recorded wins, as with the context's
+// own cause. The reason is recorded here rather than read back off the
+// connection context, whose cause the caller's own cancellation also sets; see
+// [BidiConnection.run].
+//
+// A reason must say what failed. Aborting without one (teardown,
+// [BidiConnection.Cancel]) passes nil, and a bare context.Canceled is the same
+// statement: it says only that someone stopped waiting, so it cancels the
+// context without becoming the session's error.
+//
+// Recording happens before the context is cancelled, and must stay that way:
+// cancelling first would let the action wake, return, and settle in run
+// against an abort reason this call has not stored yet, losing it.
+func (c *BidiConnection[In, Out, Stream]) cancel(err error) {
+	if err != nil && !errors.Is(err, context.Canceled) {
+		c.mu.Lock()
+		if c.abortErr == nil {
+			c.abortErr = err
+		}
+		c.mu.Unlock()
+	}
+	c.cancelFn(err)
 }
 
 // ctxErr returns the reason the connection's context was cancelled, preferring
@@ -506,17 +535,23 @@ func (c *BidiConnection[In, Out, Stream]) run(name string, fn func(context.Conte
 		closingStream = false
 	}()
 	output, err := fn(c.ctx)
+	c.mu.Lock()
 	// An abort recorded a cause (invalid inbound chunk, failed stream
 	// marshal, callback error): that cause is the session's terminal error.
 	// It overrides a nil error from a function that never observed the
 	// cancellation and the bare Canceled it unwound with, but not a distinct
 	// error the function chose to report.
-	if cause := context.Cause(c.ctx); cause != nil && !errors.Is(cause, context.Canceled) {
-		if err == nil || errors.Is(err, context.Canceled) {
-			err = cause
-		}
+	//
+	// Only a recorded abort qualifies. A cause that reached the connection
+	// through the caller's context (a deadline, a custom cancel cause) says
+	// the caller stopped waiting, not that this session failed: a function
+	// that committed its result anyway must return it. Discarding the result
+	// would strand work the caller can no longer reach, such as the snapshot
+	// ID a detached agent invocation returns for background work that is
+	// already running.
+	if c.abortErr != nil && (err == nil || errors.Is(err, context.Canceled)) {
+		err = c.abortErr
 	}
-	c.mu.Lock()
 	c.output = output
 	c.err = err
 	c.mu.Unlock()
@@ -674,9 +709,10 @@ func (c *BidiConnection[In, Out, Stream]) Output() (Out, error) {
 }
 
 // Cancel aborts the session by cancelling the connection's context: the
-// action's context is cancelled, blocked Sends unblock, and Output reports
-// the cancellation error unless the action already completed. Safe to call
-// multiple times and after completion.
+// action's context is cancelled and blocked Sends unblock. Output reports the
+// cancellation only while the action is still running; once it has returned,
+// Output reports its result, including from an action that ignored the cancel
+// and finished anyway. Safe to call multiple times and after completion.
 func (c *BidiConnection[In, Out, Stream]) Cancel() {
 	c.cancel(nil)
 }
