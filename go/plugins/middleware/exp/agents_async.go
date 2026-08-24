@@ -97,7 +97,10 @@ type backgroundTaskReport struct {
 	Agent string `json:"agent,omitempty"`
 	// Status is the task's lifecycle state: "pending", "completed", "failed",
 	// "aborted", "expired" (worker presumed dead), or "unknown" (the ID could
-	// not be resolved; see Error).
+	// not be resolved; see Error). It answers what the reader must act on
+	// rather than mirroring the stored row, so a task that committed without
+	// producing an answer reports "failed" and explains itself in Error.
+	// "completed" always carries a Response.
 	Status string `json:"status"`
 	// Response is the sub-agent's final text response, for completed tasks.
 	Response string `json:"response,omitempty"`
@@ -493,12 +496,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		}, fmt.Sprintf("%s_%s", ref.Name, shortSnapshotID(snapshotID)))
 		switch snap.FinishReason {
 		case aix.AgentFinishReasonFailed, aix.AgentFinishReasonInterrupted:
-			// The row committed, so the status is completed, but the agent
-			// declared a reason that carries no answer (it can do so without
-			// erroring, which is why the two disagree). The fold produced
-			// explanatory text, not a response: report it as the error it is,
-			// or the report would claim success in one field and failure in
-			// the next.
+			// The row committed, so the stored status is completed, but the
+			// agent declared a reason that carries no answer (it can do so
+			// without erroring, which is why the two disagree). Report the
+			// outcome the reader has to act on, not the row's bookkeeping: a
+			// model that sees "completed" moves on and never reads the error.
+			// Which of the two it was, and what to do about it, is in Error.
+			report.Status = string(aix.SnapshotStatusFailed)
 			report.Error = folded.Response
 		default:
 			report.Response, report.Artifacts = folded.Response, folded.Artifacts

@@ -246,6 +246,87 @@ func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
 	}
 }
 
+// TestAgentsBackgroundCompletedWithoutAnswerReportsFailed covers the case where
+// the stored row and the agent's own verdict disagree: the turn committed, so
+// the snapshot is "completed", but the agent declared a finish reason that
+// carries no answer. The report has to say what the reader must act on, since a
+// model that sees "completed" moves on and never reads the error.
+func TestAgentsBackgroundCompletedWithoutAnswerReportsFailed(t *testing.T) {
+	g := newTestGenkit(t)
+
+	// Gate the turn so the detach lands before the agent settles; the fn then
+	// declares failure without returning an error, so the runtime commits the
+	// row as completed with a finish reason of failed.
+	gate := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				sess.AddMessages(ai.NewModelTextMessage("partial notes"))
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonFailed}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := toolModel(t, g, "test/orch-no-answer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_researcher",
+				Input: map[string]any{"task": "dig into X", "background": true},
+			}), nil
+		case len(waits) == 0:
+			release()
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+	if len(res.Tasks) != 1 {
+		t.Fatalf("expected 1 task report, got %+v", res.Tasks)
+	}
+	got := res.Tasks[0]
+	if got.Status != string(aix.SnapshotStatusFailed) {
+		t.Errorf("Status = %q, want %q: the task produced no answer", got.Status, aix.SnapshotStatusFailed)
+	}
+	if got.Error == "" {
+		t.Error("Error is empty, want the reason the task carries no answer")
+	}
+	if got.Response != "" {
+		t.Errorf("Response = %q, want empty: there is no answer to report", got.Response)
+	}
+}
+
 // TestAgentsWaitTimeoutKeepsUnresolvableErrors covers the two halves of what a
 // timed-out wait must report. A task that is genuinely still running comes back
 // pending, because the wait ran out of time rather than learning anything. A
