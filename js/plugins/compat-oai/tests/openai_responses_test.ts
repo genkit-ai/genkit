@@ -539,13 +539,43 @@ describe('fromOpenAIResponse', () => {
     expect(converted.message?.content).toStrictEqual([{ text: 'searched' }]);
   });
 
-  test('maps non-terminal and failed statuses', () => {
-    expect(
-      fromOpenAIResponse(fakeResponse({ status: 'failed' })).finishReason
-    ).toBe('other');
+  test('maps non-terminal statuses', () => {
     expect(
       fromOpenAIResponse(fakeResponse({ status: 'in_progress' })).finishReason
     ).toBe('unknown');
+  });
+
+  test('rejects a failed response even without an error payload', () => {
+    expect(() =>
+      fromOpenAIResponse(fakeResponse({ status: 'failed' }))
+    ).toThrow(
+      expect.objectContaining({
+        status: 'INTERNAL',
+        message: expect.stringContaining('without an error payload'),
+      })
+    );
+  });
+
+  test('survives truncated json output and reports length', () => {
+    const response = fakeResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [
+        {
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          status: 'incomplete',
+          content: [
+            { type: 'output_text', text: '{"colour":', annotations: [] },
+          ],
+        },
+      ],
+    });
+
+    const converted = fromOpenAIResponse(response, true);
+    expect(converted.finishReason).toBe('length');
+    expect(converted.message?.content).toHaveLength(1);
   });
 
   test('surfaces the error of a failed response', () => {
