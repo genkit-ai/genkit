@@ -295,10 +295,12 @@ func TestConcatenateContentSkipsNilParts(t *testing.T) {
 		ai.NewTextPart("visible"),
 		ai.NewReasoningPart("thought", nil),
 		nil,
-		ai.NewDataPart(" data"),
+		// Data parts carry their payload on Data (not Text) and must not
+		// contribute to concatenated text.
+		ai.NewDataPart(map[string]any{"some": "data"}),
 	}
-	if got := concatenateTextContent(parts); got != "visible data" {
-		t.Errorf("concatenateTextContent() = %q, want %q", got, "visible data")
+	if got := concatenateTextContent(parts); got != "visible" {
+		t.Errorf("concatenateTextContent() = %q, want %q", got, "visible")
 	}
 	if got := concatenateReasoningContent(parts); got != "thought" {
 		t.Errorf("concatenateReasoningContent() = %q, want %q", got, "thought")
