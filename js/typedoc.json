@@ -11,6 +11,7 @@
     "plugins/fetch",
     "plugins/google-cloud",
     "plugins/middleware",
+    "plugins/minimax",
     "plugins/next",
     "plugins/evaluators",
     "plugins/mcp",
