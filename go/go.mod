@@ -20,6 +20,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.23.0
 	github.com/blues/jsonata-go v1.5.4
 	github.com/coder/websocket v1.8.14
+	github.com/cohere-ai/cohere-go/v2 v2.18.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/dotprompt/go v0.0.0-20260708220100-73beb993ac95
 	github.com/google/go-cmp v0.7.0
@@ -60,6 +61,8 @@ require (
 
 require (
 	cloud.google.com/go/alloydb v1.16.1 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.36.3 // indirect
+	github.com/aws/smithy-go v1.22.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
