@@ -272,10 +272,12 @@ export function toOpenAIResponsesInput(
           input.push({
             type: 'function_call_output',
             call_id: part.toolResponse.ref ?? '',
+            // `output` is required on the wire; a void tool's undefined would
+            // vanish from the serialized JSON entirely.
             output:
               typeof part.toolResponse.output === 'string'
                 ? part.toolResponse.output
-                : JSON.stringify(part.toolResponse.output),
+                : JSON.stringify(part.toolResponse.output ?? null),
           });
         }
         break;
@@ -369,13 +371,19 @@ export function toOpenAIResponsesRequestBody(
   }
 
   const storeValue = store ?? false;
+  // A bare-string `include` from the passthrough config would otherwise be
+  // spread into single characters below.
+  const callerInclude =
+    typeof includeFromConfig === 'string'
+      ? [includeFromConfig as ResponseIncludable]
+      : (includeFromConfig as ResponseIncludable[] | undefined);
   // Under the stateless default the encrypted reasoning payload is the only
   // context a reasoning model can resume from, so it is always requested.
   const include: ResponseIncludable[] | undefined = storeValue
-    ? (includeFromConfig as ResponseIncludable[] | undefined)
+    ? callerInclude
     : [
         ...new Set<ResponseIncludable>([
-          ...((includeFromConfig as ResponseIncludable[] | undefined) ?? []),
+          ...(callerInclude ?? []),
           'reasoning.encrypted_content',
         ]),
       ];

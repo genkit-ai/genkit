@@ -486,6 +486,22 @@ describe('toOpenAIResponsesRequestBody', () => {
     ]);
   });
 
+  test('serializes a void tool response instead of dropping the output key', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'f', ref: 'call_1' } }],
+        },
+      ],
+    });
+
+    expect(body.input).toStrictEqual([
+      { type: 'function_call_output', call_id: 'call_1', output: 'null' },
+    ]);
+    expect(JSON.parse(JSON.stringify(body.input))[0]).toHaveProperty('output');
+  });
+
   test('replays tool calls and encrypted reasoning in order', () => {
     const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
       messages: [
@@ -592,6 +608,18 @@ describe('toOpenAIResponsesRequestBody', () => {
     });
 
     expect(body.include).toStrictEqual(['reasoning.encrypted_content']);
+  });
+
+  test('normalizes a bare-string include instead of spreading its characters', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { include: 'message.output_text.logprobs' },
+    });
+
+    expect(body.include).toStrictEqual([
+      'message.output_text.logprobs',
+      'reasoning.encrypted_content',
+    ]);
   });
 
   test('leaves include alone when the caller opts into server-side storage', () => {
