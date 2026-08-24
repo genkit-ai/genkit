@@ -77,6 +77,21 @@ func TestCuratedModelsUseActiveIDs(t *testing.T) {
 	}
 }
 
+func TestModelRef(t *testing.T) {
+	config := &ChatOptions{}
+	ref := ModelRef("command-a-03-2025", config)
+	if ref.Name() != "cohere/command-a-03-2025" {
+		t.Fatalf("ref name = %q", ref.Name())
+	}
+	if ref.Config() != config {
+		t.Fatalf("ref config = %#v, want original pointer", ref.Config())
+	}
+	prefixed := ModelRef("cohere/command-a-03-2025", nil)
+	if prefixed.Name() != "cohere/command-a-03-2025" {
+		t.Fatalf("prefixed ref name = %q", prefixed.Name())
+	}
+}
+
 func TestPluginListsAndResolvesActions(t *testing.T) {
 	plugin := &Cohere{}
 	actions := plugin.ListActions(context.Background())
@@ -173,7 +188,7 @@ func TestGenerateStreamToolCall(t *testing.T) {
 	}}}
 
 	var chunks []*ai.ModelResponseChunk
-	response, err := generate(context.Background(), client, "command-r", input,
+	response, err := generate(context.Background(), client, "command-r", input, ChatOptions{},
 		func(_ context.Context, chunk *ai.ModelResponseChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
@@ -210,14 +225,13 @@ func TestChatOptionsPassActionSchema(t *testing.T) {
 		APIKey:  "test-key",
 		BaseURL: server.URL,
 	}))
-	if !IsDefinedModel(g, "command-r") {
-		t.Fatal("initialized plugin did not define the resolved model")
+	if IsDefinedModel(g, "command-r") {
+		t.Fatal("IsDefinedModel resolved an unregistered model")
 	}
 	maxTokens := 32
 	temperature := 0.2
 	response, err := genkit.Generate(ctx, g,
-		ai.WithModel(Model(g, "command-r")),
-		ai.WithConfig(&ChatOptions{MaxTokens: &maxTokens, Temperature: &temperature}),
+		ai.WithModel(ModelRef("command-r", &ChatOptions{MaxTokens: &maxTokens, Temperature: &temperature})),
 		ai.WithPrompt("say ok"),
 	)
 	if err != nil {
@@ -225,6 +239,9 @@ func TestChatOptionsPassActionSchema(t *testing.T) {
 	}
 	if got := response.Text(); got != "ok" {
 		t.Fatalf("response text = %q, want ok", got)
+	}
+	if !IsDefinedModel(g, "command-r") {
+		t.Fatal("resolved model was not registered")
 	}
 }
 
@@ -290,9 +307,8 @@ func TestStructuredOutputOverridesResponseFormat(t *testing.T) {
 	}
 	request, err := toCohereRequest(&ai.ModelRequest{
 		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("answer")}}},
-		Config:   &ChatOptions{ResponseFormat: &cohere.ResponseFormatV2{Type: "text"}},
 		Output:   &ai.ModelOutputConfig{Format: "json", Schema: schema, Constrained: true},
-	})
+	}, ChatOptions{ResponseFormat: &cohere.ResponseFormatV2{Type: "text"}})
 	if err != nil {
 		t.Fatalf("toCohereRequest: %v", err)
 	}
@@ -316,7 +332,7 @@ func TestGenerateStreamAggregatesReasoningTextCitationsAndUsage(t *testing.T) {
 	var chunks []*ai.ModelResponseChunk
 	response, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
 		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("answer")}}},
-	}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+	}, ChatOptions{}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -349,7 +365,7 @@ func TestGenerateStreamReturnsCallbackError(t *testing.T) {
 	want := errors.New("stop streaming")
 	_, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
 		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}}},
-	}, func(context.Context, *ai.ModelResponseChunk) error { return want })
+	}, ChatOptions{}, func(context.Context, *ai.ModelResponseChunk) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("generate error = %v, want %v", err, want)
 	}
@@ -362,7 +378,7 @@ func TestGenerateStreamRejectsMalformedToolArguments(t *testing.T) {
 	})
 	_, err := generate(context.Background(), client, "command-a-03-2025", &ai.ModelRequest{
 		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("lookup")}}},
-	}, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+	}, ChatOptions{}, func(context.Context, *ai.ModelResponseChunk) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "unable to parse tool call arguments") {
 		t.Fatalf("generate error = %v", err)
 	}
@@ -609,39 +625,6 @@ func TestToolCallPart(t *testing.T) {
 	}
 }
 
-func TestConfigFromRequest(t *testing.T) {
-	temp := 0.7
-	t.Run("nil", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{})
-		if err != nil || got == nil {
-			t.Fatalf("nil config: got %v, err %v", got, err)
-		}
-	})
-	t.Run("struct value", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{Config: ChatOptions{Temperature: &temp}})
-		if err != nil || got.Temperature == nil || *got.Temperature != 0.7 {
-			t.Fatalf("struct config: got %+v, err %v", got, err)
-		}
-	})
-	t.Run("pointer", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{Config: &ChatOptions{Temperature: &temp}})
-		if err != nil || got.Temperature == nil || *got.Temperature != 0.7 {
-			t.Fatalf("pointer config: got %+v, err %v", got, err)
-		}
-	})
-	t.Run("map", func(t *testing.T) {
-		got, err := configFromRequest(&ai.ModelRequest{Config: map[string]any{"temperature": 0.7}})
-		if err != nil || got.Temperature == nil || *got.Temperature != 0.7 {
-			t.Fatalf("map config: got %+v, err %v", got, err)
-		}
-	})
-	t.Run("unsupported", func(t *testing.T) {
-		if _, err := configFromRequest(&ai.ModelRequest{Config: 42}); err == nil {
-			t.Error("expected error for unsupported config type")
-		}
-	})
-}
-
 func TestToStreamRequest(t *testing.T) {
 	temp := 0.5
 	maxTok := 256
@@ -712,7 +695,7 @@ func TestRequestMarshals(t *testing.T) {
 			{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}},
 		},
 		Tools: []*ai.ToolDefinition{{Name: "t", Description: "d", InputSchema: map[string]any{"type": "object"}}},
-	})
+	}, ChatOptions{})
 	if err != nil {
 		t.Fatalf("toCohereRequest: %v", err)
 	}

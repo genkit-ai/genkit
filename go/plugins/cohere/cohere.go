@@ -26,9 +26,9 @@ import (
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
 	"github.com/cohere-ai/cohere-go/v2/option"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal"
 )
 
 const (
@@ -101,15 +101,11 @@ func resolveAPIKey(explicit string) string {
 func (c *Cohere) ListActions(ctx context.Context) []api.ActionDesc {
 	actions := []api.ActionDesc{}
 
-	for name := range cohereChatModels {
-		if action, ok := c.newModel(name).(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+	for id := range cohereChatModels {
+		actions = append(actions, c.newModel(id).Desc())
 	}
-	for name := range cohereEmbedders {
-		if action, ok := c.newEmbedder(name).(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+	for id := range cohereEmbedders {
+		actions = append(actions, c.newEmbedder(id).Desc())
 	}
 
 	return actions
@@ -117,49 +113,62 @@ func (c *Cohere) ListActions(ctx context.Context) []api.ActionDesc {
 
 // ResolveAction resolves a model or embedder action by name. Unknown names are
 // resolved with default metadata so newly released models can still be used.
-func (c *Cohere) ResolveAction(atype api.ActionType, name string) api.Action {
+func (c *Cohere) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		if action, ok := c.newModel(name).(api.Action); ok {
-			return action
-		}
+		return c.newModel(id)
 	case api.ActionTypeEmbedder:
-		if action, ok := c.newEmbedder(name).(api.Action); ok {
-			return action
-		}
+		return c.newEmbedder(id)
 	}
 	return nil
 }
 
+// ModelRef names a Cohere model and carries its typed configuration.
+// A nil config leaves the request configuration unset.
+func ModelRef(id string, config *ChatOptions) ai.ModelRef {
+	return ai.NewModelRef(actionName(id), config)
+}
+
 // Model returns a previously registered Cohere model.
-func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+//
+// Deprecated: pass [ModelRef] to ai.WithModel, or use ai.WithModelName when no
+// default configuration is needed. Use [genkit.LookupModel] when the action
+// itself is required.
+func Model(g *genkit.Genkit, id string) ai.Model {
+	return genkit.LookupModel(g, actionName(id))
 }
 
 // IsDefinedModel reports whether a Cohere model is already defined.
-func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+//
+// Deprecated: models resolve dynamically and do not need registration guards.
+func IsDefinedModel(g *genkit.Genkit, id string) bool {
+	return genkit.LookupAction(g, api.KeyFromName(api.ActionTypeModel, actionName(id))) != nil
 }
 
 // newModel creates a chat model without registering it.
-func (c *Cohere) newModel(name string) ai.Model {
-	info := GetModelOptions(name)
+func (c *Cohere) newModel(id string) *ai.ModelAction {
+	id = internal.TrimProvider(provider, id)
+	info := GetModelOptions(id)
 	meta := &ai.ModelOptions{
-		Label:        info.Label,
-		Supports:     info.Supports,
-		Versions:     info.Versions,
-		Stage:        info.Stage,
-		ConfigSchema: core.InferSchemaMap(ChatOptions{}),
+		Label:    info.Label,
+		Supports: info.Supports,
+		Versions: info.Versions,
+		Stage:    info.Stage,
 	}
 
 	client := c.client
-	fn := func(
+	return ai.NewModelAction(actionName(id), meta, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
+		config ChatOptions,
+		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return generate(ctx, client, name, input, cb)
-	}
+		return generate(ctx, client, id, input, config, cb)
+	})
+}
 
-	return ai.NewModel(api.NewName(provider, name), meta, fn)
+// actionName builds a provider-prefixed action name and accepts either a bare
+// Cohere model ID or an already-prefixed action name.
+func actionName(id string) string {
+	return api.NewName(provider, internal.TrimProvider(provider, id))
 }

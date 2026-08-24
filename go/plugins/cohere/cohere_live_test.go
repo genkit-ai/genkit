@@ -49,8 +49,7 @@ func TestCohereLive(t *testing.T) {
 
 	t.Run("generate", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r-08-2024")),
-			ai.WithConfig(config),
+			ai.WithModel(coheregenkit.ModelRef("command-r-08-2024", config)),
 			ai.WithSystem("be very terse"),
 			ai.WithPrompt("what is the capital of France? answer with one word"),
 		)
@@ -66,8 +65,7 @@ func TestCohereLive(t *testing.T) {
 		var out strings.Builder
 		var chunks int
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r-08-2024")),
-			ai.WithConfig(config),
+			ai.WithModel(coheregenkit.ModelRef("command-r-08-2024", config)),
 			ai.WithPrompt("count from 1 to 5"),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				for _, p := range c.Content {
@@ -103,8 +101,7 @@ func TestCohereLive(t *testing.T) {
 			},
 		)
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r-plus-08-2024")),
-			ai.WithConfig(config),
+			ai.WithModel(coheregenkit.ModelRef("command-r-plus-08-2024", config)),
 			ai.WithPrompt("use the add tool to compute 17 plus 25, then state only the result"),
 			ai.WithTools(addTool),
 		)
@@ -127,8 +124,7 @@ func TestCohereLive(t *testing.T) {
 		)
 		var sawToolRequest bool
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(coheregenkit.Model(g, "command-r-plus-08-2024")),
-			ai.WithConfig(config),
+			ai.WithModel(coheregenkit.ModelRef("command-r-plus-08-2024", config)),
 			ai.WithPrompt("use the stream_add tool to compute 17 plus 25, then state only the result"),
 			ai.WithTools(addTool),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
@@ -153,7 +149,7 @@ func TestCohereLive(t *testing.T) {
 
 	t.Run("embed", func(t *testing.T) {
 		resp, err := genkit.Embed(ctx, g,
-			ai.WithEmbedderName("cohere/embed-v4.0"),
+			ai.WithEmbedder(coheregenkit.NewEmbedderRef("embed-v4.0", nil)),
 			ai.WithTextDocs("the quick brown fox"),
 		)
 		if err != nil {
@@ -169,8 +165,7 @@ func TestCohereLive(t *testing.T) {
 
 	t.Run("embed with input type", func(t *testing.T) {
 		resp, err := genkit.Embed(ctx, g,
-			ai.WithEmbedderName("cohere/embed-v4.0"),
-			ai.WithConfig(&coheregenkit.EmbedOptions{InputType: "search_query"}),
+			ai.WithEmbedder(coheregenkit.NewEmbedderRef("embed-v4.0", &coheregenkit.EmbedOptions{InputType: "search_query"})),
 			ai.WithTextDocs("what is the capital of France"),
 		)
 		if err != nil {

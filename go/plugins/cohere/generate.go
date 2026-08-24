@@ -27,7 +27,6 @@ import (
 	cohere "github.com/cohere-ai/cohere-go/v2"
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/internal/base"
 )
 
 // ChatOptions configures a Cohere Chat v2 request. Model, messages, tools, and
@@ -84,9 +83,10 @@ func generate(
 	client *cohereclient.Client,
 	model string,
 	input *ai.ModelRequest,
-	cb func(context.Context, *ai.ModelResponseChunk) error,
+	config ChatOptions,
+	cb ai.ModelStreamCallback,
 ) (*ai.ModelResponse, error) {
-	req, err := toCohereRequest(input)
+	req, err := toCohereRequest(input, config)
 	if err != nil {
 		return nil, fmt.Errorf("cohere: %w", err)
 	}
@@ -257,11 +257,8 @@ func generateStream(
 // toCohereRequest translates an [ai.ModelRequest] into a Cohere ChatV2 request.
 // Any caller-supplied config is used as the base, so fields such as documents,
 // safety_mode and citation_options pass through untouched.
-func toCohereRequest(input *ai.ModelRequest) (*cohere.V2ChatRequest, error) {
-	req, err := configFromRequest(input)
-	if err != nil {
-		return nil, err
-	}
+func toCohereRequest(input *ai.ModelRequest, config ChatOptions) (*cohere.V2ChatRequest, error) {
+	req := config.request()
 
 	messages, err := toCohereMessages(input.Messages)
 	if err != nil {
@@ -285,31 +282,6 @@ func toCohereRequest(input *ai.ModelRequest) (*cohere.V2ChatRequest, error) {
 	}
 
 	return req, nil
-}
-
-// configFromRequest converts any supported config value into a
-// [cohere.V2ChatRequest]. An absent config is treated as valid.
-func configFromRequest(input *ai.ModelRequest) (*cohere.V2ChatRequest, error) {
-	switch config := input.Config.(type) {
-	case ChatOptions:
-		return config.request(), nil
-	case *ChatOptions:
-		if config != nil {
-			return config.request(), nil
-		}
-	case map[string]any:
-		result, err := base.MapToStruct[ChatOptions](config)
-		if err != nil {
-			return nil, fmt.Errorf("unable to parse config: %w", err)
-		}
-		return result.request(), nil
-	case nil:
-		// Empty configuration is valid.
-	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
-	}
-
-	return &cohere.V2ChatRequest{}, nil
 }
 
 // toCohereMessages maps Genkit messages to Cohere ChatV2 messages, splitting

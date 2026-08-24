@@ -28,6 +28,7 @@ import (
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
 	"github.com/cohere-ai/cohere-go/v2/option"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 func TestEmbedRequestAndResponse(t *testing.T) {
@@ -65,8 +66,7 @@ func TestEmbedRequestAndResponse(t *testing.T) {
 			{Content: []*ai.Part{ai.NewTextPart("hello"), ai.NewTextPart(" world")}},
 			{Content: []*ai.Part{ai.NewTextPart("second")}},
 		},
-		Options: &EmbedOptions{InputType: "search_query", OutputDimension: 256, Truncate: "END"},
-	})
+	}, EmbedOptions{InputType: "search_query", OutputDimension: 256, Truncate: "END"})
 	if err != nil {
 		t.Fatalf("embed: %v", err)
 	}
@@ -81,24 +81,50 @@ func TestEmbedRequestAndResponse(t *testing.T) {
 	}
 }
 
-func TestEmbedDefaultsAndMapOptions(t *testing.T) {
-	value := EmbedOptions{InputType: "search_document"}
-	if got := embedOptionsFromRequest(value); got != value {
-		t.Fatalf("value options = %+v", got)
+func TestNewEmbedderRef(t *testing.T) {
+	config := &EmbedOptions{InputType: "classification", OutputDimension: 512, Truncate: "START"}
+	ref := NewEmbedderRef("embed-v4.0", config)
+	if ref.Name() != "cohere/embed-v4.0" {
+		t.Fatalf("ref name = %q", ref.Name())
 	}
-	options := embedOptionsFromRequest(map[string]any{
-		"inputType":       "classification",
-		"outputDimension": 512,
-		"truncate":        "START",
-	})
-	if options.InputType != "classification" || options.OutputDimension != 512 || options.Truncate != "START" {
-		t.Fatalf("map options = %+v", options)
+	if ref.Config() != config {
+		t.Fatalf("ref config = %#v, want original pointer", ref.Config())
 	}
-	if got := embedOptionsFromRequest(42); got != (EmbedOptions{}) {
-		t.Fatalf("unsupported options = %+v, want defaults", got)
+	prefixed := NewEmbedderRef("cohere/embed-v4.0", nil)
+	if prefixed.Name() != "cohere/embed-v4.0" {
+		t.Fatalf("prefixed ref name = %q", prefixed.Name())
 	}
-	if got := embedOptionsFromRequest((*EmbedOptions)(nil)); got != (EmbedOptions{}) {
-		t.Fatalf("nil pointer options = %+v, want defaults", got)
+}
+
+func TestEmbedOptionsPassActionSchema(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body["input_type"] != "classification" || body["output_dimension"] != float64(512) || body["truncate"] != "START" {
+			t.Errorf("typed embed config was not forwarded: %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"response_type":"embeddings_by_type","id":"embed_1","embeddings":{"float":[[1,2]]},"texts":["hello"]}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Cohere{APIKey: "test-key", BaseURL: server.URL}))
+	response, err := genkit.Embed(ctx, g,
+		ai.WithEmbedder(NewEmbedderRef("embed-v4.0", &EmbedOptions{
+			InputType:       "classification",
+			OutputDimension: 512,
+			Truncate:        "START",
+		})),
+		ai.WithTextDocs("hello"),
+	)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(response.Embeddings) != 1 || len(response.Embeddings[0].Embedding) != 2 {
+		t.Fatalf("embeddings = %#v", response.Embeddings)
 	}
 }
 
@@ -113,7 +139,7 @@ func TestEmbedWrapsAPIErrors(t *testing.T) {
 	client := cohereclient.NewClient(option.WithToken("test-key"), option.WithBaseURL(server.URL))
 	_, err := embed(context.Background(), client, "embed-v4.0", &ai.EmbedRequest{
 		Input: []*ai.Document{{Content: []*ai.Part{ai.NewTextPart("hello")}}},
-	})
+	}, EmbedOptions{})
 	if err == nil || !strings.Contains(err.Error(), "cohere:") || !strings.Contains(err.Error(), "bad embed input") {
 		t.Fatalf("embed error = %v", err)
 	}

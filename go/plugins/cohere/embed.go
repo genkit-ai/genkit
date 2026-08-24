@@ -24,13 +24,11 @@ import (
 	cohere "github.com/cohere-ai/cohere-go/v2"
 	cohereclient "github.com/cohere-ai/cohere-go/v2/client"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal"
 )
 
-// EmbedOptions configures a Cohere embedding request. Pass it via
-// ai.WithEmbedderOptions / the EmbedRequest.Options field.
+// EmbedOptions configures a Cohere embedding request. Pass it to
+// [NewEmbedderRef] to carry typed configuration with the embedder.
 type EmbedOptions struct {
 	// InputType tunes the embedding for the downstream task. One of
 	// "search_document" (default), "search_query", "classification" or
@@ -44,25 +42,29 @@ type EmbedOptions struct {
 }
 
 // newEmbedder creates an embedder without registering it.
-func (c *Cohere) newEmbedder(name string) ai.Embedder {
-	info := GetEmbedderOptions(name)
+func (c *Cohere) newEmbedder(id string) *ai.EmbedderAction {
+	id = internal.TrimProvider(provider, id)
+	info := GetEmbedderOptions(id)
 	embedOpts := &ai.EmbedderOptions{
-		Label:        info.Label,
-		Dimensions:   info.Dimensions,
-		ConfigSchema: core.InferSchemaMap(EmbedOptions{}),
-		Supports:     &ai.EmbedderSupports{Input: []string{"text"}},
+		Label:      info.Label,
+		Dimensions: info.Dimensions,
+		Supports:   &ai.EmbedderSupports{Input: []string{"text"}},
 	}
 
 	client := c.client
-	return ai.NewEmbedder(api.NewName(provider, name), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-		return embed(ctx, client, name, req)
+	return ai.NewEmbedderAction(actionName(id), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, options EmbedOptions) (*ai.EmbedResponse, error) {
+		return embed(ctx, client, id, req, options)
 	})
 }
 
-// embed runs a Cohere V2 Embed request over the request's documents.
-func embed(ctx context.Context, client *cohereclient.Client, name string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	opts := embedOptionsFromRequest(req.Options)
+// NewEmbedderRef names a Cohere embedder and carries its typed configuration.
+// A nil config leaves the request configuration unset.
+func NewEmbedderRef(id string, config *EmbedOptions) ai.EmbedderRef {
+	return ai.NewEmbedderRef(actionName(id), config)
+}
 
+// embed runs a Cohere V2 Embed request over the request's documents.
+func embed(ctx context.Context, client *cohereclient.Client, name string, req *ai.EmbedRequest, opts EmbedOptions) (*ai.EmbedResponse, error) {
 	inputType := cohere.EmbedInputTypeSearchDocument
 	if opts.InputType != "" {
 		inputType = cohere.EmbedInputType(opts.InputType)
@@ -100,24 +102,6 @@ func embed(ctx context.Context, client *cohereclient.Client, name string, req *a
 		}
 	}
 	return &res, nil
-}
-
-// embedOptionsFromRequest extracts EmbedOptions from the request options,
-// accepting the struct, a pointer, or a map. Unrecognized values yield defaults.
-func embedOptionsFromRequest(options any) EmbedOptions {
-	switch o := options.(type) {
-	case EmbedOptions:
-		return o
-	case *EmbedOptions:
-		if o != nil {
-			return *o
-		}
-	case map[string]any:
-		if opts, err := base.MapToStruct[EmbedOptions](o); err == nil {
-			return opts
-		}
-	}
-	return EmbedOptions{}
 }
 
 // documentText concatenates the text parts of a document.

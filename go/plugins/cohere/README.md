@@ -48,7 +48,7 @@ deprecated and lack these capabilities.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("cohere/command-a-03-2025"),
+    ai.WithModel(cohere.ModelRef("command-a-03-2025", nil)),
     ai.WithPrompt("What is the capital of France?"),
 )
 ```
@@ -61,8 +61,9 @@ models can be used immediately.
 
 ### Configuration
 
-Pass `*cohere.ChatOptions` via `ai.WithConfig` to set Chat v2 options. Genkit owns the model,
-messages, tools, and streaming fields and constructs the SDK request internally:
+Pass `*cohere.ChatOptions` to `cohere.ModelRef` to carry typed Chat v2 options with the model.
+Genkit owns the model, messages, tools, and streaming fields and constructs the SDK request
+internally:
 
 ```go
 import (
@@ -73,12 +74,11 @@ import (
 safety := sdk.V2ChatRequestSafetyModeContextual
 maxTokens := 1024
 genkit.Generate(ctx, g,
-    ai.WithModelName("cohere/command-a-03-2025"),
-    ai.WithConfig(&genkitcohere.ChatOptions{
+    ai.WithModel(genkitcohere.ModelRef("command-a-03-2025", &genkitcohere.ChatOptions{
         MaxTokens:  &maxTokens,
         SafetyMode: &safety,
         Documents:  []*sdk.V2ChatRequestDocumentsItem{ /* RAG documents */ },
-    }),
+    })),
     ai.WithPrompt("..."),
 )
 ```
@@ -94,8 +94,8 @@ tool-result messages.
 
 ### Reasoning
 
-For models and configurations that emit thinking (enable it via the request's `Thinking` field in
-`ai.WithConfig`), the reasoning is surfaced as Genkit reasoning parts — `resp.Reasoning()` and
+For models and configurations that emit thinking (enable it through `ChatOptions.Thinking` on
+`ModelRef`), the reasoning is surfaced as Genkit reasoning parts — `resp.Reasoning()` and
 `ai.NewReasoningPart` content — both for non-streaming and streamed responses. Cohere thinking does
 not carry a signature.
 
@@ -109,23 +109,22 @@ applies to both non-streaming and streamed responses.
 
 ```go
 resp, err := genkit.Embed(ctx, g,
-    ai.WithEmbedderName("cohere/embed-v4.0"),
+    ai.WithEmbedder(cohere.NewEmbedderRef("embed-v4.0", nil)),
     ai.WithTextDocs("the quick brown fox"),
 )
 ```
 
 Curated embedders: `embed-v4.0`, `embed-english-v3.0`, `embed-multilingual-v3.0`.
 
-Tune the embedding for the downstream task with `cohere.EmbedOptions` via `ai.WithConfig`:
+Tune the embedding for the downstream task with typed `cohere.EmbedOptions` on the embedder ref:
 
 ```go
 genkit.Embed(ctx, g,
-    ai.WithEmbedderName("cohere/embed-v4.0"),
-    ai.WithConfig(&cohere.EmbedOptions{
+    ai.WithEmbedder(cohere.NewEmbedderRef("embed-v4.0", &cohere.EmbedOptions{
         InputType:       "search_query", // or search_document (default), classification, clustering
         OutputDimension: 1024,           // embed-v4 only: 256 / 512 / 1024 / 1536
         Truncate:        "END",          // NONE / START / END
-    }),
+    })),
     ai.WithTextDocs("what is the capital of France"),
 )
 ```

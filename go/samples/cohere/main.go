@@ -37,8 +37,7 @@ func main() {
 	// 1. Non-streaming generation.
 	fmt.Println("=== generate ===")
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-a-03-2025"),
-		ai.WithConfig(config),
+		ai.WithModel(coheregenkit.ModelRef("command-a-03-2025", config)),
 		ai.WithPrompt("In one sentence, what is Genkit?"),
 	)
 	if err != nil {
@@ -49,8 +48,7 @@ func main() {
 	// 2. Streaming generation.
 	fmt.Println("\n=== streaming ===")
 	_, err = genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-a-03-2025"),
-		ai.WithConfig(config),
+		ai.WithModel(coheregenkit.ModelRef("command-a-03-2025", config)),
 		ai.WithPrompt("Write a two-line poem about the ocean."),
 		ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 			for _, p := range chunk.Content {
@@ -77,8 +75,7 @@ func main() {
 		},
 	)
 	toolResp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("cohere/command-a-03-2025"),
-		ai.WithConfig(config),
+		ai.WithModel(coheregenkit.ModelRef("command-a-03-2025", config)),
 		ai.WithPrompt("Use the add tool to compute 17 plus 25, then state only the result."),
 		ai.WithTools(addTool),
 	)
@@ -90,8 +87,7 @@ func main() {
 	// 4. Embeddings.
 	fmt.Println("\n=== embed ===")
 	embedResp, err := genkit.Embed(ctx, g,
-		ai.WithEmbedderName("cohere/embed-v4.0"),
-		ai.WithConfig(&coheregenkit.EmbedOptions{InputType: "search_document"}),
+		ai.WithEmbedder(coheregenkit.NewEmbedderRef("embed-v4.0", &coheregenkit.EmbedOptions{InputType: "search_document"})),
 		ai.WithTextDocs("the quick brown fox", "jumps over the lazy dog"),
 	)
 	if err != nil {
