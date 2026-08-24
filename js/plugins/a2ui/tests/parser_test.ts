@@ -324,6 +324,112 @@ describe('A2uiStreamParser', () => {
     assert.match(update.updateComponents.components[0].text, /npm test/);
   });
 
+  it('allows a split render where root and leaves are in separate envelopes', () => {
+    // The v0.9 spec requires a `root` in *one of* the component lists, not in
+    // every one. A block that declares root+layout in the first updateComponents
+    // and its leaf components in a second must pass, even under strict mode.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+      validate: 'strict',
+    });
+    const splitRender = `\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "${basicCatalog.id}" } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "root", "component": "Column", "children": ["title"] }
+  ] } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "title", "component": "Text", "text": "hello" }
+  ] } }
+]
+\`\`\`
+`;
+    const { batches } = collect(parser, [splitRender]);
+    assert.strictEqual(batches.length, 1);
+    // createSurface + two updateComponents, none dropped.
+    assert.strictEqual(batches[0].length, 3);
+  });
+
+  it('throws in strict mode when no component list in the batch declares root', () => {
+    // Multiple updateComponents but none with a root: still a protocol failure.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+      validate: 'strict',
+    });
+    const bad = `\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "${basicCatalog.id}" } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "a", "component": "Text", "text": "one" }
+  ] } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "b", "component": "Text", "text": "two" }
+  ] } }
+]
+\`\`\`
+`;
+    assert.throws(() => collect(parser, [bad]), /root/);
+  });
+
+  it('does not treat an inline mention of the fence in prose as a block open', () => {
+    // A2UI Text may use inline Markdown, so the model can mention the fence
+    // mid-sentence. The required trailing newline after the tag keeps this as
+    // prose: here `a2ui` is followed by more text, not a line break.
+
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const { prose, batches } = collect(parser, [
+      'To render UI I emit an ```a2ui fenced block like this.',
+    ]);
+    assert.strictEqual(batches.length, 0);
+    assert.match(prose, /```a2ui fenced block/);
+  });
+
+  it('reassembles an opening fence split across chunks without leaking it', () => {
+    // The opening fence arrives one backtick at a time. The partial-fence
+    // holdback must keep those fragments out of prose until the fence resolves.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const { prose, batches } = collect(parser, [
+      'intro ``',
+      '`a2ui\n',
+      '[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"' +
+        basicCatalog.id +
+        '"}},{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"hi"}]}}]\n',
+      '```\n',
+    ]);
+    assert.match(prose, /intro/);
+    assert.doesNotMatch(prose, /a2ui/);
+    assert.strictEqual(batches.length, 1);
+  });
+
+  it('holds back a padded opening fence split mid-padding', () => {
+    // The open fence allows trailing spaces/tabs before its newline. A fence
+    // like "```a2ui   \n" split right in the padding must not leak backticks or
+    // the tag into prose: the holdback length is dynamic, not a fixed 8 chars.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const { prose, batches } = collect(parser, [
+      'note ```a2ui   ',
+      '\n[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"' +
+        basicCatalog.id +
+        '"}},{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"hi"}]}}]\n',
+      '```\n',
+    ]);
+    assert.match(prose, /note/);
+    assert.doesNotMatch(prose, /a2ui/);
+    assert.doesNotMatch(prose, /```/);
+    assert.strictEqual(batches.length, 1);
+  });
+
   it('handles two separate blocks in one turn', () => {
     const parser = new A2uiStreamParser({
       catalog: basicCatalog,
