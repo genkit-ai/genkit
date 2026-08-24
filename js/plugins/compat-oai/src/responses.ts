@@ -287,6 +287,10 @@ export function toOpenAIResponsesRequestBody(
         ? {
             type: 'json_schema',
             name: 'output',
+            // Unlike Chat Completions, the Responses API validates the schema
+            // under strict mode unless told otherwise, and genkit schemas are
+            // not authored for it (`additionalProperties: false` everywhere).
+            strict: false,
             schema: request.output.schema,
           }
         : { type: 'json_object' },

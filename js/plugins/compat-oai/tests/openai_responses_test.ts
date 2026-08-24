@@ -325,6 +325,9 @@ describe('toOpenAIResponsesRequestBody', () => {
       format: {
         type: 'json_schema',
         name: 'output',
+        // The Responses API validates schemas under strict mode by default,
+        // which genkit schemas do not satisfy.
+        strict: false,
         schema: { type: 'object', properties: { a: { type: 'string' } } },
       },
     });
