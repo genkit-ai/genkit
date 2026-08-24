@@ -18,6 +18,7 @@ package cohere
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -39,6 +40,10 @@ type EmbedOptions struct {
 	OutputDimension int `json:"outputDimension,omitempty"`
 	// Truncate controls handling of over-length inputs: "NONE", "START" or "END".
 	Truncate string `json:"truncate,omitempty"`
+	// EmbeddingType selects the returned representation: "float" (default),
+	// "int8", "uint8", "binary" or "ubinary". Quantized and packed integer
+	// values are converted to float32 values in Genkit's embedding response.
+	EmbeddingType cohere.EmbeddingType `json:"embeddingType,omitempty"`
 }
 
 // newEmbedder creates an embedder without registering it.
@@ -65,6 +70,11 @@ func NewEmbedderRef(id string, config *EmbedOptions) ai.EmbedderRef {
 
 // embed runs a Cohere V2 Embed request over the request's documents.
 func embed(ctx context.Context, client *cohereclient.Client, name string, req *ai.EmbedRequest, opts EmbedOptions) (*ai.EmbedResponse, error) {
+	embeddingType, err := normalizeEmbeddingType(opts.EmbeddingType)
+	if err != nil {
+		return nil, err
+	}
+
 	inputType := cohere.EmbedInputTypeSearchDocument
 	if opts.InputType != "" {
 		inputType = cohere.EmbedInputType(opts.InputType)
@@ -79,7 +89,7 @@ func embed(ctx context.Context, client *cohereclient.Client, name string, req *a
 		Model:          name,
 		Texts:          texts,
 		InputType:      inputType,
-		EmbeddingTypes: []cohere.EmbeddingType{cohere.EmbeddingTypeFloat},
+		EmbeddingTypes: []cohere.EmbeddingType{embeddingType},
 	}
 	if opts.OutputDimension > 0 {
 		dim := opts.OutputDimension
@@ -95,13 +105,55 @@ func embed(ctx context.Context, client *cohereclient.Client, name string, req *a
 		return nil, fmt.Errorf("cohere: %w", err)
 	}
 
-	var res ai.EmbedResponse
-	if resp.Embeddings != nil {
-		for _, vec := range resp.Embeddings.Float {
-			res.Embeddings = append(res.Embeddings, &ai.Embedding{Embedding: toFloat32(vec)})
-		}
+	vectors, err := embeddingVectors(resp.Embeddings, embeddingType)
+	if err != nil {
+		return nil, err
+	}
+	res := ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(vectors))}
+	for _, vector := range vectors {
+		res.Embeddings = append(res.Embeddings, &ai.Embedding{Embedding: vector})
 	}
 	return &res, nil
+}
+
+func normalizeEmbeddingType(value cohere.EmbeddingType) (cohere.EmbeddingType, error) {
+	if value == "" {
+		return cohere.EmbeddingTypeFloat, nil
+	}
+	switch value {
+	case cohere.EmbeddingTypeFloat,
+		cohere.EmbeddingTypeInt8,
+		cohere.EmbeddingTypeUint8,
+		cohere.EmbeddingTypeBinary,
+		cohere.EmbeddingTypeUbinary:
+		return value, nil
+	default:
+		return "", fmt.Errorf("cohere: unsupported embedding type %q", value)
+	}
+}
+
+func embeddingVectors(embeddings *cohere.EmbedByTypeResponseEmbeddings, embeddingType cohere.EmbeddingType) ([][]float32, error) {
+	if embeddings == nil {
+		return nil, errors.New("cohere: embed response did not contain embeddings")
+	}
+
+	var vectors [][]float32
+	switch embeddingType {
+	case cohere.EmbeddingTypeFloat:
+		vectors = floatVectors(embeddings.Float)
+	case cohere.EmbeddingTypeInt8:
+		vectors = intVectors(embeddings.Int8)
+	case cohere.EmbeddingTypeUint8:
+		vectors = intVectors(embeddings.Uint8)
+	case cohere.EmbeddingTypeBinary:
+		vectors = intVectors(embeddings.Binary)
+	case cohere.EmbeddingTypeUbinary:
+		vectors = intVectors(embeddings.Ubinary)
+	}
+	if vectors == nil {
+		return nil, fmt.Errorf("cohere: embed response did not contain %q embeddings", embeddingType)
+	}
+	return vectors, nil
 }
 
 // documentText concatenates the text parts of a document.
@@ -115,11 +167,25 @@ func documentText(doc *ai.Document) string {
 	return sb.String()
 }
 
-// toFloat32 narrows a float64 embedding vector to float32 for ai.Embedding.
-func toFloat32(in []float64) []float32 {
-	out := make([]float32, len(in))
-	for i, v := range in {
-		out[i] = float32(v)
+// floatVectors narrows float64 embedding vectors to float32 for ai.Embedding.
+func floatVectors(in [][]float64) [][]float32 {
+	out := make([][]float32, len(in))
+	for i, vector := range in {
+		out[i] = make([]float32, len(vector))
+		for j, value := range vector {
+			out[i][j] = float32(value)
+		}
+	}
+	return out
+}
+
+func intVectors(in [][]int) [][]float32 {
+	out := make([][]float32, len(in))
+	for i, vector := range in {
+		out[i] = make([]float32, len(vector))
+		for j, value := range vector {
+			out[i][j] = float32(value)
+		}
 	}
 	return out
 }

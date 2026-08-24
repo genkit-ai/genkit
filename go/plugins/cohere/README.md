@@ -114,20 +114,25 @@ resp, err := genkit.Embed(ctx, g,
 )
 ```
 
-Curated embedders: `embed-v4.0`, `embed-english-v3.0`, `embed-multilingual-v3.0`.
+Curated embedders: `embed-v4.0`, `embed-english-v3.0`, `embed-multilingual-v3.0`,
+`embed-english-light-v3.0`, and `embed-multilingual-light-v3.0`.
 
 Tune the embedding for the downstream task with typed `cohere.EmbedOptions` on the embedder ref:
 
 ```go
 genkit.Embed(ctx, g,
     ai.WithEmbedder(cohere.NewEmbedderRef("embed-v4.0", &cohere.EmbedOptions{
-        InputType:       "search_query", // or search_document (default), classification, clustering
-        OutputDimension: 1024,           // embed-v4 only: 256 / 512 / 1024 / 1536
-        Truncate:        "END",          // NONE / START / END
+        InputType:       "search_query",          // search_document (default), classification, clustering
+        OutputDimension: 1024,                    // embed-v4 only: 256 / 512 / 1024 / 1536
+        Truncate:        "END",                   // NONE / START / END
+        EmbeddingType:   sdk.EmbeddingTypeInt8,   // float (default), int8, uint8, binary, ubinary
     })),
     ai.WithTextDocs("what is the capital of France"),
 )
 ```
+
+Genkit represents embedding vectors as `float32`, so integer and packed binary representations are
+returned as their numeric values converted to `float32`. Binary and ubinary vectors remain packed.
 
 ## Running Tests
 

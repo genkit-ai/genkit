@@ -92,6 +92,14 @@ var cohereEmbedders = map[string]embedderInfo{
 		Label:      cohereLabelPrefix + " - Embed Multilingual v3.0",
 		Dimensions: 1024,
 	},
+	"embed-english-light-v3.0": {
+		Label:      cohereLabelPrefix + " - Embed English Light v3.0",
+		Dimensions: 384,
+	},
+	"embed-multilingual-light-v3.0": {
+		Label:      cohereLabelPrefix + " - Embed Multilingual Light v3.0",
+		Dimensions: 384,
+	},
 }
 
 // GetModelOptions returns the curated metadata for a chat model, falling back

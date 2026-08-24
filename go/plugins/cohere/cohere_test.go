@@ -77,6 +77,25 @@ func TestCuratedModelsUseActiveIDs(t *testing.T) {
 	}
 }
 
+func TestCuratedEmbeddersIncludeLightModels(t *testing.T) {
+	for _, tc := range []struct {
+		id         string
+		dimensions int
+	}{
+		{id: "embed-english-light-v3.0", dimensions: 384},
+		{id: "embed-multilingual-light-v3.0", dimensions: 384},
+	} {
+		info, ok := cohereEmbedders[tc.id]
+		if !ok {
+			t.Errorf("light embedder %q is not curated", tc.id)
+			continue
+		}
+		if info.Dimensions != tc.dimensions {
+			t.Errorf("embedder %q dimensions = %d, want %d", tc.id, info.Dimensions, tc.dimensions)
+		}
+	}
+}
+
 func TestModelRef(t *testing.T) {
 	config := &ChatOptions{}
 	ref := ModelRef("command-a-03-2025", config)

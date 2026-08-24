@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	cohere "github.com/cohere-ai/cohere-go/v2"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	coheregenkit "github.com/firebase/genkit/go/plugins/cohere"
@@ -173,6 +174,22 @@ func TestCohereLive(t *testing.T) {
 		}
 		if len(resp.Embeddings) != 1 || len(resp.Embeddings[0].Embedding) == 0 {
 			t.Fatalf("expected one non-empty embedding, got %+v", resp.Embeddings)
+		}
+	})
+
+	t.Run("light embed int8", func(t *testing.T) {
+		resp, err := genkit.Embed(ctx, g,
+			ai.WithEmbedder(coheregenkit.NewEmbedderRef("embed-english-light-v3.0", &coheregenkit.EmbedOptions{
+				InputType:     "search_document",
+				EmbeddingType: cohere.EmbeddingTypeInt8,
+			})),
+			ai.WithTextDocs("the quick brown fox"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Embeddings) != 1 || len(resp.Embeddings[0].Embedding) == 0 {
+			t.Fatalf("expected one non-empty light int8 embedding, got %+v", resp.Embeddings)
 		}
 	})
 }
