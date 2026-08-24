@@ -25,7 +25,7 @@ from openai.types import Model
 
 from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.model import ModelRef, model_action_metadata, model_ref
+from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -371,10 +371,10 @@ class OpenAI(Plugin):
             openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
             return await openai_model.generate(request, ctx)
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_generate,
+        return create_model(
+            name,
+            _generate,
+            config_schema=OpenAIConfig,
             metadata={
                 'model': {
                     **model_info,
@@ -408,10 +408,9 @@ class OpenAI(Plugin):
             model_instance = model_class(clean_name, self._runtime_client())
             return await model_instance.generate(request, ctx)
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_generate,
+        return create_model(
+            name,
+            _generate,
             metadata={'model': info_dict},
         )
 

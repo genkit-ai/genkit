@@ -19,7 +19,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
 from genkit._core._typing import ModelInfo, Operation, Part, Role, Supports, TextPart
-from genkit.model import model_ref
+from genkit.model import model, model_ref
 
 
 class CustomConfig(BaseModel):
@@ -1002,6 +1002,29 @@ async def test_generate_rejects_wrong_config_class_on_string_model() -> None:
 
     with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
         await ai.generate(model='flash', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_model_factory_stashes_class_without_registering() -> None:
+    """Plugin resolve builds via model(); the registry is what registers."""
+    ai = Genkit()
+    echo = EchoModel()
+
+    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return await echo.model_fn(request, ctx)
+
+    action = model('flash-plugin-style', model_fn, config_schema=CustomConfig)
+
+    assert action._config_schema is CustomConfig
+    assert await ai.registry.resolve_action(action.kind, action.name) is None
+
+    ai.registry.register_action_from_instance(action)
+    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+        await ai.generate(
+            model='flash-plugin-style',
+            prompt='hi',
+            config=OtherFamilyConfig(frequency_penalty=0.2),
+        )
 
 
 @pytest.mark.asyncio

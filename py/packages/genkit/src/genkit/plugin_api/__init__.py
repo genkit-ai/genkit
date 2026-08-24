@@ -50,6 +50,8 @@ from genkit.evaluator import (
 # Model domain re-exports
 from genkit.model import (
     ModelRef,
+    background_model,
+    model,
     model_action_metadata,
     model_ref,
 )
@@ -87,6 +89,8 @@ __all__ = [
     # Environment detection
     'is_dev_environment',
     # Model domain
+    'model',
+    'background_model',
     'model_action_metadata',
     'model_ref',
     'ModelRef',

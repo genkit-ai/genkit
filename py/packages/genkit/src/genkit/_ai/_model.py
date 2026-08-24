@@ -282,6 +282,53 @@ def _check_request_annotation(name: str, fn: ModelFn) -> None:
     )
 
 
+def model(
+    name: str,
+    fn: ModelFn,
+    *,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
+    metadata: dict[str, object] | None = None,
+    info: ModelInfo | None = None,
+    description: str | None = None,
+) -> Action:
+    """Build a model action without registering it.
+
+    Plugin ``init`` / ``resolve`` return this. ``define_model`` registers it.
+    The config class stays on the action so ``generate(model='name', config=)``
+    can isinstance-check a Pydantic instance against a string model name.
+    """
+    model_options: dict[str, object] = {}
+
+    if info:
+        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
+
+    if metadata and 'model' in metadata:
+        existing = metadata['model']
+        if isinstance(existing, dict):
+            existing_dict = cast(dict[str, object], existing)
+            for key, value in existing_dict.items():
+                if isinstance(key, str) and key not in model_options:
+                    model_options[key] = value
+
+    if 'label' not in model_options or not model_options['label']:
+        model_options['label'] = name
+
+    if config_schema:
+        model_options['customOptions'] = to_json_schema(config_schema)
+
+    model_meta: dict[str, object] = metadata.copy() if metadata else {}
+    model_meta['model'] = model_options
+
+    return Action(
+        kind=ActionKind.MODEL,
+        name=name,
+        fn=fn,
+        metadata=model_meta,
+        description=get_func_description(fn, description),
+        config_schema=config_schema,
+    )
+
+
 def define_model(
     registry: Registry,
     name: str,
@@ -293,50 +340,16 @@ def define_model(
 ) -> Action:
     """Register a custom model action."""
     _check_request_annotation(name, fn)
-    # Build model options dict
-    model_options: dict[str, object] = {}
-
-    # Start with info if provided
-    if info:
-        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
-
-    # Check if metadata has model info
-    if metadata and 'model' in metadata:
-        existing = metadata['model']
-        if isinstance(existing, dict):
-            existing_dict = cast(dict[str, object], existing)
-            for key, value in existing_dict.items():
-                if isinstance(key, str) and key not in model_options:
-                    model_options[key] = value
-
-    # Default label to name if not set
-    if 'label' not in model_options or not model_options['label']:
-        model_options['label'] = name
-
-    # Add config schema if provided
-    if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
-
-    # Build the final metadata dict
-    model_meta: dict[str, object] = metadata.copy() if metadata else {}
-    model_meta['model'] = model_options
-
-    model_description = get_func_description(fn, description)
-    action = registry.register_action(
-        name=name,
-        kind=ActionKind.MODEL,
-        fn=fn,
-        metadata=model_meta,
-        description=model_description,
+    action = model(
+        name,
+        fn,
+        config_schema=config_schema,
+        metadata=metadata,
+        info=info,
+        description=description,
     )
-    attach_config_schema(action=action, config_schema=config_schema)
+    registry.register_action_from_instance(action)
     return action
-
-
-def attach_config_schema(*, action: Action, config_schema: type | dict[str, Any] | None) -> None:
-    """Keep the Python class on the action so generate can isinstance-check config=."""
-    if isinstance(config_schema, type) and issubclass(config_schema, BaseModel):
-        action._config_schema = config_schema
 
 
 async def expected_config_schema(*, model: object | None, registry: Registry) -> type[BaseModel] | None:

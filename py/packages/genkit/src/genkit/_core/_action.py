@@ -423,13 +423,17 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
-        # Python config class from define_model. Not in metadata — that bag is JSON.
-        self._config_schema: type[BaseModel] | None = None
+        # Python class for generate's isinstance check. Not in metadata —
+        # that bag is JSON for the Dev UI.
+        self._config_schema: type[BaseModel] | None = (
+            config_schema if isinstance(config_schema, type) and issubclass(config_schema, BaseModel) else None
+        )
         self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
         # Optional matcher function for resource actions
         self.matches: Callable[[object], bool] | None = None

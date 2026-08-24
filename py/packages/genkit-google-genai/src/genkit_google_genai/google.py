@@ -58,6 +58,7 @@ from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
+from pydantic import BaseModel
 
 import genkit_google_genai.constants as const
 from genkit import ModelInfo
@@ -65,7 +66,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit.embedder import EmbedderRef, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
-from genkit.model import BackgroundAction, ModelRef, Operation, model_action_metadata
+from genkit.model import BackgroundAction, ModelRef, Operation, background_model, model, model_action_metadata
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
@@ -268,12 +269,12 @@ def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
     )
 
 
-def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type) -> Action:
+def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type[BaseModel]) -> Action:
     """Build a MODEL Action with family-specific request typing on ``fn``."""
-    return Action(
-        kind=ActionKind.MODEL,
-        name=name,
-        fn=fn,
+    return model(
+        name,
+        fn,
+        config_schema=config_schema,
         metadata=model_action_metadata(
             name=name,
             info=model_info.model_dump(by_alias=True),
@@ -378,43 +379,22 @@ def _create_veo_background_action(
     prefix = f'{plugin_name}/'
     clean_name = name.removeprefix(prefix)
     full_name = f'{prefix}{clean_name}'
-    action_key = f'/background-model/{full_name}'
 
     async def _start(request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
-        op = await veo.start(request, ctx)
-        op.action = action_key
-        return op
+        return await veo.start(request, ctx)
 
-    async def _check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def _check(op: Operation) -> Operation:
         veo = VeoModel(clean_name, client_getter())
-        updated = await veo.check(op)
-        updated.action = action_key
-        return updated
+        return await veo.check(op)
 
-    info = veo_model_info(clean_name).model_dump(by_alias=True)
-
-    start_action = Action(
-        kind=ActionKind.BACKGROUND_MODEL,
-        name=full_name,
-        fn=_start,
-        metadata={
-            'model': {**info, 'customOptions': to_json_schema(VeoConfigSchema)},
-            'type': 'background-model',
-        },
-    )
-
-    check_action = Action(
-        kind=ActionKind.CHECK_OPERATION,
-        name=f'{full_name}/check',
-        fn=_check,
-        metadata={'type': 'check-operation'},
-    )
-
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=None,
+    return background_model(
+        full_name,
+        _start,
+        _check,
+        config_schema=VeoConfigSchema,
+        info=veo_model_info(clean_name),
+        metadata={'type': 'background-model'},
     )
 
 

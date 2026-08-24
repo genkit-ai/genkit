@@ -33,7 +33,7 @@ from genkit.embedder import (
     EmbedResponse,
     embedder_action_metadata,
 )
-from genkit.model import model_action_metadata
+from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -348,10 +348,10 @@ class Ollama(Plugin):
             async with self._client_for_request(model=model_ref, model_request=request) as client:
                 return await model.generate(request, ctx, client=client)
 
-        action = Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_run,
+        action = create_model(
+            name,
+            _run,
+            config_schema=OllamaConfig,
             metadata=action_metadata.metadata,
         )
 

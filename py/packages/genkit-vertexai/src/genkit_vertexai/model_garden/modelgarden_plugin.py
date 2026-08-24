@@ -24,7 +24,7 @@ from genkit_openai.models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_openai.typing import OpenAIConfig
 from genkit_vertexai import constants as const
 
-from genkit.model import model_action_metadata
+from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
 from .model_garden import MODELGARDEN_PLUGIN_NAME, ModelGardenModel, model_garden_name
@@ -128,10 +128,10 @@ class ModelGarden(Plugin):
             handler = model_proxy.get_handler()
             model_info = model_proxy.get_model_info()
 
-            return Action(
-                kind=ActionKind.MODEL,
-                name=name,
-                fn=handler,
+            return create_model(
+                name,
+                handler,
+                config_schema=model_proxy.get_config_schema(),
                 metadata={
                     'model': {
                         **model_info.model_dump(),
@@ -153,10 +153,10 @@ class ModelGarden(Plugin):
         model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(clean_name, {})
         handler = model_proxy.to_openai_compatible_model()
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=handler,
+        return create_model(
+            name,
+            handler,
+            config_schema=OpenAIConfig,
             metadata={
                 'model': {
                     **(

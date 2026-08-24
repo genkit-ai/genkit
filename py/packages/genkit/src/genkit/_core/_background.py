@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
+from functools import wraps
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -178,51 +179,22 @@ class DefineBackgroundModelOptions(BaseModel):
     config_schema: type | dict[str, Any] | None = None
 
 
-def define_background_model(
-    registry: Registry,
+def background_model(
     name: str,
     start: StartModelOpFn,
     check: CheckModelOpFn,
+    *,
     cancel: CancelModelOpFn | None = None,
     label: str | None = None,
     info: ModelInfo | None = None,
-    config_schema: type | dict[str, Any] | None = None,
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     description: str | None = None,
 ) -> BackgroundAction[ModelResponse]:
-    """Define and register a background model.
+    """Build a background model without registering it.
 
-    A background model consists of three actions:
-    - Start action: /{background-model}/{name}
-    - Check action: /check-operation/{name}/check
-    - Cancel action: /cancel-operation/{name}/cancel (optional)
-
-    Args:
-        registry: The registry to register the actions with.
-        name: The unique name for this background model.
-        start: Function to start the background operation.
-        check: Function to check operation status.
-        cancel: Optional function to cancel operations.
-        label: Human-readable label (defaults to info.label, then model name).
-        info: Model capability information.
-        config_schema: Schema for model configuration options.
-        metadata: Additional metadata for the model.
-        description: Description for the model action.
-
-    Returns:
-        A BackgroundAction that can be used to interact with the model.
-
-    Example:
-        >>> action = define_background_model(
-        ...     registry=registry,
-        ...     name='video-gen',
-        ...     start=start_fn,
-        ...     check=check_fn,
-        ... )
-        >>> op = await action.start(request)
-        >>> while not op.done:
-        ...     await asyncio.sleep(5)
-        ...     op = await action.check(op)
+    Plugin ``init`` / ``resolve`` return this. ``define_background_model``
+    registers the start / check / cancel actions.
     """
     action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
@@ -234,7 +206,7 @@ def define_background_model(
         model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
     # generate_operation looks at this flag. A background model is a
-    # poll-handle model, so the flag is set on registration.
+    # poll-handle model, so the flag is set when the action is built.
     supports = model_options.get('supports')
     if not isinstance(supports, dict):
         supports = {}
@@ -256,7 +228,10 @@ def define_background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing
+    # Wrap the start function to add the action key and timing.
+    # Keep the caller's request annotation (ModelRequest[FamilyConfig]) so
+    # Action still types the config bag as that family.
+    @wraps(start)
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         start_time = time.perf_counter()
         op = await start(request, ctx)
@@ -275,30 +250,26 @@ def define_background_model(
         updated.action = action_key
         return updated
 
-    # Register the start action
-    start_action = registry.register_action(
-        name=name,
+    start_action = Action(
         kind=ActionKind.BACKGROUND_MODEL,
+        name=name,
         fn=wrapped_start,
+        metadata_fn=start,
         metadata=model_meta,
         description=description or f'Background model: {label}',
+        config_schema=config_schema,
     )
-    if isinstance(config_schema, type) and issubclass(config_schema, BaseModel):
-        start_action._config_schema = config_schema
 
-    # Register the check action
-    check_action = registry.register_action(
-        name=f'{name}/check',
+    check_action = Action(
         kind=ActionKind.CHECK_OPERATION,
+        name=f'{name}/check',
         fn=wrapped_check,
         metadata={'outputSchema': output_schema_meta},
         description=f'Check operation status for {label}',
     )
 
-    # Register the cancel action if provided
     cancel_action = None
     if cancel is not None:
-        # Capture cancel in local scope for the nested function
         cancel_fn = cancel
 
         async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
@@ -306,9 +277,9 @@ def define_background_model(
             cancelled.action = action_key
             return cancelled
 
-        cancel_action = registry.register_action(
-            name=f'{name}/cancel',
+        cancel_action = Action(
             kind=ActionKind.CANCEL_OPERATION,
+            name=f'{name}/cancel',
             fn=wrapped_cancel,
             metadata={'outputSchema': output_schema_meta},
             description=f'Cancel operation for {label}',
@@ -319,6 +290,37 @@ def define_background_model(
         check_action=check_action,
         cancel_action=cancel_action,
     )
+
+
+def define_background_model(
+    registry: Registry,
+    name: str,
+    start: StartModelOpFn,
+    check: CheckModelOpFn,
+    cancel: CancelModelOpFn | None = None,
+    label: str | None = None,
+    info: ModelInfo | None = None,
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    description: str | None = None,
+) -> BackgroundAction[ModelResponse]:
+    """Register a background model for long-running AI operations."""
+    action = background_model(
+        name,
+        start,
+        check,
+        cancel=cancel,
+        label=label,
+        info=info,
+        config_schema=config_schema,
+        metadata=metadata,
+        description=description,
+    )
+    registry.register_action_from_instance(action.start_action)
+    registry.register_action_from_instance(action.check_action)
+    if action.cancel_action is not None:
+        registry.register_action_from_instance(action.cancel_action)
+    return action
 
 
 async def lookup_background_action(
