@@ -53,6 +53,17 @@ func headerRecordingServer(t *testing.T) (url string, lastHeader func() http.Hea
 	}
 }
 
+// assertHeaderAbsent fails unless the header carries no values at all.
+// [http.Header.Get] cannot tell an absent header from one sent with an empty
+// value, and clearing the identity without a WithHeaderDel leaves exactly
+// that on the wire, so asserting on Get would pass either way.
+func assertHeaderAbsent(t *testing.T, header http.Header, name string) {
+	t.Helper()
+	if values := header.Values(name); len(values) != 0 {
+		t.Errorf("%s = %q, want the header dropped rather than blanked", name, values)
+	}
+}
+
 // generateOnce runs one request through an initialized plugin.
 func generateOnce(t *testing.T, o *OpenAICompatible) {
 	t.Helper()
@@ -102,15 +113,13 @@ func TestInitDropsInheritedOpenAIIdentity(t *testing.T) {
 			generateOnce(t, o)
 
 			got := lastHeader()
-			if auth := got.Get("Authorization"); auth != tt.wantAuth {
+			if tt.wantAuth == "" {
+				assertHeaderAbsent(t, got, "Authorization")
+			} else if auth := got.Get("Authorization"); auth != tt.wantAuth {
 				t.Errorf("Authorization = %q, want %q", auth, tt.wantAuth)
 			}
-			if org := got.Get("OpenAI-Organization"); org != "" {
-				t.Errorf("OpenAI-Organization = %q, want the inherited organization dropped", org)
-			}
-			if project := got.Get("OpenAI-Project"); project != "" {
-				t.Errorf("OpenAI-Project = %q, want the inherited project dropped", project)
-			}
+			assertHeaderAbsent(t, got, "OpenAI-Organization")
+			assertHeaderAbsent(t, got, "OpenAI-Project")
 		})
 	}
 }
@@ -173,10 +182,6 @@ func TestClientForKeyKeepsTheIdentityScrub(t *testing.T) {
 	if auth := got.Get("Authorization"); auth != "Bearer request-key" {
 		t.Errorf("Authorization = %q, want the per-request key", auth)
 	}
-	if org := got.Get("OpenAI-Organization"); org != "" {
-		t.Errorf("OpenAI-Organization = %q, want the inherited organization dropped", org)
-	}
-	if project := got.Get("OpenAI-Project"); project != "" {
-		t.Errorf("OpenAI-Project = %q, want the inherited project dropped", project)
-	}
+	assertHeaderAbsent(t, got, "OpenAI-Organization")
+	assertHeaderAbsent(t, got, "OpenAI-Project")
 }
