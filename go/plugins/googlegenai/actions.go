@@ -77,11 +77,12 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 		return newModel(client, id, c.modelOptions(id))
 
 	// A background model is a bundle: registering it registers both its start
-	// and check actions, so the same value resolves either key. The registry
-	// registers what we return and then looks up the key it was asked for.
+	// and check actions. The registry registers what we return and then looks
+	// up the key it was asked for.
 	case api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation:
-		// The check companion is named for the model plus the operation it
-		// performs, so resolve the model the companion belongs to.
+		// The two keys differ: start is the bare model, and the check companion
+		// is the model plus the operation it performs. Strip the suffix to get
+		// back the model the companion belongs to.
 		modelID := id
 		if atype == api.ActionTypeCheckOperation {
 			modelID = strings.TrimSuffix(id, "/check")
