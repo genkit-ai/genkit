@@ -694,7 +694,8 @@ export function fromOpenAIResponsesStreamEvent(
 export function openAIResponsesModelRunner(
   name: string,
   defaultClient: OpenAI,
-  pluginOptions?: Omit<PluginOptions, 'apiKey'>
+  pluginOptions?: Omit<PluginOptions, 'apiKey'>,
+  modelOptions?: { streaming?: boolean }
 ) {
   return async (
     request: GenerateRequest,
@@ -709,10 +710,14 @@ export function openAIResponsesModelRunner(
       request,
       defaultClient
     );
+    // Some Responses-only models (o1-pro, o3-pro) reject `stream: true`, and
+    // genkit's default paths always request streaming, so they must fall back
+    // to a non-streaming request answered as a single chunk.
+    const canStream = modelOptions?.streaming !== false;
     try {
       const body = toOpenAIResponsesRequestBody(name, request);
       let response: OpenAIResponse;
-      if (options?.streamingRequested) {
+      if (options?.streamingRequested && canStream) {
         const stream = client.responses.stream(
           { ...body, stream: true },
           { signal: options?.abortSignal }
@@ -740,7 +745,17 @@ export function openAIResponsesModelRunner(
           signal: options?.abortSignal,
         });
       }
-      return fromOpenAIResponse(response, request.output?.format === 'json');
+      const converted = fromOpenAIResponse(
+        response,
+        request.output?.format === 'json'
+      );
+      if (options?.streamingRequested && !canStream && options.sendChunk) {
+        options.sendChunk({
+          index: 0,
+          content: converted.message?.content ?? [],
+        });
+      }
+      return converted;
     } catch (e) {
       rethrowOpenAIError(e);
     }
@@ -766,8 +781,10 @@ export function defineCompatOpenAIResponsesModel<
   client: OpenAI;
   modelRef?: ModelReference<CustomOptions>;
   pluginOptions?: PluginOptions;
+  /** Set false for models that reject `stream: true`; defaults to true. */
+  streaming?: boolean;
 }): ModelAction {
-  const { name, client, pluginOptions, modelRef } = params;
+  const { name, client, pluginOptions, modelRef, streaming } = params;
   const modelName = toModelName(name, pluginOptions?.name);
   const actionName =
     modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
@@ -778,7 +795,7 @@ export function defineCompatOpenAIResponsesModel<
       ...modelRef?.info,
       configSchema: modelRef?.configSchema,
     },
-    openAIResponsesModelRunner(modelName, client, pluginOptions)
+    openAIResponsesModelRunner(modelName, client, pluginOptions, { streaming })
   );
 }
 

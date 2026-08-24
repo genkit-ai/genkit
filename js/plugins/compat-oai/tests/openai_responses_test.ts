@@ -29,7 +29,9 @@ import type { Response as OpenAIResponse } from 'openai/resources/responses/resp
 import { openAIModelRunner } from '../src/model';
 import { openAI } from '../src/openai/index';
 import {
+  NON_STREAMING_RESPONSES_MODELS,
   RESPONSES_ONLY_MODELS,
+  isNonStreamingResponsesModelName,
   isResponsesOnlyModelName,
   openAIResponsesModelRef,
 } from '../src/openai/responses';
@@ -112,6 +114,22 @@ describe('isResponsesOnlyModelName', () => {
     expect(isResponsesOnlyModelName('gpt-5.1-codex')).toBe(true);
     expect(isResponsesOnlyModelName('gpt-5.1-codex-mini')).toBe(true);
     expect(isResponsesOnlyModelName('gpt-5.1-codex-max')).toBe(true);
+  });
+});
+
+describe('isNonStreamingResponsesModelName', () => {
+  test('matches the curated non-streaming models and their suffixed forms', () => {
+    for (const name of NON_STREAMING_RESPONSES_MODELS) {
+      expect(isNonStreamingResponsesModelName(name)).toBe(true);
+    }
+    expect(isNonStreamingResponsesModelName('o3-pro-2025-06-10')).toBe(true);
+  });
+
+  test('leaves the streaming-capable models alone', () => {
+    expect(isNonStreamingResponsesModelName('gpt-5-pro')).toBe(false);
+    expect(isNonStreamingResponsesModelName('gpt-5-codex')).toBe(false);
+    expect(isNonStreamingResponsesModelName('codex-mini-latest')).toBe(false);
+    expect(isNonStreamingResponsesModelName(undefined)).toBe(false);
   });
 });
 
@@ -1011,6 +1029,29 @@ describe('openAIResponsesModelRunner', () => {
     expect(response.message?.content).toStrictEqual([{ text: 'hi there' }]);
   });
 
+  test('answers a streaming caller without streaming when the model cannot stream', async () => {
+    server.setNextResponse({ body: textResponse('non-streamed') });
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('o3-pro', client, undefined, {
+      streaming: false,
+    });
+    const sendChunk = jest.fn();
+
+    const response = await runner(
+      { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+      { streamingRequested: true, sendChunk }
+    );
+
+    const request = server.requests[server.requests.length - 1];
+    expect(request.body).not.toHaveProperty('stream');
+    expect(sendChunk).toHaveBeenCalledTimes(1);
+    expect(sendChunk).toHaveBeenCalledWith({
+      index: 0,
+      content: [{ text: 'non-streamed' }],
+    });
+    expect(response.message?.content).toStrictEqual([{ text: 'non-streamed' }]);
+  });
+
   test('streams text and reasoning deltas as chunks', async () => {
     server.setNextResponse({
       stream: true,
@@ -1404,6 +1445,27 @@ describe('openAI plugin routing', () => {
     for (const name of RESPONSES_ONLY_MODELS) {
       expect(registered).toContain(`openai/${name}`);
     }
+  });
+
+  test('streams a non-streaming model through the plugin without stream: true', async () => {
+    const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+    server.setNextResponse({ body: textResponse('pro answer') });
+
+    const { response, stream } = ai.generateStream({
+      model: openAI.model('o3-pro'),
+      prompt: 'hi',
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk.text);
+    }
+    const result = await response;
+
+    expect(result.text).toBe('pro answer');
+    expect(chunks.join('')).toBe('pro answer');
+    const sent = server.requests[server.requests.length - 1];
+    expect(sent.url).toBe('/v1/responses');
+    expect(sent.body).not.toHaveProperty('stream');
   });
 
   test('sends Responses-only models to the Responses endpoint', async () => {
