@@ -1957,17 +1957,22 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 		name     string
 		response *ModelResponse
 		wantData *Report
-		wantErr  bool
+		wantErr  error
+		// wantParseErr marks a plain parse failure, which carries no sentinel.
+		wantParseErr bool
 	}{
 		{
 			// The common path: a provider reports a safety block and returns
-			// prose explaining it, with no middleware involved.
+			// prose explaining it, with no middleware involved. A refusal
+			// cannot produce a Report, so it is an error rather than a zero
+			// value the caller would read as success.
 			name: "blocked with explanatory text",
 			response: &ModelResponse{
 				FinishReason:  FinishReasonBlocked,
 				FinishMessage: "blocked by safety settings",
 				Message:       NewModelTextMessage("Response was blocked for safety reasons."),
 			},
+			wantErr: ErrGenerationBlocked,
 		},
 		{
 			name: "blocked with no content",
@@ -1976,6 +1981,7 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 				FinishMessage: "blocked by safety settings",
 				Message:       &Message{Role: RoleModel},
 			},
+			wantErr: ErrGenerationBlocked,
 		},
 		{
 			// What a soft-failing middleware produces when the provider is
@@ -2003,7 +2009,7 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 				FinishReason: FinishReasonStop,
 				Message:      NewModelTextMessage("not json at all"),
 			},
-			wantErr: true,
+			wantParseErr: true,
 		},
 		{
 			name: "stop with conforming text parses",
@@ -2035,10 +2041,20 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 
 			t.Run("Execute", func(t *testing.T) {
 				output, resp, err := structPrompt.Execute(context.Background(), input)
-				if tt.wantErr {
+				if tt.wantParseErr {
 					if err == nil {
 						t.Fatalf("Execute() err = nil, want a parse failure")
 					}
+					return
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("Execute() err = %v, want %v", err, tt.wantErr)
+					}
+					if !strings.Contains(err.Error(), tt.response.FinishMessage) {
+						t.Errorf("Execute() err = %v, want it to carry %q", err, tt.response.FinishMessage)
+					}
+					checkResponse(t, resp, tt.response)
 					return
 				}
 				if err != nil {
@@ -2064,9 +2080,15 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 						final = v
 					}
 				}
-				if tt.wantErr {
+				if tt.wantParseErr {
 					if err == nil {
 						t.Fatalf("ExecuteStream() err = nil, want a parse failure")
+					}
+					return
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("ExecuteStream() err = %v, want %v", err, tt.wantErr)
 					}
 					return
 				}
@@ -2084,12 +2106,11 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 		})
 	}
 
-	// A string Out has no schema to violate, so it never produced a parse
-	// error. It follows the same rule anyway: text emitted alongside an
-	// abnormal finish is a block notice or a partial answer, not the
-	// completion the prompt asked for, so it stays on the response instead of
-	// being returned as the value.
-	t.Run("string output withholds text on abnormal finish", func(t *testing.T) {
+	// A string Out has no schema to violate, so a refusal used to come back as
+	// the answer. It reports the same error as every other Out: a block notice
+	// is not the completion the prompt asked for, and the notice itself stays
+	// on the response.
+	t.Run("string output reports a refusal", func(t *testing.T) {
 		blocked := &ModelResponse{
 			FinishReason:  FinishReasonBlocked,
 			FinishMessage: "blocked by safety settings",
@@ -2106,8 +2127,8 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 			WithModel(model), WithPrompt("Report on {{topic}}"))
 
 		output, resp, err := stringPrompt.Execute(context.Background(), Query{Topic: "widgets"})
-		if err != nil {
-			t.Fatalf("Execute() returned error: %v", err)
+		if !errors.Is(err, ErrGenerationBlocked) {
+			t.Fatalf("Execute() err = %v, want %v", err, ErrGenerationBlocked)
 		}
 		checkResponse(t, resp, blocked)
 		if output != "" {

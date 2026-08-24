@@ -328,6 +328,10 @@ func LookupModel(r api.Registry, name string) Model {
 // FinishReasonUnknown is not in the set on purpose: plugins map unrecognized
 // provider reasons to it, so treating it as abnormal would silently drop
 // output validation for responses the model may well have completed.
+//
+// FinishReasonBlocked is in the set, because a refusal must skip parsing like
+// any other abnormal finish, but the typed helpers test for it first and
+// report [ErrGenerationBlocked] instead of reaching here.
 func (fr FinishReason) isAbnormal() bool {
 	switch fr {
 	case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
@@ -335,6 +339,17 @@ func (fr FinishReason) isAbnormal() bool {
 	default:
 		return false
 	}
+}
+
+// blockedError reports a refusal as [ErrGenerationBlocked], carrying the
+// provider's explanation when there is one. Only the typed helpers call it:
+// they promise a value that a refusal cannot produce, whereas [Generate]
+// hands the response back and lets the caller read FinishReason.
+func blockedError(resp *ModelResponse) error {
+	if resp.FinishMessage == "" {
+		return status.Errorf(ErrGenerationBlocked, "generation blocked")
+	}
+	return status.Errorf(ErrGenerationBlocked, "generation blocked: %s", resp.FinishMessage)
 }
 
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
@@ -1038,12 +1053,14 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 	return res.Text(), nil
 }
 
-// GenerateData runs a generate request and returns strongly-typed output.
-// If the response doesn't contain text output (e.g., contains tool requests
-// or interrupts instead), or generation ended abnormally (blocked, aborted,
-// interrupted, other), the output will be nil and no error is returned. Check
-// resp.FinishReason, resp.Interrupts() or resp.ToolRequests() to handle these
-// cases.
+// A refusal is an error: when the response finished blocked, the output is nil
+// and the error is [ErrGenerationBlocked], carrying the provider's explanation.
+// The response is still returned alongside it.
+//
+// Every other finish that yields nothing to extract is not an error. If the
+// response carries no text (tool requests or interrupts instead), or ended
+// aborted, interrupted, or other, the output is nil and the error is nil.
+// Check resp.FinishReason, resp.Interrupts(), and resp.ToolRequests().
 //
 // The output format is JSON with a schema inferred from Out; an explicit
 // [WithOutputSchema] or [WithOutputSchemaName] overrides the schema while
@@ -1063,11 +1080,17 @@ func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...Generate
 		return nil, nil, err
 	}
 
-	// Two responses have no conforming output to extract: one that ended
-	// abnormally, whose FinishReason is the news the caller needs, and one with
-	// no text at all, which is what a turn holding tool requests, interrupts, or
-	// media looks like. Both hand the response back unparsed rather than report a
-	// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+	// A refusal cannot produce the value this helper promises, so it is
+	// reported rather than handed back as a zero value that reads as success.
+	// [Generate] still returns the response unwrapped.
+	if resp.FinishReason == FinishReasonBlocked {
+		return nil, resp, blockedError(resp)
+	}
+
+	// The remaining abnormal finishes, and a response with no text at all
+	// (what a turn holding tool requests, interrupts, or media looks like), have
+	// nothing to extract but are not failures. The response goes back unparsed
+	// rather than as a schema error naming the wrong cause.
 	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 		return nil, resp, nil
 	}
@@ -1154,9 +1177,15 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // Like [GenerateData], the output format is JSON with a schema inferred from
 // Out; overriding the format with a non-JSON [WithOutputFormat] or
 // [WithOutputEnums] breaks typed extraction. Also like [GenerateData], a
-// response with no text output or one that ended abnormally (blocked, aborted,
-// interrupted, other) yields zero-value Output and no error; check
-// Response.FinishReason, Interrupts() or ToolRequests() to handle those.
+// blocked response fails with [ErrGenerationBlocked], while a response with no
+// text output or one that ended aborted, interrupted, or other yields
+// zero-value Output and no error; check Response.FinishReason, Interrupts(),
+// and ToolRequests() to handle those.
+//
+// Chunks are provisional. They are parsed as they arrive, before the finish
+// reason exists, so a generation that streams partial output and then ends
+// abnormally will have yielded chunks that the final value does not stand
+// behind. The Done value is the authoritative one.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		done := false
@@ -1200,11 +1229,18 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 
-		// Two responses have no conforming output to extract: one that ended
-		// abnormally, whose FinishReason is the news the caller needs, and one with
-		// no text at all, which is what a turn holding tool requests, interrupts, or
-		// media looks like. Both hand the response back unparsed rather than report a
-		// schema error naming the wrong cause. See [FinishReason.isAbnormal].
+		// A refusal cannot produce the value this helper promises, so it is
+		// reported rather than handed back as a zero value that reads as success.
+		// [Generate] still returns the response unwrapped.
+		if resp.FinishReason == FinishReasonBlocked {
+			yield(nil, blockedError(resp))
+			return
+		}
+
+		// The remaining abnormal finishes, and a response with no text at all
+		// (what a turn holding tool requests, interrupts, or media looks like), have
+		// nothing to extract but are not failures. The response goes back unparsed
+		// rather than as a schema error naming the wrong cause.
 		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return

@@ -2889,13 +2889,16 @@ func TestGenerateDataAbnormalFinish(t *testing.T) {
 	}{
 		{
 			// The common path: a provider reports a safety block and returns
-			// prose explaining it, with no middleware involved.
+			// prose explaining it, with no middleware involved. A refusal
+			// cannot produce a Report, so it is an error rather than a nil
+			// value the caller would read as success.
 			name: "blocked with explanatory text",
 			response: &ModelResponse{
 				FinishReason:  FinishReasonBlocked,
 				FinishMessage: "blocked by safety settings",
 				Message:       NewModelTextMessage("Response was blocked for safety reasons."),
 			},
+			wantErr: ErrGenerationBlocked,
 		},
 		{
 			name: "blocked with no content",
@@ -2904,6 +2907,7 @@ func TestGenerateDataAbnormalFinish(t *testing.T) {
 				FinishMessage: "blocked by safety settings",
 				Message:       &Message{Role: RoleModel},
 			},
+			wantErr: ErrGenerationBlocked,
 		},
 		{
 			// What a soft-failing middleware produces when the provider is
@@ -2958,6 +2962,14 @@ func TestGenerateDataAbnormalFinish(t *testing.T) {
 				if tt.wantErr != nil {
 					if !errors.Is(err, tt.wantErr) {
 						t.Fatalf("GenerateData() err = %v, want %v", err, tt.wantErr)
+					}
+					if errors.Is(err, ErrGenerationBlocked) {
+						if !strings.Contains(err.Error(), tt.response.FinishMessage) {
+							t.Errorf("GenerateData() err = %v, want it to carry %q", err, tt.response.FinishMessage)
+						}
+						// The response rides along so the caller can still
+						// inspect the turn that was refused.
+						checkResponse(t, resp, tt.response)
 					}
 					return
 				}
@@ -3014,6 +3026,95 @@ func TestGenerateDataAbnormalFinish(t *testing.T) {
 					t.Errorf("GenerateDataStream() output = %+v, want %+v", final.Output, want)
 				}
 			})
+		})
+	}
+}
+
+// TestGenerateDataStreamBlockedAfterChunks covers the path the one-shot tests
+// miss: a model that streams output and only then reports a block. Chunks are
+// parsed as they arrive, before any finish reason exists, so the caller can see
+// a populated chunk for a generation that is ultimately refused. The contract
+// is that the terminal value settles it, and here that means the refusal
+// surfaces as an error rather than as a zeroed Output the caller reads as an
+// empty answer.
+func TestGenerateDataStreamBlockedAfterChunks(t *testing.T) {
+	r := childRegistry(t)
+
+	type Report struct {
+		Title string `json:"title"`
+	}
+
+	tests := []struct {
+		name      string
+		streamed  string
+		wantChunk *Report
+	}{
+		{
+			// Partial structured output arrives, then the block lands.
+			name:      "partial json then blocked",
+			streamed:  `{"title":"partial`,
+			wantChunk: &Report{Title: "partial"},
+		},
+		{
+			// A refusal streamed as prose parses to nothing useful, which must
+			// not be mistaken for a stream failure: the finish reason still has
+			// to reach the caller.
+			name:     "prose then blocked",
+			streamed: "I cannot help with that request.",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/streamBlocked-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if cb != nil {
+						if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(tt.streamed)}}); err != nil {
+							return nil, err
+						}
+					}
+					return &ModelResponse{
+						Request:       req,
+						FinishReason:  FinishReasonBlocked,
+						FinishMessage: "blocked by safety settings",
+						Message:       NewModelTextMessage(tt.streamed),
+					}, nil
+				})
+
+			var (
+				chunks []Report
+				gotErr error
+				done   bool
+			)
+			for v, err := range GenerateDataStream[Report](context.Background(), r,
+				WithModel(model), WithPrompt("please respond")) {
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if v.Done {
+					done = true
+					continue
+				}
+				chunks = append(chunks, v.Chunk)
+			}
+
+			if !errors.Is(gotErr, ErrGenerationBlocked) {
+				t.Fatalf("stream err = %v, want %v", gotErr, ErrGenerationBlocked)
+			}
+			if !strings.Contains(gotErr.Error(), "blocked by safety settings") {
+				t.Errorf("stream err = %v, want it to carry the finish message", gotErr)
+			}
+			if done {
+				t.Error("stream yielded a done value for a refused generation")
+			}
+			if tt.wantChunk != nil {
+				// Documenting the provisional chunk rather than asserting it
+				// away: it is why the terminal value has to be authoritative.
+				if len(chunks) == 0 || chunks[len(chunks)-1] != *tt.wantChunk {
+					t.Errorf("chunks = %+v, want the last to be %+v", chunks, *tt.wantChunk)
+				}
+			}
 		})
 	}
 }
