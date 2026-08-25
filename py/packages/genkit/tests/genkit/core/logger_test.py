@@ -53,11 +53,14 @@ def test_resolve_level() -> None:
         assert resolve_level() == logging.INFO
 
 
-def test_quiet_loggers_are_reflection_access_only() -> None:
-    """Dev UI mutes our reflection access logs, not the app's httpx or provider SDKs."""
-    assert QUIET_LOGGERS == ('uvicorn.access', 'uvicorn.error')
-    assert 'httpx' not in QUIET_LOGGERS
-    assert 'httpcore' not in QUIET_LOGGERS
+def test_quiet_loggers_are_shared_tty_access_noise() -> None:
+    """Dev UI mutes reflection polls and httpx INFO hops, not provider SDKs."""
+    assert QUIET_LOGGERS == (
+        'uvicorn.access',
+        'uvicorn.error',
+        'httpx',
+        'httpcore',
+    )
     assert 'google_genai.models' not in QUIET_LOGGERS
     assert 'opentelemetry.exporter' not in QUIET_LOGGERS
 

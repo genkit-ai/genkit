@@ -28,11 +28,15 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Health-check access logs on the reflection server under genkit start.
-# Collector posts use urllib so we do not set the process httpx logger.
+# Shared genkit start TTY. Uvicorn is our reflection health polls. httpx logs
+# INFO on every hop (Gemini generateContent, the app's own clients). Collector
+# POSTs use urllib, so they never hit this logger. GENKIT_LOG=debug turns these
+# back on.
 QUIET_LOGGERS = (
     'uvicorn.access',
     'uvicorn.error',
+    'httpx',
+    'httpcore',
 )
 
 
