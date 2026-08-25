@@ -1912,7 +1912,7 @@ describe('openAI.responsesModel', () => {
 
       // gpt-3.5-turbo's Chat Completions API rejects response_format
       // json_schema, so with no transport opt-in the schema must still be
-      // simulated into the prompt, exactly as before the dispatch existed.
+      // simulated into the prompt rather than sent natively.
       await ai.generate({
         model: openAI.model('gpt-3.5-turbo'),
         prompt: 'pick one',
