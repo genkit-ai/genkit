@@ -218,8 +218,14 @@ export async function startTelemetryServer(params: {
 
   api.get('/api/logs', async (request, response, next) => {
     try {
-      const { limit, continuationToken, severityText, severityNumber } =
-        request.query;
+      const {
+        limit,
+        continuationToken,
+        severityText,
+        severityNumber,
+        traceId,
+        spanId,
+      } = request.query;
       response.json(
         await params.logStore.list({
           limit: limit ? Number.parseInt(limit.toString()) : 100,
@@ -230,6 +236,8 @@ export async function startTelemetryServer(params: {
           severityNumber: severityNumber
             ? Number.parseInt(severityNumber.toString())
             : undefined,
+          traceId: traceId ? traceId.toString() : undefined,
+          spanId: spanId ? spanId.toString() : undefined,
         })
       );
     } catch (e) {

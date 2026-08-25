@@ -165,6 +165,10 @@ export abstract class BaseRuntimeManager {
       if (query !== '') query += '&';
       query += `severityNumber=${filter.severityNumber}`;
     }
+    if (filter?.spanId && !filter?.traceId) {
+      if (query !== '') query += '&';
+      query += `spanId=${encodeURIComponent(filter.spanId)}`;
+    }
 
     const fullUrl = query !== '' ? `${url}?${query}` : url;
 

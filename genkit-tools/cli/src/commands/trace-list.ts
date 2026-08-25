@@ -145,6 +145,10 @@ export const traceList = new Command('trace:list')
             `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
           );
         }
+
+        console.log(
+          `\nTip: Use "genkit trace:get <traceId>" to view full trace details.`
+        );
       } catch (e) {
         logger.error(`Error listing traces: ${e}`);
       }

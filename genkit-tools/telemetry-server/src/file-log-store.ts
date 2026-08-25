@@ -272,7 +272,11 @@ export class LogIndex {
             d.severityText?.toLowerCase() !== query.severityText.toLowerCase()
           )
             return false;
-          if (query.severityNumber && d.severityNumber !== query.severityNumber)
+          if (
+            query.severityNumber !== undefined &&
+            (d.severityNumber === undefined ||
+              d.severityNumber < query.severityNumber)
+          )
             return false;
           return true;
         });

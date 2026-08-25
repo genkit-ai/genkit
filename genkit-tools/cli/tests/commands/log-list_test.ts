@@ -144,14 +144,14 @@ describe('log:list command', () => {
       limit: 5,
       continuationToken: '',
       filter: {
-        severityText: 'ERROR',
+        severityNumber: 17,
         traceId: 'trace-1',
         spanId: 'span-1',
       },
     });
   });
 
-  it('should output formatted  logs without verbose flag', async () => {
+  it('should output logs in text format by default', async () => {
     mockManager.listLogs.mockResolvedValue({
       logs: [
         {

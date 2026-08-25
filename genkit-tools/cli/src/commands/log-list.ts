@@ -38,13 +38,15 @@ export interface LogListOptions {
  * chronological order.
  */
 export const logList = new Command('log:list')
-  .description('list logs')
+  .description(
+    'list logs. By default, the most recent logs are returned. Note: Filtering by trace-id is highly recommended.'
+  )
   .option('-l, --limit <number>', 'limit the number of returned logs', '15')
   .option('--trace-id <id>', 'filter by trace ID')
   .option('--span-id <id>', 'filter by span ID')
   .option(
-    '--severity <severity>',
-    'filter by severity (e.g., INFO, ERROR, WARNING)'
+    '--severity <level>',
+    'filter to logs at this severity level and higher (e.g., info, warn, error)'
   )
   .addOption(
     new Option('-f, --format <format>', 'output format')
@@ -66,7 +68,21 @@ export const logList = new Command('log:list')
           filter.spanId = options.spanId;
         }
         if (options.severity) {
-          filter.severityText = options.severity;
+          const severities: Record<string, number> = {
+            trace: 1,
+            debug: 5,
+            info: 9,
+            warn: 13,
+            error: 17,
+            fatal: 21,
+          };
+          const num = severities[options.severity.toLowerCase()];
+          if (num !== undefined) {
+            filter.severityNumber = num;
+          } else {
+            // Fallback for custom severity texts
+            filter.severityText = options.severity;
+          }
         }
 
         const limit = Number.parseInt(options.limit, 10);
@@ -102,7 +118,7 @@ export const logList = new Command('log:list')
           );
           logs.forEach((log) => {
             let time = 'unknown';
-            if (log.timestamp) {
+            if (typeof log.timestamp === 'number') {
               time = new Date(log.timestamp).toLocaleString();
             }
 
