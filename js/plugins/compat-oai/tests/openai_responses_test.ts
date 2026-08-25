@@ -685,6 +685,42 @@ describe('toOpenAIResponsesRequestBody', () => {
 
     expect(body.include).toStrictEqual(['message.output_text.logprobs']);
   });
+
+  test('maps previousResponseId onto the wire field', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { previousResponseId: 'resp_prev' },
+    });
+
+    expect(body.previous_response_id).toBe('resp_prev');
+    expect(body).not.toHaveProperty('previousResponseId');
+  });
+
+  test('maps reasoning effort and summary into the reasoning object', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { reasoningEffort: 'low', reasoningSummary: 'auto' },
+    });
+
+    expect(body.reasoning).toStrictEqual({ effort: 'low', summary: 'auto' });
+    expect(body).not.toHaveProperty('reasoningEffort');
+    expect(body).not.toHaveProperty('reasoningSummary');
+  });
+
+  test('composes declared reasoning fields over a raw passthrough object', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: {
+        reasoningSummary: 'detailed',
+        reasoning: { effort: 'high', summary: 'auto' },
+      },
+    });
+
+    expect(body.reasoning).toStrictEqual({
+      effort: 'high',
+      summary: 'detailed',
+    });
+  });
 });
 
 describe('fromOpenAIResponse', () => {
@@ -1736,6 +1772,85 @@ describe('openAI plugin routing', () => {
     expect(
       Object.keys(metadata.metadata?.model.customOptions.properties)
     ).toContain('transport');
+  });
+});
+
+describe('openAI.responsesModel', () => {
+  test('returns a namespaced ref pinned to the responses transport', () => {
+    const ref = openAI.responsesModel('gpt-4o');
+
+    expect(ref.name).toBe('openai/gpt-4o');
+    expect(ref.config).toStrictEqual({ transport: 'responses' });
+    expect(Object.keys(ref.configSchema!.shape)).toContain(
+      'previousResponseId'
+    );
+  });
+
+  test('merges call-site config under the pin', () => {
+    const ref = openAI.responsesModel('gpt-4o', { reasoningEffort: 'low' });
+
+    expect(ref.config).toStrictEqual({
+      reasoningEffort: 'low',
+      transport: 'responses',
+    });
+  });
+
+  test('withConfig replaces config wholesale but re-injects the pin', () => {
+    const ref = openAI
+      .responsesModel('gpt-4o', { reasoningEffort: 'low' })
+      .withConfig({ temperature: 0.5 });
+
+    expect(ref.config).toStrictEqual({
+      temperature: 0.5,
+      transport: 'responses',
+    });
+  });
+
+  test('keeps the pin through a withConfig().withVersion() chain', () => {
+    const ref = openAI
+      .responsesModel('gpt-4o')
+      .withConfig({ temperature: 0.5 })
+      .withVersion('gpt-4o-2024-08-06');
+
+    expect(ref.version).toBe('gpt-4o-2024-08-06');
+    expect(ref.config).toStrictEqual({
+      temperature: 0.5,
+      transport: 'responses',
+    });
+    // The chained ref must stay pinned for the next withConfig too.
+    expect(ref.withConfig({ temperature: 1 }).config).toStrictEqual({
+      temperature: 1,
+      transport: 'responses',
+    });
+  });
+
+  test('routes a dual-transport model over the Responses API end to end', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({ body: textResponse('opted in') });
+
+      const result = await ai.generate({
+        model: openAI.responsesModel('gpt-4o'),
+        prompt: 'hi',
+      });
+
+      expect(result.text).toBe('opted in');
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/responses');
+      expect(sent.body.model).toBe('gpt-4o');
+      expect(sent.body).not.toHaveProperty('transport');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
   });
 });
 

@@ -357,6 +357,10 @@ export type OpenAIPlugin = {
     config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
   ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  responsesModel(
+    name: string,
+    config?: z.infer<typeof OpenAIResponsesConfigSchema>
+  ): ModelReference<typeof OpenAIResponsesConfigSchema>;
   embedder(
     name:
       | keyof typeof SUPPORTED_EMBEDDING_MODELS
@@ -403,6 +407,33 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
   });
 }) as OpenAIPlugin['model'];
 
+/**
+ * Re-injects the transport pin whenever the ref is rebuilt: core `withConfig`
+ * replaces config wholesale and both chain methods mint fresh, unpinned refs.
+ */
+function pinResponsesTransport(
+  ref: ModelReference<typeof OpenAIResponsesConfigSchema>
+): ModelReference<typeof OpenAIResponsesConfigSchema> {
+  const withConfig = ref.withConfig;
+  const withVersion = ref.withVersion;
+  ref.withConfig = (cfg) =>
+    pinResponsesTransport(withConfig({ ...cfg, transport: 'responses' }));
+  ref.withVersion = (version) => pinResponsesTransport(withVersion(version));
+  return ref;
+}
+
+const responsesModel = ((
+  name: string,
+  config?: z.infer<typeof OpenAIResponsesConfigSchema>
+): ModelReference<typeof OpenAIResponsesConfigSchema> => {
+  return pinResponsesTransport(
+    openAIResponsesModelRef({
+      name,
+      config: { ...config, transport: 'responses' },
+    })
+  );
+}) as OpenAIPlugin['responsesModel'];
+
 const embedder = ((
   name: string,
   config?: any
@@ -446,6 +477,7 @@ const embedder = ((
  */
 export const openAI: OpenAIPlugin = Object.assign(openAIPlugin, {
   model,
+  responsesModel,
   embedder,
 });
 
