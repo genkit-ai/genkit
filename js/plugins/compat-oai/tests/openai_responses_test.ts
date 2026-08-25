@@ -451,8 +451,33 @@ describe('fromOpenAIResponse', () => {
     expect(fromOpenAIResponse(response)).toStrictEqual({
       finishReason: 'stop',
       message: { role: 'model', content: [{ text: 'hello' }] },
-      usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 4,
+        totalTokens: 14,
+        thoughtsTokens: 0,
+        cachedContentTokens: 0,
+      },
       raw: response,
+    });
+  });
+
+  test('maps reasoning and cached token details into usage', () => {
+    const response = textResponse('hello');
+    response.usage = {
+      input_tokens: 10,
+      output_tokens: 20,
+      total_tokens: 30,
+      input_tokens_details: { cached_tokens: 4 },
+      output_tokens_details: { reasoning_tokens: 15 },
+    };
+
+    expect(fromOpenAIResponse(response).usage).toStrictEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 30,
+      thoughtsTokens: 15,
+      cachedContentTokens: 4,
     });
   });
 
