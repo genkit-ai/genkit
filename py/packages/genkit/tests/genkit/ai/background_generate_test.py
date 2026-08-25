@@ -20,22 +20,21 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import Genkit, Message
+from genkit import ActionKind, Document, Genkit, Message
 from genkit._core._action import ActionRunContext
-from genkit._core._background import BackgroundAction
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import (
     FinishReason,
-    ModelInfo,
     Operation,
     Part,
     Role,
-    Supports,
     TextPart,
     ToolRequest,
     ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
 )
 
 
@@ -44,14 +43,14 @@ def ai() -> Genkit:
     return Genkit()
 
 
-async def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> BackgroundAction:
+def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id=op_id, done=False)
 
     async def check(op: Operation) -> Operation:
         return op
 
-    return ai.define_background_model(
+    ai.define_background_model(
         name='bg-model',
         start=start,
         check=check,
@@ -61,7 +60,7 @@ async def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> Backgrou
 @pytest.mark.asyncio
 async def test_generate_returns_operation_for_background_model(ai: Genkit) -> None:
     """generate() wraps the start handle. message stays empty."""
-    await register_bg_model(ai)
+    register_bg_model(ai)
 
     response = await ai.generate(model='bg-model', prompt='a cat surfing')
 
@@ -75,7 +74,7 @@ async def test_generate_returns_operation_for_background_model(ai: Genkit) -> No
 @pytest.mark.asyncio
 async def test_generate_operation_with_background_model(ai: Genkit) -> None:
     """generate_operation() returns that same handle."""
-    await register_bg_model(ai, op_id='bg-op-456')
+    register_bg_model(ai, op_id='bg-op-456')
 
     operation = await ai.generate_operation(model='bg-model', prompt='a cat surfing')
 
@@ -130,7 +129,7 @@ class ReadsMessage(BaseMiddleware):
 @pytest.mark.asyncio
 async def test_generate_boxes_before_wrap_model(ai: Genkit) -> None:
     """wrap_model sees a ModelResponse, so reading .message does not crash."""
-    await register_bg_model(ai)
+    register_bg_model(ai)
 
     response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[ReadsMessage()])
 
@@ -151,20 +150,17 @@ class DropsOperation(BaseMiddleware):
 
 
 @pytest.mark.asyncio
-async def test_generate_fails_when_wrap_model_drops_operation(ai: Genkit) -> None:
-    """A hook that rebuilds ModelResponse without operation must not blame the model."""
-    await register_bg_model(ai)
+async def test_generate_operation_fails_when_wrap_model_drops_operation(ai: Genkit) -> None:
+    """generate() stays quiet; generate_operation is the one missing-handle error."""
+    register_bg_model(ai)
 
-    with pytest.raises(GenkitError, match='wrap_model returned no operation') as exc_info:
-        await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
+    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
+    assert response.operation is None
 
-    assert exc_info.value.status == 'FAILED_PRECONDITION'
-
-    with pytest.raises(GenkitError, match='wrap_model returned no operation') as op_exc:
+    with pytest.raises(GenkitError, match='did not return an operation') as exc_info:
         await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
 
-    assert op_exc.value.status == 'FAILED_PRECONDITION'
-    assert 'did not return an operation' not in str(op_exc.value)
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
 
 
 class DropsGenerate(BaseMiddleware):
@@ -179,63 +175,191 @@ class DropsGenerate(BaseMiddleware):
 
 
 @pytest.mark.asyncio
-async def test_generate_fails_when_wrap_generate_drops_operation(ai: Genkit) -> None:
-    """wrap_generate can still rebuild the final response; dropping the handle must not blame the model."""
-    await register_bg_model(ai)
+async def test_generate_operation_fails_when_wrap_generate_drops_operation(ai: Genkit) -> None:
+    """Same one error if wrap_generate rebuilds the response without the handle."""
+    register_bg_model(ai)
 
-    with pytest.raises(GenkitError, match='wrap_generate returned no operation') as exc_info:
-        await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
+    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
+    assert response.operation is None
+
+    with pytest.raises(GenkitError, match='did not return an operation') as exc_info:
+        await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert 'did not return an operation' not in str(exc_info.value)
+
+
+class SwallowsStart(BaseMiddleware):
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        try:
+            return await next_fn(params, ctx)
+        except GenkitError:
+            return ModelResponse(
+                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='FLASH'))]),
+                finish_reason=FinishReason.STOP,
+            )
 
 
 @pytest.mark.asyncio
-async def test_generate_on_lro_define_model_still_runs_tools(ai: Genkit) -> None:
-    """A define_model LRO that also returns a tool request still runs the tool loop."""
-    tool_ran = 0
+async def test_generate_keeps_fallback_answer_when_start_raises(ai: Genkit) -> None:
+    """A hook that substitutes another model's answer is not a missing handle."""
 
-    @ai.tool(name='ping')
-    async def ping() -> str:
-        nonlocal tool_ran
-        tool_ran += 1
-        return 'pong'
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        raise GenkitError(status='UNAVAILABLE', message='veo capacity exhausted')
 
-    turns = 0
+    async def check(op: Operation) -> Operation:
+        return op
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        nonlocal turns
-        turns += 1
-        if turns == 1:
-            return ModelResponse(
-                message=Message(
-                    role=Role.MODEL,
-                    content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1')))],
-                ),
-                operation=Operation(id='lro-1', done=False),
-                finish_reason=FinishReason.STOP,
-            )
-        return ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='done'))]),
-            finish_reason=FinishReason.STOP,
-        )
+    ai.define_background_model(name='bg-model', start=start, check=check)
 
-    ai.define_model(
-        name='lro-model',
-        fn=model_fn,
-        info=ModelInfo(supports=Supports(long_running=True, tools=True)),
-    )
+    response = await ai.generate(model='bg-model', prompt='a cat', use=[SwallowsStart()])
 
-    response = await ai.generate(model='lro-model', prompt='x', tools=['ping'])
-
-    assert tool_ran == 1
-    assert response.text == 'done'
+    assert response.text == 'FLASH'
     assert response.operation is None
 
 
-def test_model_response_eq_includes_operation() -> None:
-    """Two start handles with different job ids are not the same response."""
-    a = ModelResponse(operation=Operation(id='unique-a'))
-    b = ModelResponse(operation=Operation(id='unique-b'))
-    assert a != b
-    assert a == ModelResponse(operation=Operation(id='unique-a'))
+@pytest.mark.asyncio
+async def test_generate_persists_clean_history_without_injected_docs(ai: Genkit) -> None:
+    """Injected RAG text stays off response.request.messages."""
+    register_bg_model(ai)
+
+    response = await ai.generate(
+        model='bg-model',
+        prompt='render a cat',
+        docs=[Document.from_text('SECRET-CONTEXT-DOC')],
+    )
+
+    assert response.request is not None
+    dumped = ' '.join(m.text for m in response.request.messages)
+    assert 'SECRET-CONTEXT-DOC' not in dumped
+    assert 'render a cat' in dumped
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
+    """A video start cannot satisfy an interrupt resume. Don't bill start()."""
+    started = 0
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        nonlocal started
+        started += 1
+        return Operation(id='bg-op-123', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+
+    with pytest.raises(GenkitError, match='Cannot resume background model') as exc_info:
+        await ai.generate(
+            model='bg-model',
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+                Message(
+                    role=Role.MODEL,
+                    content=[
+                        Part(root=ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1'))),
+                    ],
+                ),
+            ],
+            resume_respond=[ToolResponsePart(tool_response=ToolResponse(name='ping', ref='1', output='ok'))],
+        )
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert started == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_start_latency(ai: Genkit) -> None:
+    """wrapped_start already measured the call; the boxed response should carry it."""
+    register_bg_model(ai)
+
+    response = await ai.generate(model='bg-model', prompt='a cat')
+
+    assert response.latency_ms is not None
+    assert response.latency_ms >= 0
+
+
+def _register_raw_background(ai: Genkit, *, name: str, start: Callable[..., Awaitable[object]]) -> None:
+    ai.registry.register_action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=start)
+
+
+@pytest.mark.asyncio
+async def test_background_start_already_boxed_model_response(ai: Genkit) -> None:
+    """start() that already returned ModelResponse(operation=...) is passed through."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(operation=Operation(id='boxed-1', done=False))
+
+    _register_raw_background(ai, name='boxed-bg', start=start)
+
+    response = await ai.generate(model='boxed-bg', prompt='a cat')
+
+    assert response.operation is not None
+    assert response.operation.id == 'boxed-1'
+    assert response.message is None
+
+
+@pytest.mark.asyncio
+async def test_background_start_model_response_without_operation_raises(ai: Genkit) -> None:
+    """A background start that returns a chat turn has no handle to poll."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+        )
+
+    _register_raw_background(ai, name='empty-bg', start=start)
+
+    with pytest.raises(GenkitError, match='Background model') as exc_info:
+        await ai.generate(model='empty-bg', prompt='a cat')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'did not return an operation' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_define_model_returning_operation_raises(ai: Genkit) -> None:
+    """A chat model that returns a bare Operation is registered on the wrong kind."""
+
+    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='sneaky', done=False)
+
+    ai.define_model(name='plain', fn=model_fn)
+
+    with pytest.raises(GenkitError, match='define_background_model') as exc_info:
+        await ai.generate(model='plain', prompt='hi')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'plain' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_define_model_returning_model_response_with_operation_raises(ai: Genkit) -> None:
+    """A chat model that stuffs a handle onto ModelResponse is the same mistake."""
+
+    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Started'))]),
+            operation=Operation(id='lro-1', done=False),
+        )
+
+    ai.define_model(name='plain', fn=model_fn)
+
+    with pytest.raises(GenkitError, match='define_background_model') as exc_info:
+        await ai.generate(model='plain', prompt='hi')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+def test_model_response_eq_uses_operation_id() -> None:
+    """Same job id is the same response even when start timing differs."""
+    a = ModelResponse(operation=Operation(id='unique-a', metadata={'latencyMs': 0.166}))
+    b = ModelResponse(operation=Operation(id='unique-a', metadata={'latencyMs': 0.002}))
+    c = ModelResponse(operation=Operation(id='unique-b'))
+    assert a == b
+    assert a != c

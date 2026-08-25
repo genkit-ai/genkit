@@ -176,32 +176,15 @@ async def test_generate_operation_no_operation_returned(ai: Genkit) -> None:
 
 @pytest.mark.asyncio
 async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
-    """Test successful generate_operation with a proper long-running model."""
-    expected_operation = Operation(
-        id='test-operation-123',
-        done=False,
-        action='/background-model/lro-model',
-    )
+    """Test successful generate_operation with a background model."""
 
-    # Define a model that supports long_running and returns an operation
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='test-operation-123', done=False)
 
-    ai.define_model(
-        name='lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai.define_background_model(name='lro-model', start=start, check=check)
 
     operation = await ai.generate_operation(model='lro-model', prompt='Generate video')
 
@@ -212,44 +195,17 @@ async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_operation_with_default_model(ai: Genkit) -> None:
+async def test_generate_operation_with_default_model() -> None:
     """Test generate_operation uses default model when set."""
-    expected_operation = Operation(
-        id='default-op-456',
-        done=False,
-    )
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='default-op-456', done=False)
 
-    ai.define_model(
-        name='default-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation) -> Operation:
+        return op
 
-    # Create a new Genkit instance with the default model set
     ai_with_default = Genkit(model='default-lro-model')
-    # Re-register the model on the new instance
-    ai_with_default.define_model(
-        name='default-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    ai_with_default.define_background_model(name='default-lro-model', start=start, check=check)
 
     operation = await ai_with_default.generate_operation(prompt='Generate video')
 
@@ -261,28 +217,16 @@ async def test_generate_operation_with_default_model(ai: Genkit) -> None:
 async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     """Test that generate_operation passes all options to generate()."""
     captured_request: ModelRequest | None = None
-    expected_operation = Operation(id='opt-test-789', done=False)
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         nonlocal captured_request
         captured_request = request
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+        return Operation(id='opt-test-789', done=False)
 
-    ai.define_model(
-        name='options-test-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai.define_background_model(name='options-test-model', start=start, check=check)
 
     await ai.generate_operation(
         model='options-test-model',
@@ -292,5 +236,4 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     )
 
     assert captured_request is not None
-    # Verify config was passed
     assert captured_request.config is not None

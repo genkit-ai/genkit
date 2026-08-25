@@ -519,16 +519,15 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         pass
 
     def __eq__(self, other: object) -> bool:
-        """Compare responses by message, finish_reason, and operation.
+        """Compare responses by message, finish_reason, and operation id.
 
         Two start handles with different job ids are not the same response.
+        Timing on the handle is not part of the job.
         """
         if isinstance(other, ModelResponse):
-            return (
-                self.message == other.message
-                and self.finish_reason == other.finish_reason
-                and self.operation == other.operation
-            )
+            self_op = self.operation.id if self.operation is not None else None
+            other_op = other.operation.id if other.operation is not None else None
+            return self.message == other.message and self.finish_reason == other.finish_reason and self_op == other_op
         return super().__eq__(other)
 
     def __hash__(self) -> int:

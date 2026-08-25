@@ -637,6 +637,17 @@ class ChunkAccumulator:
             ctx.replace_on_chunk(previous)
 
 
+def _latency_ms_from_operation(operation: Operation) -> float | None:
+    """Copy start timing off the handle if the wrapper stamped it."""
+    meta = operation.metadata
+    if not isinstance(meta, dict):
+        return None
+    raw_ms = meta.get('latencyMs')
+    if isinstance(raw_ms, int | float):
+        return float(raw_ms)
+    return None
+
+
 def _persist_threaded_conversation(response: ModelResponse, messages: list[Message]) -> ModelResponse:
     """Persist the threaded conversation onto the response's request.
 
@@ -663,6 +674,15 @@ async def _generate_action_turn(
     raise_if_aborted(run_ctx.abort_signal)
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
+
+    if model.kind == ActionKind.BACKGROUND_MODEL and raw_request.resume is not None:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Cannot resume background model '{model.name}'; "
+                'a background start cannot satisfy an interrupted tool turn'
+            ),
+        )
 
     raw_request, formatter = apply_format(raw_request, format_def)
 
@@ -775,10 +795,36 @@ async def _generate_action_turn(
                     abort_signal=c.abort_signal,
                 )
             ).response
-            # start() returns a poll handle. wrap_model is documented as
-            # seeing a ModelResponse, so wrap before the hook runs.
-            if isinstance(raw, Operation):
-                return ModelResponse(operation=raw, request=params.request)
+            # wrap_model reads .message. A background start is a poll handle,
+            # so box it before the hook. A chat model that returns a handle
+            # is registered on the wrong kind.
+            if model.kind == ActionKind.BACKGROUND_MODEL:
+                if isinstance(raw, ModelResponse):
+                    if raw.operation is None:
+                        raise GenkitError(
+                            status='FAILED_PRECONDITION',
+                            message=f"Background model '{model.name}' did not return an operation",
+                        )
+                    if raw.latency_ms is None:
+                        raw.latency_ms = _latency_ms_from_operation(raw.operation)
+                    return raw
+                if not isinstance(raw, Operation):
+                    raise GenkitError(
+                        status='FAILED_PRECONDITION',
+                        message=f"Background model '{model.name}' did not return an operation",
+                    )
+                return ModelResponse(
+                    operation=raw,
+                    request=params.request,
+                    latency_ms=_latency_ms_from_operation(raw),
+                )
+            if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        f"Model '{model.name}' is a define_model and returned an operation; use define_background_model"
+                    ),
+                )
             return raw
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
@@ -787,21 +833,6 @@ async def _generate_action_turn(
                 ctx,
                 next_fn,
             )
-
-        # A background start is a poll handle, not a conversation turn.
-        # define_model LRO replies that also carry a message still go
-        # through persist and the tool loop.
-        if model.kind == ActionKind.BACKGROUND_MODEL:
-            if model_response.operation is None:
-                raise GenkitError(
-                    status='FAILED_PRECONDITION',
-                    message=(
-                        'wrap_model returned no operation for a background model; pass through response.operation'
-                    ),
-                )
-            if model_response.request is None:
-                model_response.request = request
-            return model_response
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
@@ -912,13 +943,7 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
-    if model.kind == ActionKind.BACKGROUND_MODEL and response.operation is None:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=('wrap_generate returned no operation for a background model; pass through response.operation'),
-        )
-    return response
+    return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
 
 
 def apply_format(
