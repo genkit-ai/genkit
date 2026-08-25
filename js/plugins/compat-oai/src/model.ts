@@ -50,6 +50,7 @@ import type {
   CompletionChoice,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
+import { openAIResponsesModelRunner } from './responses.js';
 import {
   extractDataFromBase64Url,
   generateFilenameFromContentType,
@@ -690,7 +691,10 @@ export function openAIModelRunner(
  * @param params.client The OpenAI client instance.
  * @param params.modelRef Optional reference to the model's configuration and
  * custom options.
-
+ * @param params.responsesTransport Set true when the provider also serves this
+ * model over the Responses API; a request carrying
+ * `config: { transport: 'responses' }` is then dispatched to that transport
+ * instead of Chat Completions.
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAIModel<
@@ -701,11 +705,28 @@ export function defineCompatOpenAIModel<
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: ModelRequestBuilder;
   pluginOptions?: PluginOptions;
+  responsesTransport?: boolean;
 }): ModelAction {
   const { name, client, pluginOptions, modelRef, requestBuilder } = params;
   const modelName = toModelName(name, pluginOptions?.name);
   const actionName =
     modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
+
+  const chatRunner = openAIModelRunner(
+    modelName,
+    client,
+    requestBuilder,
+    pluginOptions
+  );
+  const responsesRunner = params.responsesTransport
+    ? openAIResponsesModelRunner(modelName, client, pluginOptions)
+    : undefined;
+  const runner: typeof chatRunner = responsesRunner
+    ? (request, options) =>
+        request.config?.transport === 'responses'
+          ? responsesRunner(request, options)
+          : chatRunner(request, options)
+    : chatRunner;
 
   return model(
     {
@@ -713,7 +734,7 @@ export function defineCompatOpenAIModel<
       ...modelRef?.info,
       configSchema: modelRef?.configSchema,
     },
-    openAIModelRunner(modelName, client, requestBuilder, pluginOptions)
+    runner
   );
 }
 

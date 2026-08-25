@@ -150,6 +150,7 @@ function createResolver(pluginOptions: PluginOptions) {
         client,
         pluginOptions,
         modelRef,
+        responsesTransport: true,
       });
     }
   };
@@ -243,6 +244,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
             client,
             pluginOptions,
             modelRef,
+            responsesTransport: true,
           })
         )
       );

@@ -1487,13 +1487,13 @@ describe('openAI plugin routing', () => {
     ).toContain('transport');
   });
 
-  test('leaves dual-transport names on Chat Completions', async () => {
+  test('declares the transport key on dual-transport chat models', async () => {
     const plugin = openAI({ apiKey: 'key' });
     const action = await plugin.model('gpt-5');
 
     expect(
       Object.keys(action.__action.metadata?.model.customOptions.properties)
-    ).not.toContain('transport');
+    ).toContain('transport');
   });
 
   test('gives Responses-only refs the transport-aware config schema', () => {
@@ -1636,6 +1636,86 @@ describe('openAI plugin routing', () => {
     expect(server.requests[server.requests.length - 1].url).toBe(
       '/v1/chat/completions'
     );
+  });
+
+  test('dispatches a dual-transport model to Responses on config opt-in', async () => {
+    const plugin = openAI({ apiKey: 'key' });
+    const action = await plugin.model('gpt-4o');
+    server.setNextResponse({ body: textResponse('via responses') });
+
+    const result = await action({
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: { transport: 'responses' },
+    });
+
+    expect(result.message?.content[0].text).toBe('via responses');
+    const sent = server.requests[server.requests.length - 1];
+    expect(sent.url).toBe('/v1/responses');
+    expect(sent.body).not.toHaveProperty('transport');
+  });
+
+  test('streams a dual-transport model over Responses on config opt-in', async () => {
+    const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            id: 'msg_1',
+            type: 'message',
+            role: 'assistant',
+            status: 'in_progress',
+            content: [],
+          },
+          sequence_number: 1,
+        },
+        {
+          type: 'response.content_part.added',
+          item_id: 'msg_1',
+          output_index: 0,
+          content_index: 0,
+          part: { type: 'output_text', text: '', annotations: [] },
+          sequence_number: 2,
+        },
+        {
+          type: 'response.output_text.delta',
+          item_id: 'msg_1',
+          output_index: 0,
+          content_index: 0,
+          delta: 'streamed',
+          sequence_number: 3,
+        },
+        {
+          type: 'response.completed',
+          response: textResponse('streamed'),
+          sequence_number: 4,
+        },
+      ],
+    });
+
+    const { response, stream } = ai.generateStream({
+      model: openAI.model('gpt-4o'),
+      prompt: 'hi',
+      config: { transport: 'responses' },
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk.text);
+    }
+    const result = await response;
+
+    expect(result.text).toBe('streamed');
+    expect(chunks.join('')).toBe('streamed');
+    const sent = server.requests[server.requests.length - 1];
+    expect(sent.url).toBe('/v1/responses');
+    expect(sent.body.stream).toBe(true);
   });
 
   test('lists Responses-only models with the transport-aware config schema', async () => {
