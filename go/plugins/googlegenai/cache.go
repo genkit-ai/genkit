@@ -289,7 +289,7 @@ func calculateCacheHash(content []*genai.Content, model string) (string, error) 
 	if err != nil {
 		// Reachable through tool inputs and outputs, which carry caller-owned
 		// map[string]any into FunctionCall.Args and FunctionResponse.Response.
-		return "", status.Errorf(status.ErrInvalidArgument, "cannot hash cache contents: %v", err)
+		return "", status.Errorf(status.ErrInvalidArgument, "cannot hash cache contents: %w", err)
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
