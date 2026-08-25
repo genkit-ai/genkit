@@ -301,27 +301,80 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Context Caching
 
-Gemini 2.5 and newer models automatically cache common content prefixes. In Genkit Go, you can mark content for caching using `WithCacheTTL` or `WithCacheName`.
+There are two kinds of caching, and they bill differently. Most traffic wants
+the first one.
+
+#### Implicit caching (automatic, no code)
+
+Gemini 2.5 and newer models cache repeated prompt prefixes on their own. It is
+on by default on both the Gemini API and Vertex AI, there is no storage charge,
+and a hit bills the repeated tokens at a fraction of the normal input price.
+You do not call anything to get it.
+
+What it asks of you is only that the repeated part stays at the front of the
+prompt and stays identical between calls, and that the prompt is large enough
+to qualify (roughly a thousand tokens and up, depending on the model). Genkit
+sends messages in the order you build them, so putting the stable content in
+the first message is enough.
+
+Read the hit off the response:
 
 ```go
-// Create a message with cached content
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithMessages(ai.NewUserTextMessage(largeStableContext)),
+    ai.WithPrompt("Task 1..."),
+)
+// Tokens billed at the cached rate, implicit or explicit.
+fmt.Println(resp.Usage.CachedContentTokens)
+```
+
+See [Gemini API context caching][gemini-caching] and
+[Vertex AI context caching][vertex-caching] for the current thresholds.
+
+#### Explicit caching (`WithCacheTTL`)
+
+`WithCacheTTL` uploads the marked message and everything before it to a cache
+resource, and later requests point at it instead of resending it. This buys a
+guaranteed hit and a lifetime you control. In exchange you pay to store the
+content for that lifetime, so it is worth it when you know you will reuse a
+large prefix and want the hit guaranteed rather than best-effort. If you are
+not sure, start with implicit caching and measure `CachedContentTokens`.
+
+```go
+// Cache this message and everything before it. The marker is inclusive, so
+// keep the question in a separate message.
 cachedMsg := ai.NewUserTextMessage(largeContent).WithCacheTTL(300)
 
-// First request - content will be cached
 resp1, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithMessages(cachedMsg),
     ai.WithPrompt("Task 1..."),
 )
 
-// Second request with same prefix - eligible for cache hit
+// Later requests reuse the same cache. Replaying the history carries the
+// cache name back automatically; rebuilding the same prefix by hand also
+// finds it, because Genkit looks for a cache holding that content before it
+// creates another one.
 resp2, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
-    // Reuse the history from previous response or construct messages with same prefix
     ai.WithMessages(resp1.History()...),
     ai.WithPrompt("Task 2..."),
 )
 ```
+
+The cached prefix travels by reference only: it is not also sent inline, so it
+is billed once. If the cache has expired or no longer matches the request,
+Genkit builds a fresh one rather than failing.
+
+`WithCacheName` points a request at a cache you already hold. Use it when you
+kept the name yourself instead of replaying the history. If that cache is gone,
+the request still goes through, uncached.
+
+Tools and system prompts are not supported with explicit caching.
+
+[gemini-caching]: https://ai.google.dev/gemini-api/docs/caching
+[vertex-caching]: https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview
 
 ### Handling Errors and Blocked Content
 
