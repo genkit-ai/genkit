@@ -23,14 +23,15 @@ from typing import Any, Literal, TypeAlias, cast
 from openai import AsyncOpenAI
 from openai.types import Model
 
-from genkit import Embedding, EmbedRequest, EmbedResponse, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.model import ModelConfig, model_action_metadata
+from genkit.model import ModelRef, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
     ActionRunContext,
+    ModelConfig,
     Plugin,
     loop_local_client,
     to_json_schema,
@@ -48,7 +49,7 @@ from genkit_openai.models import (
     OpenAISTTModel,
     OpenAITTSModel,
 )
-from genkit_openai.models.model_info import get_default_openai_model_info
+from genkit_openai.models.model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai.typing import OpenAIConfig
 
 
@@ -62,6 +63,24 @@ def open_ai_name(name: str) -> str:
         The fully qualified OpenAI action name.
     """
     return f'openai/{name}'
+
+
+# Only this plugin's namespace. A vertexai/ or azure/ paste is a different
+# name — remapping it here would send the request to the OpenAI API.
+_STRIP_PREFIXES = ('openai/',)
+
+
+def _strip_ref_prefixes(name: str) -> str:
+    """Peel this plugin's prefix so it is not stamped twice."""
+    local = name
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _STRIP_PREFIXES:
+            if local.startswith(prefix):
+                local = local[len(prefix) :]
+                changed = True
+    return local
 
 
 class _ModelType(enum.Enum):
@@ -200,6 +219,38 @@ class OpenAI(Plugin):
 
     name = 'openai'
 
+    @classmethod
+    def gpt_model(cls, name: KnownGpt | str, *, config: OpenAIConfig | None = None) -> ModelRef[OpenAIConfig]:
+        """Typed ref for an OpenAI chat model, e.g. ``OpenAI.gpt_model('gpt-4o')``.
+
+        Chat only: image, TTS, STT, and embedding ids validate different
+        request shapes, so binding OpenAIConfig to them would let chat-only
+        keys like frequency_penalty ride into the wrong endpoint.
+        """
+        # str(None) is 'None', and that classifies as chat, so a non-string
+        # would mint a real-looking ref instead of failing here.
+        if not isinstance(name, str):
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name must be a string.')
+        local = _strip_ref_prefixes(name)
+        if not local:
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
+        model_type = _classify_model(local)
+        if model_type != _ModelType.CHAT:
+            kind = {
+                _ModelType.EMBEDDER: 'an embedder',
+                _ModelType.IMAGE: 'an image model',
+                _ModelType.TTS: 'a tts model',
+                _ModelType.STT: 'an stt model',
+            }[model_type]
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f"OpenAI.gpt_model: '{local}' is {kind}; it does not take "
+                    f'OpenAIConfig. Pass it as a string (openai_model({local!r})).'
+                ),
+            )
+        return model_ref(local, config_schema=OpenAIConfig, namespace='openai', config=config)
+
     def __init__(self, **openai_params: Any) -> None:  # noqa: ANN401
         """Initializes the OpenAI plugin with the specified parameters.
 
@@ -254,7 +305,7 @@ class OpenAI(Plugin):
             is provided). The 'supports' key contains a dictionary representing
             the model's capabilities (e.g., tools, streaming).
         """
-        if model_supported := SUPPORTED_OPENAI_MODELS.get(name):
+        if model_supported := SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name)):
             supports = (
                 model_supported.supports.model_dump(by_alias=True, exclude_none=True)
                 if model_supported.supports
@@ -316,7 +367,7 @@ class OpenAI(Plugin):
         # Create the model handler
         model_info = self.get_model_info(clean_name) or {}
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
             openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
             return await openai_model.generate(request, ctx)
 
@@ -485,7 +536,7 @@ class OpenAI(Plugin):
                 actions.append(
                     model_action_metadata(
                         name=open_ai_name(name),
-                        config_schema=ModelConfig,
+                        config_schema=OpenAIConfig,
                         info={
                             'label': f'OpenAI - {name}',
                             'supports': Supports(

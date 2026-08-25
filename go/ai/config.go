@@ -19,10 +19,11 @@ package ai
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
+	"slices"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -32,6 +33,46 @@ import (
 // the raw value is deserialized into the Config type parameter before the
 // function runs, and the request's type-erased config slot is normalized to
 // that same converted value so the two views never disagree.
+
+// typedConfigFn wraps fn so it receives the typed config alongside a request
+// whose type-erased config slot has been normalized to the same value, meaning
+// the request's two views of the config never disagree. slot points at that
+// slot on the shallow copy this makes: the incoming request is caller-owned
+// memory that may be reused across actions or turns, so it keeps carrying the
+// raw config.
+//
+// Models go through [normalizeConfig] instead, which does the same thing as
+// middleware so the built-in wrappers see the typed value too.
+func typedConfigFn[Req, Resp, Config any](
+	slot func(*Req) *any,
+	fn func(context.Context, *Req, Config) (*Resp, error),
+) func(context.Context, *Req) (*Resp, error) {
+	return func(ctx context.Context, req *Req) (*Resp, error) {
+		reqCopy := *req
+		cfg, err := resolveConfigInto[Config](slot(&reqCopy))
+		if err != nil {
+			return nil, err
+		}
+		return fn(ctx, &reqCopy, cfg)
+	}
+}
+
+// actionMetadata builds an action descriptor's metadata: the caller's maps are
+// merged in order, then the built-in entries and the action type are stamped
+// over them so they cannot be corrupted. Registry discovery depends on those.
+func actionMetadata(atype api.ActionType, builtin map[string]any, callerMetadata ...map[string]any) map[string]any {
+	size := len(builtin) + 1
+	for _, m := range callerMetadata {
+		size += len(m)
+	}
+	metadata := make(map[string]any, size)
+	for _, m := range callerMetadata {
+		maps.Copy(metadata, m)
+	}
+	maps.Copy(metadata, builtin)
+	metadata["type"] = atype
+	return metadata
+}
 
 // nullableConfigSchema wraps a config schema for the request input-schema
 // slot so that an explicit JSON null is accepted on the wire: a typed-nil Go
@@ -81,8 +122,24 @@ func normalizeConfig[Config any](model string, versions []string) ModelMiddlewar
 // wire name ("options" for embedders, retrievers, and evaluators; models go
 // through [modelConfigSchemas]).
 func actionConfigSchemas[Config any](override map[string]any, reqZero any, key string) (configSchema, inputSchema map[string]any) {
-	configSchema = effectiveConfigSchema[Config](override)
-	return configSchema, requestInputSchema(reqZero, key, nullableConfigSchema(configSchema))
+	configSchema, enforced := configSchemas[Config](override)
+	return configSchema, requestInputSchema(reqZero, key, nullableConfigSchema(enforced))
+}
+
+// configSchemas returns the config schema the action advertises and the one it
+// enforces on the wire. The advertised one is the contract, verbatim from the
+// plugin or inferred from Config; the enforced one is a copy that additionally
+// tolerates the nulls a partial config marshals to, which stays out of the
+// advertised copy so the dev UI is not littered with it.
+//
+// Both a declared and an inferred schema are widened, so a config behaves the
+// same whichever way its schema was arrived at. The copy is what keeps that
+// safe: a plugin's declared schema is usually a package-level value.
+func configSchemas[Config any](override map[string]any) (advertised, enforced map[string]any) {
+	advertised = effectiveConfigSchema[Config](override)
+	enforced = base.CloneSchema(advertised)
+	tolerateNulls(enforced)
+	return advertised, enforced
 }
 
 // modelConfigSchemas is [actionConfigSchemas] for the model config slot. It
@@ -91,9 +148,17 @@ func actionConfigSchemas[Config any](override map[string]any, reqZero any, key s
 // the raw value, and conversion drops it, so the schema must not reject it.
 // The property is added to the advertised schema as well, which is honest:
 // the key is accepted on the wire.
-func modelConfigSchemas[Config any](override map[string]any) (configSchema, inputSchema map[string]any) {
-	configSchema = withVersionProperty(effectiveConfigSchema[Config](override))
-	return configSchema, requestInputSchema(ModelRequest{}, "config", nullableConfigSchema(configSchema))
+//
+// versions is the model's supported version list. Only a model that declares
+// one gets the property: validateVersion rejects every value when the list is
+// empty, so advertising the key there offers a field that can only error.
+func modelConfigSchemas[Config any](override map[string]any, versions []string) (configSchema, inputSchema map[string]any) {
+	configSchema, enforced := configSchemas[Config](override)
+	if len(versions) > 0 {
+		configSchema = withVersionProperty(configSchema)
+		enforced = withVersionProperty(enforced)
+	}
+	return configSchema, requestInputSchema(ModelRequest{}, "config", nullableConfigSchema(enforced))
 }
 
 // effectiveConfigSchema returns the explicit override when set, otherwise the
@@ -112,26 +177,53 @@ func effectiveConfigSchema[Config any](override map[string]any) map[string]any {
 	return schema
 }
 
-// stripRequired removes "required" lists from schema and its nested object
-// schemas (properties, items, and schema-valued additionalProperties).
+// stripRequired removes "required" from schema and every subschema: a config
+// is partial by nature, so a field lacking omitempty must not become mandatory.
 func stripRequired(schema map[string]any) {
-	if schema == nil {
-		return
-	}
 	delete(schema, "required")
-	if props, ok := schema["properties"].(map[string]any); ok {
-		for _, sub := range props {
-			if m, ok := sub.(map[string]any); ok {
-				stripRequired(m)
-			}
+	base.WalkSubschemas(schema, func(sub map[string]any) map[string]any {
+		delete(sub, "required")
+		return sub
+	})
+}
+
+// tolerateNulls widens every subschema of an inferred config schema to also
+// accept an explicit JSON null.
+//
+// A pointer, slice, or map field that lacks omitempty marshals to null when it
+// is unset, so enforcing the field's declared type would reject a partially
+// filled value of the config type itself: sending Config{Temperature: 0.5}
+// fails on `config.list: Invalid type. Expected: array, given: null`. That is
+// the same "a config is partial by nature" reasoning that strips "required",
+// applied to the fields that are present but empty.
+//
+// Every field is widened, not just the nilable ones, because the inferred
+// schema cannot tell a *string from a string. Widening costs nothing: null
+// decodes to the zero value for every Go kind, which is what omitting the
+// field would have produced.
+func tolerateNulls(schema map[string]any) {
+	base.WalkSubschemas(schema, allowNull)
+}
+
+// allowNull returns schema widened to accept null, adding to its "type" when
+// it has one and wrapping it in an anyOf otherwise.
+func allowNull(schema map[string]any) map[string]any {
+	switch t := schema["type"].(type) {
+	case string:
+		if t != "null" {
+			schema["type"] = []any{t, "null"}
 		}
+		return schema
+	case []any:
+		if !slices.Contains(t, any("null")) {
+			schema["type"] = append(t, "null")
+		}
+		return schema
 	}
-	if items, ok := schema["items"].(map[string]any); ok {
-		stripRequired(items)
+	if len(schema) == 0 {
+		return schema // Already unconstrained, so null is in.
 	}
-	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
-		stripRequired(extra)
-	}
+	return nullableConfigSchema(schema)
 }
 
 // withVersionProperty returns schema with a string "version" property added
@@ -161,10 +253,12 @@ func withVersionProperty(schema map[string]any) map[string]any {
 func resolveConfig[Config any](raw any) (Config, error) {
 	cfg, err := base.ConvertToExact[Config](raw)
 	if err != nil {
+		// Public: naming the config type is what tells a caller which
+		// provider's config they reached for, and it leaks nothing.
 		if errors.Is(err, base.ErrTypeMismatch) {
-			return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("invalid config type %T, want %T or map[string]any", raw, cfg), nil)
+			return cfg, status.PublicErrorf(status.ErrInvalidArgument, "invalid config type %T, want %T or map[string]any", raw, cfg)
 		}
-		return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("invalid config for %T; check that field names and value types match: %v", cfg, err), nil)
+		return cfg, status.PublicErrorf(status.ErrInvalidArgument, "invalid config for %T; check that field names and value types match: %w", cfg, err)
 	}
 	return cfg, nil
 }

@@ -51,10 +51,31 @@ interface RawEnvelope {
   deleteSurface?: DeleteSurfaceEnvelope['deleteSurface'];
 }
 
-/** Opening fence, matched case-insensitively (```a2ui). */
-const OPEN_FENCE_RE = /```[ \t]*a2ui[ \t]*\r?\n/i;
-/** The longest prefix of an opening fence, used to hold back a partial fence. */
-const MAX_PARTIAL_FENCE = '```a2ui\n'.length;
+/**
+ * Opening fence, matched case-insensitively (```a2ui, optional trailing spaces,
+ * then a newline).
+ *
+ * The fence is deliberately NOT anchored to line start (unlike
+ * {@link CLOSE_FENCE_RE}): a model may legitimately begin the block right after
+ * inline prose on the same line, and the streaming parser must still catch it.
+ * The required trailing newline is what guards against a false positive from
+ * prose that merely *mentions* the fence: A2UI `Text` "may use inline Markdown",
+ * so the model can write "I emit an ```a2ui block like this", but there the
+ * `a2ui` tag is followed by more text on the same line, not a newline, so it
+ * does not match.
+ */
+const OPEN_FENCE_RE = /```a2ui[ \t]*\r?\n/i;
+/**
+ * Matches, at the very end of the buffer, the longest suffix that could still be
+ * completing an opening fence on the next chunk: 1-3 backticks, then a partial
+ * `a2ui` tag, then optional trailing spaces/tabs and an optional `\r` awaiting
+ * its `\n`. Held back from prose so a fence split across chunks is never leaked.
+ *
+ * A fixed-length holdback would be wrong: {@link OPEN_FENCE_RE} allows unbounded
+ * `[ \t]*` padding before the newline, so the incomplete-fence suffix has no
+ * fixed maximum length. Anchoring to the end (`$`) lets us hold back exactly it.
+ */
+const PARTIAL_OPEN_FENCE_RE = /(?:`|``|```(?:a(?:2(?:u(?:i[ \t]*\r?)?)?)?)?)$/i;
 /**
  * Closing fence: ``` at the start of a line (optionally indented). Anchoring to
  * line start (mirroring {@link OPEN_FENCE_RE}) is important: A2UI `Text` values
@@ -151,7 +172,10 @@ export class A2uiStreamParser {
             proseBuf += this.buffer;
             this.buffer = '';
           } else {
-            const keep = Math.min(MAX_PARTIAL_FENCE, this.buffer.length);
+            // Hold back a trailing suffix that could still be completing an
+            // opening fence on the next chunk (e.g. "```a2u" or "```a2ui  \r").
+            const partial = this.buffer.match(PARTIAL_OPEN_FENCE_RE);
+            const keep = partial ? partial[0].length : 0;
             const safeLen = this.buffer.length - keep;
             if (safeLen > 0) {
               proseBuf += this.buffer.slice(0, safeLen);
@@ -381,22 +405,31 @@ export class A2uiStreamParser {
 
   /**
    * Enforces the "RE-RENDER THE WHOLE SURFACE" protocol rule for full-surface
-   * renders: any `updateComponents` in the batch must contain a component with
-   * `id: "root"`. Returns an error message, or `null` if valid. Unlike
+   * renders. The v0.9 spec requires that "one of the components in one of the
+   * component lists MUST have an id of `root`" — a batch-level rule, not a
+   * per-message one. A split render is therefore legal: the root (and layout)
+   * may live in one `updateComponents` while its leaf components arrive in a
+   * later one within the same batch. So this checks that *at least one*
+   * `updateComponents` in the batch declares a `root`, not that every one does.
+   *
+   * Returns an error message, or `null` if valid. Unlike
    * {@link validateComponents} this is a protocol check, not a catalog check, so
    * it runs regardless of whether a catalog is configured.
    */
   private validateRoot(envelopes: A2uiEnvelope[]): string | null {
+    let sawComponentList = false;
     for (const e of envelopes) {
       const uc = (e as UpdateComponentsEnvelope).updateComponents;
       if (uc && Array.isArray(uc.components)) {
-        const hasRoot = uc.components.some((c) => c.id === 'root');
-        if (!hasRoot) {
-          return 'component list must contain a component id "root".';
+        sawComponentList = true;
+        if (uc.components.some((c) => c.id === 'root')) {
+          return null;
         }
       }
     }
-    return null;
+    // Only a batch that actually carries component lists must declare a root.
+    if (!sawComponentList) return null;
+    return 'component list must contain a component id "root".';
   }
 }
 

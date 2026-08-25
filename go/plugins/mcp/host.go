@@ -69,7 +69,7 @@ func NewMCPHost(g *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
 	ctx := context.Background()
 	for _, serverConfig := range options.MCPServers {
 		if err := host.Connect(ctx, g, serverConfig.Name, serverConfig.Config); err != nil {
-			logger.FromContext(ctx).Error("Failed to connect to MCP server", "server", serverConfig.Name, "host", host.name, "error", err)
+			logger.Error(ctx, "failed to connect to MCP server, continuing with the others", "server", serverConfig.Name, "host", host.name, "error", err)
 			// Continue with other servers
 		}
 	}
@@ -83,11 +83,11 @@ func (h *MCPHost) Connect(ctx context.Context, g *genkit.Genkit, serverName stri
 	// If a client with this name already exists, disconnect it first
 	if existingClient, exists := h.clients[serverName]; exists {
 		if err := existingClient.Disconnect(); err != nil {
-			logger.FromContext(ctx).Warn("Error disconnecting existing MCP client", "server", serverName, "host", h.name, "error", err)
+			logger.Warn(ctx, "error disconnecting existing MCP client", "server", serverName, "host", h.name, "error", err)
 		}
 	}
 
-	logger.FromContext(ctx).Info("Connecting to MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "connecting to MCP server", "server", serverName, "host", h.name)
 
 	// Set the server name in the config
 	if config.Name == "" {
@@ -112,7 +112,7 @@ func (h *MCPHost) Disconnect(ctx context.Context, serverName string) error {
 		return fmt.Errorf("no client found with name '%s'", serverName)
 	}
 
-	logger.FromContext(ctx).Info("Disconnecting MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "disconnecting MCP server", "server", serverName, "host", h.name)
 
 	err := client.Disconnect()
 	delete(h.clients, serverName)
@@ -126,7 +126,7 @@ func (h *MCPHost) Reconnect(ctx context.Context, serverName string) error {
 		return fmt.Errorf("no client found with name '%s'", serverName)
 	}
 
-	logger.FromContext(ctx).Info("Reconnecting MCP server", "server", serverName, "host", h.name)
+	logger.Info(ctx, "reconnecting MCP server", "server", serverName, "host", h.name)
 	return client.Restart(ctx)
 }
 
@@ -141,7 +141,7 @@ func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.T
 
 		tools, err := client.GetActiveTools(ctx, gk)
 		if err != nil {
-			logger.FromContext(ctx).Error("Error fetching tools from MCP client", "client", name, "host", h.name, "error", err)
+			logger.Error(ctx, "failed to fetch tools from MCP client, skipping it", "client", name, "host", h.name, "error", err)
 			continue
 		}
 
@@ -162,7 +162,7 @@ func (h *MCPHost) GetActiveResources(ctx context.Context) ([]ai.Resource, error)
 
 		resources, err := client.GetActiveResources(ctx)
 		if err != nil {
-			logger.FromContext(ctx).Error("Error fetching resources from MCP client", "client", name, "host", h.name, "error", err)
+			logger.Error(ctx, "failed to fetch resources from MCP client, skipping it", "client", name, "host", h.name, "error", err)
 			continue
 		}
 		allResources = append(allResources, resources...)

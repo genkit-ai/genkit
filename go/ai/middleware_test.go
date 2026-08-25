@@ -20,12 +20,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -121,6 +124,133 @@ func TestPluginStateCarriedThroughPrototype(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&shared); got != 3 {
 		t.Errorf("shared counter = %d, want 3 (plugin state should persist across JSON dispatches)", got)
+	}
+}
+
+// --- per-call isolation: JSON dispatch never writes through to the prototype ---
+
+// isolationLog records the config each New() was built with. Dispatches in
+// these tests are sequential, so no locking.
+type isolationLog struct {
+	seen []isolationConfig
+}
+
+func (l *isolationLog) at(t *testing.T, i int) isolationConfig {
+	t.Helper()
+	if i >= len(l.seen) {
+		t.Fatalf("wanted config %d, only %d recorded", i, len(l.seen))
+	}
+	return l.seen[i]
+}
+
+// isolationConfig mirrors the built-in middleware shape: exported fields are
+// per-call user config, unexported fields are plugin state.
+type isolationConfig struct {
+	Label    string            `json:"label,omitempty"`
+	Statuses []string          `json:"statuses,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+
+	log *isolationLog
+}
+
+func (isolationConfig) Name() string { return "test/isolation" }
+
+func (c isolationConfig) New(ctx context.Context) (*Hooks, error) {
+	if c.log != nil {
+		c.log.seen = append(c.log.seen, c)
+	}
+	return &Hooks{}, nil
+}
+
+// Registering by value is the documented shape, but [NewMiddleware] accepts
+// any [Middleware], so a pointer prototype has to isolate just the same.
+func forEachPrototypeShape(t *testing.T, run func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, snapshot func() isolationConfig)) {
+	t.Helper()
+	for _, tc := range []struct {
+		name  string
+		build func(isolationConfig) (*MiddlewareDesc, func() isolationConfig)
+	}{
+		{"value prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			return NewMiddleware("desc", p), func() isolationConfig { return p }
+		}},
+		{"pointer prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			ptr := &p
+			return NewMiddleware("desc", ptr), func() isolationConfig { return *ptr }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &isolationLog{}
+			desc, snapshot := tc.build(isolationConfig{log: log})
+			run(t, desc, log, snapshot)
+		})
+	}
+}
+
+func TestBuildFromJSON_ConfigDoesNotLeakBetweenCalls(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, _ func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+		buildOrFail(t, desc, `{}`)
+
+		second := log.at(t, 1)
+		if second.Label != "" {
+			t.Errorf("Label = %q, want empty (leaked from the previous call)", second.Label)
+		}
+		if second.Statuses != nil {
+			t.Errorf("Statuses = %v, want nil (leaked from the previous call)", second.Statuses)
+		}
+		if second.Tags != nil {
+			t.Errorf("Tags = %v, want nil (leaked from the previous call)", second.Tags)
+		}
+	})
+}
+
+func TestBuildFromJSON_PrototypeNotMutated(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, _ *isolationLog, snapshot func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+
+		got := snapshot()
+		if got.Label != "" || got.Statuses != nil || got.Tags != nil {
+			t.Errorf("prototype mutated by dispatch: %+v", got)
+		}
+	})
+}
+
+// ptrRecvConfig takes pointer receivers, so Name() survives being read off a
+// nil prototype during registration.
+type ptrRecvConfig struct {
+	Label string `json:"label,omitempty"`
+}
+
+func (*ptrRecvConfig) Name() string { return "test/ptr-recv" }
+
+func (c *ptrRecvConfig) New(context.Context) (*Hooks, error) {
+	return &Hooks{
+		WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+			_ = c.Label // A nil receiver surfaces here, not in New.
+			return next(ctx, p)
+		},
+	}, nil
+}
+
+// A nil pointer prototype is a programming error, but it must not panic the
+// process. A call that sends no config has nothing to unmarshal, so nothing
+// allocates through the pointer and New would otherwise get a nil receiver.
+func TestBuildFromJSON_NilPrototype(t *testing.T) {
+	desc := NewMiddleware("desc", (*ptrRecvConfig)(nil))
+	h, err := desc.buildFromJSON(testCtx, nil)
+	if err != nil {
+		t.Fatalf("buildFromJSON failed: %v", err)
+	}
+	next := func(context.Context, *ModelParams) (*ModelResponse, error) { return &ModelResponse{}, nil }
+	if _, err := h.WrapModel(testCtx, &ModelParams{}, next); err != nil {
+		t.Fatalf("WrapModel failed: %v", err)
+	}
+}
+
+func buildOrFail(t *testing.T, desc *MiddlewareDesc, configJSON string) {
+	t.Helper()
+	if _, err := desc.buildFromJSON(testCtx, []byte(configJSON)); err != nil {
+		t.Fatalf("buildFromJSON(%s) failed: %v", configJSON, err)
 	}
 }
 
@@ -679,7 +809,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 			}
 			span := toolSpans[0]
 			assertSpanAttr(t, span, "genkit:type", "action")
-			assertSpanAttr(t, span, "genkit:metadata:subtype", "tool")
+			assertSpanAttr(t, span, "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 			assertSpanAttr(t, span, "genkit:state", tt.wantState)
 			assertSpanAttr(t, span, "genkit:input", `{"value":"x"}`)
 		})
@@ -747,6 +877,10 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
 			assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
+			// The short-circuit span is meant to be indistinguishable from
+			// this one, so pin them to the same shape from both sides.
+			assertSpanAttr(t, toolSpans[0], "genkit:type", "action")
+			assertSpanAttr(t, toolSpans[0], "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 		})
 	}
 }
@@ -812,10 +946,9 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
 				resp, err := next(ctx, params)
-				var sve *core.SchemaValidationError
-				if errors.As(err, &sve) {
+				if errors.Is(err, status.ErrInvalidInput) {
 					return &MultipartToolResponse{
-						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", sve))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", err))},
 						Output:  "tool call failed; see content for details",
 					}, nil
 				}
@@ -1052,5 +1185,147 @@ func TestMiddlewareRefArg_NewErrors(t *testing.T) {
 	// of silently producing nil hooks.
 	if _, err := (middlewareRefArg{name: "x"}).New(testCtx); err == nil {
 		t.Fatal("expected middlewareRefArg.New to return an error")
+	}
+}
+
+// --- hook logging: runs are attributed and short-circuits flagged ---
+
+// hookLogRecorder is a slog.Handler that captures records at or above min.
+type hookLogRecorder struct {
+	min     slog.Level
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *hookLogRecorder) Enabled(_ context.Context, l slog.Level) bool { return l >= h.min }
+
+func (h *hookLogRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *hookLogRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *hookLogRecorder) WithGroup(string) slog.Handler      { return h }
+
+func TestMiddlewareHookLogging(t *testing.T) {
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{}, nil
+	}
+	passThrough := namedHooks{name: "test/outer", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}
+	shortCircuit := namedHooks{name: "test/inner", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return &ModelResponse{}, nil // resolves the call without invoking next
+		},
+	}}
+	chain := buildModelChain([]namedHooks{passThrough, shortCircuit}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelDebug}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	type entry struct {
+		msg, mw        string
+		shortCircuited bool
+	}
+	var got []entry
+	for _, r := range rec.records {
+		e := entry{msg: r.Message}
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "middleware":
+				e.mw = a.Value.String()
+			case "shortCircuited":
+				e.shortCircuited = a.Value.Bool()
+			}
+			return true
+		})
+		got = append(got, e)
+	}
+	want := []entry{
+		{msg: "middleware hook started", mw: "test/outer"},
+		{msg: "middleware hook started", mw: "test/inner"},
+		{msg: "middleware hook finished", mw: "test/inner", shortCircuited: true},
+		{msg: "middleware hook finished", mw: "test/outer"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("hook log entries = %v, want %v", got, want)
+	}
+}
+
+func TestMiddlewareHookLoggingDisabled(t *testing.T) {
+	ran := false
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		ran = true
+		return &ModelResponse{}, nil
+	}
+	chain := buildModelChain([]namedHooks{{name: "test/mw", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelInfo}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("base model fn did not run")
+	}
+	if len(rec.records) != 0 {
+		t.Errorf("got %d log records with debug disabled, want 0", len(rec.records))
+	}
+}
+
+// TestWrapGenerateOptionsAreIsolatedPerIteration checks that a WrapGenerate
+// hook writing to its Options disturbs neither later turns nor their spans.
+func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/toolModel",
+		handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+	})
+	var toolCalls int32
+	tool := defineCountingTool(t, r, "myTool", &toolCalls)
+	spans := collectSpans(t)
+
+	var seen []int
+	clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				seen = append(seen, len(p.Options.Messages))
+				p.Options.Messages = nil
+				p.Options.StepName = "clobbered"
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/toolModel"),
+		WithPrompt("use it"),
+		WithTools(tool),
+		WithUse(clobber),
+	)
+	assertNoError(t, err)
+
+	// One tool call and a final answer; each turn sees the call's own message.
+	want := []int{1, 1}
+	if !slices.Equal(seen, want) {
+		t.Errorf("hook saw %v messages per iteration, want %v", seen, want)
+	}
+	if got := len(spans.allByName("clobbered")); got != 0 {
+		t.Errorf("got %d spans named %q, want 0: a hook's step name must not rename the loop's spans", got, "clobbered")
+	}
+	if got := len(spans.allByName("generate")); got != len(want) {
+		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
 	}
 }

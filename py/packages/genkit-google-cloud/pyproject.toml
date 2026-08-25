@@ -44,6 +44,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
+  "google-cloud-firestore>=2.14.0",
   "google-cloud-logging>=3.10.0",
   "opentelemetry-exporter-gcp-trace>=1.9.0",
   "opentelemetry-exporter-gcp-monitoring>=1.9.0",
@@ -66,7 +67,7 @@ license = "Apache-2.0"
 name = "genkit-google-cloud"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.9.0"
+version = "0.10.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

@@ -24,6 +24,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -47,7 +48,7 @@ type RetrieverOptions struct {
 }
 
 // Convert a Firestore document snapshot to a Genkit Document object.
-func convertToDoc(docSnapshots []*firestore.DocumentSnapshot, contentField string, metadataFields []string) []*ai.Document {
+func convertToDoc(ctx context.Context, docSnapshots []*firestore.DocumentSnapshot, contentField string, metadataFields []string) []*ai.Document {
 	var documents []*ai.Document // Prepare the documents to return in the response
 
 	for _, result := range docSnapshots {
@@ -56,7 +57,8 @@ func convertToDoc(docSnapshots []*firestore.DocumentSnapshot, contentField strin
 		// Ensure content field exists and is of type string
 		content, ok := data[contentField].(string)
 		if !ok {
-			fmt.Printf("Content field %s missing or not a string in document %s", contentField, result.Ref.ID)
+			logger.Warn(ctx, "firebase: skipping document with a missing or non-string content field",
+				"contentField", contentField, "document", result.Ref.ID)
 			continue
 		}
 
@@ -126,7 +128,7 @@ func defineFirestoreRetriever(g *genkit.Genkit, cfg RetrieverOptions, client *fi
 		}
 
 		// Convert Firestore documents to Genkit documents
-		documents := convertToDoc(results, cfg.ContentField, cfg.MetadataFields)
+		documents := convertToDoc(ctx, results, cfg.ContentField, cfg.MetadataFields)
 		return &ai.RetrieverResponse{Documents: documents}, nil
 	}
 

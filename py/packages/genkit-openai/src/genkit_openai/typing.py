@@ -39,8 +39,9 @@ else:
     from enum import StrEnum
 
 from pydantic import ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
-from genkit.model import ModelConfig
+from genkit.plugin_api import ModelConfig
 
 
 class ReasoningEffort(StrEnum):
@@ -215,7 +216,12 @@ class OpenAIConfig(ModelConfig):
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
     """
 
+    # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
+    # out as frequency_penalty. maxOutputTokens binds on the schema; it is
+    # not a create() kwarg (use max_tokens / maxTokens for a token cap).
+    # populate_by_name keeps the snake_case Python fields working too.
     model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
         extra='allow',
         populate_by_name=True,
     )

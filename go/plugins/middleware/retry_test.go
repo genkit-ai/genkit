@@ -24,6 +24,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -313,3 +314,30 @@ func TestRetryStopsWhenContextCanceledDuringBackoff(t *testing.T) {
 }
 
 var ctx = context.Background()
+
+// TestUnclassifiedErrorsKeepTheirContract pins the distinction Classified
+// draws. An error chain can carry a typed-nil *status.Error without anything
+// having classified it, and reading that as a deliberate INTERNAL would retry
+// it here and fail over to a different billed model in the fallback middleware.
+func TestUnclassifiedErrorsKeepTheirContract(t *testing.T) {
+	var typedNil *status.Error
+	unclassified := fmt.Errorf("provider blew up: %w", typedNil)
+
+	// Retry's contract: an unclassified error is always retried, whatever the
+	// status list says.
+	if !isRetryable(unclassified, []status.Name{status.Unavailable}) {
+		t.Error("isRetryable = false for an unclassified error, want true regardless of the list")
+	}
+	// Fallback's contract: an unclassified error propagates instead.
+	if isFallbackRetryable(unclassified, defaultFallbackStatuses) {
+		t.Error("isFallbackRetryable = true for an unclassified error, want false")
+	}
+	// A deliberate INTERNAL is still honored on both sides.
+	classified := status.Errorf(status.ErrInternal, "the plugin said so")
+	if !isRetryable(classified, defaultRetryStatuses) {
+		t.Error("isRetryable = false for a deliberate INTERNAL")
+	}
+	if !isFallbackRetryable(classified, defaultFallbackStatuses) {
+		t.Error("isFallbackRetryable = false for a deliberate INTERNAL")
+	}
+}

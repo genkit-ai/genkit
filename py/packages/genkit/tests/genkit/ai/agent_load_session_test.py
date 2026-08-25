@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from genkit._ai._agents._runtime import load_session
+from genkit._ai._agents._runtime import AgentInitError, load_session
 from genkit._ai._agents._session import SessionStore
 from genkit._core._error import GenkitError
 from genkit._core._typing import (
@@ -127,3 +127,33 @@ async def test_resume_by_session_id_no_completed_seeds_fresh() -> None:
     assert snap is None
     state = await session.state()
     assert state.session_id == SESSION_ID
+
+
+@pytest.mark.asyncio
+async def test_snapshot_id_and_matching_session_id_resumes() -> None:
+    completed = _snap('snap-c', SnapshotStatus.COMPLETED)
+    store = _ScriptedStore({'snap-c': completed}, leaf=completed)
+
+    _session, snap = await load_session(
+        init=AgentInit(snapshot_id='snap-c', session_id=SESSION_ID),
+        store=store,
+        agent_name='a',
+    )
+    assert snap is not None
+    assert snap.snapshot_id == 'snap-c'
+
+
+@pytest.mark.asyncio
+async def test_snapshot_id_with_mismatched_session_id_rejected() -> None:
+    completed = _snap('snap-c', SnapshotStatus.COMPLETED)
+    store = _ScriptedStore({'snap-c': completed}, leaf=completed)
+
+    with pytest.raises(AgentInitError) as exc:
+        await load_session(
+            init=AgentInit(snapshot_id='snap-c', session_id='other-sess'),
+            store=store,
+            agent_name='a',
+        )
+    assert exc.value.status == INVALID_ARGUMENT
+    assert 'does not belong to session' in str(exc.value)
+    assert 'it belongs to' in str(exc.value)

@@ -250,7 +250,7 @@ Release highlights:
 
 Published packages:
 - genkit (core)
-- genkit-plugin-* (22 plugins)"
+- genkit-* (12 plugins)"
 else
     TAG_MSG="Genkit Python SDK v${VERSION}
 
@@ -259,7 +259,7 @@ Release highlights:
 
 Published packages:
 - genkit (core)
-- genkit-plugin-* (22 plugins)"
+- genkit-* (12 plugins)"
 fi
 git tag -a "$TAG_NAME" -m "$TAG_MSG"
 

@@ -25,6 +25,7 @@ from genkit._core._error import GenkitError, StatusCodes, StatusName, get_callab
 from genkit._core._http_client import get_cached_client
 from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
+from genkit._core._model import ModelConfig
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
@@ -56,6 +57,7 @@ from genkit.model import (
 __all__ = [
     # Base class and framework primitives
     'MiddlewarePlugin',
+    'ModelConfig',
     'Plugin',
     'new_middleware',
     'Action',

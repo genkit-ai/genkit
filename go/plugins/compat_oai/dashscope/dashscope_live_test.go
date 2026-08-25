@@ -17,103 +17,36 @@ package dashscope_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 )
 
 func TestPluginLive(t *testing.T) {
-	apiKey := os.Getenv("DASHSCOPE_API_KEY")
-	if apiKey == "" {
-		t.Skip("Skipping test: DASHSCOPE_API_KEY environment variable not set")
+	if os.Getenv("DASHSCOPE_API_KEY") == "" {
+		t.Skip("DASHSCOPE_API_KEY is not set")
 	}
 
 	ctx := context.Background()
-
-	g := genkit.Init(
-		ctx,
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&dashscope.DashScope{}),
 		genkit.WithDefaultModel("dashscope/qwen-plus"),
-		genkit.WithPlugins(&dashscope.DashScope{
-			APIKey: apiKey,
-		}),
 	)
-	t.Log("genkit initialized")
 
-	t.Run("basic completion", func(t *testing.T) {
-		t.Log("generating basic completion response")
-		resp, err := genkit.Generate(
-			ctx, g,
-			ai.WithPrompt("What is the capital of France?"),
-		)
-		if err != nil {
-			t.Fatal("error generating basic completion response: ", err)
-		}
-		t.Logf("basic completion response: %+v", resp)
-
-		out := resp.Message.Content[0].Text
-		if !strings.Contains(strings.ToLower(out), "paris") {
-			t.Errorf("got %q, expecting it to contain 'Paris'", out)
-		}
-
-		// Verify usage statistics are present
-		if resp.Usage == nil || resp.Usage.TotalTokens == 0 {
-			t.Error("Expected non-zero usage statistics")
-		}
-	})
-
-	t.Run("streaming", func(t *testing.T) {
-		var streamedOutput string
-		chunks := 0
-
-		final, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("Write a short paragraph about artificial intelligence."),
-			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-				chunks++
-				for _, content := range chunk.Content {
-					streamedOutput += content.Text
-				}
-				return nil
-			}))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Verify streaming worked
-		if chunks <= 1 {
-			t.Error("Expected multiple chunks for streaming")
-		}
-
-		// Verify final output matches streamed content
-		finalOutput := ""
-		for _, content := range final.Message.Content {
-			finalOutput += content.Text
-		}
-		if streamedOutput != finalOutput {
-			t.Errorf("Streaming output doesn't match final output\nStreamed: %s\nFinal: %s",
-				streamedOutput, finalOutput)
-		}
-
-		t.Logf("streaming response: %+v", finalOutput)
-	})
-
-	t.Run("system message", func(t *testing.T) {
-		resp, err := genkit.Generate(
-			ctx, g,
-			ai.WithPrompt("What are you?"),
-			ai.WithSystem("You are a helpful math tutor who loves numbers."),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		out := resp.Message.Content[0].Text
-		if !strings.Contains(strings.ToLower(out), "math") {
-			t.Errorf("got %q, expecting response to mention being a math tutor", out)
-		}
-
-		t.Logf("system message response: %+v", out)
+	thinking := true
+	livetest.Run(t, g, livetest.Suite{
+		Model: dashscope.ModelRef("qwen-plus", nil),
+		ReasoningModel: dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+			EnableThinking: &thinking,
+		}),
+		ReasoningContent: true,
+		// DashScope only serves thinking on streaming calls.
+		StreamOnlyReasoning: true,
+		VisionModel:         dashscope.ModelRef("qwen3-vl-plus", nil),
+		ExtraConfig: map[string]any{
+			"extra": map[string]any{"enable_thinking": false},
+		},
 	})
 }

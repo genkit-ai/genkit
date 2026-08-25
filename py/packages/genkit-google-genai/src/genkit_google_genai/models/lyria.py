@@ -56,7 +56,7 @@ def is_lyria_model(name: str) -> bool:
     Returns:
         True if this is a Lyria model name.
     """
-    return name.startswith('lyria-')
+    return name.split('/')[-1].lower().startswith('lyria-')
 
 
 class LyriaConfig(BaseModel):

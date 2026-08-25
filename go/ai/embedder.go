@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -169,52 +168,34 @@ func NewEmbedderAction[Config any](
 		panic("ai.NewEmbedderAction: name is required")
 	}
 
-	if opts == nil {
-		opts = &EmbedderOptions{
-			Label: name,
-		}
+	o := EmbedderOptions{}
+	if opts != nil {
+		o = *opts
 	}
-	if opts.Supports == nil {
-		opts.Supports = &EmbedderSupports{}
+	if o.Label == "" {
+		o.Label = name
 	}
+	o.Supports = cloneEmbedderSupports(o.Supports)
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EmbedRequest{}, "options")
-
-	// Seed from the caller's metadata, then stamp the built-in keys over it so
-	// they cannot be corrupted; registry discovery depends on them.
-	metadata := make(map[string]any, len(opts.Metadata)+3)
-	maps.Copy(metadata, opts.Metadata)
-	metadata["type"] = api.ActionTypeEmbedder
-	// TODO: This should be under "embedder" but JS has it as "info".
-	metadata["info"] = map[string]any{
-		"label":      opts.Label,
-		"dimensions": opts.Dimensions,
-		"supports": map[string]any{
-			"input":        opts.Supports.Input,
-			"multilingual": opts.Supports.Multilingual,
+	configSchema, inputSchema := actionConfigSchemas[Config](o.ConfigSchema, EmbedRequest{}, "options")
+	metadata := actionMetadata(api.ActionTypeEmbedder, map[string]any{
+		// TODO: This should be under "embedder" but JS has it as "info".
+		"info": map[string]any{
+			"label":      o.Label,
+			"dimensions": o.Dimensions,
+			"supports": map[string]any{
+				"input":        o.Supports.Input,
+				"multilingual": o.Supports.Multilingual,
+			},
 		},
-	}
-	metadata["embedder"] = map[string]any{
-		"customOptions": configSchema,
-	}
-
-	rawFn := func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
-		// Normalize a shallow copy so the type-erased Options and the typed
-		// parameter always agree without clobbering the caller-owned request.
-		reqCopy := *req
-		req = &reqCopy
-		cfg, err := resolveConfigInto[Config](&req.Options)
-		if err != nil {
-			return nil, err
-		}
-		return fn(ctx, req, cfg)
-	}
+		"embedder": map[string]any{"customOptions": configSchema},
+	}, o.Metadata)
 
 	return &EmbedderAction{
 		action: *core.NewActionOf(api.ActionTypeEmbedder, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
-		}, rawFn),
+		}, typedConfigFn(func(r *EmbedRequest) *any { return &r.Options }, fn)),
 	}
 }
 

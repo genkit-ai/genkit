@@ -26,6 +26,7 @@ from genkit._ai._agents._client import (
     AgentError,
     AgentInterrupt,
     AgentTransport,
+    DetachedTask,
     TurnDriver,
 )
 from genkit._ai._agents._runtime import AgentInitError
@@ -139,7 +140,7 @@ class MockAgentTransport(AgentTransport[Any]):
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         self.abort_snapshot_id = snapshot_id
-        return SnapshotStatus.ABORTED
+        return SnapshotStatus.PENDING
 
     def push_chunk(self, chunk: AgentStreamChunk | None) -> None:
         self._receive_queue.put_nowait(chunk)
@@ -166,11 +167,29 @@ def test_restart_applies_replace_input() -> None:
 
 
 def test_connect_init_rejects_multiple_resume_fields() -> None:
-    with pytest.raises(ValueError, match='at most one'):
+    with pytest.raises(AgentInitError, match="Cannot send 'state' together with"):
         AgentChat(
             MockAgentTransport(),
             AgentInit(state=SessionState(), snapshot_id='snap-1'),
         )
+
+
+@pytest.mark.asyncio
+async def test_detached_task_abort_returns_previous_status() -> None:
+    transport = MockAgentTransport()
+    task = DetachedTask(snapshot_id='snap-1', transport=transport)
+    assert await task.abort() == SnapshotStatus.PENDING
+    assert transport.abort_snapshot_id == 'snap-1'
+
+
+def test_connect_init_allows_snapshot_id_and_session_id() -> None:
+    # snapshot_id picks the row; session_id is an ownership check.
+    chat = AgentChat(
+        MockAgentTransport(state_management='server'),
+        AgentInit(snapshot_id='snap-1', session_id='sess-1'),
+    )
+    assert chat.snapshot_id == 'snap-1'
+    assert chat.session_id == 'sess-1'
 
 
 def test_connect_init_applies_state_only() -> None:
@@ -219,7 +238,7 @@ async def test_wire_init_derives_from_live_session_state() -> None:
 
     # First turn (no snapshot yet) resumes by the bootstrap session id.
     assert transport.connect_init == AgentInit(session_id='sess-bootstrap')
-    # Output advanced the live snapshot id, so the next turn would resume by snapshot.
+    # Output advanced the live snapshot id; later turns resume that row only.
     assert chat.snapshot_id == 'snap-1'
     assert chat._wire_init() == AgentInit(snapshot_id='snap-1')
 
@@ -1139,7 +1158,9 @@ async def test_session_abort() -> None:
 
     # Abort the running snapshot on the server (requires a store)
     status = await chat.abort()
-    assert status == SnapshotStatus.ABORTED
+    # abort() returns the snapshot's *previous* status — pending, since the
+    # detached turn was still running (spec: tests/specs/agent.yaml).
+    assert status == SnapshotStatus.PENDING
 
     # Give the background task a moment to process cancellation
     await asyncio.sleep(0.5)

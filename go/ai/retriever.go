@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -162,52 +161,32 @@ func NewRetrieverAction[Config any](
 	fn RetrieverActionFunc[Config],
 ) *RetrieverAction {
 	if name == "" {
-		panic("ai.NewRetrieverAction: retriever name is required")
+		panic("ai.NewRetrieverAction: name is required")
 	}
 
-	if opts == nil {
-		opts = &RetrieverOptions{
-			Label: name,
-		}
+	o := RetrieverOptions{}
+	if opts != nil {
+		o = *opts
 	}
-	if opts.Supports == nil {
-		opts.Supports = &RetrieverSupports{}
+	if o.Label == "" {
+		o.Label = name
 	}
+	o.Supports = cloneRetrieverSupports(o.Supports)
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, RetrieverRequest{}, "options")
-
-	// Seed from the caller's metadata, then stamp the built-in keys over it so
-	// they cannot be corrupted; registry discovery depends on them.
-	metadata := make(map[string]any, len(opts.Metadata)+3)
-	maps.Copy(metadata, opts.Metadata)
-	metadata["type"] = api.ActionTypeRetriever
-	metadata["info"] = map[string]any{
-		"label": opts.Label,
-		"supports": map[string]any{
-			"media": opts.Supports.Media,
+	configSchema, inputSchema := actionConfigSchemas[Config](o.ConfigSchema, RetrieverRequest{}, "options")
+	metadata := actionMetadata(api.ActionTypeRetriever, map[string]any{
+		"info": map[string]any{
+			"label":    o.Label,
+			"supports": map[string]any{"media": o.Supports.Media},
 		},
-	}
-	metadata["retriever"] = map[string]any{
-		"customOptions": configSchema,
-	}
-
-	rawFn := func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
-		// Normalize a shallow copy so the type-erased Options and the typed
-		// parameter always agree without clobbering the caller-owned request.
-		reqCopy := *req
-		req = &reqCopy
-		cfg, err := resolveConfigInto[Config](&req.Options)
-		if err != nil {
-			return nil, err
-		}
-		return fn(ctx, req, cfg)
-	}
+		"retriever": map[string]any{"customOptions": configSchema},
+	}, o.Metadata)
 
 	return &RetrieverAction{
 		action: *core.NewActionOf(api.ActionTypeRetriever, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
-		}, rawFn),
+		}, typedConfigFn(func(r *RetrieverRequest) *any { return &r.Options }, fn)),
 	}
 }
 
@@ -217,7 +196,7 @@ func NewRetrieverAction[Config any](
 // fn as a typed value instead of leaving them type-erased on the request.
 func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
 	if name == "" {
-		panic("ai.NewRetriever: retriever name is required")
+		panic("ai.NewRetriever: name is required")
 	}
 	return NewRetrieverAction(name, opts, func(ctx context.Context, req *RetrieverRequest, _ any) (*RetrieverResponse, error) {
 		return fn(ctx, req)

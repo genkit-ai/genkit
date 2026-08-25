@@ -20,10 +20,12 @@ package tracing
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/internal/base"
@@ -216,10 +218,6 @@ func RunInNewSpan[I, O any](
 	f func(context.Context, I) (O, error),
 ) (O, error) {
 	// TODO: support span links.
-	log := logger.FromContext(ctx)
-	log.Debug("span start", "name", metadata.Name)
-	defer log.Debug("span end", "name", metadata.Name)
-
 	if metadata == nil {
 		metadata = &SpanMetadata{}
 	}
@@ -246,11 +244,11 @@ func RunInNewSpan[I, O any](
 		parentPath = parentSM.Path
 	}
 
-	// Build path with type annotations to maintain compatibility with TypeScript telemetry format
+	// Build path with type annotations to maintain compatibility with the
+	// TypeScript telemetry format: a flow is annotated by its subtype, every
+	// other span by its type, then its subtype when it has one.
 	if metadata.Subtype == "flow" {
 		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, "flow")
-	} else if metadata.Subtype == "util" {
-		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, "util")
 	} else {
 		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, metadata.Type)
 		if metadata.Subtype != "" {
@@ -295,6 +293,36 @@ func RunInNewSpan[I, O any](
 	defer span.End()
 	defer func() { span.SetAttributes(sm.attributes()...) }()
 	ctx = spanMetaKey.NewContext(ctx, sm)
+
+	// These logs run under the new span's context, so they land on this span
+	// in the Dev UI. The deferred one is registered after the span.End defer,
+	// so it fires first, while the span is still recording. This is the
+	// hottest path in the framework, so the log arguments are only built when
+	// some handler accepts debug records (the console at GENKIT_LOG_LEVEL=
+	// debug, or the Dev UI export sink).
+	start := time.Now()
+	logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
+	if logDebug {
+		startArgs := []any{"name", metadata.Name}
+		if metadata.Type != "" {
+			startArgs = append(startArgs, "type", metadata.Type)
+		}
+		if metadata.Subtype != "" {
+			startArgs = append(startArgs, "subtype", metadata.Subtype)
+		}
+		logger.Debug(ctx, "span started", startArgs...)
+	}
+	defer func() {
+		if !logDebug {
+			return
+		}
+		endArgs := []any{"name", metadata.Name, "state", string(sm.State), "duration", time.Since(start).Round(time.Millisecond)}
+		if sm.Error != "" {
+			endArgs = append(endArgs, "error", sm.Error)
+		}
+		logger.Debug(ctx, "span finished", endArgs...)
+	}()
+
 	output, err := f(ctx, input)
 
 	if err != nil {

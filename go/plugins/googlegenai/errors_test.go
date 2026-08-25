@@ -20,8 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -133,5 +136,194 @@ func TestWrapAPIError_HandlesWrappedAPIError(t *testing.T) {
 	}
 	if ge.Status != core.UNAVAILABLE {
 		t.Fatalf("status = %q, want UNAVAILABLE", ge.Status)
+	}
+}
+
+func TestRetryDelay_FromRetryInfoString(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{"@type": "type.googleapis.com/google.rpc.QuotaFailure"},
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "58s",
+			},
+		},
+	}
+	d, ok := RetryDelay(api)
+	if !ok {
+		t.Fatal("RetryDelay = false, want true")
+	}
+	if want := 58 * time.Second; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_FromRetryInfoDurationFields(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type": "type.googleapis.com/google.rpc.RetryInfo",
+				// json.Unmarshal produces float64 for numbers.
+				"retryDelay": map[string]any{"seconds": float64(2), "nanos": float64(500000000)},
+			},
+		},
+	}
+	d, ok := RetryDelay(api)
+	if !ok {
+		t.Fatal("RetryDelay = false, want true")
+	}
+	if want := 2500 * time.Millisecond; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_ThroughWrappedError(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "1.5s",
+			},
+		},
+	}
+	wrapped := fmt.Errorf("generate: %w", wrapAPIError(api))
+	d, ok := RetryDelay(wrapped)
+	if !ok {
+		t.Fatal("RetryDelay through wrapped error = false, want true")
+	}
+	if want := 1500 * time.Millisecond; d != want {
+		t.Fatalf("RetryDelay = %v, want %v", d, want)
+	}
+}
+
+func TestRetryDelay_AbsentOrMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"non-API error", errors.New("plain")},
+		{"no details", genai.APIError{Code: 429, Status: "RESOURCE_EXHAUSTED"}},
+		{"no retry info", genai.APIError{Code: 429, Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}}}},
+		{"bad delay value", genai.APIError{Code: 429, Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "soon"}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if d, ok := RetryDelay(tc.err); ok {
+				t.Fatalf("RetryDelay = (%v, true), want false", d)
+			}
+		})
+	}
+}
+
+func TestWrapAPIError_AttachesRetryAfterDetails(t *testing.T) {
+	api := genai.APIError{
+		Code:   429,
+		Status: "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+				"retryDelay": "3s",
+			},
+		},
+	}
+	wrapped := wrapAPIError(api)
+	var ge *core.GenkitError
+	if !errors.As(wrapped, &ge) {
+		t.Fatalf("wrapAPIError did not produce a GenkitError; got %T", wrapped)
+	}
+	if got, want := ge.Details["retryAfterMs"], int64(3000); got != want {
+		t.Fatalf("Details[retryAfterMs] = %v (%T), want %v", got, got, want)
+	}
+}
+
+// TestRequestShapingErrorsAreNotRetryable covers the request-shaping failures
+// this package raises before any HTTP call. Each is deterministic in its input,
+// so reissuing it would fail identically; classifying them keeps the retry
+// middleware, whose default set is UNAVAILABLE, DEADLINE_EXCEEDED,
+// RESOURCE_EXHAUSTED, ABORTED, and INTERNAL, from spending its budget on a
+// request that can never succeed. An unclassified error is retried regardless
+// of that list, which is what these guard.
+func TestRequestShapingErrorsAreNotRetryable(t *testing.T) {
+	retried := map[status.Name]bool{
+		status.Unavailable:       true,
+		status.DeadlineExceeded:  true,
+		status.ResourceExhausted: true,
+		status.Aborted:           true,
+		status.Internal:          true,
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "invalid tool name",
+			call: func() error {
+				_, err := toGeminiTools([]*ai.ToolDefinition{{Name: "not a valid name!"}})
+				return err
+			},
+		},
+		{
+			name: "schema missing type",
+			call: func() error {
+				_, err := toGeminiSchema(map[string]any{}, map[string]any{"description": "no type"})
+				return err
+			},
+		},
+		{
+			name: "schema type not a string",
+			call: func() error {
+				_, err := toGeminiSchema(map[string]any{}, map[string]any{"type": 42})
+				return err
+			},
+		},
+		{
+			name: "cache metadata not a map",
+			call: func() error {
+				_, err := findCacheMarker(&ai.ModelRequest{Messages: []*ai.Message{
+					{Role: ai.RoleUser, Metadata: map[string]any{"cache": "not a map"}},
+				}})
+				return err
+			},
+		},
+		{
+			name: "cache ttl not a number",
+			call: func() error {
+				_, err := findCacheMarker(&ai.ModelRequest{Messages: []*ai.Message{
+					{Role: ai.RoleUser, Metadata: map[string]any{"cache": map[string]any{"ttlSeconds": "soon"}}},
+				}})
+				return err
+			},
+		},
+		{
+			name: "tools with context caching",
+			call: func() error {
+				return validateContextCacheRequest(&ai.ModelRequest{
+					Tools: []*ai.ToolDefinition{{Name: "someTool"}},
+				}, "gemini-flash-latest")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			s, ok := status.Classified(err)
+			if !ok {
+				t.Fatalf("error is unclassified, so retry would reissue it: %v", err)
+			}
+			if retried[s] {
+				t.Errorf("error maps to %v, which the retry middleware reissues: %v", s, err)
+			}
+		})
 	}
 }

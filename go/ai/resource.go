@@ -96,10 +96,14 @@ type ResourceOutput struct {
 
 // ResourceOptions configures a resource definition.
 type ResourceOptions struct {
-	URI         string         // Static URI (mutually exclusive with Template)
-	Template    string         // URI template (mutually exclusive with URI)
-	Description string         // Optional description
-	Metadata    map[string]any // Optional metadata
+	// URI is the resource's static URI. Mutually exclusive with Template.
+	URI string
+	// Template is a URI template the resource matches. Mutually exclusive with URI.
+	Template string
+	// Description is the resource's human-readable description.
+	Description string
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any
 }
 
 // ResourceFunc is a function that loads content for a resource.

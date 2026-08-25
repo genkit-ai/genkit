@@ -79,11 +79,40 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out
 // Each call to Run results in a new step in the flow.
 // A step has its own span in the trace, and its result is cached so that if the flow
 // is restarted, f will not be called a second time.
+//
+// The step's context is not available to fn, so anything inside it that takes a
+// context and traces its own work, such as an HTTP client or a database call,
+// reports against the enclosing flow rather than against this step. Use
+// [RunWithContext] for those; keep Run for pure work that traces nothing.
 func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out, error) {
+	return runStep(ctx, "flow.Run", name, func(context.Context) (Out, error) { return fn() })
+}
+
+// RunWithContext is [Run] with the step's own context passed to fn.
+//
+// Work that fn starts with that context nests under the step in the trace
+// instead of under the flow, which is what makes a step's span cover the calls
+// it is timing:
+//
+//	file, err := core.RunWithContext(ctx, "upload-image", func(ctx context.Context) (*File, error) {
+//		return client.Files.Upload(ctx, path) // its spans nest under "upload-image"
+//	})
+//
+// Passing the enclosing context instead of the one supplied here is the whole
+// difference, and it is silent: the step still records the right duration while
+// the calls it made appear beside it rather than beneath it.
+func RunWithContext[Out any](ctx context.Context, name string, fn func(context.Context) (Out, error)) (Out, error) {
+	return runStep(ctx, "flow.RunWithContext", name, fn)
+}
+
+// runStep is the body shared by [Run] and [RunWithContext]. The caller name is
+// passed in so the "must be called from a flow" error names the function the
+// user actually called.
+func runStep[Out any](ctx context.Context, caller, name string, fn func(context.Context) (Out, error)) (Out, error) {
 	fc := flowContextKey.FromContext(ctx)
 	if fc == nil {
 		var z Out
-		return z, fmt.Errorf("flow.Run(%q): must be called from a flow", name)
+		return z, fmt.Errorf("%s(%q): must be called from a flow", caller, name)
 	}
 	spanMetadata := &tracing.SpanMetadata{
 		Name:    name,
@@ -91,7 +120,7 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 		Subtype: "flowStep",
 	}
 	return tracing.RunInNewSpan(ctx, spanMetadata, nil, func(ctx context.Context, _ any) (Out, error) {
-		o, err := fn()
+		o, err := fn(ctx)
 		if err != nil {
 			return base.Zero[Out](), err
 		}

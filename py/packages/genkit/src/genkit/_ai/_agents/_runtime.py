@@ -37,6 +37,7 @@ from genkit._ai._agents._session import (
     reserve_snapshot_id,
     run_with_session,
 )
+from genkit._ai._agents._session_stores._util import session_id_of
 from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
 from genkit._ai._generate import generate_action
@@ -316,7 +317,9 @@ def assert_init_matches_state_management(
 ) -> None:
     """Raise ``AgentInitError`` when init does not match the agent's store mode."""
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        # Wire-facing errors use the wire (camelCase) field names so a
+        # client talking over HTTP sees the same identifiers it sent.
+        field = 'snapshotId' if init.snapshot_id else 'sessionId'
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -325,12 +328,11 @@ def assert_init_matches_state_management(
             ),
         )
     if init.state is not None and store is not None:
-        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
             ),
         )
 
@@ -345,6 +347,8 @@ async def load_session(
     """Construct a Session from AgentInit payload.
 
     Server-managed (store set): resume via snapshot_id or session_id.
+    snapshot_id is that exact row (must be completed). session_id continues
+    the conversation: skip a dead leaf, or start fresh if none is completed.
     Client-managed (no store): use init.state or start fresh.
 
     When ``state_schema`` is set the custom state loaded from a snapshot or the
@@ -356,11 +360,6 @@ async def load_session(
     """
     name = agent_name or 'agent'
 
-    if init.snapshot_id and init.session_id:
-        raise AgentInitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
-        )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     ctx = get_current_context()
@@ -372,6 +371,20 @@ async def load_session(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
+        # When init carries both ids, the snapshot id picks the row and the
+        # session id is an ownership check: the snapshot must belong to that
+        # session. Wrong pairing is a client error, not a silent load.
+        if init.session_id:
+            snap_session_id = session_id_of(snap)
+            if snap_session_id != init.session_id:
+                owner = snap_session_id if snap_session_id is not None else 'an unknown session'
+                raise AgentInitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'Snapshot {init.snapshot_id!r} does not belong to session '
+                        f'{init.session_id!r} (it belongs to {owner!r}).'
+                    ),
+                )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
@@ -657,19 +670,28 @@ class AgentRuntime:
             out.snapshot_id = await self.ensure_recovery_snapshot()
         return out
 
-    async def watch_snapshot_abort(self, *, snapshot_id: str, abort_signal: asyncio.Event) -> None:
+    async def watch_snapshot_abort(
+        self,
+        *,
+        snapshot_id: str,
+        abort_signal: asyncio.Event,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
             return
-        q = await self.store.on_snapshot_status_change(snapshot_id)
-        while True:
-            status = await q.get()
-            if status is None:
-                return
+        # Prefer the detach-time context from the caller so the subscription
+        # stays on the request's tenant even if this task starts after ambient
+        # context has moved on.
+        statuses = await self.store.on_snapshot_status_change(
+            snapshot_id, context=context if context is not None else get_current_context()
+        )
+        # Aborted is terminal, so the stream ends right after that yield and
+        # unsubscribes. Returning early would skip that teardown.
+        async for status in statuses:
             if status == SnapshotStatus.ABORTED:
                 abort_signal.set()
-                return
 
-    async def refresh_heartbeat(self, snapshot_id: str) -> None:
+    async def refresh_heartbeat(self, snapshot_id: str, *, context: dict[str, Any] | None = None) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
 
         A reader treats a pending snapshot whose heartbeat has gone stale as
@@ -677,13 +699,14 @@ class AgentRuntime:
         detached turn is genuinely still running we bump the beat on an interval.
         The mutator only touches a still-pending snapshot, so a beat never
         resurrects a terminal snapshot or races a concurrent abort/finalize.
+
+        ``context`` should be the detach-time tenant context (same as abort-watch
+        and finalize). Falls back to ambient context if the caller omitted it.
         """
         if self.store is None:
             return
         interval_s = DEFAULT_HEARTBEAT_INTERVAL_MS / 1000
-        # Capture at start (detach time) so beats keep using the request's
-        # tenant context even if ambient context later changes.
-        beat_context = get_current_context()
+        beat_context = context if context is not None else get_current_context()
 
         def beat(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is None or existing.status != SnapshotStatus.PENDING:
@@ -708,8 +731,14 @@ class AgentRuntime:
         err_holder: list[Exception],
         result_holder: list[AgentResult],
         heartbeat_task: asyncio.Task,
+        context: dict[str, Any] | None = None,
     ) -> None:
-        """Background task: wait for fn, then rewrite pending snapshot with final state."""
+        """Background task: wait for fn, then rewrite pending snapshot with final state.
+
+        ``context`` should be captured at detach time (same as heartbeats) so a
+        multi-tenant store still writes the terminal status under the request's
+        tenant after the original call has returned.
+        """
         await fn_task
         await forward_task
 
@@ -722,7 +751,17 @@ class AgentRuntime:
         state = await self.session.state()
         now = datetime.now(timezone.utc).isoformat()
         fn_err = err_holder[0] if err_holder else None
-        if fn_err:
+        # SessionRunner.run swallows turn exceptions into last_turn_error and
+        # still returns. The attached path consults that field; detached
+        # finalize used to look only at err_holder, so a graceful turn failure
+        # wrote status=completed / error=None. Same rule as emit_turn_end.
+        turn_err = self.session_runner.last_turn_error
+        is_failed = (
+            fn_err is not None
+            or turn_err is not None
+            or self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
+        )
+        if is_failed:
             finish_reason = AgentFinishReason.FAILED
         else:
             result = result_holder[0] if result_holder else None
@@ -737,9 +776,9 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id=existing.snapshot_id if existing else '',
                 parent_id=pending_snap.parent_id or '',
-                status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
+                status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(to_error_details(fn_err) if fn_err else None),
+                error=(to_error_details(fn_err) if fn_err else turn_err),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -748,7 +787,7 @@ class AgentRuntime:
             await self.store.save_snapshot(  # type: ignore[union-attr]
                 pending_snap.snapshot_id,
                 finalize,
-                context=get_current_context(),
+                context=context,
             )
         except Exception:  # noqa: BLE001
             # Best-effort: the snapshot stays pending, but its heartbeat stopped
@@ -780,6 +819,12 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if item.detach:
                         is_detached = True
+                        # Stop chunk emission immediately: a detached run must
+                        # not stream chunks back on this connection. Setting the
+                        # flag here — before the payload is queued — closes the
+                        # race where the background turn starts streaming before
+                        # the detach branch of run() marks the runtime detached.
+                        self.detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
                         # this order means the turn is deterministically queued for
@@ -884,10 +929,19 @@ class AgentRuntime:
             # emitting chunks to it. The turn keeps running; a background task
             # finalizes the snapshot when fn finishes.
             self.detached = True
+            # Pin tenant context for background abort-watch / heartbeat / finalize
+            # — ambient context may be gone by the time those tasks run or settle.
+            detach_context = get_current_context()
             t1 = asyncio.create_task(
-                self.watch_snapshot_abort(snapshot_id=pending_snap.snapshot_id, abort_signal=abort_signal)
+                self.watch_snapshot_abort(
+                    snapshot_id=pending_snap.snapshot_id,
+                    abort_signal=abort_signal,
+                    context=detach_context,
+                )
             )
-            heartbeat_task = asyncio.create_task(self.refresh_heartbeat(pending_snap.snapshot_id))
+            heartbeat_task = asyncio.create_task(
+                self.refresh_heartbeat(pending_snap.snapshot_id, context=detach_context)
+            )
             t2 = asyncio.create_task(
                 self.finalize_detach(
                     pending_snap=pending_snap,
@@ -896,6 +950,7 @@ class AgentRuntime:
                     err_holder=err_holder,
                     result_holder=result_holder,
                     heartbeat_task=heartbeat_task,
+                    context=detach_context,
                 )
             )
             self.background_tasks.add(t1)

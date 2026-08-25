@@ -35,16 +35,11 @@ async def walk_back_to_resumable(
     store: SessionStore,
     snapshot: SessionSnapshot | None,
 ) -> SessionSnapshot | None:
-    """Falls back from a session leaf to the last resumable (completed) snapshot.
+    """Skip a failed / aborted / pending leaf back to the last completed snapshot.
 
-    A session's newest snapshot can be a failed, aborted, or still-pending turn,
-    and none of those are a place you can pick the conversation back up from. So
-    a non-completed leaf walks its parent chain back to the last good turn —
-    landing a reload on the same spot a live chat would resume from, instead of a
-    dead handle. A visited set guards a corrupt or cyclic chain.
-
-    Parent hops use the ambient request context so tenant-scoped stores keep
-    reading under the same auth as the caller.
+    That's the only kind of row you can continue a conversation from. If the
+    parent chain loops, we fail instead of reading forever. Parent hops use
+    the ambient request context so tenant-scoped stores keep the caller's auth.
     """
     visited: set[str] = set()
     while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
@@ -77,7 +72,14 @@ def parse_snapshot_lookup_kw(
 
     A bad selector is a caller mistake, so it raises ``INVALID_ARGUMENT`` — over a
     transport that surfaces as a 400, not a 500 the way a bare ``ValueError`` would.
+    Whitespace-only ids count as empty: they are not usable as document keys.
     """
+    for name, value in (('snapshot_id', snapshot_id), ('session_id', session_id)):
+        if value is not None and not value.strip():
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name} must not be empty or whitespace-only.',
+            )
     if bool(snapshot_id) == bool(session_id):
         raise GenkitError(
             status='INVALID_ARGUMENT',
@@ -142,10 +144,10 @@ async def resolve_snapshot(
         snapshot = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     else:
         assert session_id is not None
-        # Resolving a session means "where do I continue from", so skip a
-        # failed/aborted/pending leaf back to the last resumable turn.
+        # Return the stored leaf as-is — including a failed, aborted, or
+        # still-pending turn — so you can see why the last turn died.
+        # chat(session_id=) / load_session skip a dead leaf separately.
         snapshot = await store.get_snapshot(session_id=session_id, context=context)
-        snapshot = await walk_back_to_resumable(store=store, snapshot=snapshot)
     if snapshot is None:
         return None
     effective = (
@@ -161,6 +163,25 @@ def abort_if_pending(existing: SessionSnapshot | None) -> SessionSnapshot | None
     return existing.model_copy(update={'status': SnapshotStatus.ABORTED})
 
 
+class _AbortRecorder:
+    """save_snapshot mutator for abort that also records the row it saw.
+
+    Abort reports the turn's prior status (was it still running, or already
+    finished?), and the only trustworthy source for that is the row the winning
+    write actually observed — a separate read could see a newer state. Stores
+    may invoke the mutator more than once under contention; the last
+    observation wins, matching what got committed.
+    """
+
+    def __init__(self) -> None:
+        self.previous: SnapshotStatus | None = None
+
+    def __call__(self, existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        if existing is not None:
+            self.previous = existing.status
+        return abort_if_pending(existing)
+
+
 async def abort_snapshot_in_store(
     *,
     store: SessionStore,
@@ -169,18 +190,19 @@ async def abort_snapshot_in_store(
 ) -> SnapshotStatus | None:
     """Abort a running snapshot by flipping it to aborted.
 
-    There's no dedicated store abort call: aborting is an ordinary atomic
-    snapshot write whose mutator flips a still-pending turn to aborted and leaves
-    an already-finished one untouched, so a late abort never rewrites a
-    completed/failed result. The write also notifies any status subscribers,
-    which is how a detached turn learns it was aborted. Returns the snapshot's
-    resulting status (aborted when this call did the flip), or None if it doesn't
-    exist.
+    There's no separate abort API on the store. Aborting is an ordinary atomic
+    snapshot write: the mutator flips a still-pending turn to aborted and leaves
+    an already-finished one untouched, so a late abort never overwrites a
+    completed or failed result. The write also notifies status subscribers,
+    which is how a detached turn learns it was aborted.
+
+    Returns the last status the mutator saw on the existing row — typically
+    ``pending`` when this call cancelled in-flight work, or the unchanged
+    terminal status if the turn had already finished. ``None`` if the mutator
+    never ran (missing row, or the store skipped the write). We do not re-read
+    the row afterward to invent a previous status: if the mutator never ran,
+    there is nothing to report.
     """
-    saved = await store.save_snapshot(snapshot_id, abort_if_pending, context=context)
-    if saved is not None:
-        return saved.status
-    # The mutator skipped the write: either the snapshot is gone or already
-    # terminal. Report its current status without touching it.
-    current = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
-    return current.status if current is not None else None
+    recorder = _AbortRecorder()
+    await store.save_snapshot(snapshot_id, recorder, context=context)
+    return recorder.previous

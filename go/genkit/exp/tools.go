@@ -41,7 +41,7 @@ import (
 // Example:
 //
 //	type WeatherInput struct {
-//		City string `json:"city" jsonschema:"description=city name"`
+//		City string `json:"city" jsonschema_description:"city name"`
 //	}
 //
 //	weatherTool := exp.DefineTool(g, "getWeather", "Fetches the weather for a given city",

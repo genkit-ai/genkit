@@ -43,7 +43,7 @@ async def plan_trip(destination: str) -> str:
 ## Why Genkit?
 
 - **Type-Safe by Design:** Leverage Python type annotations and Pydantic models for structured inputs, outputs, and tool definitions.
-- **Multi-Model Provider API:** Switch effortlessly between Google Gemini, Anthropic Claude, OpenAI, Ollama, and Vertex AI with a unified API.
+- **Multi-Model Provider API:** Switch effortlessly between Google Gemini, Anthropic Claude, OpenAI, Ollama, Vertex AI, and Amazon Bedrock with a unified API.
 - **Integrated Observability:** Built-in OpenTelemetry tracing and evaluation metrics. Inspect spans and debug flows in real-time using the Genkit Developer UI (`genkit start`).
 - **Deploy Anywhere:** Expose flows as standard ASGI/WSGI applications compatible with FastAPI, Flask, Django, Cloud Run, or any serverless platform.
 

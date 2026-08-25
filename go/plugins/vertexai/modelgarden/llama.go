@@ -94,7 +94,7 @@ func (l *Llama) Init(ctx context.Context) []api.Action {
 	actions = append(actions, l.oai.Init(ctx)...)
 
 	for name, opts := range LlamaModels {
-		actions = append(actions, l.oai.DefineModel(provider, name, opts).(api.Action))
+		actions = append(actions, l.oai.NewModel(name, opts))
 	}
 
 	l.initted = true
@@ -107,7 +107,8 @@ func LlamaModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(provider, id))
 }
 
-// DefineModel adds a Llama model to the registry.
+// DefineModel builds a Llama model. The model is not registered: register the
+// returned model with [genkit.RegisterAction] before generating with it.
 func (l *Llama) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -117,5 +118,5 @@ func (l *Llama) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
-	return l.oai.DefineModel(provider, name, *opts), nil
+	return l.oai.NewModel(name, *opts), nil
 }

@@ -1939,7 +1939,7 @@ describe('openAIModelRunner', () => {
         })
       ).rejects.toThrow(
         expect.objectContaining({
-          status: 'PERMISSION_DENIED',
+          status: 'UNAUTHENTICATED',
           message: expect.stringContaining('Incorrect API key provided'),
         })
       );
@@ -1958,7 +1958,7 @@ describe('openAIModelRunner', () => {
         })
       ).rejects.toThrow(
         expect.objectContaining({
-          status: 'PERMISSION_DENIED',
+          status: 'UNAUTHENTICATED',
           message: expect.stringContaining('Incorrect API key provided'),
         })
       );
@@ -1976,6 +1976,26 @@ describe('openAIModelRunner', () => {
           {}
         ),
         expectedStatus: 'RESOURCE_EXHAUSTED',
+      },
+      {
+        name: '401',
+        error: new APIError(
+          401,
+          { error: { message: 'Incorrect API key provided' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'UNAUTHENTICATED',
+      },
+      {
+        name: '403',
+        error: new APIError(
+          403,
+          { error: { message: 'Project does not have access' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'PERMISSION_DENIED',
       },
       {
         name: '400',

@@ -49,8 +49,8 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 | `expectOutput` | Object | Expected fields on the `AgentOutput`. See [Output Assertions](#output-assertions). |
 | `expectError` | Object | Optional. Asserts the turn *throws* (rather than resolving with a graceful `finishReason: 'failed'` output). Used for API-misuse cases (e.g. sending `state` to a server-managed agent). Fields: `status` (matched exactly) and `message` (matched as a substring). Mutually exclusive with `expectOutput`. |
 | `captureSnapshotId` | `string` | Optional. Stores `output.snapshotId` under this name for use in later steps via `{{name}}`. |
-
 | `captureState` | `string` | Optional. Stores `output.state` under this name for use in later steps via `{{name}}`. |
+| `captureSessionId` | `string` | Optional. Stores `output.state.sessionId` under this name for use in later steps via `{{name}}`. |
 
 #### `getSnapshotData`
 
@@ -75,11 +75,11 @@ Aborts an agent by snapshot ID.
 |-------|------|-------------|
 | `type` | `"abort"` | Required. |
 | `snapshotId` | `string` | The snapshot ID to abort. Supports `{{name}}` references. |
-| `expectPreviousStatus` | `string` | Expected previous status before abort (e.g. `"pending"`, `"done"`). |
+| `expectPreviousStatus` | `string` | Expected previous status before abort (e.g. `"pending"`, `"completed"`). YAML `~` means absent. |
 
 #### `waitUntilCompleted`
 
-Polls a snapshot until it reaches a terminal status (`done`, `failed`, or
+Polls a snapshot until it reaches a terminal status (`completed`, `failed`, or
 `aborted`).
 
 | Field | Type | Description |
@@ -99,6 +99,7 @@ Used in `expectOutput` for `send` steps.
 |-------|------|-------------|
 | `message` | `MessageData` | If present, `output.message` must deep-equal this value. |
 | `hasSnapshotId` | `boolean` | If `true`, asserts `output.snapshotId` is a non-empty string. |
+| `hasSessionId` | `boolean` | If `true`, asserts `output.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | If present, asserts that `output.state` contains (at minimum) these fields. Uses "contains" / subset matching — the actual state may have additional fields. |
 | `artifactsContain` | `Artifact[]` | If present, asserts that `output.artifacts` contains (at minimum) these entries. |
 | `finishReason` | `string` | If present, `output.finishReason` must equal this value exactly (e.g. `stop` on a normal completion, `interrupted` on a tool pause, `failed` on a graceful failure). |
@@ -113,7 +114,7 @@ steps.
 | Field | Type | Description |
 |-------|------|-------------|
 | `parentId` | `string` | Expected `parentId`. Supports `{{name}}` references. |
-| `status` | `string` | Expected `status` (e.g. `"done"`, `"pending"`, `"failed"`, `"aborted"`). |
+| `status` | `string` | Expected `status` (e.g. `"completed"`, `"pending"`, `"failed"`, `"aborted"`). |
 | `finishReason` | `string` | Expected `snapshot.finishReason` (e.g. `failed`). Distinct from `status` — a failed run records `finishReason: failed` in addition to `status: failed`. |
 | `hasSessionId` | `boolean` | If `true`, asserts `snapshot.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
@@ -130,6 +131,7 @@ values:
 
 - `captureSnapshotId: snap1` → captures `output.snapshotId` as `snap1`
 - `captureState: state1` → captures `output.state` as `state1`
+- `captureSessionId: sess1` → captures `output.state.sessionId` as `sess1`
 
 These can be used anywhere a `snapshotId` or `state` is expected in subsequent
 steps:
@@ -154,6 +156,7 @@ Only simple `{{name}}` syntax is supported — no dot-paths or expressions.
 | `artifactsContain` | **Partial**: each specified artifact must be present (matched by name). |
 | `message` | **Strict**: deep-equality on the message object. |
 | `hasSnapshotId` | **Boolean**: asserts presence of a non-empty string. |
+| `hasSessionId` | **Boolean**: asserts `state.sessionId` is a non-empty string. |
 
 ---
 
@@ -233,9 +236,19 @@ cd js/ai
 npx tsx --test tests/agents_spec_test.ts
 ```
 
-### Go ⏳
+### Python ✅
 
-_(Coming soon — implement a Go harness that reads the same YAML spec.)_
+```bash
+cd py
+uv run pytest packages/genkit/tests/genkit/ai/agent_conformance_test.py
+```
+
+### Go ✅
+
+```bash
+cd go
+go test ./ai/exp/ -run TestAgentConformance
+```
 
 ---
 

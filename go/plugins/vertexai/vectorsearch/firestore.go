@@ -17,11 +17,10 @@ package vectorsearch
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"cloud.google.com/go/firestore"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/googleapis/gax-go/v2/apierror"
+	"github.com/firebase/genkit/go/core/logger"
 )
 
 // GetFirestoreDocumentRetriever creates a Firestore Document Retriever.
@@ -32,26 +31,29 @@ func GetFirestoreDocumentRetriever(db *firestore.Client, collectionName string) 
 		docs := []*ai.Document{}
 		for _, neighbor := range neighbors {
 			if neighbor.Datapoint.DatapointId == "" {
-				log.Printf("Skipping neighbor with empty or nil DatapointId: %+v", neighbor)
+				logger.Debug(ctx, "vectorsearch: skipping neighbor with an empty datapoint ID")
 				continue
 			}
 
 			docRef := db.Collection(collectionName).Doc(neighbor.Datapoint.DatapointId)
 			docSnapshot, err := docRef.Get(ctx)
 			if err != nil {
-				// Log the error but continue to try other neighbors.
-				log.Printf("Failed to get document %s from Firestore: %v", neighbor.Datapoint.DatapointId, err)
+				// Continue to try other neighbors on failure.
+				logger.Warn(ctx, "vectorsearch: skipping document that could not be fetched from Firestore",
+					"document", neighbor.Datapoint.DatapointId, "error", err)
 				continue
 			}
 
 			if !docSnapshot.Exists() {
-				log.Printf("Document %s does not exist in collection %s. Skipping.", neighbor.Datapoint.DatapointId, collectionName)
+				logger.Warn(ctx, "vectorsearch: skipping document missing from Firestore collection",
+					"document", neighbor.Datapoint.DatapointId, "collection", collectionName)
 				continue
 			}
 
 			var firestoreData ai.Document
 			if err := docSnapshot.DataTo(&firestoreData); err != nil {
-				log.Printf("Failed to unmarshal document data for ID %s: %v", neighbor.Datapoint.DatapointId, err)
+				logger.Warn(ctx, "vectorsearch: skipping document whose data could not be unmarshaled",
+					"document", neighbor.Datapoint.DatapointId, "error", err)
 				continue
 			}
 
@@ -78,11 +80,9 @@ func GetFirestoreDocumentIndexer(db *firestore.Client, collectionName string) Do
 			ids = append(ids, docRef.ID)
 		}
 
-		// Commit the batch operation.
+		// Commit the batch operation. APIError's Error() includes its
+		// details, so the wrapped error carries the full diagnostics.
 		if _, err := batch.Commit(ctx); err != nil {
-			if apiErr, ok := err.(*apierror.APIError); ok {
-				log.Printf("Firestore API Error: %v, DebugInfo: %v", apiErr, apiErr.Details())
-			}
 			return nil, fmt.Errorf("failed to commit Firestore batch: %w", err)
 		}
 

@@ -100,7 +100,7 @@ async def test_simple_prompt() -> None:
     """Test simple prompt rendering."""
     ai, *_ = setup_test()
 
-    want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hi" {"temperature":11}'
 
     my_prompt = ai.define_prompt(prompt='hi', config={'temperature': 11})
 
@@ -123,9 +123,11 @@ async def test_simple_prompt_with_override_config() -> None:
     ai, *_ = setup_test()
 
     # Config is MERGED: prompt config (banana: true) + opts config (temperature: 12)
-    want_txt = '[ECHO] user: "hi" {"temperature":12.0,"banana":true}'
+    want_txt = '[ECHO] user: "hi" {"banana":true,"temperature":12}'
 
-    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})
+    # banana is a pass-through test key, not a ModelConfigDict field
+    prompt_config: dict[str, Any] = {'banana': True}
+    my_prompt = ai.define_prompt(prompt='hi', config=prompt_config)
 
     # Pass config via kwargs — this MERGES with prompt config
     response = await my_prompt(config={'temperature': 12})
@@ -221,7 +223,7 @@ test_cases_parse_partial_json = [
         ModelConfig.model_validate({'temperature': 11}),
         {},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
-        """[ECHO] system: "hello foo (bar)" {"temperature":11.0,"banana":"ripe"}""",
+        """[ECHO] system: "hello foo (bar)" {"banana":"ripe","temperature":11.0}""",
     ),
     (
         'renders user prompt',
@@ -241,7 +243,7 @@ test_cases_parse_partial_json = [
         ModelConfig.model_validate({'temperature': 11}),
         {},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
-        """[ECHO] user: "hello foo (bar_system)" {"temperature":11.0,"banana":"ripe"}""",
+        """[ECHO] user: "hello foo (bar_system)" {"banana":"ripe","temperature":11.0}""",
     ),
     (
         'renders user prompt with context',
@@ -261,7 +263,7 @@ test_cases_parse_partial_json = [
         ModelConfig.model_validate({'temperature': 11}),
         {'auth': {'email': 'a@b.c'}},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
-        """[ECHO] user: "hello foo (bar, a@b.c)" {"temperature":11.0,"banana":"ripe"}""",
+        """[ECHO] user: "hello foo (bar, a@b.c)" {"banana":"ripe","temperature":11.0}""",
     ),
 ]
 
@@ -522,9 +524,11 @@ async def test_config_merge_priority() -> None:
     """
     ai, *_ = setup_test()
 
+    # banana is a pass-through test key, not a ModelConfigDict field
+    prompt_config: dict[str, Any] = {'temperature': 0.5, 'banana': 'yellow'}
     my_prompt = ai.define_prompt(
         prompt='test',
-        config={'temperature': 0.5, 'banana': 'yellow'},
+        config=prompt_config,
     )
 
     # New API: runtime config is MERGED with prompt config
