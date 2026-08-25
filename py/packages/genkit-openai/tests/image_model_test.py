@@ -84,6 +84,19 @@ class TestToImageGenerateParams:
         assert got['prompt'] == 'a cat'
         assert got['response_format'] == 'b64_json'
 
+    def test_gpt_image_1_omits_response_format(self) -> None:
+        """Verify GPT Image 1 requests omit the unsupported response format."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'response_format': 'url'},
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert 'response_format' not in got
+
     def test_config_passthrough(self) -> None:
         """Verify image-specific config options pass through."""
         request = ModelRequest(
