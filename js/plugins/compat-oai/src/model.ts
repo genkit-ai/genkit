@@ -34,7 +34,13 @@ import {
   z,
 } from 'genkit';
 import { parsePartialJson } from 'genkit/extract';
-import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
+import type {
+  ModelAction,
+  ModelInfo,
+  ModelMiddleware,
+  ToolDefinition,
+} from 'genkit/model';
+import { simulateConstrainedGeneration } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
 import type {
@@ -560,7 +566,11 @@ export function toOpenAIRequestBody(
   // Near-miss values ('Responses', a YAML typo) would otherwise be silently
   // dropped and served over Chat Completions - the one silent cell in the
   // transport matrix.
-  if (transport !== undefined && transport !== 'chat_completions') {
+  if (
+    transport !== undefined &&
+    transport !== 'chat_completions' &&
+    transport !== 'auto'
+  ) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
       message: `Unknown transport '${transport}'.`,
@@ -771,22 +781,34 @@ export function defineCompatOpenAIModel<
           : chatRunner(request, options)
     : chatRunner;
 
-  // A dispatch-capable action must not be wrapped in
-  // simulateConstrainedGeneration: that middleware strips output.schema into
-  // the prompt before the transport decision runs, and both wire formats here
-  // carry the schema natively.
+  // Registering constrained keeps core's simulateConstrainedGeneration off,
+  // because it would strip output.schema into the prompt before the transport
+  // dispatch runs. Models that never declared constrained still need that
+  // simulation on their Chat Completions requests, so the middleware below
+  // re-applies it for exactly those.
+  const ownConstrained = modelRef?.info?.supports?.constrained;
   const supports = params.responsesTransport
     ? {
         ...modelRef?.info?.supports,
-        constrained: modelRef?.info?.supports?.constrained ?? ('all' as const),
+        constrained: ownConstrained ?? ('all' as const),
       }
     : modelRef?.info?.supports;
+  const use: ModelMiddleware[] | undefined =
+    params.responsesTransport && !ownConstrained
+      ? [
+          (req, next) =>
+            req.config?.transport === 'responses'
+              ? next(req)
+              : simulateConstrainedGeneration()(req, next),
+        ]
+      : undefined;
 
   return model(
     {
       name: actionName,
       ...modelRef?.info,
       ...(supports ? { supports } : {}),
+      ...(use ? { use } : {}),
       configSchema: modelRef?.configSchema,
     },
     runner
