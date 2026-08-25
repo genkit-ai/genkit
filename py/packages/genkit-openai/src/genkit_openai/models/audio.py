@@ -375,6 +375,8 @@ class OpenAISTTModel:
         params = _to_stt_params(self._model_name, request)
         translate = extract_config_dict(request).get('translate', False)
         if translate:
+            params.pop('language', None)
+            params.pop('timestamp_granularities', None)
             result = await self._client.audio.translations.create(**params)
         else:
             result = await self._client.audio.transcriptions.create(

@@ -332,13 +332,20 @@ class TestOpenAISTTModel:
                     ],
                 ),
             ],
-            config={'translate': True},
+            config={
+                'translate': True,
+                'language': 'es',
+                'timestamp_granularities': ['word'],
+            },
         )
 
         got = await model.generate(request, MagicMock())
 
         mock_client.audio.translations.create.assert_called_once()
         mock_client.audio.transcriptions.create.assert_not_called()
+        translation_params = mock_client.audio.translations.create.call_args.kwargs
+        assert 'language' not in translation_params
+        assert 'timestamp_granularities' not in translation_params
         assert got.message is not None
 
         part = got.message.content[0].root
