@@ -686,6 +686,36 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(body.include).toStrictEqual(['message.output_text.logprobs']);
   });
 
+  test('drops declared chat-schema keys that have no Responses equivalent', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-4o', {
+      messages: [],
+      config: {
+        transport: 'responses',
+        frequencyPenalty: 0.5,
+        presencePenalty: 0.5,
+        logProbs: true,
+        topLogProbs: 3,
+      },
+    });
+
+    expect(body).not.toHaveProperty('frequencyPenalty');
+    expect(body).not.toHaveProperty('presencePenalty');
+    expect(body).not.toHaveProperty('logProbs');
+    expect(body).not.toHaveProperty('topLogProbs');
+  });
+
+  test('lets a raw previous_response_id passthrough win over the declared key', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: {
+        previousResponseId: 'resp_declared',
+        previous_response_id: 'resp_raw',
+      },
+    });
+
+    expect(body.previous_response_id).toBe('resp_raw');
+  });
+
   test('maps previousResponseId onto the wire field', () => {
     const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
       messages: [],

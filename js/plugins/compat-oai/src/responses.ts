@@ -337,6 +337,12 @@ export function toOpenAIResponsesRequestBody(
     topP: top_p,
     topK, // the Responses API has no equivalent
     stopSequences, // the Responses API has no equivalent
+    // Chat Completions schema keys with no Responses equivalent, dropped so a
+    // dual-transport model's declared chat config cannot leak onto this wire.
+    frequencyPenalty,
+    presencePenalty,
+    logProbs,
+    topLogProbs,
     visualDetailLevel, // consumed while building the input items above
     version: modelVersion,
     store,
