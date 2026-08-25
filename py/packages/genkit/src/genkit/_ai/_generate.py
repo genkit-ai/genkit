@@ -648,6 +648,43 @@ def _latency_ms_from_operation(operation: Operation) -> float | None:
     return None
 
 
+def box_background_start(*, raw: object, request: ModelRequest, name: str) -> ModelResponse:
+    """Turn a background start into the ModelResponse wrap_model reads.
+
+    start() is a poll handle. Already-boxed responses pass through; a chat
+    turn with no handle is a model-author mistake.
+    """
+    if isinstance(raw, ModelResponse):
+        if raw.operation is None:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=f"Background model '{name}' did not return an operation",
+            )
+        if raw.latency_ms is None:
+            raw.latency_ms = _latency_ms_from_operation(raw.operation)
+        return raw
+    if not isinstance(raw, Operation):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=f"Background model '{name}' did not return an operation",
+        )
+    return ModelResponse(
+        operation=raw,
+        request=request,
+        latency_ms=_latency_ms_from_operation(raw),
+    )
+
+
+def reject_foreground_operation(*, raw: object, name: str) -> ModelResponse:
+    """A chat model returns a message, not a job handle."""
+    if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=f"Model '{name}' is a define_model and returned an operation; use define_background_model",
+        )
+    return cast(ModelResponse, raw)
+
+
 def _persist_threaded_conversation(response: ModelResponse, messages: list[Message]) -> ModelResponse:
     """Persist the threaded conversation onto the response's request.
 
@@ -795,37 +832,9 @@ async def _generate_action_turn(
                     abort_signal=c.abort_signal,
                 )
             ).response
-            # wrap_model reads .message. A background start is a poll handle,
-            # so box it before the hook. A chat model that returns a handle
-            # is registered on the wrong kind.
             if model.kind == ActionKind.BACKGROUND_MODEL:
-                if isinstance(raw, ModelResponse):
-                    if raw.operation is None:
-                        raise GenkitError(
-                            status='FAILED_PRECONDITION',
-                            message=f"Background model '{model.name}' did not return an operation",
-                        )
-                    if raw.latency_ms is None:
-                        raw.latency_ms = _latency_ms_from_operation(raw.operation)
-                    return raw
-                if not isinstance(raw, Operation):
-                    raise GenkitError(
-                        status='FAILED_PRECONDITION',
-                        message=f"Background model '{model.name}' did not return an operation",
-                    )
-                return ModelResponse(
-                    operation=raw,
-                    request=params.request,
-                    latency_ms=_latency_ms_from_operation(raw),
-                )
-            if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
-                raise GenkitError(
-                    status='FAILED_PRECONDITION',
-                    message=(
-                        f"Model '{model.name}' is a define_model and returned an operation; use define_background_model"
-                    ),
-                )
-            return raw
+                return box_background_start(raw=raw, request=params.request, name=model.name)
+            return reject_foreground_operation(raw=raw, name=model.name)
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
