@@ -437,6 +437,8 @@ export function fromOpenAIResponse(
       inputTokens: response.usage?.input_tokens,
       outputTokens: response.usage?.output_tokens,
       totalTokens: response.usage?.total_tokens,
+      thoughtsTokens: response.usage?.output_tokens_details?.reasoning_tokens,
+      cachedContentTokens: response.usage?.input_tokens_details?.cached_tokens,
     },
     raw: response,
   };
