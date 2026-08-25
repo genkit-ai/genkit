@@ -220,6 +220,24 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(withoutSystem).not.toHaveProperty('instructions');
   });
 
+  test('rejects stream in config instead of passing it to the wire', () => {
+    expect(() =>
+      toOpenAIResponsesRequestBody('gpt-5-pro', {
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { stream: true },
+      })
+    ).toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
+
+  test('rejects background in config instead of passing it to the wire', () => {
+    expect(() =>
+      toOpenAIResponsesRequestBody('gpt-5-pro', {
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { background: true },
+      })
+    ).toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
+
   test('joins config instructions with system messages instead of clobbering them', () => {
     const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
       messages: [{ role: 'system', content: [{ text: 'You are X' }] }],

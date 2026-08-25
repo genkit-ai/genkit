@@ -249,6 +249,8 @@ export function toOpenAIResponsesRequestBody(
     instructions: instructionsFromConfig,
     // Selects the OpenAI transport; it is a plugin concept, not a wire field.
     transport,
+    stream,
+    background,
     apiKey,
     ...restOfConfig
   } = request.config ?? {};
@@ -257,6 +259,22 @@ export function toOpenAIResponsesRequestBody(
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
       message: `Unsupported transport '${transport}'; this model is served over the Responses API.`,
+    });
+  }
+
+  // Either key through the passthrough would change the response envelope out
+  // from under this runner: a Stream or a queued response read as a completed
+  // one comes back as an empty message with a clean finish.
+  if (stream !== undefined) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `'stream' is not a config option; use Genkit's streaming API (generateStream) instead.`,
+    });
+  }
+  if (background !== undefined) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Background responses are not supported.`,
     });
   }
 
