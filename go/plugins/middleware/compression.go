@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // CompressionMetadataKey is the message-metadata key under which
@@ -43,6 +44,11 @@ import (
 //   - The last message covered by a compaction gains {"summary": "...",
 //     "stats": {...}}. A client can render a "history was compacted here"
 //     divider after that message; every message stays in the history.
+//   - The synthetic message carrying a compaction summary into the model's
+//     view is marked {"summaryMessage": true}. It appears only in model
+//     requests (and their traces), never in the history.
+//
+// Go clients decode stamps with [ReadCompressionStamp].
 //
 // The newest message carrying a "summary" entry (the compaction boundary)
 // determines what the model sees: system messages, then the summary as a
@@ -50,12 +56,65 @@ import (
 // boundary stamps remain in place as historical markers.
 const CompressionMetadataKey = "contextCompression"
 
+// Stamp field names under [CompressionMetadataKey]; see [CompressionStamp]
+// for their meaning.
+const (
+	stampInputTokens    = "inputTokens"
+	stampSummary        = "summary"
+	stampStats          = "stats"
+	stampSummaryMessage = "summaryMessage"
+)
+
+// CompressionStamp is the decoded form of one message's stamp under
+// [CompressionMetadataKey]. The JSON field names are the wire contract, for
+// clients reading the raw metadata without a Genkit dependency.
+type CompressionStamp struct {
+	// InputTokens is the provider-reported input token count of the model
+	// call that produced this message. Zero when the call reported no usage.
+	InputTokens int `json:"inputTokens,omitempty"`
+	// Summary is the summary text stamped on a compaction boundary. Empty on
+	// non-boundary messages and for summarizer-less compactions alike, so
+	// test Stats to detect a boundary.
+	Summary string `json:"summary,omitempty"`
+	// Stats describes the compaction whose boundary this message is
+	// (trigger, messagesCompacted, ...); non-nil exactly on boundary
+	// messages.
+	Stats map[string]any `json:"stats,omitempty"`
+	// SummaryMessage marks the synthetic message that carries a compaction
+	// summary into the model's view.
+	SummaryMessage bool `json:"summaryMessage,omitempty"`
+}
+
+// ReadCompressionStamp decodes the [CompressionMetadataKey] stamp on a
+// message, reporting whether the message carries one. Stamps round-trip
+// through JSON persistence, so numeric fields are coerced from any wire form.
+func ReadCompressionStamp(msg *ai.Message) (CompressionStamp, bool) {
+	raw := readStamp(msg)
+	if raw == nil {
+		return CompressionStamp{}, false
+	}
+	stamp := CompressionStamp{}
+	stamp.InputTokens, _ = base.ConvertTo[int](raw[stampInputTokens])
+	stamp.Summary, _ = raw[stampSummary].(string)
+	stamp.Stats, _ = raw[stampStats].(map[string]any)
+	stamp.SummaryMessage, _ = raw[stampSummaryMessage].(bool)
+	return stamp, true
+}
+
 // promptScaffoldKey marks messages rendered fresh from a prompt template each
 // turn (see the agent runtime in genkit/exp). Such messages are not durable
 // history: they are always preserved in the view, excluded from compaction
 // coverage, and never chosen as a boundary, since a stamp on one would be
 // lost on the next render.
 const promptScaffoldKey = "_genkit_prompt"
+
+// partPurposeKey and partPurposeOutput mirror the part-metadata convention
+// the ai package uses to tag injected output-format instructions
+// (injectInstructions in go/ai/format.go, pinned by its TestInjectInstructions).
+const (
+	partPurposeKey    = "purpose"
+	partPurposeOutput = "output"
+)
 
 // Default tuning values, matching the genkitx-misc JS contextCompression
 // middleware where a counterpart exists.
@@ -74,6 +133,10 @@ const (
 	// media entirely would underestimate; a flat per-part cost is closest to
 	// how providers bill vision input.
 	estTokensPerMediaPart = 1000
+	// estToolEnvelopeChars is the flat allowance for the JSON envelope around
+	// a tool call's payload (keys, ref, braces), so the estimate can count
+	// the payload itself from the per-call serialization cache.
+	estToolEnvelopeChars = 40
 
 	// summarizeRenderMaxChars caps the conversation rendering handed to the
 	// summarizer model, since the content being folded is by construction
@@ -337,24 +400,18 @@ func (c *ContextCompression) maxToolResponseChars() int {
 }
 
 func (c *ContextCompression) dedupeKeepRecent() int {
-	if c.DedupeToolResponses != nil && c.DedupeToolResponses.KeepRecent > defaultDedupeKeepRecent {
-		return c.DedupeToolResponses.KeepRecent
-	}
-	return defaultDedupeKeepRecent
+	return max(c.DedupeToolResponses.KeepRecent, defaultDedupeKeepRecent)
 }
 
 func (c *ContextCompression) dedupeNotice() string {
-	if c.DedupeToolResponses != nil && c.DedupeToolResponses.Notice != "" {
+	if c.DedupeToolResponses.Notice != "" {
 		return c.DedupeToolResponses.Notice
 	}
 	return defaultDedupeNotice
 }
 
 func (c *ContextCompression) truncatePreserveRecent() int {
-	t := c.TruncateToolResponses
-	switch {
-	case t == nil:
-		return defaultTruncatePreserveRecent
+	switch t := c.TruncateToolResponses; {
 	case t.PreserveRecent > 0:
 		return t.PreserveRecent
 	case t.PreserveRecent < 0:
@@ -383,15 +440,16 @@ func (c *ContextCompression) summarizePrompt() string {
 // request.
 func (c *ContextCompression) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
 	orig := params.Request
-	view, stats := c.buildView(orig.Messages)
+	pc := partTextCache{}
+	view, stats := c.buildView(orig.Messages, pc)
 
-	if plan, ok := c.planCompaction(ctx, orig.Messages, view); ok {
+	if plan, ok := c.planCompaction(ctx, orig.Messages, view, pc); ok {
 		compacted, err := c.compact(ctx, orig.Messages, view, plan)
 		if err != nil {
 			return nil, err
 		}
 		if compacted {
-			view, stats = c.buildView(orig.Messages)
+			view, stats = c.buildView(orig.Messages, pc)
 		}
 	}
 
@@ -425,7 +483,7 @@ func (c *ContextCompression) wrapModel(ctx context.Context, params *ai.ModelPara
 		resp.Request = &restored
 	}
 	if resp.Message != nil && resp.Usage != nil && resp.Usage.InputTokens > 0 {
-		mergeStamp(resp.Message, map[string]any{"inputTokens": resp.Usage.InputTokens})
+		mergeStamp(resp.Message, map[string]any{stampInputTokens: resp.Usage.InputTokens})
 	}
 	return resp, nil
 }
@@ -471,22 +529,14 @@ func flattenView(view []viewEntry) []*ai.Message {
 // viewDiffers reports whether the view is anything other than the original
 // messages in order.
 func viewDiffers(view []viewEntry, msgs []*ai.Message) bool {
-	if len(view) != len(msgs) {
-		return true
-	}
-	for i, e := range view {
-		if e.msg != msgs[i] {
-			return true
-		}
-	}
-	return false
+	return !slices.EqualFunc(view, msgs, func(e viewEntry, m *ai.Message) bool { return e.msg == m })
 }
 
 // buildView derives the messages to send to the model this call: the newest
 // compaction boundary is applied (system and prompt-template messages, then
 // the stored summary, then everything after the boundary), and the cheap
 // strategies rewrite tool responses within the result.
-func (c *ContextCompression) buildView(msgs []*ai.Message) ([]viewEntry, viewStats) {
+func (c *ContextCompression) buildView(msgs []*ai.Message, pc partTextCache) ([]viewEntry, viewStats) {
 	boundary := newestBoundary(msgs)
 	view := make([]viewEntry, 0, len(msgs)+1)
 	for i, m := range msgs {
@@ -509,12 +559,17 @@ func (c *ContextCompression) buildView(msgs []*ai.Message) ([]viewEntry, viewSta
 	}
 
 	var stats viewStats
-	stats.capped = applyToolResponseCap(view, c.maxToolResponseChars())
+	// Dedupe runs first so responses it elides are not first capped or
+	// truncated to no effect; its keys derive from request inputs, which the
+	// other strategies never touch.
 	if c.DedupeToolResponses != nil {
-		stats.deduplicated = c.applyDedupe(view)
+		stats.deduplicated = c.applyDedupe(view, pc)
+	}
+	if c.maxToolResponseChars() > 0 {
+		stats.capped = c.applyToolResponseCap(view, pc)
 	}
 	if c.TruncateToolResponses != nil && c.TruncateToolResponses.MaxChars > 0 {
-		stats.truncated = c.applyTruncate(view)
+		stats.truncated = c.applyTruncate(view, pc)
 	}
 	return view, stats
 }
@@ -523,7 +578,7 @@ func (c *ContextCompression) buildView(msgs []*ai.Message) ([]viewEntry, viewSta
 // boundary covers: the stored summary behind a standard prefix, or the
 // truncation notice for a summarizer-less compaction.
 func (c *ContextCompression) boundaryText(boundary *ai.Message) string {
-	if summary, _ := readStamp(boundary)["summary"].(string); summary != "" {
+	if summary, _ := readStamp(boundary)[stampSummary].(string); summary != "" {
 		return summaryPrefix + "\n" + summary
 	}
 	return c.truncationNotice()
@@ -534,7 +589,7 @@ func (c *ContextCompression) boundaryText(boundary *ai.Message) string {
 // synthetic so traces are self-explanatory.
 func summaryMessage(text string) *ai.Message {
 	m := ai.NewUserTextMessage(text)
-	m.Metadata = map[string]any{CompressionMetadataKey: map[string]any{"summaryMessage": true}}
+	m.Metadata = map[string]any{CompressionMetadataKey: map[string]any{stampSummaryMessage: true}}
 	return m
 }
 
@@ -559,7 +614,7 @@ func alwaysPreserved(m *ai.Message) bool {
 		if p == nil || p.Metadata == nil {
 			continue
 		}
-		if purpose, _ := p.Metadata["purpose"].(string); purpose == "output" {
+		if purpose, _ := p.Metadata[partPurposeKey].(string); purpose == partPurposeOutput {
 			return true
 		}
 	}
@@ -598,7 +653,7 @@ func mergeStamp(m *ai.Message, fields map[string]any) {
 // compactions), or -1.
 func newestBoundary(msgs []*ai.Message) int {
 	for i, msg := range slices.Backward(msgs) {
-		if _, ok := readStamp(msg)["summary"]; ok {
+		if _, ok := readStamp(msg)[stampSummary]; ok {
 			return i
 		}
 	}
@@ -617,36 +672,18 @@ func lastReportedInputTokens(msgs []*ai.Message) (int, bool) {
 		if msg == nil || msg.Role != ai.RoleModel {
 			continue
 		}
-		if v, ok := readStamp(msg)["inputTokens"]; ok {
-			return asInt(v)
+		stamp, _ := ReadCompressionStamp(msg)
+		if stamp.InputTokens > 0 {
+			return stamp.InputTokens, true
 		}
 		return 0, false
 	}
 	return 0, false
 }
 
-func asInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case json.Number:
-		f, err := n.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return int(f), true
-	default:
-		return 0, false
-	}
-}
-
 // estimateTokens roughly estimates the token count of the view. Used only
 // until a provider-reported count is stamped on the history.
-func estimateTokens(view []viewEntry) int {
+func estimateTokens(view []viewEntry, pc partTextCache) int {
 	chars, media := 0, 0
 	for _, e := range view {
 		for _, p := range e.msg.Content {
@@ -656,6 +693,10 @@ func estimateTokens(view []viewEntry) int {
 				media++
 			case p.IsText(), p.IsReasoning():
 				chars += len(p.Text)
+			case p.IsToolRequest():
+				chars += len(p.ToolRequest.Name) + len(pc.toolInput(p)) + estToolEnvelopeChars
+			case p.IsToolResponse():
+				chars += len(p.ToolResponse.Name) + len(pc.toolOutput(p)) + estToolEnvelopeChars
 			default:
 				chars += len(marshalJSON(p))
 			}
@@ -682,6 +723,34 @@ func toolOutputString(out any) string {
 		return s
 	}
 	return marshalJSON(out)
+}
+
+// partTextCache memoizes the per-call serializations of tool part payloads,
+// keyed by part pointer, so each payload is serialized at most once per model
+// call across the strategies and the token estimate. Parts a strategy
+// rewrites get fresh pointers (and plain string outputs), so entries never go
+// stale.
+type partTextCache map[*ai.Part]string
+
+// toolOutput returns the serialized output of a tool response part.
+func (pc partTextCache) toolOutput(p *ai.Part) string {
+	s, ok := pc[p]
+	if !ok {
+		s = toolOutputString(p.ToolResponse.Output)
+		pc[p] = s
+	}
+	return s
+}
+
+// toolInput returns the serialized input of a tool request part, or "" if it
+// cannot be serialized.
+func (pc partTextCache) toolInput(p *ai.Part) string {
+	s, ok := pc[p]
+	if !ok {
+		s = marshalJSON(p.ToolRequest.Input)
+		pc[p] = s
+	}
+	return s
 }
 
 // cutRuneSafe returns s truncated to at most n bytes without splitting a
@@ -712,11 +781,10 @@ func replaceToolOutput(e *viewEntry, partIndex int, output string, dropContent b
 }
 
 // applyToolResponseCap hard-truncates any single tool response larger than
-// maxChars, regardless of position. Returns the number of responses capped.
-func applyToolResponseCap(view []viewEntry, maxChars int) int {
-	if maxChars <= 0 {
-		return 0
-	}
+// MaxToolResponseChars, regardless of position. Returns the number of
+// responses capped.
+func (c *ContextCompression) applyToolResponseCap(view []viewEntry, pc partTextCache) int {
+	maxChars := c.maxToolResponseChars()
 	capped := 0
 	for i := range view {
 		e := &view[i]
@@ -724,7 +792,7 @@ func applyToolResponseCap(view []viewEntry, maxChars int) int {
 			if !p.IsToolResponse() {
 				continue
 			}
-			out := toolOutputString(p.ToolResponse.Output)
+			out := pc.toolOutput(p)
 			if len(out) <= maxChars {
 				continue
 			}
@@ -747,33 +815,45 @@ func applyToolResponseCap(view []viewEntry, maxChars int) int {
 // found or serialized, joins no group and is never elided: refless
 // histories (hand-built, or imported from runtimes without call IDs) must
 // not have distinct results collapsed as duplicates.
-func (c *ContextCompression) applyDedupe(view []viewEntry) int {
+func (c *ContextCompression) applyDedupe(view []viewEntry, pc partTextCache) int {
 	matchBy := c.DedupeToolResponses.MatchBy
 	if matchBy == "" {
 		matchBy = CompressionDedupeNameAndInput
 	}
+	keep := c.dedupeKeepRecent()
 
-	inputs := map[string]string{}
+	// Count responses per tool name first: a tool with at most KeepRecent
+	// responses can never have one elided, whatever the inputs, so its
+	// request inputs are never serialized.
+	nameCounts := map[string]int{}
+	for _, e := range view {
+		for _, p := range e.msg.Content {
+			if p.IsToolResponse() {
+				nameCounts[p.ToolResponse.Name]++
+			}
+		}
+	}
+
+	requests := map[string]*ai.Part{}
 	groups := map[string][][2]int{}
 	for i, e := range view {
 		for j, p := range e.msg.Content {
 			if matchBy == CompressionDedupeNameAndInput &&
 				e.msg.Role == ai.RoleModel && p.IsToolRequest() && p.ToolRequest.Ref != "" {
-				req := p.ToolRequest
-				inputs[req.Name+"\x00"+req.Ref] = marshalJSON(req.Input)
+				requests[p.ToolRequest.Name+"\x00"+p.ToolRequest.Ref] = p
 			}
-			if !p.IsToolResponse() {
+			if !p.IsToolResponse() || nameCounts[p.ToolResponse.Name] <= keep {
 				continue
 			}
 			resp := p.ToolResponse
 			key := resp.Name
 			if matchBy == CompressionDedupeNameAndInput {
 				input := ""
-				if resp.Ref != "" {
-					input = inputs[resp.Name+"\x00"+resp.Ref]
+				if req, ok := requests[resp.Name+"\x00"+resp.Ref]; ok {
+					input = pc.toolInput(req)
 				}
 				if input == "" {
-					continue // Unresolvable request input: never elide.
+					continue // No ref, or unresolvable request input: never elide.
 				}
 				key = resp.Name + "\x00" + input
 			}
@@ -781,7 +861,6 @@ func (c *ContextCompression) applyDedupe(view []viewEntry) int {
 		}
 	}
 
-	keep := c.dedupeKeepRecent()
 	notice := c.dedupeNotice()
 	deduplicated := 0
 	for _, positions := range groups {
@@ -799,7 +878,7 @@ func (c *ContextCompression) applyDedupe(view []viewEntry) int {
 // applyTruncate truncates tool response outputs beyond MaxChars, leaving the
 // most recent PreserveRecent tool messages untouched. Returns the number
 // truncated.
-func (c *ContextCompression) applyTruncate(view []viewEntry) int {
+func (c *ContextCompression) applyTruncate(view []viewEntry, pc partTextCache) int {
 	maxChars := c.TruncateToolResponses.MaxChars
 	preserve := c.truncatePreserveRecent()
 
@@ -818,7 +897,7 @@ func (c *ContextCompression) applyTruncate(view []viewEntry) int {
 			if !p.IsToolResponse() {
 				continue
 			}
-			out := toolOutputString(p.ToolResponse.Output)
+			out := pc.toolOutput(p)
 			if len(out) <= maxChars {
 				continue
 			}
@@ -829,16 +908,23 @@ func (c *ContextCompression) applyTruncate(view []viewEntry) int {
 	return truncated
 }
 
-// compactionPlan captures one compaction decision: where the boundary lies
-// and what triggered it.
+// compactionPlan captures one compaction decision: where the boundary lies,
+// what triggered it, and what the compaction covers.
 type compactionPlan struct {
 	// boundary is the original index of the last message the compaction
 	// covers.
 	boundary int
+	// prevBoundary is the original index of the boundary this compaction
+	// supersedes, or -1.
+	prevBoundary int
+	// covered is how many durable messages the compaction folds.
+	covered int
 	// trigger names the trigger that fired: "inputTokens" or "maxMessages".
 	trigger string
 	// reading is the context-size reading that fired a token trigger.
 	reading int
+	// overshoot is reading relative to MaxInputTokens for a token trigger.
+	overshoot float64
 	// estimated reports whether reading came from the character estimate
 	// rather than provider-reported usage.
 	estimated bool
@@ -846,12 +932,12 @@ type compactionPlan struct {
 
 // planCompaction decides whether a compaction should run this call, and where
 // its boundary lies.
-func (c *ContextCompression) planCompaction(ctx context.Context, msgs []*ai.Message, view []viewEntry) (compactionPlan, bool) {
+func (c *ContextCompression) planCompaction(ctx context.Context, msgs []*ai.Message, view []viewEntry, pc partTextCache) (compactionPlan, bool) {
 	plan := compactionPlan{}
 	if c.MaxInputTokens > 0 {
 		reading, known := lastReportedInputTokens(msgs)
 		if !known {
-			reading = estimateTokens(view)
+			reading = estimateTokens(view, pc)
 		}
 		if reading > c.MaxInputTokens {
 			plan.trigger = "inputTokens"
@@ -868,7 +954,8 @@ func (c *ContextCompression) planCompaction(ctx context.Context, msgs []*ai.Mess
 
 	keep := c.preserveRecent()
 	if plan.trigger == "inputTokens" {
-		keep = adjustForOvershoot(float64(plan.reading)/float64(c.MaxInputTokens), keep)
+		plan.overshoot = float64(plan.reading) / float64(c.MaxInputTokens)
+		keep = adjustForOvershoot(plan.overshoot, keep)
 	}
 
 	// Candidates are durable, compactable view messages: everything after
@@ -901,13 +988,15 @@ func (c *ContextCompression) planCompaction(ctx context.Context, msgs []*ai.Mess
 	// clean, keeping each tool response with the model message that
 	// requested it.
 	pos := len(candidates) - keep - 1
-	for pos >= 0 && isToolMessage(msgs, candidates[pos+1]) {
+	for pos >= 0 && msgs[candidates[pos+1]].Role == ai.RoleTool {
 		pos--
 	}
 	if pos < 0 {
 		return plan, false // Nothing left to fold once the window starts clean.
 	}
 	plan.boundary = candidates[pos]
+	plan.covered = pos + 1
+	plan.prevBoundary = newestBoundary(msgs)
 
 	if plan.trigger == "maxMessages" {
 		// The view can never shrink below the preserved head plus the summary
@@ -922,10 +1011,6 @@ func (c *ContextCompression) planCompaction(ctx context.Context, msgs []*ai.Mess
 		}
 	}
 	return plan, true
-}
-
-func isToolMessage(msgs []*ai.Message, i int) bool {
-	return i >= 0 && i < len(msgs) && msgs[i] != nil && msgs[i].Role == ai.RoleTool
 }
 
 // adjustForOvershoot shrinks the preserved window when the context is far
@@ -949,17 +1034,9 @@ func adjustForOvershoot(overshoot float64, keep int) int {
 // unresolvable summarizer model with a genkit instance available is
 // deterministic misconfiguration and returns an error.
 func (c *ContextCompression) compact(ctx context.Context, msgs []*ai.Message, view []viewEntry, plan compactionPlan) (bool, error) {
-	prevBoundary := newestBoundary(msgs)
-	covered := 0
-	for _, e := range view {
-		if e.origIndex > prevBoundary && e.origIndex <= plan.boundary && !alwaysPreserved(e.msg) {
-			covered++
-		}
-	}
-
 	stats := map[string]any{
 		"trigger":           plan.trigger,
-		"messagesCompacted": covered,
+		"messagesCompacted": plan.covered,
 		"summarized":        false,
 	}
 	if plan.trigger == "inputTokens" {
@@ -968,7 +1045,7 @@ func (c *ContextCompression) compact(ctx context.Context, msgs []*ai.Message, vi
 		} else {
 			stats["inputTokens"] = plan.reading
 		}
-		stats["overshoot"] = math.Round(float64(plan.reading)/float64(c.MaxInputTokens)*100) / 100
+		stats["overshoot"] = math.Round(plan.overshoot*100) / 100
 	}
 
 	summary := ""
@@ -988,7 +1065,7 @@ func (c *ContextCompression) compact(ctx context.Context, msgs []*ai.Message, vi
 				"contextCompression: summarizer model %q not found", c.Summarizer.Model.Name())
 		} else {
 			start := time.Now()
-			text, err := c.summarize(ctx, m, msgs, view, prevBoundary, plan.boundary, stats)
+			text, err := c.summarize(ctx, m, msgs, view, plan, stats)
 			if err != nil {
 				softErr = err
 			} else {
@@ -1013,11 +1090,11 @@ func (c *ContextCompression) compact(ctx context.Context, msgs []*ai.Message, vi
 		}
 	}
 
-	mergeStamp(msgs[plan.boundary], map[string]any{"summary": summary, "stats": stats})
+	mergeStamp(msgs[plan.boundary], map[string]any{stampSummary: summary, stampStats: stats})
 
 	logger.Debug(ctx, "context compacted",
 		"trigger", plan.trigger,
-		"messagesCompacted", covered,
+		"messagesCompacted", plan.covered,
 		"boundary", plan.boundary,
 		"summarized", summary != "",
 		"summaryChars", len(summary))
@@ -1028,10 +1105,10 @@ func (c *ContextCompression) compact(ctx context.Context, msgs []*ai.Message, vi
 // to fold it (together with any previous summary) into a fresh summary. All
 // returned errors are transient: the caller absorbs them and proceeds
 // uncompacted.
-func (c *ContextCompression) summarize(ctx context.Context, m ai.Model, msgs []*ai.Message, view []viewEntry, prevBoundary, boundary int, stats map[string]any) (string, error) {
+func (c *ContextCompression) summarize(ctx context.Context, m ai.Model, msgs []*ai.Message, view []viewEntry, plan compactionPlan, stats map[string]any) (string, error) {
 	var sb strings.Builder
-	if prevBoundary >= 0 {
-		if prev, _ := readStamp(msgs[prevBoundary])["summary"].(string); prev != "" {
+	if plan.prevBoundary >= 0 {
+		if prev, _ := readStamp(msgs[plan.prevBoundary])[stampSummary].(string); prev != "" {
 			sb.WriteString("[Previous summary]\n")
 			sb.WriteString(prev)
 			sb.WriteString("\n\n[New messages]\n")
@@ -1039,7 +1116,7 @@ func (c *ContextCompression) summarize(ctx context.Context, m ai.Model, msgs []*
 			sb.WriteString("[Note: some earlier messages were previously dropped without summarization.]\n\n")
 		}
 	}
-	renderConversation(&sb, view, prevBoundary, boundary)
+	renderConversation(&sb, view, plan.prevBoundary, plan.boundary)
 
 	// The rendered conversation is roughly the over-budget context being
 	// folded, which can exceed the summarizer's own window exactly when

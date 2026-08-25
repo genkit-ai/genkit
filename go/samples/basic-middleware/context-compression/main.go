@@ -139,26 +139,21 @@ func main() {
 			}
 
 			// The full history is intact; the compression record lives in
-			// message metadata. A chat client reads the same stamps to place
-			// "history was compacted here" markers.
-			result := &ResearchResult{Answer: resp.Text()}
-			for _, msg := range resp.History() {
-				result.Messages++
-				stamp, _ := msg.Metadata[middleware.CompressionMetadataKey].(map[string]any)
-				if stamp == nil {
+			// message metadata. A chat client reads the same stamps (with
+			// middleware.ReadCompressionStamp, or the raw metadata over the
+			// wire) to place "history was compacted here" markers.
+			history := resp.History()
+			result := &ResearchResult{Answer: resp.Text(), Messages: len(history)}
+			for _, msg := range history {
+				stamp, ok := middleware.ReadCompressionStamp(msg)
+				if !ok {
 					continue
 				}
-				// In-process stamps carry ints; after a JSON round-trip
-				// (persisted sessions, remote clients) they arrive as
-				// float64, so a client must accept both.
-				switch tokens := stamp["inputTokens"].(type) {
-				case int:
-					result.InputTokensPerTurn = append(result.InputTokensPerTurn, tokens)
-				case float64:
-					result.InputTokensPerTurn = append(result.InputTokensPerTurn, int(tokens))
+				if stamp.InputTokens > 0 {
+					result.InputTokensPerTurn = append(result.InputTokensPerTurn, stamp.InputTokens)
 				}
-				if stats, ok := stamp["stats"].(map[string]any); ok {
-					result.Compactions = append(result.Compactions, stats)
+				if stamp.Stats != nil {
+					result.Compactions = append(result.Compactions, stamp.Stats)
 				}
 			}
 			return result, nil

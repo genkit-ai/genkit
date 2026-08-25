@@ -71,11 +71,12 @@ func defineEchoTool(t *testing.T, g *genkit.Genkit, name string) ai.Tool {
 }
 
 // defineSummarizer registers a summarizer model that records each prompt it
-// receives and returns the next text from texts (the last repeats).
-func defineSummarizer(t *testing.T, g *genkit.Genkit, prompts *[]string, texts ...string) ai.Model {
+// receives and returns the next text from texts (the last repeats). The
+// returned config wires the middleware to it.
+func defineSummarizer(t *testing.T, g *genkit.Genkit, prompts *[]string, texts ...string) *CompressionSummarizer {
 	t.Helper()
 	calls := 0
-	return defineTestModel(t, g, "test/summarizer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	defineTestModel(t, g, "test/summarizer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		*prompts = append(*prompts, req.Messages[len(req.Messages)-1].Text())
 		text := texts[min(calls, len(texts)-1)]
 		calls++
@@ -85,6 +86,7 @@ func defineSummarizer(t *testing.T, g *genkit.Genkit, prompts *[]string, texts .
 			Usage:   &ai.GenerationUsage{InputTokens: 200, OutputTokens: 50},
 		}, nil
 	})
+	return &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)}
 }
 
 // toolOutputs returns the output string of every tool response in msgs, in
@@ -309,7 +311,7 @@ func TestCompressionTokenTriggerWithSummarizer(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S1")
+	summarizer := defineSummarizer(t, g, &prompts, "S1")
 	tool := defineEchoTool(t, g, "research")
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("research",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{500, 5000, 800}, "done", &seen))
@@ -321,7 +323,7 @@ func TestCompressionTokenTriggerWithSummarizer(t *testing.T) {
 		ai.WithUse(&ContextCompression{
 			MaxInputTokens: 1000,
 			PreserveRecent: 2,
-			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+			Summarizer:     summarizer,
 		}),
 	)
 	if err != nil {
@@ -391,7 +393,7 @@ func TestCompressionEstimateTriggersFirstCall(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S1")
+	summarizer := defineSummarizer(t, g, &prompts, "S1")
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("unused",
 		nil, []int{100}, "done", &seen))
 
@@ -402,7 +404,7 @@ func TestCompressionEstimateTriggersFirstCall(t *testing.T) {
 		ai.WithUse(&ContextCompression{
 			MaxInputTokens: 1000,
 			PreserveRecent: 1,
-			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+			Summarizer:     summarizer,
 		}),
 	)
 	if err != nil {
@@ -472,7 +474,7 @@ func TestCompressionIncrementalSummaries(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S1", "S2")
+	summarizer := defineSummarizer(t, g, &prompts, "S1", "S2")
 	tool := defineEchoTool(t, g, "step")
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{5000}, "done", &seen))
@@ -484,7 +486,7 @@ func TestCompressionIncrementalSummaries(t *testing.T) {
 		ai.WithUse(&ContextCompression{
 			MaxInputTokens: 1000,
 			PreserveRecent: 2,
-			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+			Summarizer:     summarizer,
 		}),
 	)
 	if err != nil {
@@ -816,7 +818,7 @@ func TestCompressionPersistsAcrossCalls(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S1")
+	summarizer := defineSummarizer(t, g, &prompts, "S1")
 	tool := defineEchoTool(t, g, "step")
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{500, 5000, 800}, "done", &seen))
@@ -824,7 +826,7 @@ func TestCompressionPersistsAcrossCalls(t *testing.T) {
 	cc := &ContextCompression{
 		MaxInputTokens: 1000,
 		PreserveRecent: 2,
-		Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+		Summarizer:     summarizer,
 	}
 
 	resp, err := genkit.Generate(ctx, g,
@@ -966,7 +968,7 @@ func TestCompressionStaleUsageStampDoesNotRefire(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S")
+	summarizer := defineSummarizer(t, g, &prompts, "S")
 	tool := defineEchoTool(t, g, "step")
 	// The first call reports 5000 tokens; every later call reports none.
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
@@ -979,7 +981,7 @@ func TestCompressionStaleUsageStampDoesNotRefire(t *testing.T) {
 		ai.WithUse(&ContextCompression{
 			MaxInputTokens: 1000,
 			PreserveRecent: 2,
-			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+			Summarizer:     summarizer,
 		}),
 	)
 	if err != nil {
@@ -1072,7 +1074,7 @@ func TestCompressionUnsatisfiableMaxMessagesDoesNotThrash(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	var prompts []string
-	defineSummarizer(t, g, &prompts, "S")
+	summarizer := defineSummarizer(t, g, &prompts, "S")
 	tool := defineEchoTool(t, g, "step")
 	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}, {"v": "3"}, {"v": "4"}}, []int{0}, "done", &seen))
@@ -1086,7 +1088,7 @@ func TestCompressionUnsatisfiableMaxMessagesDoesNotThrash(t *testing.T) {
 		// so the cap is unsatisfiable and must not fire at all.
 		ai.WithUse(&ContextCompression{
 			MaxMessages: 3,
-			Summarizer:  &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+			Summarizer:  summarizer,
 		}),
 	)
 	if err != nil {
