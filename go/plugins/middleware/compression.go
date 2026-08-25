@@ -544,8 +544,8 @@ func mergeStamp(m *ai.Message, fields map[string]any) {
 // compaction (a "summary" entry, possibly empty for summarizer-less
 // compactions), or -1.
 func newestBoundary(msgs []*ai.Message) int {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if _, ok := readStamp(msgs[i])["summary"]; ok {
+	for i, msg := range slices.Backward(msgs) {
+		if _, ok := readStamp(msg)["summary"]; ok {
 			return i
 		}
 	}
@@ -556,11 +556,11 @@ func newestBoundary(msgs []*ai.Message) int {
 // newest model message, if any. Stamps round-trip through JSON persistence,
 // so the value may arrive as any numeric type.
 func lastReportedInputTokens(msgs []*ai.Message) (int, bool) {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i] == nil || msgs[i].Role != ai.RoleModel {
+	for _, msg := range slices.Backward(msgs) {
+		if msg == nil || msg.Role != ai.RoleModel {
 			continue
 		}
-		if v, ok := readStamp(msgs[i])["inputTokens"]; ok {
+		if v, ok := readStamp(msg)["inputTokens"]; ok {
 			return asInt(v)
 		}
 	}
