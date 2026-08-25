@@ -704,13 +704,22 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(body).not.toHaveProperty('topLogProbs');
   });
 
-  test('lets a raw previous_response_id passthrough win over the declared key', () => {
+  test('lets the declared previousResponseId win over a raw passthrough key', () => {
     const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
       messages: [],
       config: {
         previousResponseId: 'resp_declared',
         previous_response_id: 'resp_raw',
       },
+    });
+
+    expect(body.previous_response_id).toBe('resp_declared');
+  });
+
+  test('keeps a raw previous_response_id passthrough when no declared key is set', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { previous_response_id: 'resp_raw' },
     });
 
     expect(body.previous_response_id).toBe('resp_raw');
