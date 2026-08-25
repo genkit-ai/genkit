@@ -198,6 +198,12 @@ const second = await ai.generate({
 
 When threading with `previousResponseId`, send only the new user turn; the server already holds the earlier context.
 
+The pro models can take several minutes per request; raise the SDK's default 10-minute timeout through the plugin's `timeout` option if needed:
+
+```typescript
+openAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30 * 60 * 1000 });
+```
+
 ### Custom models & other Cloud providers
 
 ```typescript
