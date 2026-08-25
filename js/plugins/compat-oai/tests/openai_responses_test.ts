@@ -1892,6 +1892,47 @@ describe('openAI.responsesModel', () => {
     }
   });
 
+  test('keeps simulating an output schema on the plain chat path', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              message: { role: 'assistant', content: '{"colour":"blue"}' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      });
+
+      // gpt-3.5-turbo's Chat Completions API rejects response_format
+      // json_schema, so with no transport opt-in the schema must still be
+      // simulated into the prompt, exactly as before the dispatch existed.
+      await ai.generate({
+        model: openAI.model('gpt-3.5-turbo'),
+        prompt: 'pick one',
+        output: { schema: z.object({ colour: z.string() }) },
+      });
+
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/chat/completions');
+      expect(sent.body.response_format?.type).not.toBe('json_schema');
+      expect(JSON.stringify(sent.body.messages)).toContain('colour');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
+  });
+
   test('sends an output schema natively on the dispatched path', async () => {
     const server = new FakeOpenAIServer();
     await server.start();
