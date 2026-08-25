@@ -306,6 +306,46 @@ class TestOpenAISTTModel:
     """Tests for the OpenAISTTModel class."""
 
     @pytest.mark.asyncio
+    async def test_generate_calls_translation_create_when_translate_is_enabled(self) -> None:
+        """Verify Whisper uses the translations API when translate is enabled."""
+        mock_result = MagicMock()
+        mock_result.text = 'Translated text'
+
+        mock_client = AsyncMock()
+        mock_client.audio.translations.create = AsyncMock(return_value=mock_result)
+
+        model = OpenAISTTModel('whisper-1', mock_client)
+        audio_data = base64.b64encode(b'fake audio').decode('ascii')
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(
+                            root=MediaPart(
+                                media=Media(
+                                    content_type='audio/mpeg',
+                                    url=f'data:audio/mpeg;base64,{audio_data}',
+                                )
+                            )
+                        ),
+                    ],
+                ),
+            ],
+            config={'translate': True},
+        )
+
+        got = await model.generate(request, MagicMock())
+
+        mock_client.audio.translations.create.assert_called_once()
+        mock_client.audio.transcriptions.create.assert_not_called()
+        assert got.message is not None
+
+        part = got.message.content[0].root
+        assert isinstance(part, TextPart)
+        assert part.text == 'Translated text'
+
+    @pytest.mark.asyncio
     async def test_generate_calls_transcription_create(self) -> None:
         """Verify generate() calls client.audio.transcriptions.create."""
         mock_result = MagicMock()

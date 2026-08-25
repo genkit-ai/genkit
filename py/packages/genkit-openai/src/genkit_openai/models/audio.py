@@ -30,7 +30,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
-from openai.types.audio import Transcription
+from openai.types.audio import Transcription, Translation
 
 from genkit import (
     Media,
@@ -271,7 +271,7 @@ def _to_stt_params(
     return {k: v for k, v in params.items() if v is not None}
 
 
-def _to_stt_response(result: Transcription | str) -> ModelResponse:
+def _to_stt_response(result: Transcription | Translation | str) -> ModelResponse:
     """Convert an OpenAI transcription result to a Genkit ModelResponse.
 
     Handles the full union of types returned by transcriptions.create().
@@ -373,10 +373,14 @@ class OpenAISTTModel:
             A ModelResponse containing the transcribed text.
         """
         params = _to_stt_params(self._model_name, request)
-        result = await self._client.audio.transcriptions.create(
-            **params,
-            stream=False,
-        )
+        translate = extract_config_dict(request).get('translate', False)
+        if translate:
+            result = await self._client.audio.translations.create(**params)
+        else:
+            result = await self._client.audio.transcriptions.create(
+                **params,
+                stream=False,
+            )
         # transcriptions.create(stream=False) returns a union of
         # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
         # _to_stt_response handles all of these via isinstance/hasattr checks.
