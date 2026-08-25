@@ -1953,4 +1953,16 @@ describe('chat completions transport handling', () => {
       })
     ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
   });
+
+  test('rejects a near-miss transport value instead of serving it silently', async () => {
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIModelRunner('gpt-4o', client);
+
+    await expect(
+      runner({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { transport: 'Responses' },
+      })
+    ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
 });

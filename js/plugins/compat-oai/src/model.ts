@@ -537,6 +537,15 @@ export function toOpenAIRequestBody(
       message: `The 'responses' transport is not supported by ${modelVersion ?? modelName}; it is served over the Chat Completions API.`,
     });
   }
+  // Near-miss values ('Responses', a YAML typo) would otherwise be silently
+  // dropped and served over Chat Completions - the one silent cell in the
+  // transport matrix.
+  if (transport !== undefined && transport !== 'chat_completions') {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Unknown transport '${transport}'.`,
+    });
+  }
 
   const tools: ChatCompletionTool[] = request.tools?.map(toOpenAITool) ?? [];
   if (toolsFromConfig) {
