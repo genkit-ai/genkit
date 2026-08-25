@@ -349,3 +349,103 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]
+
+
+@pytest.mark.asyncio
+async def test_tool_with_only_tool_run_context_param_is_valid() -> None:
+    """Tool with ``ToolRunContext`` as its sole parameter defines and executes.
+
+    Regression for #4492: the parameter must not be treated as the tool's input
+    type (previously crashed with ``PydanticSchemaGenerationError``), and the
+    tool must receive a ``ToolRunContext`` instead of the raw input at runtime.
+    """
+    ai = Genkit()
+    seen: list[ToolRunContext] = []
+
+    @ai.tool(name='ctx_only')
+    async def get_user(ctx: ToolRunContext) -> str:
+        seen.append(ctx)
+        raw_user = ctx.context.get('user')
+        user_id = 0
+        if isinstance(raw_user, dict):
+            user_id = int(raw_user.get('id', 0))
+        if user_id == 42:
+            return 'User is Arthur Dent, an intergalactic traveler.'
+        return 'User is Guest.'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_only')
+    assert action is not None
+    # No input schema is inferred for a context-only parameter.
+    assert action.input_schema == {}
+    assert action.input_type is None
+
+    resp = await action.run(input={}, context={'user': {'id': 42}})
+    assert resp.response == 'User is Arthur Dent, an intergalactic traveler.'
+    assert len(seen) == 1
+    assert isinstance(seen[0], ToolRunContext)
+    assert seen[0].context == {'user': {'id': 42}}
+    assert seen[0].resumed_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_with_ctx_only_tool() -> None:
+    """Context-only tools get resume metadata: ``metadata.resumed`` surfaces as ``resumed_metadata``."""
+    ai = Genkit()
+    captured: list[tuple[dict | None, object | None]] = []
+
+    @ai.tool(name='ctx_only_restart')
+    async def check(ctx: ToolRunContext) -> str:
+        captured.append((ctx.resumed_metadata, ctx.original_input))
+        return 'done'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_only_restart')
+    assert action is not None
+
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='ctx_only_restart', ref='x', input={}),
+        metadata={'resumed': True, 'replacedInput': {'old': True}},
+    )
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
+
+    assert len(captured) == 1
+    assert captured[0][0] == {}
+    assert captured[0][1] == {'old': True}
+
+
+@pytest.mark.asyncio
+async def test_tool_with_input_and_context_params_unaffected() -> None:
+    """``(input, ctx)`` tools keep receiving the input and a ``ToolRunContext``."""
+    ai = Genkit()
+    seen: list[tuple[dict, ToolRunContext]] = []
+
+    @ai.tool(name='inp_ctx')
+    async def echo(inp: dict, ctx: ToolRunContext) -> str:
+        seen.append((inp, ctx))
+        return 'echoed'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='inp_ctx')
+    assert action is not None
+    assert action.input_schema.get('type') == 'object'
+
+    resp = await action.run(input={'msg': 'hi'}, context={'auth': 'role'})
+    assert resp.response == 'echoed'
+    assert len(seen) == 1
+    assert seen[0][0] == {'msg': 'hi'}
+    assert isinstance(seen[0][1], ToolRunContext)
+    assert seen[0][1].context == {'auth': 'role'}
+
+
+@pytest.mark.asyncio
+async def test_tool_with_single_input_param_unaffected() -> None:
+    """A tool with a single input parameter keeps receiving the raw input."""
+    ai = Genkit()
+
+    @ai.tool(name='echo_input')
+    async def echo_input(x: dict) -> dict:
+        return x
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='echo_input')
+    assert action is not None
+
+    resp = await action.run({'a': 1})
+    assert resp.response == {'a': 1}
