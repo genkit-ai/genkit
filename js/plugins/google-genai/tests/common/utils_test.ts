@@ -1095,6 +1095,37 @@ describe('Common Utils', () => {
       assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
     });
 
+    it('coerces a stringified HTTP code to a number when mapping status', () => {
+      const text = JSON.stringify({
+        error: { code: '503', message: 'overloaded' },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNAVAILABLE');
+    });
+
+    it('uses a default message when the error message is not a string', () => {
+      const text = JSON.stringify({
+        error: { code: 500, message: { nested: 'oops' } },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'INTERNAL');
+      assert.ok(err.message.includes('Error streaming from the model'));
+    });
+
+    it('truncates long non-JSON payloads in the fallback message', () => {
+      const longText = 'x'.repeat(1000);
+      const err = parseStreamErrorText(longText);
+      assert.ok(!(err instanceof GenkitError));
+      assert.ok(err.message.includes('...'));
+      // 'Failed to parse stream: ' + 500 chars + '...'
+      assert.ok(
+        err.message.length < 600,
+        `Expected truncated message, got length ${err.message.length}`
+      );
+    });
+
     it('returns a generic Error for non-JSON text', () => {
       const err = parseStreamErrorText('not json at all');
       assert.ok(!(err instanceof GenkitError));

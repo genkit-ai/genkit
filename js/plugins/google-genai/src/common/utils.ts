@@ -393,21 +393,35 @@ export function parseStreamErrorText(text: string): Error {
   try {
     const json = JSON.parse(text);
     const apiError = json?.error;
-    if (apiError && (apiError.code || apiError.status)) {
+    if (
+      apiError &&
+      typeof apiError === 'object' &&
+      (apiError.code || apiError.status)
+    ) {
+      // Coerce `code` to a number so a stringified code (e.g. "503") still maps.
+      const rawCode = Number(apiError.code);
       const status: StatusName = StatusNameSchema.safeParse(apiError.status)
         .success
         ? (apiError.status as StatusName)
-        : httpStatusToGenkitStatus(apiError.code);
+        : httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
+      const message =
+        typeof apiError.message === 'string'
+          ? apiError.message
+          : 'Error streaming from the model';
       return new GenkitError({
         status,
-        message: apiError.message || 'Error streaming from the model',
+        message,
         detail: json,
       });
     }
   } catch (e) {
     // Not JSON or not a recognizable error body, fall through to generic error.
   }
-  return new Error('Failed to parse stream: ' + text);
+  // Truncate to avoid memory/log bloat from large non-JSON payloads (e.g. an
+  // HTML error page from an upstream proxy).
+  const truncatedText =
+    text.length > 500 ? text.substring(0, 500) + '...' : text;
+  return new Error('Failed to parse stream: ' + truncatedText);
 }
 
 /**
