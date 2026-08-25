@@ -115,7 +115,7 @@ func main() {
 	genkit.DefineFlow(g, "researchFlow",
 		func(ctx context.Context, input TopicRequest) (*ResearchResult, error) {
 			resp, err := genkit.Generate(ctx, g,
-				ai.WithModelName("googleai/gemini-flash-latest"),
+				ai.WithModelName("googleai/gemini-3.6-flash"),
 				ai.WithPrompt("Research %s: search for at least three angles, read the most "+
 					"promising documents, then give a concise synthesis.", input.Topic),
 				ai.WithTools(search, readDocument),
@@ -126,7 +126,9 @@ func main() {
 					DedupeToolResponses:   &middleware.CompressionDedupe{},
 					TruncateToolResponses: &middleware.CompressionToolTruncation{MaxChars: 2000},
 					Summarizer: &middleware.CompressionSummarizer{
-						Model: googlegenai.ModelRef("googleai/gemini-flash-lite-latest", nil),
+						// Usually a cheaper model than the primary one; the
+						// same model keeps this sample to one dependency.
+						Model: googlegenai.ModelRef("googleai/gemini-3.6-flash", nil),
 					},
 				}),
 			)
