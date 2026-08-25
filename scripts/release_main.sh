@@ -65,6 +65,7 @@ JS_PACKAGES=(
   js/plugins/fetch
   js/plugins/middleware
   js/plugins/vercel-ai
+  js/plugins/a2ui
 )
 
 # CLI tooling packages to publish, relative to the repo root.
