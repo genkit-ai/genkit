@@ -192,7 +192,7 @@ const first = await ai.generate({
 const second = await ai.generate({
   model: openAI.responsesModel('gpt-4o'),
   prompt: 'Double it.',
-  config: { store: true, previousResponseId: first.raw.id },
+  config: { store: true, previousResponseId: (first.raw as { id: string }).id },
 });
 ```
 
