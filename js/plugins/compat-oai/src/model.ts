@@ -728,10 +728,22 @@ export function defineCompatOpenAIModel<
           : chatRunner(request, options)
     : chatRunner;
 
+  // A dispatch-capable action must not be wrapped in
+  // simulateConstrainedGeneration: that middleware strips output.schema into
+  // the prompt before the transport decision runs, and both wire formats here
+  // carry the schema natively.
+  const supports = params.responsesTransport
+    ? {
+        ...modelRef?.info?.supports,
+        constrained: modelRef?.info?.supports?.constrained ?? ('all' as const),
+      }
+    : modelRef?.info?.supports;
+
   return model(
     {
       name: actionName,
       ...modelRef?.info,
+      ...(supports ? { supports } : {}),
       configSchema: modelRef?.configSchema,
     },
     runner

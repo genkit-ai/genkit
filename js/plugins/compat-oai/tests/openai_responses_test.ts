@@ -1882,6 +1882,37 @@ describe('openAI.responsesModel', () => {
       server.stop();
     }
   });
+
+  test('sends an output schema natively on the dispatched path', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({ body: textResponse('{"colour":"blue"}') });
+
+      // gpt-5's chat info declares no `constrained`, so without the dispatch
+      // default this would be simulated into the prompt instead.
+      await ai.generate({
+        model: openAI.responsesModel('gpt-5'),
+        prompt: 'pick one',
+        output: { schema: z.object({ colour: z.string() }) },
+      });
+
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/responses');
+      expect(sent.body.text.format.type).toBe('json_schema');
+      expect(JSON.stringify(sent.body.input)).not.toContain('colour');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
+  });
 });
 
 describe('chat completions transport handling', () => {
