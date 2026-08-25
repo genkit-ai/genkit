@@ -458,7 +458,6 @@ export function toOpenAIResponsesRequestBody(
     tools: tools.length ? tools : undefined,
     tool_choice: request.toolChoice,
     include,
-    previous_response_id: previousResponseId,
     // The Responses API retains requests and responses server-side by default;
     // pinning it off matches the Chat Completions retention posture. A
     // `previous_response_id` passthrough still works against an earlier stored
@@ -467,6 +466,12 @@ export function toOpenAIResponsesRequestBody(
     store: storeValue,
     ...restOfConfig,
   };
+
+  // Set after the spread so a declared key beats a raw passthrough one, the
+  // same precedence the reasoning fields below get.
+  if (previousResponseId !== undefined) {
+    body.previous_response_id = previousResponseId;
+  }
 
   // Composed onto any raw `reasoning` object from the passthrough so the
   // declared fields win without discarding the rest of it.
