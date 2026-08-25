@@ -27,6 +27,7 @@
 import { a2ui } from '@genkit-ai/a2ui';
 import { expressHandler } from '@genkit-ai/express';
 import { googleAI } from '@genkit-ai/google-genai';
+import { retry } from '@genkit-ai/middleware';
 import cors from 'cors';
 import express from 'express';
 import { existsSync } from 'fs';
@@ -40,7 +41,7 @@ logger.setLogLevel('debug');
 // The whole A2UI integration is the `a2ui()` middleware in the agent's `use`
 // array below; `use` auto-registers it, so no plugin entry is required here.
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [googleAI(), retry.plugin()],
 });
 
 /** A demo tool the model can call to fetch (fake) weather data. */
@@ -84,7 +85,10 @@ prose brief; put the substance in the UI. When asked about weather, call the
 getWeather tool, then render a nice Card/Column summarizing it (temperature,
 condition, humidity). Feel free to add a Button (e.g. "Refresh") when useful.`,
   tools: [getWeather],
-  use: [a2ui()], // defaults to the bundled 'basic' catalog
+  use: [
+    a2ui(), // defaults to the bundled 'basic' catalog
+    retry(),
+  ],
   store: new InMemorySessionStore(),
 });
 
