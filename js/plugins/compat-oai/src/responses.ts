@@ -622,6 +622,10 @@ export interface ResponsesToolCallAccumulator {
  * `output_index`. Mutated in place as fragments arrive.
  * @returns The chunk to emit, or `undefined` for events with no chunk-visible
  * payload.
+ *
+ * Chunks carry no `index`: that field is the position of the message in the
+ * conversation, not the response's `output_index`, and core fills it with the
+ * tool-loop message index when omitted.
  */
 export function fromOpenAIResponsesStreamEvent(
   event: ResponseStreamEvent,
@@ -629,14 +633,11 @@ export function fromOpenAIResponsesStreamEvent(
 ): GenerateResponseChunkData | undefined {
   switch (event.type) {
     case 'response.output_text.delta':
-      return { index: event.output_index, content: [{ text: event.delta }] };
+      return { content: [{ text: event.delta }] };
     case 'response.refusal.delta':
-      return { index: event.output_index, content: [{ text: event.delta }] };
+      return { content: [{ text: event.delta }] };
     case 'response.reasoning_summary_text.delta':
-      return {
-        index: event.output_index,
-        content: [{ reasoning: event.delta }],
-      };
+      return { content: [{ reasoning: event.delta }] };
     case 'response.output_item.added': {
       if (event.item.type !== 'function_call') return undefined;
       const acc: ResponsesToolCallAccumulator = {
@@ -646,7 +647,6 @@ export function fromOpenAIResponsesStreamEvent(
       };
       toolCalls.set(event.output_index, acc);
       return {
-        index: event.output_index,
         content: [
           {
             toolRequest: {
@@ -670,7 +670,6 @@ export function fromOpenAIResponsesStreamEvent(
         input = {};
       }
       return {
-        index: event.output_index,
         content: [
           {
             toolRequest: { name: acc.name, ref: acc.ref, input, partial: true },
@@ -751,7 +750,6 @@ export function openAIResponsesModelRunner(
       );
       if (options?.streamingRequested && !canStream && options.sendChunk) {
         options.sendChunk({
-          index: 0,
           content: converted.message?.content ?? [],
         });
       }

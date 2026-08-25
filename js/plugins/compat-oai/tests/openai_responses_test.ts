@@ -1046,7 +1046,6 @@ describe('openAIResponsesModelRunner', () => {
     expect(request.body).not.toHaveProperty('stream');
     expect(sendChunk).toHaveBeenCalledTimes(1);
     expect(sendChunk).toHaveBeenCalledWith({
-      index: 0,
       content: [{ text: 'non-streamed' }],
     });
     expect(response.message?.content).toStrictEqual([{ text: 'non-streamed' }]);
@@ -1128,9 +1127,9 @@ describe('openAIResponsesModelRunner', () => {
     );
 
     expect(sendChunk.mock.calls.map((call) => call[0])).toStrictEqual([
-      { index: 0, content: [{ reasoning: 'thinking' }] },
-      { index: 1, content: [{ text: 'hel' }] },
-      { index: 1, content: [{ text: 'lo' }] },
+      { content: [{ reasoning: 'thinking' }] },
+      { content: [{ text: 'hel' }] },
+      { content: [{ text: 'lo' }] },
     ]);
     expect(response.message?.content).toStrictEqual([{ text: 'hello' }]);
     expect(server.requests[server.requests.length - 1].body.stream).toBe(true);
@@ -1201,7 +1200,6 @@ describe('openAIResponsesModelRunner', () => {
 
     const chunks = sendChunk.mock.calls.map((call) => call[0]);
     expect(chunks[0]).toStrictEqual({
-      index: 0,
       content: [
         {
           toolRequest: {
@@ -1214,7 +1212,6 @@ describe('openAIResponsesModelRunner', () => {
       ],
     });
     expect(chunks[chunks.length - 1]).toStrictEqual({
-      index: 0,
       content: [
         {
           toolRequest: {
