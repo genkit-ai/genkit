@@ -32,10 +32,14 @@ import {
  */
 export const RESPONSES_ONLY_MODELS = [
   'gpt-5-pro',
+  'gpt-5.2-pro',
+  'gpt-5.5-pro',
   'gpt-5-codex',
   'gpt-5.1-codex',
   'gpt-5.1-codex-mini',
   'gpt-5.1-codex-max',
+  'gpt-5.2-codex',
+  'gpt-5.3-codex',
   'codex-mini-latest',
   'o1-pro',
   'o3-pro',
@@ -105,12 +109,16 @@ export function openAIResponsesModelRef(params: {
 
 export const SUPPORTED_RESPONSES_MODELS = {
   'gpt-5-pro': openAIResponsesModelRef({ name: 'gpt-5-pro' }),
+  'gpt-5.2-pro': openAIResponsesModelRef({ name: 'gpt-5.2-pro' }),
+  'gpt-5.5-pro': openAIResponsesModelRef({ name: 'gpt-5.5-pro' }),
   'gpt-5-codex': openAIResponsesModelRef({ name: 'gpt-5-codex' }),
   'gpt-5.1-codex': openAIResponsesModelRef({ name: 'gpt-5.1-codex' }),
   'gpt-5.1-codex-mini': openAIResponsesModelRef({
     name: 'gpt-5.1-codex-mini',
   }),
   'gpt-5.1-codex-max': openAIResponsesModelRef({ name: 'gpt-5.1-codex-max' }),
+  'gpt-5.2-codex': openAIResponsesModelRef({ name: 'gpt-5.2-codex' }),
+  'gpt-5.3-codex': openAIResponsesModelRef({ name: 'gpt-5.3-codex' }),
   'codex-mini-latest': openAIResponsesModelRef({ name: 'codex-mini-latest' }),
   'o1-pro': openAIResponsesModelRef({ name: 'o1-pro' }),
   'o3-pro': openAIResponsesModelRef({ name: 'o3-pro' }),
