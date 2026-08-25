@@ -38,6 +38,7 @@ import {
 import {
   defineCompatOpenAIResponsesModel,
   fromOpenAIResponse,
+  isReasoningModelName,
   openAIResponsesModelRunner,
   toOpenAIResponsesRequestBody,
 } from '../src/responses';
@@ -130,6 +131,25 @@ describe('isNonStreamingResponsesModelName', () => {
     expect(isNonStreamingResponsesModelName('gpt-5-codex')).toBe(false);
     expect(isNonStreamingResponsesModelName('codex-mini-latest')).toBe(false);
     expect(isNonStreamingResponsesModelName(undefined)).toBe(false);
+  });
+});
+
+describe('isReasoningModelName', () => {
+  test('matches the reasoning families', () => {
+    expect(isReasoningModelName('o1-pro')).toBe(true);
+    expect(isReasoningModelName('o3')).toBe(true);
+    expect(isReasoningModelName('o4-mini')).toBe(true);
+    expect(isReasoningModelName('gpt-5-nano')).toBe(true);
+    expect(isReasoningModelName('gpt-5.3-codex')).toBe(true);
+    expect(isReasoningModelName('codex-mini-latest')).toBe(true);
+  });
+
+  test('leaves non-reasoning models out', () => {
+    expect(isReasoningModelName('gpt-4o')).toBe(false);
+    expect(isReasoningModelName('gpt-4o-mini')).toBe(false);
+    expect(isReasoningModelName('gpt-5-chat-latest')).toBe(false);
+    expect(isReasoningModelName('')).toBe(false);
+    expect(isReasoningModelName(undefined)).toBe(false);
   });
 });
 
@@ -617,6 +637,23 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(
       toOpenAIResponsesRequestBody('gpt-5-pro', { messages: [] }).include
     ).toStrictEqual(['reasoning.encrypted_content']);
+  });
+
+  test('never requests encrypted reasoning from a non-reasoning model', () => {
+    // Non-reasoning models reject the include with a 400, so a dual-transport
+    // opt-in (gpt-4o over Responses) must not carry it.
+    const body = toOpenAIResponsesRequestBody('gpt-4o', { messages: [] });
+
+    expect(body).not.toHaveProperty('include');
+  });
+
+  test('gates encrypted reasoning on the version when one is set', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-4o', {
+      messages: [],
+      config: { version: 'o3-pro-2025-06-10' },
+    });
+
+    expect(body.include).toStrictEqual(['reasoning.encrypted_content']);
   });
 
   test('merges caller include values without duplicating', () => {

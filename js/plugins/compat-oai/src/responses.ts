@@ -294,6 +294,22 @@ export function toOpenAIResponsesInput(
   };
 }
 
+/**
+ * Checks whether a model belongs to a reasoning family, i.e. can return
+ * reasoning items with encrypted content.
+ *
+ * Hand-curated by family like the transport lists in openai/responses.ts:
+ * requesting `reasoning.encrypted_content` from a non-reasoning model is a
+ * 400, not a no-op. Chat-tuned variants (`gpt-5-chat-latest`) are the
+ * non-reasoning exceptions inside a reasoning family.
+ * @param name The bare model name, without the plugin namespace.
+ */
+export function isReasoningModelName(name?: string): boolean {
+  if (!name) return false;
+  if (name.includes('chat')) return false;
+  return /^o\d|^gpt-5|^codex/.test(name);
+}
+
 /** Drops keys whose value is `undefined` so they never show up in traces. */
 function stripUndefined<T extends object>(value: T): T {
   return Object.fromEntries(
@@ -378,15 +394,18 @@ export function toOpenAIResponsesRequestBody(
       ? [includeFromConfig as ResponseIncludable]
       : (includeFromConfig as ResponseIncludable[] | undefined);
   // Under the stateless default the encrypted reasoning payload is the only
-  // context a reasoning model can resume from, so it is always requested.
-  const include: ResponseIncludable[] | undefined = storeValue
-    ? callerInclude
-    : [
-        ...new Set<ResponseIncludable>([
-          ...(callerInclude ?? []),
-          'reasoning.encrypted_content',
-        ]),
-      ];
+  // context a reasoning model can resume from, so it is requested for every
+  // model that can return one; asking a non-reasoning model for it is a 400,
+  // not a no-op, so the gate matters for dual-transport models.
+  const include: ResponseIncludable[] | undefined =
+    !storeValue && isReasoningModelName((modelVersion as string) ?? modelName)
+      ? [
+          ...new Set<ResponseIncludable>([
+            ...(callerInclude ?? []),
+            'reasoning.encrypted_content',
+          ]),
+        ]
+      : callerInclude;
 
   const body: ResponseCreateParamsNonStreaming = {
     model: modelVersion ?? modelName,
