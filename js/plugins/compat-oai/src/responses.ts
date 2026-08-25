@@ -298,9 +298,12 @@ export function toOpenAIResponsesRequestBody(
     ...restOfConfig,
   };
 
+  // Composed onto any raw `text` object from the passthrough (e.g. verbosity)
+  // rather than replacing it wholesale.
   const format = request.output?.format;
   if (format === 'json') {
     body.text = {
+      ...body.text,
       format: request.output?.schema
         ? {
             type: 'json_schema',
@@ -314,7 +317,7 @@ export function toOpenAIResponsesRequestBody(
         : { type: 'json_object' },
     };
   } else if (format === 'text') {
-    body.text = { format: { type: 'text' } };
+    body.text = { ...body.text, format: { type: 'text' } };
   }
 
   return stripUndefined(body);

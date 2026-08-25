@@ -220,6 +220,19 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(withoutSystem).not.toHaveProperty('instructions');
   });
 
+  test('composes the output format over a raw text config passthrough', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: { text: { verbosity: 'low' } },
+      output: { format: 'json' },
+    });
+
+    expect(body.text).toStrictEqual({
+      verbosity: 'low',
+      format: { type: 'json_object' },
+    });
+  });
+
   test('rejects stream in config instead of passing it to the wire', () => {
     expect(() =>
       toOpenAIResponsesRequestBody('gpt-5-pro', {
