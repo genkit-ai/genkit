@@ -413,6 +413,33 @@ async def test_run_tool_after_restart_with_ctx_only_tool() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_with_only_tool_run_context_param_with_default() -> None:
+    """A context-only tool whose param has a default still gets a ``ToolRunContext``.
+
+    Regression for the case where ``_first_arg_optional`` is True: without
+    explicit input the dispatch must pass the context, not call the tool with
+    no arguments (previously hit ``IndexError`` in the tool wrapper).
+    """
+    ai = Genkit()
+    seen: list[ToolRunContext] = []
+
+    @ai.tool(name='ctx_only_default')
+    async def get_user(ctx: ToolRunContext = None) -> str:  # noqa: ARG001
+        if ctx is not None:
+            seen.append(ctx)
+        return 'done'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_only_default')
+    assert action is not None
+
+    resp = await action.run(input=None, context={'user': {'id': 42}})
+    assert resp.response == 'done'
+    assert len(seen) == 1
+    assert isinstance(seen[0], ToolRunContext)
+    assert seen[0].context == {'user': {'id': 42}}
+
+
+@pytest.mark.asyncio
 async def test_tool_with_input_and_context_params_unaffected() -> None:
     """``(input, ctx)`` tools keep receiving the input and a ``ToolRunContext``."""
     ai = Genkit()

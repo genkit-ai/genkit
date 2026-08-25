@@ -248,8 +248,19 @@ def _is_context_annotation(annotation: Any) -> bool:  # noqa: ANN401 - annotatio
     Context parameters (e.g. the tool-only ``ToolRunContext``) receive runtime
     state rather than action input, so they must not be treated as input
     types when inferring schemas or dispatching arguments.
+
+    String annotations are handled too: when a user module enables
+    ``from __future__ import annotations`` (or ``get_type_hints`` fails and we
+    fall back to raw annotations), the annotation arrives as the class name.
     """
-    return isinstance(annotation, type) and issubclass(annotation, ActionRunContext)
+    if isinstance(annotation, type) and issubclass(annotation, ActionRunContext):
+        return True
+    if isinstance(annotation, str):
+        return annotation in ('ActionRunContext', 'ToolRunContext') or annotation.endswith((
+            '.ActionRunContext',
+            '.ToolRunContext',
+        ))
+    return False
 
 
 # =============================================================================
@@ -829,10 +840,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             case 0:
                 return await self._fn()
             case 1:
-                if omit_input:
-                    return await self._fn()
                 if _is_context_annotation(self._arg_types[0]):
                     return await self._fn(ctx)
+                if omit_input:
+                    return await self._fn()
                 return await self._fn(input)
             case 2:
                 if omit_input:

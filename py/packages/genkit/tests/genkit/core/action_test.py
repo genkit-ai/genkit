@@ -17,6 +17,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     DapQualifiedName,
+    _is_context_annotation,
     create_action_key,
     get_current_context,
     parse_action_key,
@@ -25,6 +26,10 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError
 from genkit._core._model import OutputConfig
+
+
+class _ToolRunContextLike(ActionRunContext):
+    """Minimal ``ActionRunContext`` subclass for annotation recognition tests."""
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -435,3 +440,17 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginCfg)
     assert seen['config'].temperature == 0.5
+
+
+def test_is_context_annotation_class_and_string_forms() -> None:
+    """``_is_context_annotation`` recognizes context classes and their string annotations."""
+    assert _is_context_annotation(ActionRunContext)
+    assert _is_context_annotation(_ToolRunContextLike)
+    assert _is_context_annotation('ActionRunContext')
+    assert _is_context_annotation('genkit._core._action.ActionRunContext')
+    assert _is_context_annotation('ToolRunContext')
+    assert _is_context_annotation('genkit._ai._tools.ToolRunContext')
+    assert not _is_context_annotation(str)
+    assert not _is_context_annotation('str')
+    assert not _is_context_annotation('NotARealContext')
+    assert not _is_context_annotation(None)
