@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -57,14 +58,6 @@ func scriptedToolModel(toolName string, inputs []map[string]any, usages []int, f
 	}
 }
 
-// defineToolLoopModel registers a tool-capable model backed by fn.
-func defineToolLoopModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
-	t.Helper()
-	return genkit.DefineModel(g, name, &ai.ModelOptions{
-		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, fn)
-}
-
 // defineEchoTool registers a tool that echoes payload characters: input
 // {"v": string} returns "result:" + v.
 func defineEchoTool(t *testing.T, g *genkit.Genkit, name string) ai.Tool {
@@ -92,15 +85,6 @@ func defineSummarizer(t *testing.T, g *genkit.Genkit, prompts *[]string, texts .
 			Usage:   &ai.GenerationUsage{InputTokens: 200, OutputTokens: 50},
 		}, nil
 	})
-}
-
-// stampOf returns the compression metadata object on a message, or nil.
-func stampOf(m *ai.Message) map[string]any {
-	if m == nil || m.Metadata == nil {
-		return nil
-	}
-	stamp, _ := m.Metadata[CompressionMetadataKey].(map[string]any)
-	return stamp
 }
 
 // toolOutputs returns the output string of every tool response in msgs, in
@@ -157,7 +141,7 @@ func TestCompressionPassthrough(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	tool := defineEchoTool(t, g, "echo")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("echo",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("echo",
 		[]map[string]any{{"v": "1"}}, []int{700}, "done", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -180,15 +164,15 @@ func TestCompressionPassthrough(t *testing.T) {
 	}
 	// Model messages carry the usage annotation even without compaction.
 	history := resp.History()
-	if v, ok := stampOf(history[1])["inputTokens"]; !ok || v != 700 {
+	if v, ok := readStamp(history[1])["inputTokens"]; !ok || v != 700 {
 		t.Errorf("model message inputTokens stamp = %v, want 700", v)
 	}
-	if v, ok := stampOf(resp.Message)["inputTokens"]; !ok || v != 700 {
+	if v, ok := readStamp(resp.Message)["inputTokens"]; !ok || v != 700 {
 		t.Errorf("final message inputTokens stamp = %v, want 700", v)
 	}
 	for _, msgs := range seen {
 		for _, m := range msgs {
-			if _, ok := stampOf(m)["summary"]; ok {
+			if _, ok := readStamp(m)["summary"]; ok {
 				t.Error("no compaction expected, found a summary stamp")
 			}
 		}
@@ -200,7 +184,7 @@ func TestCompressionSafetyCapAlwaysOn(t *testing.T) {
 	var seen [][]*ai.Message
 	payload := strings.Repeat("H", 5000)
 	tool := defineEchoTool(t, g, "huge")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("huge",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("huge",
 		[]map[string]any{{"v": payload}}, []int{100}, "capped", &seen))
 
 	// No triggers configured at all: the cap still applies to every call.
@@ -232,7 +216,7 @@ func TestCompressionDedupe(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	tool := defineEchoTool(t, g, "read")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("read",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("read",
 		[]map[string]any{{"v": "a"}, {"v": "a"}, {"v": "b"}}, []int{100}, "done", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -264,7 +248,7 @@ func TestCompressionDedupeNameOnly(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	tool := defineEchoTool(t, g, "state")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("state",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("state",
 		[]map[string]any{{"v": "a"}, {"v": "b"}, {"v": "c"}}, []int{100}, "done", &seen))
 
 	_, err := genkit.Generate(ctx, g,
@@ -291,7 +275,7 @@ func TestCompressionTruncateToolResponses(t *testing.T) {
 	var seen [][]*ai.Message
 	payload := strings.Repeat("Z", 200)
 	tool := defineEchoTool(t, g, "verbose")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("verbose",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("verbose",
 		[]map[string]any{{"v": payload + "1"}, {"v": payload + "2"}, {"v": payload + "3"}},
 		[]int{100}, "done", &seen))
 
@@ -327,7 +311,7 @@ func TestCompressionTokenTriggerWithSummarizer(t *testing.T) {
 	var prompts []string
 	defineSummarizer(t, g, &prompts, "S1")
 	tool := defineEchoTool(t, g, "research")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("research",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("research",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{500, 5000, 800}, "done", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -378,7 +362,7 @@ func TestCompressionTokenTriggerWithSummarizer(t *testing.T) {
 	if len(history) != 6 {
 		t.Fatalf("history has %d messages, want 6", len(history))
 	}
-	stamp := stampOf(history[2])
+	stamp := readStamp(history[2])
 	if stamp == nil || stamp["summary"] != "S1" {
 		t.Fatalf("boundary stamp = %v, want summary S1 on message 2", stamp)
 	}
@@ -386,11 +370,17 @@ func TestCompressionTokenTriggerWithSummarizer(t *testing.T) {
 	if stats == nil {
 		t.Fatal("boundary stamp has no stats")
 	}
-	if stats["trigger"] != "inputTokens" || stats["inputTokens"] != 5000 || stats["messagesCompacted"] != 3 || stats["summarized"] != true {
-		t.Errorf("stats = %v", stats)
-	}
-	if stats["summaryModel"] != "test/summarizer" || stats["summaryInputTokens"] != 200 {
-		t.Errorf("summary stats = %v", stats)
+	for field, want := range map[string]any{
+		"trigger":            "inputTokens",
+		"inputTokens":        5000,
+		"messagesCompacted":  3,
+		"summarized":         true,
+		"summaryModel":       "test/summarizer",
+		"summaryInputTokens": 200,
+	} {
+		if got := stats[field]; got != want {
+			t.Errorf("stats[%q] = %v, want %v", field, got, want)
+		}
 	}
 	if hist := toolOutputs(history); !slices.Equal(hist, []string{"result:1", "result:2"}) {
 		t.Errorf("history tool outputs rewritten: %q", hist)
@@ -433,7 +423,7 @@ func TestCompressionEstimateTriggersFirstCall(t *testing.T) {
 	if len(history) != 8 {
 		t.Fatalf("history has %d messages, want 8", len(history))
 	}
-	stats, _ := stampOf(history[5])["stats"].(map[string]any)
+	stats, _ := readStamp(history[5])["stats"].(map[string]any)
 	if stats == nil {
 		t.Fatal("boundary stamp missing on message 5")
 	}
@@ -465,7 +455,7 @@ func TestCompressionNoticeOnlyWithoutSummarizer(t *testing.T) {
 	if first[0].Text() != defaultTruncationNotice {
 		t.Errorf("first view message = %.100q, want the truncation notice", first[0].Text())
 	}
-	stamp := stampOf(resp.History()[5])
+	stamp := readStamp(resp.History()[5])
 	if stamp == nil {
 		t.Fatal("boundary stamp missing")
 	}
@@ -484,7 +474,7 @@ func TestCompressionIncrementalSummaries(t *testing.T) {
 	var prompts []string
 	defineSummarizer(t, g, &prompts, "S1", "S2")
 	tool := defineEchoTool(t, g, "step")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("step",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{5000}, "done", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -520,10 +510,10 @@ func TestCompressionIncrementalSummaries(t *testing.T) {
 	// Both boundary stamps remain in the history; the model only ever sees
 	// the newest summary.
 	history := resp.History()
-	if got := stampOf(history[0])["summary"]; got != "S1" {
+	if got := readStamp(history[0])["summary"]; got != "S1" {
 		t.Errorf("first boundary summary = %v, want S1", got)
 	}
-	if got := stampOf(history[2])["summary"]; got != "S2" {
+	if got := readStamp(history[2])["summary"]; got != "S2" {
 		t.Errorf("second boundary summary = %v, want S2", got)
 	}
 	final := seen[len(seen)-1]
@@ -539,7 +529,7 @@ func TestCompressionSummarizerFailureFailsOpen(t *testing.T) {
 		return nil, fmt.Errorf("summarizer unavailable")
 	})
 	tool := defineEchoTool(t, g, "work")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("work",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("work",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{5000}, "completed", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -565,7 +555,7 @@ func TestCompressionSummarizerFailureFailsOpen(t *testing.T) {
 		t.Errorf("final call saw %d messages, want the full 5", len(final))
 	}
 	for i, m := range resp.History() {
-		if _, ok := stampOf(m)["summary"]; ok {
+		if _, ok := readStamp(m)["summary"]; ok {
 			t.Errorf("message %d has a boundary stamp after summarizer failure", i)
 		}
 	}
@@ -633,7 +623,7 @@ func TestCompressionBoundarySnapsPastToolMessages(t *testing.T) {
 		t.Error("view starts with a tool message after the notice")
 	}
 	assertNoOrphanToolResponses(t, first)
-	if _, ok := stampOf(resp.History()[2])["summary"]; !ok {
+	if _, ok := readStamp(resp.History()[2])["summary"]; !ok {
 		t.Error("boundary should have pulled back to the tool message at index 2")
 	}
 }
@@ -645,7 +635,7 @@ func TestCompressionCompactsMidToolLoop(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	tool := defineEchoTool(t, g, "step")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("step",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{5000}, "done", &seen))
 
 	resp, err := genkit.Generate(ctx, g,
@@ -704,7 +694,7 @@ func TestCompressionOvershootShrinksWindow(t *testing.T) {
 	g := newTestGenkit(t)
 	var seen [][]*ai.Message
 	tool := defineEchoTool(t, g, "step")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("step",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{500, 5000, 800}, "done", &seen))
 
 	_, err := genkit.Generate(ctx, g,
@@ -808,11 +798,11 @@ func TestCompressionPreservesPromptScaffolding(t *testing.T) {
 	}
 	history := resp.History()
 	for _, i := range []int{0, 1} {
-		if _, ok := stampOf(history[i])["summary"]; ok {
+		if _, ok := readStamp(history[i])["summary"]; ok {
 			t.Errorf("boundary stamped on preserved message %d", i)
 		}
 	}
-	if _, ok := stampOf(history[7])["summary"]; !ok {
+	if _, ok := readStamp(history[7])["summary"]; !ok {
 		t.Error("boundary stamp missing from the last covered durable message")
 	}
 }
@@ -828,7 +818,7 @@ func TestCompressionPersistsAcrossCalls(t *testing.T) {
 	var prompts []string
 	defineSummarizer(t, g, &prompts, "S1")
 	tool := defineEchoTool(t, g, "step")
-	m := defineToolLoopModel(t, g, "test/model", scriptedToolModel("step",
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
 		[]map[string]any{{"v": "1"}, {"v": "2"}}, []int{500, 5000, 800}, "done", &seen))
 
 	cc := &ContextCompression{
@@ -860,7 +850,7 @@ func TestCompressionPersistsAcrossCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m2 := defineToolLoopModel(t, g, "test/model2", scriptedToolModel("step",
+	m2 := defineTestModel(t, g, "test/model2", scriptedToolModel("step",
 		nil, []int{300}, "follow-up done", &seen))
 	resp2, err := genkit.Generate(ctx, g,
 		ai.WithModel(m2),
@@ -965,5 +955,286 @@ func TestCompressionStreamingPassesThrough(t *testing.T) {
 	}
 	if !slices.Contains(chunks, "hel") || !slices.Contains(chunks, "lo") {
 		t.Errorf("streamed chunks = %q, want both model chunks", chunks)
+	}
+}
+
+// TestCompressionStaleUsageStampDoesNotRefire guards against a stale usage
+// stamp re-triggering compaction: once the newest model message carries no
+// usage, the estimate of the (already compacted) view takes over instead of
+// an old over-budget reading, so one summarization is enough.
+func TestCompressionStaleUsageStampDoesNotRefire(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	var prompts []string
+	defineSummarizer(t, g, &prompts, "S")
+	tool := defineEchoTool(t, g, "step")
+	// The first call reports 5000 tokens; every later call reports none.
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
+		[]map[string]any{{"v": "1"}, {"v": "2"}, {"v": "3"}, {"v": "4"}}, []int{5000, 0}, "done", &seen))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithPrompt("go"),
+		ai.WithTools(tool),
+		ai.WithUse(&ContextCompression{
+			MaxInputTokens: 1000,
+			PreserveRecent: 2,
+			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "done" {
+		t.Fatalf("got %q, want %q", resp.Text(), "done")
+	}
+	if len(prompts) != 1 {
+		t.Errorf("summarizer called %d times off one stale stamp, want 1", len(prompts))
+	}
+}
+
+// TestCompressionDedupeSkipsReflessResponses guards the dedupe against
+// refless histories: two same-name responses with different inputs and no
+// call refs must both survive rather than being collapsed as duplicates.
+func TestCompressionDedupeSkipsReflessResponses(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("unused",
+		nil, []int{100}, "done", &seen))
+
+	history := []*ai.Message{
+		ai.NewUserTextMessage("compare a and b"),
+		ai.NewMessage(ai.RoleModel, nil, ai.NewToolRequestPart(&ai.ToolRequest{Name: "read", Input: map[string]any{"f": "a"}})),
+		ai.NewMessage(ai.RoleTool, nil, ai.NewToolResponsePart(&ai.ToolResponse{Name: "read", Output: "CONTENTS-A"})),
+		ai.NewMessage(ai.RoleModel, nil, ai.NewToolRequestPart(&ai.ToolRequest{Name: "read", Input: map[string]any{"f": "b"}})),
+		ai.NewMessage(ai.RoleTool, nil, ai.NewToolResponsePart(&ai.ToolResponse{Name: "read", Output: "CONTENTS-B"})),
+	}
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithMessages(history...),
+		ai.WithPrompt("go"),
+		ai.WithUse(&ContextCompression{DedupeToolResponses: &CompressionDedupe{}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := toolOutputs(seen[0])
+	want := []string{"CONTENTS-A", "CONTENTS-B"}
+	if !slices.Equal(got, want) {
+		t.Errorf("view tool outputs = %q, want %q (refless responses must never be elided)", got, want)
+	}
+}
+
+// TestCompressionPreservesOutputInstructions asserts that a message carrying
+// an injected purpose:"output" instruction part is never compacted away,
+// since the model needs the schema directive on every call.
+func TestCompressionPreservesOutputInstructions(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("unused",
+		nil, []int{100}, "done", &seen))
+
+	msgs := bigHistory(6, 2000)
+	instructions := ai.NewTextPart("Respond in JSON matching the schema.")
+	instructions.Metadata = map[string]any{"purpose": "output"}
+	msgs[0].Content = append(msgs[0].Content, instructions)
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithMessages(msgs...),
+		ai.WithPrompt("final"),
+		ai.WithUse(&ContextCompression{MaxInputTokens: 1000, PreserveRecent: 1}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := seen[0]
+	found := false
+	for _, msg := range first {
+		if strings.Contains(msg.Text(), "msg-0 ") {
+			found = true
+		}
+		if strings.Contains(msg.Text(), "msg-2 ") {
+			t.Error("message 2 should have been compacted away")
+		}
+	}
+	if !found {
+		t.Error("the message carrying output instructions was compacted away")
+	}
+}
+
+// TestCompressionUnsatisfiableMaxMessagesDoesNotThrash asserts that a
+// MaxMessages below what the preserved head and kept window can shrink to
+// skips compaction instead of running a billed summarization on every call.
+func TestCompressionUnsatisfiableMaxMessagesDoesNotThrash(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	var prompts []string
+	defineSummarizer(t, g, &prompts, "S")
+	tool := defineEchoTool(t, g, "step")
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("step",
+		[]map[string]any{{"v": "1"}, {"v": "2"}, {"v": "3"}, {"v": "4"}}, []int{0}, "done", &seen))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithSystem("be helpful"),
+		ai.WithPrompt("go"),
+		ai.WithTools(tool),
+		// The view can never shrink to 3 (system + summary + a kept pair),
+		// so the cap is unsatisfiable and must not fire at all.
+		ai.WithUse(&ContextCompression{
+			MaxMessages: 3,
+			Summarizer:  &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "done" {
+		t.Fatalf("got %q, want %q", resp.Text(), "done")
+	}
+	if len(prompts) != 0 {
+		t.Errorf("summarizer called %d times against an unsatisfiable cap, want 0", len(prompts))
+	}
+}
+
+// TestCompressionSummarizerFailureNoticeBackstop asserts that a failing
+// summarizer does not disable compaction entirely: an exceeded MaxMessages
+// falls back to a truncation-notice compaction so the context stays bounded.
+func TestCompressionSummarizerFailureNoticeBackstop(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	defineTestModel(t, g, "test/summarizer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, fmt.Errorf("summarizer unavailable")
+	})
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("unused",
+		nil, []int{100}, "done", &seen))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithMessages(bigHistory(7, 10)...),
+		ai.WithPrompt("final"),
+		ai.WithUse(&ContextCompression{
+			MaxMessages: 4,
+			Summarizer:  &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := seen[0]
+	if len(first) != 4 {
+		t.Fatalf("view has %d messages, want 4 (notice + 3 recent)", len(first))
+	}
+	if first[0].Text() != defaultTruncationNotice {
+		t.Errorf("view[0] = %.80q, want the truncation notice", first[0].Text())
+	}
+	stamp := readStamp(resp.History()[4])
+	if stamp == nil || stamp["summary"] != "" {
+		t.Fatalf("boundary stamp = %v, want a notice-only stamp", stamp)
+	}
+	stats, _ := stamp["stats"].(map[string]any)
+	if stats["summarizerFailed"] != true {
+		t.Errorf("stats = %v, want summarizerFailed true", stats)
+	}
+}
+
+// TestCompressionRuneSafeTruncation asserts that truncation never splits a
+// UTF-8 rune, so the view stays valid UTF-8 for strict providers.
+func TestCompressionRuneSafeTruncation(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	tool := defineEchoTool(t, g, "intl")
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("intl",
+		[]map[string]any{{"v": strings.Repeat("é", 200)}}, []int{100}, "done", &seen))
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithPrompt("go"),
+		ai.WithTools(tool),
+		// 101 lands mid-rune in a two-byte-rune payload.
+		ai.WithUse(&ContextCompression{MaxToolResponseChars: 101}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs := toolOutputs(seen[1])
+	if len(outs) != 1 {
+		t.Fatalf("got %d tool outputs, want 1", len(outs))
+	}
+	if !utf8.ValidString(outs[0]) {
+		t.Errorf("capped output is not valid UTF-8: %q", outs[0][:20])
+	}
+}
+
+// TestCompressionSummarizerLengthFinishFailsOpen asserts that a summary cut
+// off at the summarizer's output limit is rejected rather than stamped as
+// the permanent replacement for the folded messages.
+func TestCompressionSummarizerLengthFinishFailsOpen(t *testing.T) {
+	g := newTestGenkit(t)
+	var seen [][]*ai.Message
+	defineTestModel(t, g, "test/summarizer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			Request:      req,
+			Message:      ai.NewModelTextMessage("partial summa"),
+			FinishReason: ai.FinishReasonLength,
+		}, nil
+	})
+	m := defineTestModel(t, g, "test/model", scriptedToolModel("unused",
+		nil, []int{100}, "done", &seen))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithMessages(bigHistory(6, 2000)...),
+		ai.WithPrompt("final"),
+		ai.WithUse(&ContextCompression{
+			MaxInputTokens: 1000,
+			PreserveRecent: 1,
+			Summarizer:     &CompressionSummarizer{Model: ai.NewModelRef("test/summarizer", nil)},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, msg := range resp.History() {
+		if _, ok := readStamp(msg)["summary"]; ok {
+			t.Errorf("message %d stamped with a length-truncated summary", i)
+		}
+	}
+}
+
+// TestCompressionNoInstanceFailsOpen asserts that entry points without a
+// genkit instance in context (the raw ai package, prompt execution) degrade
+// to an uncompacted call with a warning instead of failing the generation.
+func TestCompressionNoInstanceFailsOpen(t *testing.T) {
+	r := newTestRegistry(t)
+	var seen [][]*ai.Message
+	m := defineModel(t, r, "test/model", scriptedToolModel("unused",
+		nil, []int{100}, "done", &seen))
+	registerTestMiddleware(r, "compress the context", ContextCompression{})
+
+	msgs := append(bigHistory(6, 2000), ai.NewUserTextMessage("final question"))
+	resp, err := ai.GenerateWithRequest(ctx, r, &ai.GenerateActionOptions{
+		Model:    m.Name(),
+		Messages: msgs,
+		Use: []*ai.MiddlewareRef{{
+			Name: provider + "/contextCompression",
+			Config: map[string]any{
+				"maxInputTokens": 1000,
+				"summarizer":     map[string]any{"model": "test/summarizer"},
+			},
+		}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "done" {
+		t.Fatalf("got %q, want %q", resp.Text(), "done")
+	}
+	if got, want := len(seen[0]), len(msgs); got != want {
+		t.Errorf("view has %d messages, want the full %d (uncompacted fail-open)", got, want)
 	}
 }

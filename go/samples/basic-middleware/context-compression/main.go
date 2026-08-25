@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 // This sample demonstrates the ContextCompression middleware on a research
 // loop whose tools return deliberately verbose output, so the context grows
@@ -146,8 +148,14 @@ func main() {
 				if stamp == nil {
 					continue
 				}
-				if tokens, ok := stamp["inputTokens"].(int); ok {
+				// In-process stamps carry ints; after a JSON round-trip
+				// (persisted sessions, remote clients) they arrive as
+				// float64, so a client must accept both.
+				switch tokens := stamp["inputTokens"].(type) {
+				case int:
 					result.InputTokensPerTurn = append(result.InputTokensPerTurn, tokens)
+				case float64:
+					result.InputTokensPerTurn = append(result.InputTokensPerTurn, int(tokens))
 				}
 				if stats, ok := stamp["stats"].(map[string]any); ok {
 					result.Compactions = append(result.Compactions, stats)

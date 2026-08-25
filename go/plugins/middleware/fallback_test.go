@@ -35,7 +35,7 @@ func newTestGenkit(t *testing.T) *genkit.Genkit {
 func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
 	return genkit.DefineModel(g, name, &ai.ModelOptions{
-		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, fn)
 }
 
