@@ -675,14 +675,16 @@ def box_background_start(*, raw: object, request: ModelRequest, name: str) -> Mo
     )
 
 
-def reject_foreground_operation(*, raw: object, name: str) -> ModelResponse:
+def assert_foreground_model_has_no_operation(*, raw: object, name: str) -> None:
     """A chat model returns a message, not a job handle."""
     if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
         raise GenkitError(
             status='FAILED_PRECONDITION',
-            message=f"Model '{name}' is a define_model and returned an operation; use define_background_model",
+            message=(
+                f"Model '{name}' is a regular model that returns a response immediately. "
+                'Use define_background_model for background models that return operations.'
+            ),
         )
-    return cast(ModelResponse, raw)
 
 
 def _persist_threaded_conversation(response: ModelResponse, messages: list[Message]) -> ModelResponse:
@@ -834,7 +836,8 @@ async def _generate_action_turn(
             ).response
             if model.kind == ActionKind.BACKGROUND_MODEL:
                 return box_background_start(raw=raw, request=params.request, name=model.name)
-            return reject_foreground_operation(raw=raw, name=model.name)
+            assert_foreground_model_has_no_operation(raw=raw, name=model.name)
+            return cast(ModelResponse, raw)
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
