@@ -60,6 +60,32 @@ StateT_co = TypeVarExt('StateT_co', covariant=True, bound=BaseModel, default=Any
 STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
 
 
+class SessionStoreLock:
+    """Loop-local asyncio.Lock for in-process stores that need one.
+
+    Not part of :class:`SessionStore`: durable backends (e.g. Firestore) do not
+    expose a public lock. In-memory and file stores mix this in for their own
+    serialization.
+    """
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        """Return a loop-local asyncio.Lock for this store instance."""
+        try:
+            getter = STORE_LOCK_GETTERS.get(self)
+            if getter is None:
+                getter = _loop_local_client(lambda: asyncio.Lock())
+                STORE_LOCK_GETTERS[self] = getter
+            return getter()
+        except TypeError:
+            # Fallback for classes that disallow weak references
+            getter = getattr(self, '_loop_lock_getter', None)
+            if getter is None:
+                getter = _loop_local_client(lambda: asyncio.Lock())
+                object.__setattr__(self, '_loop_lock_getter', getter)
+            return getter()
+
+
 class SessionStore(Protocol, Generic[StateT_co]):
     """Structural interface for snapshot persistence backends.
 
@@ -99,8 +125,10 @@ class SessionStore(Protocol, Generic[StateT_co]):
         """Atomically read-modify-write a snapshot under ``snapshot_id``.
 
         fn receives the existing snapshot (or None for new) and returns the
-        snapshot to persist, or None to skip. fn must be side-effect free —
-        stores may call it more than once under contention.
+        snapshot to persist, or None to skip. Stores may call fn more than
+        once under contention, so it must not mutate external state; recording
+        what it observed is fine as long as a retried call may overwrite the
+        record (last call wins).
 
         Callers reserve the id up front (``reserve_snapshot_id``) so it can be
         known before the write — e.g. handed to a turn handler via
@@ -112,22 +140,21 @@ class SessionStore(Protocol, Generic[StateT_co]):
         """
         ...
 
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Return a loop-local asyncio.Lock for this store instance."""
-        try:
-            getter = STORE_LOCK_GETTERS.get(self)
-            if getter is None:
-                getter = _loop_local_client(lambda: asyncio.Lock())
-                STORE_LOCK_GETTERS[self] = getter
-            return getter()
-        except TypeError:
-            # Fallback for classes that disallow weak references
-            getter = getattr(self, '_loop_lock_getter', None)
-            if getter is None:
-                getter = _loop_local_client(lambda: asyncio.Lock())
-                object.__setattr__(self, '_loop_lock_getter', getter)
-            return getter()
+
+@runtime_checkable
+class SnapshotStatusStream(Protocol):
+    """Async iterator of snapshot status changes.
+
+    Consume with ``async for``. Call ``aclose()`` (or ``contextlib.aclosing``)
+    to unsubscribe — Python does not tear subscriptions down on ``break`` alone.
+    Natural end after a terminal status also unsubscribes.
+    """
+
+    def __aiter__(self) -> SnapshotStatusStream: ...
+
+    async def __anext__(self) -> SnapshotStatus: ...
+
+    async def aclose(self) -> None: ...
 
 
 @runtime_checkable
@@ -141,8 +168,23 @@ class SnapshotSubscriber(Protocol):
     that can't signal status changes can't support detach.
     """
 
-    async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
-        """Queue that receives status changes; None sentinel when done."""
+    async def on_snapshot_status_change(
+        self, snapshot_id: str, *, context: dict[str, Any] | None = None
+    ) -> SnapshotStatusStream:
+        """Async stream of the snapshot's persisted status changes.
+
+        Yields committed statuses such as pending, completed, failed, or aborted.
+        ``expired`` is computed on read when a pending heartbeat goes stale — it
+        is not written to the store and does not appear on this stream. Use
+        ``get_snapshot`` / resolve paths for that liveness check.
+
+        Iteration ends when the run resolves (the last yielded status is a
+        persisted terminal) or when the store is closed locally (ends without
+        one). Call ``aclose()`` (or wrap with ``contextlib.aclosing``) to
+        unsubscribe early — ``break`` alone is not enough. ``context`` scopes
+        the subscription for multi-tenant stores; stores without tenancy accept
+        and ignore it.
+        """
         ...
 
 

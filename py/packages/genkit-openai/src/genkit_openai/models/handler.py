@@ -16,7 +16,8 @@
 
 """OpenAI Compatible Model handlers for Genkit."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import cast
 
 from openai import AsyncOpenAI
 
@@ -49,7 +50,7 @@ class OpenAIModelHandler:
         self._source = source
 
     @staticmethod
-    def _get_supported_models(source: PluginSource) -> dict[str, ModelInfo]:
+    def _get_supported_models(source: PluginSource) -> Mapping[str, ModelInfo]:
         """Returns the supported models based on the plugin source.
 
         Args:
@@ -61,7 +62,9 @@ class OpenAIModelHandler:
             with openai-compat models if source is model-garden.
 
         """
-        return SUPPORTED_OPENAI_COMPAT_MODELS if source == PluginSource.MODEL_GARDEN else SUPPORTED_OPENAI_MODELS
+        if source == PluginSource.MODEL_GARDEN:
+            return SUPPORTED_OPENAI_COMPAT_MODELS
+        return cast(Mapping[str, ModelInfo], SUPPORTED_OPENAI_MODELS)
 
     @classmethod
     def get_model_handler(

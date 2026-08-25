@@ -19,10 +19,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
-from typing import Generic
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
+from pydantic import BaseModel
 
 # Internal imports from sibling modules
 from genkit._ai._agents._client import AgentClient, part_roots
@@ -69,7 +70,7 @@ from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfig
+from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._typing import (
@@ -176,7 +177,13 @@ class Agent(
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
-        """Read a snapshot by id or latest session leaf (client-visible form)."""
+        """Read a stored snapshot without starting a session.
+
+        Pass exactly one of ``snapshot_id`` or ``session_id``. A session
+        lookup returns the newest row even when that turn failed or was
+        aborted. ``chat(session_id=)`` is how you continue from the last
+        good turn.
+        """
         if self.store is None:
             return None
         return await resolve_snapshot(
@@ -188,7 +195,15 @@ class Agent(
         )
 
     async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Abort a running snapshot."""
+        """Abort a running snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status means the turn had
+        already finished — this call did not rewrite it. ``None`` means
+        nothing was observed (no store, no row, or the store never ran the
+        abort write). This Python server always returns the previous status.
+        """
         if self.store is None:
             return None
         return await abort_snapshot_in_store(
@@ -322,11 +337,11 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    model: str | None = None,
+    model: ModelRef[ModelRefConfigT] | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    config: dict[str, object] | ModelConfig | None = None,
+    config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,

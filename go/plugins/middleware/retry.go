@@ -20,13 +20,13 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"math"
 	"math/rand"
 	"slices"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -72,25 +72,27 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 //	)
 type Retry struct {
 	// MaxRetries is the maximum number of retry attempts. Defaults to 3.
-	MaxRetries int `json:"maxRetries,omitempty"`
+	MaxRetries int `json:"maxRetries,omitempty" jsonschema_description:"Maximum number of retry attempts. Defaults to 3."`
 	// Statuses is the set of status codes that trigger a retry for classified
 	// errors; unclassified errors are always retried regardless of this list.
 	// Defaults to [defaultRetryStatuses].
-	Statuses []status.Name `json:"statuses,omitempty"`
+	Statuses []status.Name `json:"statuses,omitempty" jsonschema_description:"Status codes that trigger a retry for classified errors. Unclassified errors are always retried regardless of this list. Defaults to UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED and INTERNAL." jsonschema:"enum=OK,enum=CANCELLED,enum=UNKNOWN,enum=INVALID_ARGUMENT,enum=DEADLINE_EXCEEDED,enum=NOT_FOUND,enum=ALREADY_EXISTS,enum=PERMISSION_DENIED,enum=UNAUTHENTICATED,enum=RESOURCE_EXHAUSTED,enum=FAILED_PRECONDITION,enum=ABORTED,enum=OUT_OF_RANGE,enum=UNIMPLEMENTED,enum=INTERNAL,enum=UNAVAILABLE,enum=DATA_LOSS"`
 	// InitialDelayMs is the delay before the first retry, in milliseconds. Defaults to 1000.
-	InitialDelayMs int `json:"initialDelayMs,omitempty"`
+	InitialDelayMs int `json:"initialDelayMs,omitempty" jsonschema_description:"Delay before the first retry, in milliseconds. Defaults to 1000."`
 	// MaxDelayMs is the upper bound on retry delay, in milliseconds. Defaults to 60000.
-	MaxDelayMs int `json:"maxDelayMs,omitempty"`
+	MaxDelayMs int `json:"maxDelayMs,omitempty" jsonschema_description:"Upper bound on the retry delay, in milliseconds. Defaults to 60000."`
 	// BackoffFactor is the multiplier applied to the delay after each retry. Defaults to 2.
-	BackoffFactor float64 `json:"backoffFactor,omitempty"`
+	BackoffFactor float64 `json:"backoffFactor,omitempty" jsonschema_description:"Multiplier applied to the delay after each retry. Defaults to 2."`
 	// NoJitter disables random jitter on the delay. Jitter helps prevent
 	// thundering-herd problems when many clients retry simultaneously.
-	NoJitter bool `json:"noJitter,omitempty"`
+	NoJitter bool `json:"noJitter,omitempty" jsonschema_description:"Disables random jitter on the delay. Jitter helps prevent thundering-herd problems when many clients retry at the same time. Defaults to false."`
 }
 
-func (r *Retry) Name() string { return provider + "/retry" }
+// Name implements [ai.Middleware].
+func (r Retry) Name() string { return provider + "/retry" }
 
-func (r *Retry) New(ctx context.Context) (*ai.Hooks, error) {
+// New implements [ai.Middleware], hooking the model stage.
+func (r Retry) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: r.wrapModel,
 	}, nil
@@ -158,6 +160,12 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 			delay += jitter
 		}
 
+		logger.Debug(ctx, "model call failed, retrying",
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+			"delay", delay.Round(time.Millisecond),
+			"error", err)
+
 		// Bail out if the caller disconnected mid-backoff; no reason to wait
 		// out the delay (or issue another retry) for a caller who has left.
 		if err := sleepFunc(ctx, delay); err != nil {
@@ -174,26 +182,8 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 // preserving the v1 contract that non-GenkitError errors are retried
 // regardless of the Statuses setting.
 func isRetryable(err error, statuses []status.Name) bool {
-	if s, ok := classifiedStatus(err); ok {
+	if s, ok := status.Classified(err); ok {
 		return slices.Contains(statuses, s)
 	}
 	return true
-}
-
-// classifiedStatus returns the status err was explicitly classified with, or
-// false when nothing in err's chain carries one. The distinction keeps these
-// middlewares matching their v1 contracts: a classified error is checked
-// against the configured status list, while an unclassified one (a plain error
-// from a provider SDK or the network) keeps its v1 behavior instead of
-// silently inheriting INTERNAL's membership in the list. Cancellation and
-// deadline expiry count as classified, reporting CANCELLED and
-// DEADLINE_EXCEEDED per [status.Of].
-func classifiedStatus(err error) (status.Name, bool) {
-	var e *status.Error
-	var s *status.Sentinel
-	if errors.As(err, &e) || errors.As(err, &s) ||
-		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return status.Of(err), true
-	}
-	return "", false
 }

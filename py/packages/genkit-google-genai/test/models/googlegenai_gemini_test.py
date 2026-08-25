@@ -37,6 +37,7 @@ from genkit_google_genai.models.gemini import (
     GemmaConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
+    get_model_config_schema,
     google_model_info,
     is_image_model,
     is_tts_model,
@@ -50,6 +51,7 @@ from genkit import (
     ActionRunContext,
     Constrained,
     FinishReason,
+    GenkitError,
     MediaPart,
     Message,
     ModelInfo,
@@ -61,11 +63,10 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)
-IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_0_FLASH_EXP]
+IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_5_FLASH]
 
 
 @pytest.mark.asyncio
@@ -258,7 +259,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
                 ],
             ),
         ],
-        config={'response_modalities': modalities},
+        config=GeminiConfigSchema.model_validate({'response_modalities': modalities}),
     )
 
     candidate = genai.types.Candidate(
@@ -381,7 +382,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     response_text = 'request answer'
     request_text = 'response question'
     system_instruction = 'system instruction text'
-    version = GoogleAIGeminiVersion.GEMINI_2_0_FLASH
+    version = GoogleAIGeminiVersion.GEMINI_2_5_FLASH
 
     request = ModelRequest(
         messages=[
@@ -588,6 +589,8 @@ def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
         'gemini-3.1-pro-preview',
         'gemini-3.1-flash-lite',
         'gemini-3.5-flash',
+        'gemini-3.6-flash',
+        'gemini-3.7-flash',
     ],
 )
 def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: str) -> None:
@@ -1028,42 +1031,36 @@ async def test_gemini_model__retrieve_cached_content(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ('label', 'config'),
-    [
-        ('snake_case dict', {'code_execution': True}),
-        ('camelCase dict', {'codeExecution': True}),
-        (
-            'GenerationCommonConfig with alias-form extra',
-            GenerationCommonConfig.model_validate({'codeExecution': True}),
-        ),
-        ('GeminiConfigSchema instance', GeminiConfigSchema.model_validate({'code_execution': True})),
-    ],
-)
-def test_gemini_model__normalize_config_canonicalizes_aliases(
+def test_gemini_model__normalize_config_dumps_schema_instance(
     gemini_model_instance: GeminiModel,
-    label: str,
-    config: object,
 ) -> None:
-    """Every input shape collapses onto the canonical snake_case field."""
-    dumped = gemini_model_instance._normalize_config_to_dict(config)
+    """A typed family config dumps to snake_case for the SDK."""
+    dumped = gemini_model_instance._normalize_config_to_dict(
+        GeminiConfigSchema.model_validate({'code_execution': True})
+    )
 
-    assert dumped == {'code_execution': True}, label
+    assert dumped == {'code_execution': True}
+
+
+def test_gemini_model__normalize_config_rejects_raw_dicts(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A dict at the dump leaf means Action never produced the family instance."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._normalize_config_to_dict({'code_execution': True})  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert gemini_model_instance._version in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__camelcase_code_execution_translates_to_tool(
+async def test_gemini_model__code_execution_translates_to_tool(
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """A camelCase convenience flag is translated into a tool, not leaked.
-
-    Reproduces the bug where ``ai.generate(config=GeminiConfigSchema(...).model_dump())``
-    produced an alias-form dict that fell through to the SDK's strict
-    ``GenerateContentConfig`` and raised ``extra_forbidden``.
-    """
+    """A typed ``code_execution`` flag becomes a tool and is not leaked to the SDK."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
+        config=GeminiConfigSchema.model_validate({'code_execution': True}),
     )
 
     cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
@@ -1072,38 +1069,35 @@ async def test_gemini_model__camelcase_code_execution_translates_to_tool(
     assert cfg.tools is not None
     code_exec_tools = [t for t in cfg.tools if isinstance(t, genai_types.Tool) and t.code_execution is not None]
     assert len(code_exec_tools) == 1
-    # The flag should not survive as an unknown SDK field in any casing.
     assert 'codeExecution' not in cfg.model_dump(exclude_none=True)
     assert 'code_execution' not in cfg.model_dump(exclude_none=True)
 
 
-def test_gemini_model__normalize_config_picks_gemma_schema() -> None:
-    """Gemma's relaxed temperature bounds survive normalization.
-
-    Gemma intentionally drops the [0.0, 2.0] cap that vanilla Gemini enforces,
-    so a config like ``temperature=3.0`` must be allowed when the bound model
-    is Gemma. If the routing falls back to the strict Gemini schema instead,
-    validation here would raise.
-    """
+def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
+    """Gemma's relaxed temperature dumps through without re-validation."""
     gemma_model = GeminiModel(version='gemma-2-27b-it', client=MagicMock(spec=genai.Client))
 
-    dumped = gemma_model._normalize_config_to_dict({'temperature': 3.0})
+    dumped = gemma_model._normalize_config_to_dict(GemmaConfigSchema(temperature=3.0))
 
     assert dumped == {'temperature': 3.0}
 
 
-def test_gemini_model__normalize_config_respects_version_override() -> None:
-    """A per-request ``version`` override picks the matching schema.
+@pytest.mark.asyncio
+async def test_gemini_model__unknown_extra_rides_on_extra_body(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiConfigSchema.model_validate({'temperature': 0.5, 'fooBar': 1}),
+    )
 
-    Same model instance, but the caller overrides the version to a Gemma one,
-    so the schema selection has to follow the override -- otherwise the
-    instance's standard Gemini schema would reject the relaxed temperature.
-    """
-    gemini_model = GeminiModel(version='gemini-2.0-flash-001', client=MagicMock(spec=genai.Client))
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
 
-    dumped = gemini_model._normalize_config_to_dict({'version': 'gemma-2-27b-it', 'temperature': 3.0})
-
-    assert dumped == {'version': 'gemma-2-27b-it', 'temperature': 3.0}
+    assert cfg is not None
+    assert cfg.temperature == 0.5
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
 
 
 @pytest.mark.parametrize(
@@ -1121,22 +1115,12 @@ def test_gemini_model__normalize_config_respects_version_override() -> None:
         ('gemini-2.0-flash-001', GeminiConfigSchema),
     ],
 )
-def test_gemini_model__pick_plugin_schema_routes_by_model_family(
+def test_get_model_config_schema_routes_by_model_family(
     version: str,
     expected_schema: type[GeminiConfigSchema],
 ) -> None:
-    """Each model family lands on its own schema based on the bound version.
-
-    Pins the routing contract so a future change can't quietly send TTS or
-    image models down the standard Gemini path (which would silently drop
-    their typed fields into ``extra='allow'`` and skip the family-specific
-    validation rules).
-    """
-    model = GeminiModel(version=version, client=MagicMock(spec=genai.Client))
-
-    picked = model._pick_plugin_schema({})
-
-    assert type(picked) is expected_schema
+    """Family routing lives on the name check, not a runtime re-validate."""
+    assert get_model_config_schema(version) is expected_schema
 
 
 @pytest.mark.asyncio

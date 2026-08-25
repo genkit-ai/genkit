@@ -85,10 +85,15 @@ from genkit_google_genai.models.gemini import (
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
+    GemmaConfigSchema,
     GoogleAIGeminiVersion,
+    KnownGemini,
+    KnownGeminiImage,
+    KnownGeminiTts,
+    KnownGemma,
     VertexAIGeminiVersion,
 )
-from genkit_google_genai.models.imagen import ImagenVersion
+from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
 from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
@@ -108,9 +113,16 @@ __all__ = [
     'GeminiEmbeddingModels',
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
+    'GemmaConfigSchema',
     'GoogleAI',
     'GoogleAIGeminiVersion',
+    'ImagenConfigSchema',
     'ImagenVersion',
+    'KnownGemini',
+    'KnownGeminiImage',
+    'KnownGeminiTts',
+    'KnownGemma',
+    'KnownImagen',
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',

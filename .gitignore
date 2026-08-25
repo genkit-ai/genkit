@@ -47,6 +47,7 @@ last_recording.mp4
 js/testapps/flow-simple-ai/*.wav
 js/testapps/flow-simple-ai/meme-of-the-day.mp4
 js/testapps/flow-simple-ai/photo.mp4
+go/samples/basic-media/mountain.mp4
 *.local.*
 js/plugins/firebase/database-debug.log
 js/plugins/firebase/firestore-debug.log

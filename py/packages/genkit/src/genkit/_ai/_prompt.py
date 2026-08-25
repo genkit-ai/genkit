@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -43,9 +43,13 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
+    ModelArg,
+    ModelRef,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    normalize_config,
+    resolve_call_model,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -59,13 +63,12 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, OutputConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
-    OutputConfig,
     Part,
     Resume,
     Role,
@@ -128,8 +131,8 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: ModelArg | None
+    config: Mapping[str, Any] | BaseModel | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -210,8 +213,8 @@ class PromptConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    model: str | ModelRef[BaseModel] | None = None
+    config: Mapping[str, Any] | BaseModel | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -242,8 +245,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        model: ModelArg | None = None,
+        config: Mapping[str, Any] | BaseModel | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -370,20 +373,22 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: Mapping[str, Any] | BaseModel | None
         if opts.get('config') is not None:
-            base = (
-                self._config.model_dump(exclude_none=True)
-                if isinstance(self._config, BaseModel)
-                else (self._config or {})
-            )
-            opt_config = opts.get('config')
-            override = (
-                opt_config.model_dump(exclude_none=True) if isinstance(opt_config, BaseModel) else (opt_config or {})
-            )
+            # exclude_unset semantics via normalize_config: untouched fields are
+            # absent (cannot clobber defaults); an explicitly-set None survives
+            # the merge and clears the lower-precedence value downstream.
+            base = normalize_config(config=self._config)
+            override = normalize_config(config=opts.get('config'))
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._config
+
+        resolved = resolve_call_model(
+            model=opts.get('model') or self._model,
+            config=merged_config,
+            registry=self._registry,
+        )
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
@@ -393,14 +398,14 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             return opt_val if opt_val is not None else default
 
         return PromptConfig(
-            model=opts.get('model') or self._model,
+            model=resolved.name,
             prompt=self._prompt,
             system=self._system,
             messages=self._messages,
             tools=opts.get('tools') or self._tools,
             return_tool_requests=_or(opts.get('return_tool_requests'), self._return_tool_requests),
             tool_choice=opts.get('tool_choice') or self._tool_choice,
-            config=merged_config,
+            config=resolved.config,
             max_turns=_or(opts.get('max_turns'), self._max_turns),
             output_format=output_opts.get('format') or self._output_format,
             output_content_type=output_opts.get('content_type') or self._output_content_type,
@@ -621,9 +626,11 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    if model is None:
-        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
+    resolved = resolve_call_model(model=options.model, config=options.config, registry=registry)
+    model = resolved.name
+    default_model = registry.lookup_value('defaultModel', 'defaultModel')
+    uses_ref = isinstance(options.model, ModelRef) or isinstance(default_model, ModelRef)
+    config = resolved.config if uses_ref else options.config
 
     ri: dict[str, Any] = {}
     cache = PromptCache()
@@ -666,7 +673,7 @@ async def to_generate_action_options(
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=options.config,
+        config=config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
@@ -692,15 +699,6 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
     return cast(dict[str, Any], template_input)
 
 
-def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
-    """Build a Resume from flat resume_respond / resume_restart / resume_metadata kwargs."""
-    return resume_options_to_resume(
-        resume_respond=opts.get('resume_respond'),
-        resume_restart=opts.get('resume_restart'),
-        resume_metadata=opts.get('resume_metadata'),
-    )
-
-
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools: list[Action] = []
@@ -719,7 +717,8 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        schema_=options.output.json_schema if options.output else None,
+        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
+        json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
     return ModelRequest(
@@ -729,10 +728,7 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         docs=options.docs if options.docs else None,  # type: ignore[arg-type]
         tools=tool_defs,
         tool_choice=options.tool_choice,
-        output_format=output_config.format,
-        output_schema=output_config.schema_,
-        output_constrained=output_config.constrained,
-        output_content_type=output_config.content_type,
+        output=output_config,
     )
 
 
@@ -921,8 +917,8 @@ async def render_prompt_config_for_executable_call(
 ) -> PromptConfig:
     """Expand dotprompt with the call's input into one merged :class:`PromptConfig`.
 
-    Sets final ``messages``, merged ``docs``, optional ``resume``, and clears template source fields
-    before :func:`to_generate_action_options`.
+    Sets final ``messages`` and merged ``docs``, and clears template source
+    fields, before :func:`to_generate_action_options`.
     """
     ri = coerce_prompt_template_input(template_input)
     render_context = opts.get('context')
@@ -948,15 +944,16 @@ async def render_prompt_config_for_executable_call(
     if extra_docs:
         merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
 
-    resume = resume_from_prompt_call_opts(opts)
-    return PromptConfig.model_validate({
-        **prompt_config.model_dump(),
-        'system': None,
-        'prompt': None,
-        'messages': resolved_msgs,
-        'docs': merged_docs,
-        'resume': resume,
-    })
+    # Keep the merged config bag as-is. dump/revalidate would rebuild it
+    # and drop keys the plugin is about to see.
+    return prompt_config.model_copy(
+        update={
+            'system': None,
+            'prompt': None,
+            'messages': resolved_msgs,
+            'docs': merged_docs,
+        }
+    )
 
 
 async def executable_prompt_call_to_generate_options(

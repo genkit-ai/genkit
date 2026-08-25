@@ -376,7 +376,7 @@ class PostMiddleware(BaseMiddleware):
 
 
 class ExtensionMiddlewarePlugin(MiddlewarePlugin):
-    """Test plugin subclass; mirrors ``genkit.plugins.middleware.Middleware``."""
+    """Test plugin subclass; mirrors ``genkit_middleware.Middleware``."""
 
     name = 'extension-middleware'
 
@@ -2262,7 +2262,6 @@ spec_path = pathlib.Path(__file__).parent / '../../../../../../tests/specs/gener
 with spec_path.resolve().open() as stream:
     tests_spec = yaml.safe_load(stream)
     specs = tests_spec['tests']
-    specs = [x for x in tests_spec['tests'] if x['name'] == 'calls tools']
 
 
 @pytest.mark.parametrize(

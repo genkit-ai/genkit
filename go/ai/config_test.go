@@ -292,6 +292,107 @@ func TestModelVersionWithTypedConfig(t *testing.T) {
 	if strings.Contains(err.Error(), "schema") {
 		t.Fatalf("Generate() error = %v, want the version error, not a schema rejection", err)
 	}
+
+	if _, ok := advertisedConfigProps(t, m)["version"]; !ok {
+		t.Error("a model declaring Versions should advertise the version property")
+	}
+}
+
+type nilableSub struct {
+	A string `json:"a"`
+}
+
+// nilableConfig has one nilable field of each kind without omitempty, so its
+// own partially filled value marshals nulls into the config slot.
+type nilableConfig struct {
+	Sub  *nilableSub       `json:"sub"`
+	List []string          `json:"list"`
+	M    map[string]string `json:"m"`
+	Name *string           `json:"name"`
+	T    float64           `json:"t,omitempty"`
+}
+
+// TestInferredConfigSchemaToleratesNulls pins that an inferred config schema
+// accepts the config type's own partial value. A nilable field lacking
+// omitempty marshals to null, so enforcing its declared type would reject
+// every request that leaves it unset. Widening must not cost the checks that
+// make enforcement worth having, so unknown and mistyped fields still fail.
+func TestInferredConfigSchemaToleratesNulls(t *testing.T) {
+	r := registry.New()
+	m := NewModelAction("test/nilable", &ModelOptions{},
+		func(ctx context.Context, req *ModelRequest, cfg nilableConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+	m.Register(r)
+
+	generate := func(config any) error {
+		_, err := m.Generate(context.Background(), &ModelRequest{
+			Messages: []*Message{NewUserTextMessage("hi")},
+			Config:   config,
+		}, nil)
+		return err
+	}
+
+	if err := generate(nilableConfig{T: 0.5}); err != nil {
+		t.Errorf("a partial config of the action's own type was rejected: %v", err)
+	}
+	if err := generate(map[string]any{"sub": nil, "list": nil, "name": nil}); err != nil {
+		t.Errorf("explicit nulls were rejected: %v", err)
+	}
+	if err := generate(map[string]any{"bogus": 1}); err == nil {
+		t.Error("an unknown config field should still be rejected")
+	}
+	if err := generate(map[string]any{"t": "hot"}); err == nil {
+		t.Error("a mistyped config value should still be rejected")
+	}
+	if err := generate(map[string]any{"sub": map[string]any{"nope": 1}}); err == nil {
+		t.Error("an unknown nested field should still be rejected")
+	}
+
+	// The advertised schema stays clean: null tolerance is an enforcement
+	// concern, and the dev UI should show the field's real type.
+	props := advertisedConfigProps(t, m)
+	sub, ok := props["sub"].(map[string]any)
+	if !ok {
+		t.Fatalf("advertised properties.sub = %v, want a schema", props["sub"])
+	}
+	if sub["type"] != "object" {
+		t.Errorf("advertised properties.sub.type = %v, want a plain \"object\"", sub["type"])
+	}
+}
+
+// TestModelWithoutVersionsHidesVersionProperty is the other half of
+// [TestModelVersionWithTypedConfig]: version validation rejects every value
+// when a model declares no versions, so advertising the key there would offer
+// a config field that can only ever error.
+func TestModelWithoutVersionsHidesVersionProperty(t *testing.T) {
+	m := NewModelAction("test/unversioned", &ModelOptions{},
+		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+
+	if _, ok := advertisedConfigProps(t, m)["version"]; ok {
+		t.Error("a model declaring no Versions should not advertise the version property")
+	}
+}
+
+// advertisedConfigProps returns the properties of the config schema a model
+// advertises to the dev UI.
+func advertisedConfigProps(t *testing.T, m *ModelAction) map[string]any {
+	t.Helper()
+	model, ok := m.Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing, got %v", m.Desc().Metadata)
+	}
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions is %T, want map[string]any", model["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions has no properties map, got %v", schema)
+	}
+	return props
 }
 
 // strictFieldConfig has fields without omitempty; the inferred schema must

@@ -26,38 +26,6 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// Options follow the standard Go functional-options pattern: pass as many as
-// you like, in any order, and they merge left to right. Two rules govern how
-// repeats combine, so composing a request from several helpers is predictable:
-//
-//   - Collection options accumulate. Repeating one, or mixing its variants,
-//     appends in call order: WithMessages(a), WithMessages(b) sends [a, b], and
-//     WithTools, WithResources, WithUse, WithMiddleware, WithDocs, and
-//     WithDataset behave the same.
-//   - Single-value options take the last one set. WithConfig, WithModel /
-//     WithModelName, WithSystem, WithPrompt, the output-schema options, and the
-//     like each fill one slot, so the final call wins and earlier ones are
-//     overwritten rather than rejected. Every option that fills a slot shares
-//     it: WithSystem, WithSystemParts, WithSystemFn, and WithSystemPartsFn are
-//     four ways to write one system message, so they do not merge.
-//
-// One combination is refused rather than merged. WithMessagesTemplate lays out
-// the whole conversation, down to where {{history}} puts the caller's, so
-// separately supplied messages have no position relative to it. Passing it to
-// DefinePrompt alongside WithMessages or WithMessagesFn panics. Repeating the
-// template alone is an ordinary slot.
-//
-// A zero value does not fill a slot: WithMaxTurns(0), WithToolChoice(""), or
-// WithConfig(nil) is a no-op, so an earlier non-zero value cannot be un-set by
-// a later zero one. The rules apply within a single options list; APIs that
-// layer two lists (a prompt's define-time options against Execute-time
-// options) document their own precedence.
-//
-// Applying options therefore never fails on a "set more than once" conflict.
-// What does fail is a genuinely invalid argument (a type that WithInputType
-// cannot turn into a schema) or the refused combination above, and both panic
-// at the call site where the mistake is rather than deferring to the request.
-
 // PromptFn is a function that generates a prompt from a prompt's input.
 //
 // The input is untyped. [WithPromptFn] and [WithSystemFn] take a function with
@@ -70,19 +38,22 @@ type PromptFn = func(context.Context, any) (string, error)
 // type and converts for you.
 type MessagesFn = func(context.Context, any) ([]*Message, error)
 
-// appendMessagesFn composes two message-producing functions so their outputs
-// concatenate in call order. It backs the accumulate semantics of
-// [WithMessages] and [WithMessagesFn]: passing several of them (in any mix)
-// appends their messages instead of overwriting. Either side may be nil, in
-// which case the other is returned unwrapped.
-func appendMessagesFn(existing, next MessagesFn) MessagesFn {
+// appendFn composes two content-producing functions so their outputs
+// concatenate in call order. It backs the accumulate semantics of the
+// collection options: passing several of them, in any mix, appends instead of
+// overwriting. Either side may be nil, in which case the other is returned
+// unwrapped.
+//
+// [MessagesFn] and [DocsFn] are aliases for this shape, so one helper serves
+// both.
+func appendFn[T any](existing, next func(context.Context, any) ([]T, error)) func(context.Context, any) ([]T, error) {
 	if existing == nil {
 		return next
 	}
 	if next == nil {
 		return existing
 	}
-	return func(ctx context.Context, input any) ([]*Message, error) {
+	return func(ctx context.Context, input any) ([]T, error) {
 		before, err := existing(ctx, input)
 		if err != nil {
 			return nil, err
@@ -95,28 +66,6 @@ func appendMessagesFn(existing, next MessagesFn) MessagesFn {
 		// hands the caller's slice straight through, so appending in place
 		// would write into the spare capacity of the array backing their
 		// history. Concat always allocates a fresh slice.
-		return slices.Concat(before, after), nil
-	}
-}
-
-// appendDocsFn is [appendMessagesFn] for documents, backing the accumulate
-// semantics of [WithDocsFn].
-func appendDocsFn(existing, next DocsFn) DocsFn {
-	if existing == nil {
-		return next
-	}
-	if next == nil {
-		return existing
-	}
-	return func(ctx context.Context, input any) ([]*Document, error) {
-		before, err := existing(ctx, input)
-		if err != nil {
-			return nil, err
-		}
-		after, err := next(ctx, input)
-		if err != nil {
-			return nil, err
-		}
 		return slices.Concat(before, after), nil
 	}
 }
@@ -247,7 +196,7 @@ type CommonGenOption interface {
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
-	opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
+	opts.MessagesFn = appendFn(opts.MessagesFn, o.MessagesFn)
 	if o.MessagesText != nil {
 		opts.MessagesText = o.MessagesText
 	}
@@ -320,11 +269,7 @@ func WithMessages(messages ...*Message) CommonGenOption {
 // Compiling needs a prompt, so this is a [PromptOption]: passing it to
 // [Generate] or [Prompt.Execute] does not compile. Use [WithMessages] there.
 func WithMessagesTemplate(text string, args ...any) PromptOption {
-	if len(args) > 0 {
-		// Assigning avoids a compile-time warning about non-constant text.
-		t := text
-		text = fmt.Sprintf(t, args...)
-	}
+	text = sprintfText(text, args)
 	return &promptOptions{commonGenOptions: commonGenOptions{MessagesText: &text}}
 }
 
@@ -427,11 +372,10 @@ type InputOption interface {
 	applyInput(*inputOptions)
 }
 
-// InputSchemaOption is an [InputOption] that provides an explicit input
-// schema, inline or by name. Unlike the schema-inference options, it also
-// applies to the tool constructors, where an explicit schema stands in for an
-// In type parameter of 'any'; a tool whose input shape a Go type can express
-// should use the type parameter instead.
+// InputSchemaOption is an [InputOption] that also applies to the tool
+// constructors, where the input schema it supplies stands in for an In type
+// parameter of 'any'. A tool whose input shape a Go type can express should
+// use the type parameter instead.
 type InputSchemaOption interface {
 	InputOption
 	ToolOption
@@ -455,7 +399,11 @@ func (o *inputOptions) applyTool(opts *toolOptions)     { o.applyInput(&opts.inp
 // WithInputType uses the type provided to derive the input schema.
 // The inputted value may serve as the default input if no input is given at generation time depending on the action.
 // Only supports structs and map[string]any.
-func WithInputType(input any) InputOption {
+//
+// It applies to the tool constructors too, where the derived schema stands in
+// for an In type parameter of 'any'. Prefer the type parameter there: it is
+// the same schema plus a typed function signature.
+func WithInputType(input any) InputSchemaOption {
 	// Converting rather than marshaling by hand gives the default input the
 	// same Go types it would have arriving over the wire.
 	defaultInput, err := base.ConvertToExact[map[string]any](input)
@@ -901,7 +849,7 @@ type DocumentOption interface {
 // the [WithDocsFn] functions compose the same way.
 func (o *documentOptions) applyDocument(opts *documentOptions) {
 	opts.Documents = append(opts.Documents, o.Documents...)
-	opts.DocsFn = appendDocsFn(opts.DocsFn, o.DocsFn)
+	opts.DocsFn = appendFn(opts.DocsFn, o.DocsFn)
 }
 
 func (o *documentOptions) applyPrompt(opts *promptOptions) {

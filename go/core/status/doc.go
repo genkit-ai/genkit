@@ -57,6 +57,11 @@ When several [Error] values are in one chain, errors.As finds the outermost, so
 the last deliberate reclassification is the one transports report. [Of] follows
 the same rule.
 
+[Of] answers Internal for an unclassified error, which is right for a transport
+but not for code deciding what to do about the failure. Middleware branching on
+a status wants [Classified], which reports whether anything in the chain
+actually carried one.
+
 The pattern to avoid is restating the status on every frame as an error bubbles
 up. Wrapping with %v is the usual culprit: it flattens the cause into a string,
 so the sentinel, the status, and everything else in the chain are lost.

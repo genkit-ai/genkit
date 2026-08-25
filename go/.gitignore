@@ -1,4 +1,19 @@
 # Compiled sample binaries produced by `go build ./samples/<name>` from this
 # directory (e.g. ./samples/basic-agents). They are build artifacts, not source.
+# A new sample belongs here too: the binary lands beside this file, named after
+# the sample's directory.
+/basic
 /basic-agents
 /basic-agents-server
+/basic-durable-streaming-exp
+/basic-errors
+/basic-formats
+/basic-media
+/basic-middleware
+/basic-prompt-content
+/basic-prompts
+/basic-structured
+/basic-tool-interrupts
+/basic-tool-interrupts-exp
+/basic-tools
+/basic-tools-exp

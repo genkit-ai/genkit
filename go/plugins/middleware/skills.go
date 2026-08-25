@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/goccy/go-yaml"
 )
 
@@ -66,7 +67,7 @@ type Skills struct {
 	// SkillPaths lists directories that are scanned for skills. Each direct
 	// subdirectory containing a SKILL.md file is exposed as a skill.
 	// Defaults to []string{"skills"}.
-	SkillPaths []string `json:"skillPaths,omitempty"`
+	SkillPaths []string `json:"skillPaths,omitempty" jsonschema_description:"Directories that are scanned for skills. Each direct subdirectory containing a SKILL.md file is exposed as a skill. Defaults to the \"skills\" directory."`
 }
 
 // skillInfo records where a skill's SKILL.md lives and its description.
@@ -81,23 +82,29 @@ type skillFrontmatter struct {
 	Description string `yaml:"description"`
 }
 
-func (s *Skills) Name() string { return provider + "/skills" }
+func (s Skills) Name() string { return provider + "/skills" }
 
 // New scans the configured skill paths and returns a [ai.Hooks] that injects
 // the skills system prompt and exposes the use_skill tool. Scanning happens
 // once per [ai.Generate] call; the result is captured in the returned hooks
 // so WrapGenerate and the use_skill tool agree on the same skill set.
-func (s *Skills) New(ctx context.Context) (*ai.Hooks, error) {
-	info, err := scanSkills(s.paths())
+func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
+	info, err := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0)
 	if err != nil {
 		return nil, err
 	}
+	names := make([]string, 0, len(info))
+	for name := range info {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	logger.Debug(ctx, "skills middleware scanned", "skills", names)
 
 	useSkill := ai.NewTool(
 		useSkillToolName,
 		"Use a skill by its name.",
 		func(_ *ai.ToolContext, in struct {
-			SkillName string `json:"skillName" jsonschema:"description=The name of the skill to use."`
+			SkillName string `json:"skillName" jsonschema_description:"The name of the skill to use."`
 		}) (string, error) {
 			si, ok := info[in.SkillName]
 			if !ok {
@@ -135,16 +142,27 @@ func (s *Skills) paths() []string {
 
 // scanSkills enumerates SKILL.md files under each path and returns a map keyed
 // by the skill's directory name. Missing or unreadable paths are skipped,
-// matching the JS implementation.
-func scanSkills(paths []string) (map[string]skillInfo, error) {
+// matching the JS implementation; a skipped path is a warning when the caller
+// configured it explicitly (a likely misconfiguration) and debug noise when it
+// is only the unset default.
+func scanSkills(ctx context.Context, paths []string, explicit bool) (map[string]skillInfo, error) {
 	result := make(map[string]skillInfo)
+	skipped := func(p string, err error) {
+		if explicit {
+			logger.Warn(ctx, "skills path could not be read, skipping", "path", p, "error", err)
+		} else {
+			logger.Debug(ctx, "skills path could not be read, skipping", "path", p, "error", err)
+		}
+	}
 	for _, p := range paths {
 		abs, err := filepath.Abs(p)
 		if err != nil {
+			skipped(p, err)
 			continue
 		}
 		entries, err := os.ReadDir(abs)
 		if err != nil {
+			skipped(abs, err)
 			continue
 		}
 		for _, entry := range entries {

@@ -24,7 +24,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_anthropic import Anthropic, anthropic_name
+from genkit_anthropic import Anthropic, AnthropicConfig, anthropic_name
 from genkit_anthropic.model_info import (
     SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
     get_model_info,
@@ -34,7 +34,6 @@ from genkit import (
     ActionKind,
     Constrained,
     Message,
-    ModelConfig,
     ModelRequest,
     Part,
     Role,
@@ -448,7 +447,7 @@ def _create_sample_request() -> ModelRequest:
                 content=[Part(root=TextPart(text='Hello, how are you?'))],
             )
         ],
-        config=ModelConfig(),
+        config=AnthropicConfig(),
         tools=[
             ToolDefinition(
                 name='get_weather',

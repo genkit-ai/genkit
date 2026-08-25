@@ -29,17 +29,51 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
 // genkitCtxKey is the context key for the Genkit instance.
 var genkitCtxKey = base.NewContextKey[*Genkit]()
+
+// configureLoggingOnce guards configureLogging: Init may run more than once
+// (commonly in tests), but log handlers must only be installed once.
+var configureLoggingOnce sync.Once
+
+// configureLogging applies GENKIT_LOG_LEVEL to the console handler and, in the
+// dev environment, installs the handler that streams logs to the Dev UI's
+// telemetry server, correlated with the active trace span.
+func configureLogging() {
+	if v := os.Getenv("GENKIT_LOG_LEVEL"); v != "" {
+		var lvl slog.Level
+		if err := lvl.UnmarshalText([]byte(v)); err != nil {
+			slog.Warn("ignoring invalid GENKIT_LOG_LEVEL", "value", v, "error", err)
+		} else if logger.HasCustomDefault() {
+			// The application brought its own handler; its level is not ours
+			// to manage. Warn rather than stay silent, since the user set the
+			// variable expecting an effect.
+			slog.Warn("ignoring GENKIT_LOG_LEVEL because the application installed its own default logger", "value", v)
+		} else {
+			logger.SetLevel(lvl)
+		}
+	}
+	if api.CurrentEnvironment() == api.EnvironmentDev {
+		logger.AddHandler(tracing.LogExportHandler())
+		// The CLI normally provides the telemetry server URL in the
+		// environment; when it arrives later via the reflection API instead,
+		// configureTelemetry enables export at that point.
+		tracing.EnableLogExport(os.Getenv("GENKIT_TELEMETRY_SERVER"))
+	}
+}
 
 // FromContext returns the [*Genkit] instance stored in the context.
 // This is set automatically by [Generate] and related functions, and seeded
@@ -241,6 +275,9 @@ func WithExperimental() GenkitOption {
 func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	ctx, _ = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 
+	configureLoggingOnce.Do(configureLogging)
+	start := time.Now()
+
 	gOpts := &genkitOptions{}
 	for _, opt := range opts {
 		if err := opt.apply(gOpts); err != nil {
@@ -252,6 +289,8 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	g := &Genkit{reg: r}
 
 	for _, plugin := range gOpts.Plugins {
+		logger.Debug(ctx, "initializing plugin", "plugin", plugin.Name())
+		pluginStart := time.Now()
 		actions := plugin.Init(ctx)
 		for _, action := range actions {
 			action.Register(r)
@@ -267,6 +306,10 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 				d.Register(r)
 			}
 		}
+		logger.Debug(ctx, "initialized plugin",
+			"plugin", plugin.Name(),
+			"actions", len(actions),
+			"duration", time.Since(pluginStart).Round(time.Millisecond))
 	}
 
 	ai.ConfigureFormats(r)
@@ -288,33 +331,75 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	if api.CurrentEnvironment() == api.EnvironmentDev {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
+		// startupErrCh carries the startup outcome to the select below. The
+		// supervisor goroutine is the sole reader of errCh, so a post-startup
+		// serve error can never be mistaken for a startup failure here, and a
+		// startup failure never strands the supervisor waiting on a start
+		// signal that will not come.
+		startupErrCh := make(chan error, 1)
 
 		if v2URL := os.Getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
 			// V2: connect to the CLI's WebSocket server.
 			go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: v2URL}, errCh, serverStartCh)
 		} else {
-			// V1: start an HTTP reflection server.
-			go func() {
-				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
-					return
-				}
-				if err := <-errCh; err != nil {
-					slog.Error("reflection server error", "err", err)
-				}
-			}()
+			// V1: start an HTTP reflection server. Startup errors arrive on
+			// errCh; success closes serverStartCh.
+			go startReflectionServer(ctx, g, errCh, serverStartCh)
 		}
 
+		go func() {
+			select {
+			case <-serverStartCh:
+				startupErrCh <- nil
+				select {
+				case err := <-errCh:
+					if err != nil {
+						logger.Error(ctx, "reflection server error", "error", err)
+					}
+				case <-ctx.Done():
+				}
+			case err := <-errCh:
+				// Both channels can be ready when the server fails right
+				// after starting; started-then-failed is a runtime error,
+				// not a startup failure.
+				select {
+				case <-serverStartCh:
+					startupErrCh <- nil
+					if err != nil {
+						logger.Error(ctx, "reflection server error", "error", err)
+					}
+				default:
+					startupErrCh <- err
+				}
+			case <-ctx.Done():
+			}
+		}()
+
 		select {
-		case err := <-errCh:
-			panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
-		case <-serverStartCh:
-			slog.Debug("reflection server started successfully")
+		case err := <-startupErrCh:
+			if err != nil {
+				panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
+			}
 		case <-ctx.Done():
 			panic(ctx.Err())
 		}
 	}
 
+	logger.Info(ctx, "Genkit initialized",
+		"env", api.CurrentEnvironment(),
+		"plugins", pluginNames(gOpts.Plugins),
+		"duration", time.Since(start).Round(time.Millisecond))
+
 	return g
+}
+
+// pluginNames returns the names of the given plugins for the init log line.
+func pluginNames(plugins []api.Plugin) []string {
+	names := make([]string, len(plugins))
+	for i, p := range plugins {
+		names[i] = p.Name()
+	}
+	return names
 }
 
 // RegisterAction registers a [api.Action] that was previously created by calling
@@ -465,8 +550,40 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //			return response, nil
 //		},
 //	)
+//
+// The step's context is not available to `fn`, so anything inside it that takes
+// a context and traces its own work, such as an HTTP client or a database call,
+// reports against the enclosing flow rather than against this step. Use
+// [RunWithContext] for those; keep Run for pure work that traces nothing.
 func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out, error) {
 	return core.Run(ctx, name, fn)
+}
+
+// RunWithContext is [Run] with the step's own context passed to `fn`.
+//
+// Work that `fn` starts with that context nests under the step in the trace
+// instead of under the flow, which is what makes a step's span cover the calls
+// it is timing:
+//
+//	genkit.DefineFlow(g, "describe",
+//		func(ctx context.Context, path string) (string, error) {
+//			// The upload's own HTTP spans nest under "upload-image".
+//			file, err := genkit.RunWithContext(ctx, "upload-image",
+//				func(ctx context.Context) (*genai.File, error) {
+//					return client.Files.UploadFromPath(ctx, path, nil)
+//				})
+//			if err != nil {
+//				return "", err
+//			}
+//			// ... use file.URI in a request ...
+//		},
+//	)
+//
+// Passing the enclosing context instead of the one supplied here is the whole
+// difference, and it is silent: the step still records the right duration while
+// the calls it made appear beside it rather than beneath it.
+func RunWithContext[Out any](ctx context.Context, name string, fn func(context.Context) (Out, error)) (Out, error) {
+	return core.RunWithContext(ctx, name, fn)
 }
 
 // ListFlows returns a slice of all [api.Action] instances that represent
@@ -499,67 +616,33 @@ func ListTools(g *Genkit) []ai.Tool {
 	return tools
 }
 
-// DefineModelAction defines a custom model implementation, registers it
-// as a [core.Action] of type Model, and returns the concrete [ai.ModelAction].
+// DefineModelAction defines a custom model implementation, registers it as a
+// [core.Action] of type Model, and returns the concrete [ai.ModelAction].
 //
-// The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
-// The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
-// The `fn` argument ([ai.ModelActionFunc]) implements the actual generation logic,
-// handling input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
-// potentially streaming chunks ([ai.ModelResponseChunk]) via the callback.
+// name identifies the model (e.g. "myProvider/myModel"), opts describes what it
+// supports, and fn implements generation, streaming chunks through its callback.
 //
 // Config is the model's typed configuration; it is usually inferred from fn's
 // signature. See [ai.NewModelAction] for how the request's config is
 // deserialized and validated.
 //
-// For models that don't need to be registered (e.g., for plugin development or testing),
-// use [ai.NewModelAction] instead.
+// For models that don't need to be registered (e.g., for plugin development or
+// testing), use [ai.NewModelAction] instead.
 //
 // Example:
 //
 //	echoModel := genkit.DefineModelAction(g, "custom/echo",
-//		&ai.ModelOptions{
-//			Label:    "Echo Model",
-//			Supports: &ai.ModelSupports{Multiturn: true},
-//		},
-//		func(ctx context.Context, req *ai.ModelRequest, config MyConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-//			// Simple echo implementation
-//			resp := &ai.ModelResponse{
-//				Message: &ai.Message{
-//					Role:    ai.RoleModel,
-//					Content: []*ai.Part{},
-//				},
-//			}
-//			// Combine content from the last user message
-//			var responseText strings.Builder
-//			if len(req.Messages) > 0 {
-//				lastMsg := req.Messages[len(req.Messages)-1]
-//				if lastMsg.Role == ai.RoleUser {
-//					for _, part := range lastMsg.Content {
-//						if part.IsText() {
-//							responseText.WriteString(part.Text)
-//						}
-//					}
-//				}
-//			}
-//			if responseText.Len() == 0 {
-//				responseText.WriteString("...")
-//			}
-//
-//			resp.Message.Content = append(resp.Message.Content, ai.NewTextPart(responseText.String()))
-//
-//			// Example of streaming (optional)
+//		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+//		func(ctx context.Context, req *ai.ModelRequest, cfg *echoConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+//			text := req.Messages[len(req.Messages)-1].Text()
 //			if cb != nil {
-//				chunk := &ai.ModelResponseChunk{ Index: 0, Content: resp.Message.Content }
-//				if err := cb(ctx, chunk); err != nil {
-//					return nil, err // Handle streaming error
-//				}
+//				cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(text)}})
 //			}
-//
-//			resp.FinishReason = ai.FinishReasonStop
-//			return resp, nil
-//		},
-//	)
+//			return &ai.ModelResponse{
+//				Message:      ai.NewModelTextMessage(text),
+//				FinishReason: ai.FinishReasonStop,
+//			}, nil
+//		})
 func DefineModelAction[Config any](
 	g *Genkit,
 	name string,
@@ -590,8 +673,11 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 // The `checkFn` is the function that checks the status of the background model.
 //
 // Config is the model's typed configuration; it is usually inferred from
-// startFn's signature. See [ai.NewModelAction] for how the request's
-// config is deserialized and validated.
+// startFn's signature. See [ai.NewModelAction] for how the request's config is
+// deserialized and validated.
+//
+// For background models that don't need to be registered (e.g., for plugin
+// development), use [ai.NewBackgroundModelAction] instead.
 func DefineBackgroundModelAction[Config any](
 	g *Genkit,
 	name string,
@@ -815,10 +901,10 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 //
 // The `description` is a human-readable explanation shown in the Dev UI. The
 // `prototype` is a value of a type that implements [ai.Middleware]. Its
-// [ai.Middleware.Name] method supplies the registered name, and its fields
-// (both exported JSON config and unexported plugin-level state) are captured
-// by a value-copy inside the descriptor so JSON-dispatched invocations
-// preserve prototype state across calls.
+// [ai.Middleware.Name] method supplies the registered name, and each
+// JSON-dispatched invocation copies it so unexported plugin-level state
+// carries into the call while the call's own config is unmarshalled over the
+// exported fields (see [ai.Middleware] for what belongs where).
 //
 // For pure Go use, registration is not strictly required: passing a middleware
 // config directly to [ai.WithUse] invokes its [ai.Middleware.New] method on
@@ -1574,8 +1660,11 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 // ([ai.EvaluatorCallbackRequest]) in the evaluation dataset.
 //
 // Config is the evaluator's typed configuration; it is usually inferred from
-// fn's signature. See [ai.NewEvaluatorAction] for how the request's
-// options are deserialized.
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's options are
+// deserialized.
+//
+// For evaluators that don't need to be registered (e.g., for plugin
+// development), use [ai.NewEvaluatorAction] instead.
 func DefineEvaluatorAction[Config any](
 	g *Genkit,
 	name string,
@@ -1608,8 +1697,11 @@ func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.Ev
 // such as batching calls to external services or parallelizing computations.
 //
 // Config is the evaluator's typed configuration; it is usually inferred from
-// fn's signature. See [ai.NewEvaluatorAction] for how the request's
-// options are deserialized.
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's options are
+// deserialized.
+//
+// For evaluators that don't need to be registered (e.g., for plugin
+// development), use [ai.NewBatchEvaluatorAction] instead.
 func DefineBatchEvaluatorAction[Config any](
 	g *Genkit,
 	name string,
@@ -1709,7 +1801,7 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 		if !useDefaultDir {
 			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
 		}
-		slog.Debug("default prompt directory not found, skipping loading .prompt files", "dir", dir)
+		slog.Debug("default prompt directory not found, skipping prompt loading", "dir", dir)
 		return
 	}
 
@@ -1717,7 +1809,7 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 		if !useDefaultDir {
 			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
 		}
-		slog.Debug("Default prompt directory not found, skipping loading .prompt files", "dir", dir)
+		slog.Debug("default prompt directory not found, skipping prompt loading", "dir", dir)
 		return
 	}
 

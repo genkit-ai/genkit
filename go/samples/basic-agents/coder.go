@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -38,12 +39,12 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
-					ai.WithModel(flashModel),
+					ai.WithModel(model),
 					ai.WithSystem("You are a senior software engineer. Answer in as few words as possible. Use fenced code blocks for any code."),
 					ai.WithMessages(sess.Messages()...),
 				) {
 					if err != nil {
-						return nil, err
+						return nil, fmt.Errorf("could not answer the question: %w", err)
 					}
 					if chunk.Done {
 						sess.AddMessages(chunk.Response.Message)

@@ -40,7 +40,9 @@ US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
-def _text_request(config: dict[str, Any] | None = None) -> ModelRequest[Any]:
+def _text_request(config: GeminiConfigSchema | dict[str, Any] | None = None) -> ModelRequest[Any]:
+    if isinstance(config, dict):
+        config = GeminiConfigSchema.model_validate(config)
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
         config=config,
@@ -648,6 +650,7 @@ class TestPluginModelWiring:
         """The model action constructs GeminiModel with the plugin's kwargs."""
         plugin = _vertex_plugin(location='us')
         action = plugin._resolve_model('vertexai/gemini-2.5-flash')
+        assert action is not None
         with patch('genkit_google_genai.google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
@@ -663,6 +666,7 @@ class TestPluginModelWiring:
         with patch('genkit_google_genai.google.genai.client.Client'):
             plugin = GoogleAI(api_key='k')
         action = plugin._resolve_model('googleai/gemini-2.5-flash')
+        assert action is not None
         with patch('genkit_google_genai.google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
@@ -780,9 +784,13 @@ class TestLocationConfigThroughPipeline:
 
     @pytest.mark.asyncio
     async def test_location_stripped_from_generate_content_config(self) -> None:
-        """A config with location converts to GenerateContentConfig without error."""
+        """A config with location converts to GenerateContentConfig without error.
+
+        By the time the model runs, Action has validated the caller's dict into
+        the family schema, so the pipeline is exercised with that instance.
+        """
         model = _vertex_model()
-        request = _text_request({'location': 'eu', 'temperature': 0.5})
+        request = _text_request(GeminiConfigSchema.model_validate({'location': 'eu', 'temperature': 0.5}))
         cfg = await model._genkit_to_googleai_cfg(request=request)
         assert cfg is not None
         assert cfg.temperature == 0.5

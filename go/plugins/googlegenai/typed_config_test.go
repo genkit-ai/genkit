@@ -4,23 +4,21 @@
 package googlegenai
 
 import (
-	"context"
-	"maps"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
 
 // assertAdvertises checks that got, a model's advertised customOptions
-// metadata, is the curated config schema plus the framework-added string
-// "version" property (a version pinned through the config must stay
-// admissible on the wire). Asserting on got's shape rather than rebuilding
-// the framework's decoration keeps the plugin-owned part of the contract
-// pinned without mimicking framework internals.
+// metadata, is exactly the curated config schema. Asserting on got's shape
+// rather than rebuilding the framework's decoration keeps the plugin-owned
+// part of the contract pinned without mimicking framework internals.
 func assertAdvertises(t *testing.T, name string, got any, curated map[string]any) {
 	t.Helper()
 	schema, ok := got.(map[string]any)
@@ -31,15 +29,15 @@ func assertAdvertises(t *testing.T, name string, got any, curated map[string]any
 	if !ok {
 		t.Fatalf("%s customOptions has no properties map", name)
 	}
-	if !reflect.DeepEqual(props["version"], map[string]any{"type": "string"}) {
-		t.Errorf("%s customOptions properties.version = %v, want the framework-added string schema", name, props["version"])
+	// No googlegenai model declares Versions, and the version middleware
+	// rejects every value for a model that declares none, so the framework
+	// must not add the property here: it would be a dev UI field that only
+	// ever errors.
+	if _, ok := props["version"]; ok {
+		t.Errorf("%s customOptions advertises a version property, but the model declares no versions", name)
 	}
-	schema = maps.Clone(schema)
-	props = maps.Clone(props)
-	delete(props, "version")
-	schema["properties"] = props
 	if !reflect.DeepEqual(schema, curated) {
-		t.Errorf("%s customOptions is not the curated schema plus version", name)
+		t.Errorf("%s customOptions is not the curated schema", name)
 	}
 }
 
@@ -64,14 +62,7 @@ func TestConfigSchemaMatchesDefaultConfig(t *testing.T) {
 // actions below only reads the backend off the client config.
 func testClient(t *testing.T) *genai.Client {
 	t.Helper()
-	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  "test-api-key",
-	})
-	if err != nil {
-		t.Fatalf("genai.NewClient() error = %v", err)
-	}
-	return client
+	return newTestClient(t, "")
 }
 
 // validateConfig runs the request's config through the same check the action
@@ -133,6 +124,13 @@ func TestModelConfigSchema(t *testing.T) {
 	}{
 		{"mistyped value", gemini.InputSchema, map[string]any{"temperature": "hot"}},
 		{"unknown nested field", gemini.InputSchema, map[string]any{"thinkingConfig": map[string]any{"nope": 1}}},
+		// The root and tools[] hide a field each, and hiding it by replacing it
+		// with the permissive schema rather than deleting it is what keeps them
+		// closed. Deleting would have forced additionalProperties open on both,
+		// and these two typos would sail through and be silently ignored.
+		{"unknown top-level field", gemini.InputSchema, map[string]any{"nope": 1}},
+		{"camelCase slip on a hiding object", gemini.InputSchema, map[string]any{"max_output_tokens": 100}},
+		{"unknown field on a config tool", gemini.InputSchema, map[string]any{"tools": []any{map[string]any{"nope": 1}}}},
 		// Image models advertise the images config, so a chat config's fields
 		// are not valid there.
 		{"chat config on an image model", imagen.InputSchema, map[string]any{"temperature": 0.4}},
@@ -181,6 +179,14 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.wantErr)
+			}
+			// The caller's request is what is wrong, so this must reach the
+			// dev UI as a 400 rather than a 500.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("error is not classified ErrInvalidArgument: %v", err)
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
 			}
 		})
 	}

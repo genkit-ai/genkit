@@ -49,9 +49,11 @@ from pydantic import BaseModel, Field
 from genkit import Genkit
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
+from genkit._core._model import ModelConfig
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
+from genkit.model import model_ref
 
 
 @pytest.fixture
@@ -416,5 +418,28 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
             'properties': {},
             'additionalProperties': True,
         }
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_values_default_model_ref_is_name() -> None:
+    """A stored ModelRef lists as its wire name so the Dev UI can JSON it."""
+    registry = Registry()
+    registry.register_value(
+        'defaultModel',
+        'defaultModel',
+        model_ref(
+            'echoModel',
+            config_schema=ModelConfig,
+            version='001',
+            config=ModelConfig(temperature=0.7),
+        ),
+    )
+    client = await _registry_asgi_client(registry)
+    try:
+        response = await client.get('/api/values?type=defaultModel')
+        assert response.status_code == 200
+        assert response.json() == {'defaultModel': 'echoModel'}
     finally:
         await client.aclose()

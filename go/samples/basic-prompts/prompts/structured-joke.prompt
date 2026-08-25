@@ -2,12 +2,18 @@
 model: googleai/gemini-flash-latest
 config:
   thinkingConfig:
-    thinkingLevel: MINIMAL
+    thinkingLevel: MEDIUM
 input:
   schema: JokeRequest
 output:
   format: json
-  schema: Joke
+  # Written out inline rather than referencing a registered schema by name, as
+  # the input above and recipe.prompt both do. Handy for a shape only one
+  # prompt uses; the fields still have to line up with the Go type the caller
+  # unmarshals into.
+  schema:
+    joke: string, The joke text
+    category: string, The joke category
 ---
 Share a long joke about {{topic}}.
 

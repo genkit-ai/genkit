@@ -22,16 +22,19 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
+from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
+from genkit._core._error import GenkitError
 from genkit._core._extract_json import extract_json
 from genkit._core._typing import (
     Candidate,
@@ -47,8 +50,10 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
+    OutputConfig as OutputConfigData,
     Part,
     Resume,
     Role,
@@ -59,22 +64,139 @@ from genkit._core._typing import (
     ToolRequestPart,
 )
 
-ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
+# Runtime schema for common generate knobs. ModelConfigDict is the
+# hand-copied autocomplete list — keep the keys matching so a new knob
+# shows up in the IDE the same day it becomes legal.
+ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
+
+
+class ModelConfigDict(TypedDict, extra_items=Any, total=False):
+    """Common knobs for dict-literal autocomplete on ``config={...}``.
+
+    ``None`` clears a ModelRef default. Extra keys (provider-specific) stay
+    in the bag and are forwarded.
+
+    Keys match ``GenerationCommonConfig`` / ``ModelConfig``. If a common
+    knob is added there and not here, autocomplete quietly drops it.
+    """
+
+    version: str | None
+    temperature: float | None
+    max_output_tokens: float | None
+    top_k: float | None
+    top_p: float | None
+    stop_sequences: Sequence[str] | None
+    api_key: str | None
+
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
 ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
+# ModelConfig subclasses without forcing everything through GenerationCommonConfig.
+# Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
+# ModelRequest[ModelConfig] you can assign a ModelConfig into.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT')
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+def declared_config_type(cls: type) -> type | None:
+    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+    meta = getattr(cls, '__pydantic_generic_metadata__', None)
+    if not meta:
+        return None
+    args = meta.get('args') or ()
+    if not args:
+        return None
+    arg = args[0]
+    if isinstance(arg, TypeVar) or arg is Any:
+        return None
+    return arg
+
+
+def config_type_path(cls: type) -> str:
+    """The public import a plugin author would use, else the defining module.
+
+    Walks parent packages from the top and uses the first one that re-exports
+    this class under the same name (``genkit_openai.OpenAIConfig``, not
+    ``genkit_openai.typing.OpenAIConfig``). Nested / test-local classes keep
+    the defining path.
+    """
+    impl = f'{cls.__module__}.{cls.__qualname__}'
+    if '<locals>' in cls.__qualname__ or '.' in cls.__qualname__:
+        return impl
+    parts = cls.__module__.split('.')
+    name = cls.__name__
+    for i in range(1, len(parts) + 1):
+        mod_name = '.'.join(parts[:i])
+        try:
+            mod = import_module(mod_name)
+        except ImportError:
+            continue
+        if getattr(mod, name, None) is not cls:
+            continue
+        public = getattr(mod, '__all__', None)
+        if public is not None and name not in public:
+            continue
+        return f'{mod_name}.{name}'
+    return impl
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Handle for a model tied to a config schema.
+
+    Fields cannot be rebound. config and info are copied at construction so later
+    mutations of the caller's objects don't change the ref; the copies themselves
+    stay ordinary mutable Pydantic models.
+    """
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
+
+    # Explicitly opt out of hashing: Pydantic configs are unhashable, so an
+    # auto-generated __hash__ would fail once set.
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        # If config_schema is not a BaseModel subclass, raise an error.
+        schema = self.config_schema
+        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if self.config is not None and not isinstance(self.config, schema):
+            expected = f'{schema.__module__}.{schema.__name__}'
+            actual = f'{type(self.config).__module__}.{type(self.config).__name__}'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self.name}: config must be an instance of {expected}, got {actual}',
+            )
+        # If info is present, validate that it is a ModelInfo and raise an error if not.
+        if self.info is not None and not isinstance(self.info, ModelInfo):
+            actual = f'{type(self.info).__module__}.{type(self.info).__name__}'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
+            )
+        # Callers often keep the config/info they passed in. Copy so later
+        # mutations of those objects don't change the ref's defaults.
+        if self.config is not None:
+            object.__setattr__(self, 'config', self.config.model_copy(deep=True))
+        if self.info is not None:
+            object.__setattr__(self, 'info', self.info.model_copy(deep=True))
 
 
 class Message(MessageData):
@@ -223,12 +345,22 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
-    """Hand-written model request with flat output fields and veneer types.
+class OutputConfig(OutputConfigData):
+    """Output settings for a model request.
 
-    Output config is inlined as flat fields (output_format, output_schema, etc.)
-    instead of a nested OutputConfig object. Messages and docs use veneer types
-    (Message, Document) for convenience methods like .text.
+    Construct with ``json_schema=``; the serialized key on the wire is
+    ``schema``. This is the class to import and construct from hand-written
+    code.
+    """
+
+
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
+    """Hand-written model request with veneer types and flat output accessors.
+
+    Output settings live nested as ``output: OutputConfig`` so dump/validate
+    round-trips the wire shape, while flat properties (``output_format`` etc.)
+    stay the plugin-author convenience surface. Messages and docs use veneer
+    types (Message, Document) for helpers like ``.text``.
 
     Example:
         class GeminiConfig(ModelConfig):
@@ -240,20 +372,46 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
                 print(msg.text)  # Message veneer property
             if request.output_format == 'json':
                 schema = request.output_schema
+
+    Note:
+        Pass output settings as ``output=OutputConfig(...)``. The flat
+        names (``output_format`` etc.) are convenience properties you read
+        and write after construction — they are not constructor arguments,
+        so passing them there leaves output unset.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
-    # Flat output fields (no nested OutputConfig)
-    output_format: str | None = None
-    output_schema: dict[str, Any] | None = None
-    output_constrained: bool | None = None
-    output_content_type: str | None = None
+    # Wire-shaped output storage; flat access via the properties below.
+    output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @field_validator('config', mode='before')
+    @classmethod
+    def _check_config_type(cls, v: object) -> object:
+        """A mapping is the bag the plugin schema coerces.
+
+        A Pydantic instance is only legal if it is that schema. OpenAIConfig
+        on a Gemini request is a caller mistake — pass a mapping instead.
+        """
+        if v is None:
+            return v
+        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
+            return v
+        if isinstance(v, BaseModel):
+            expected = declared_config_type(cls)
+            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+                raise ValueError(
+                    f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
+                )
+            if expected is dict:
+                raise ValueError(f'config must be a mapping, got {type(v).__name__}')
+            return v
+        raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -265,33 +423,61 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     @field_validator('docs', mode='before')
     @classmethod
     def _wrap_docs(cls, v: list[DocumentData] | None) -> list[Document] | None:
-        """Wrap DocumentData in Document veneer for convenience methods."""
+        """Wrap DocumentData in Document veneer for convenience methods.
+
+        A dumped request sends docs as dicts. Messages already take a mapping;
+        this wrap has to as well or a bad config plus docs= never reaches the
+        GenkitError for the config.
+        """
         if v is None:
             return None
-        # pyrefly: ignore[bad-return]
-        return [d if isinstance(d, Document) else Document(d.content, d.metadata) for d in v]
+        wrapped: list[Document] = []
+        for d in v:
+            if isinstance(d, Document):
+                wrapped.append(d)
+            elif isinstance(d, dict):
+                wrapped.append(Document(d.get('content') or [], d.get('metadata')))
+            else:
+                wrapped.append(Document(d.content, d.metadata))
+        return wrapped
 
-    @model_serializer(mode='wrap')
-    def _serialize_for_spec(self, serializer: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-        """Serialize to spec wire format with nested output (matches JS/Go)."""
-        data = serializer(self)
-        # Build nested output from flat fields - spec expects output key always present
-        output: dict[str, Any] = {}
-        if self.output_format is not None:
-            output['format'] = self.output_format
-        if self.output_schema is not None:
-            output['schema'] = self.output_schema
-        if self.output_constrained is not None:
-            output['constrained'] = self.output_constrained
-        if self.output_content_type is not None:
-            output['contentType'] = self.output_content_type
-        # Remove flat fields, add nested output
-        data.pop('outputFormat', None)
-        data.pop('outputSchema', None)
-        data.pop('outputConstrained', None)
-        data.pop('outputContentType', None)
-        data['output'] = output
-        return data
+    # Flat accessors: the plugin-author convenience surface over nested output.
+
+    @property
+    def output_format(self) -> str | None:
+        """Output format (e.g. 'json'); reads ``output.format``."""
+        return self.output.format
+
+    @output_format.setter
+    def output_format(self, v: str | None) -> None:
+        self.output.format = v
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        """Output JSON schema; reads ``output.json_schema``."""
+        return self.output.json_schema
+
+    @output_schema.setter
+    def output_schema(self, v: dict[str, Any] | None) -> None:
+        self.output.json_schema = v
+
+    @property
+    def output_constrained(self) -> bool | None:
+        """Whether constrained decoding is requested; reads ``output.constrained``."""
+        return self.output.constrained
+
+    @output_constrained.setter
+    def output_constrained(self, v: bool | None) -> None:
+        self.output.constrained = v
+
+    @property
+    def output_content_type(self) -> str | None:
+        """Output content type; reads ``output.content_type``."""
+        return self.output.content_type
+
+    @output_content_type.setter
+    def output_content_type(self, v: str | None) -> None:
+        self.output.content_type = v
 
 
 class ModelResponse(GenkitModel, Generic[OutputT]):

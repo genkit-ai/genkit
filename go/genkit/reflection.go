@@ -172,6 +172,7 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 			return
 		}
 
+		slog.Info("reflection server listening", "addr", s.Addr)
 		close(serverStartCh)
 
 		if err := s.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -321,24 +322,98 @@ func serveMux(g *Genkit, s *reflectionServer) *http.ServeMux {
 func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		logger.FromContext(ctx).Debug("request start", "method", r.Method, "path", r.URL.Path)
+		logger.Debug(ctx, "reflection request started", "method", r.Method, "path", r.URL.Path)
 
 		var err error
 		defer func() {
 			if err != nil {
-				logger.FromContext(ctx).Error("request end", "err", err)
+				logger.Error(ctx, "reflection request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 			} else {
-				logger.FromContext(ctx).Debug("request end")
+				logger.Debug(ctx, "reflection request finished", "method", r.Method, "path", r.URL.Path)
 			}
 		}()
 
 		w.Header().Set("x-genkit-version", "go/"+internal.Version)
 
 		if err = h(w, r); err != nil {
-			errorResponse := core.ToReflectionError(err)
-			w.WriteHeader(errorResponse.Code)
+			errorResponse := toReflectionError(err)
+			// The body's code is a canonical status code, not an HTTP one, so
+			// the transport status is derived from it rather than reused. Going
+			// through the code keeps the two from ever disagreeing.
+			w.WriteHeader(status.FromCode(errorResponse.Code).HTTPCode())
 			writeJSON(ctx, w, errorResponse)
 		}
+	}
+}
+
+// reflectionErrorDetails is the details field of a [reflectionError].
+type reflectionErrorDetails struct {
+	Stack   *string `json:"stack,omitempty"`
+	TraceID *string `json:"traceId,omitempty"`
+}
+
+// reflectionError is the wire format for an error in a reflection API
+// response. It belongs to this boundary alone: the reflection API is how the
+// dev UI talks to a running app, so nothing outside this package constructs or
+// reads one.
+type reflectionError struct {
+	Details *reflectionErrorDetails `json:"details,omitempty"`
+	Message string                  `json:"message"`
+	// Code is the canonical status code, the same numbering gRPC uses and the
+	// dev UI's Status schema validates against (INVALID_ARGUMENT is 3, not
+	// 400). It is not an HTTP status: callers needing one derive it with
+	// [status.FromCode] and [status.Name.HTTPCode].
+	Code int `json:"code"`
+}
+
+// setTraceID records traceID, allocating the details envelope when the error
+// arrived without one.
+//
+// [toReflectionError] fills in details only from a stack or trace the error
+// itself carried, and leaves the pointer nil otherwise. Every error that was
+// never classified reaches that case, which is any plain error returned by a
+// plugin or a user's own function, so the envelope cannot be assumed to exist
+// just because a trace ID is on hand to write into it.
+func (re *reflectionError) setTraceID(traceID string) {
+	if traceID == "" {
+		return
+	}
+	if re.Details == nil {
+		re.Details = &reflectionErrorDetails{}
+	}
+	re.Details.TraceID = &traceID
+}
+
+// toReflectionError renders err as the reflection API's wire envelope, mapping
+// its status to an HTTP code and carrying the stack through to the dev UI.
+func toReflectionError(err error) reflectionError {
+	e := status.Convert(err)
+	if e == nil {
+		return reflectionError{Code: status.Internal.Code(), Details: &reflectionErrorDetails{}}
+	}
+	// The deprecated core constructors recorded the stack under
+	// Details["stack"]; status.Errorf keeps it off the details map and formats
+	// it on demand. Read both so errors from either carry a stack.
+	stack, stackOK := e.Details["stack"].(string)
+	if !stackOK {
+		stack = e.Stack()
+		stackOK = stack != ""
+	}
+	traceID, traceOK := e.Details["traceId"].(string)
+	var details *reflectionErrorDetails
+	if stackOK || traceOK {
+		details = &reflectionErrorDetails{}
+		if stackOK {
+			details.Stack = &stack
+		}
+		if traceOK {
+			details.TraceID = &traceID
+		}
+	}
+	return reflectionError{
+		Details: details,
+		Code:    e.Status.Code(),
+		Message: e.Message,
 	}
 }
 
@@ -365,7 +440,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			return err
 		}
 
-		logger.FromContext(ctx).Debug("running action", "key", body.Key, "stream", stream)
+		logger.Debug(ctx, "running action from the Dev UI", "key", body.Key, "stream", stream)
 
 		// Create cancellable context for this action
 		actionCtx, cancel := context.WithCancel(ctx)
@@ -450,10 +525,10 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 					traceIDPtr = &resp.Telemetry.TraceID
 				}
 				errResp := errorResponse{
-					Error: core.ReflectionError{
+					Error: reflectionError{
 						Code:    core.CodeCancelled, // gRPC CANCELLED = 1
 						Message: "Action was cancelled",
-						Details: &core.ReflectionErrorDetails{
+						Details: &reflectionErrorDetails{
 							TraceID: traceIDPtr,
 						},
 					},
@@ -474,14 +549,14 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 			// Handle other errors
 			if stream {
-				refErr := core.ToReflectionError(err)
-				if resp != nil && resp.Telemetry.TraceID != "" {
-					refErr.Details.TraceID = &resp.Telemetry.TraceID
+				refErr := toReflectionError(err)
+				if resp != nil {
+					refErr.setTraceID(resp.Telemetry.TraceID)
 				}
 
 				reflectErr, err := json.Marshal(refErr)
 				if err != nil {
-					logger.FromContext(ctx).Error("writing output", "err", err)
+					logger.Error(ctx, "failed to write reflection response", "error", err)
 					return nil
 				}
 				_, err = fmt.Fprintf(w, "{\"error\": %s }", reflectErr)
@@ -492,14 +567,14 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 
 			// Non-streaming error
-			errorResponse := core.ToReflectionError(err)
-			if resp != nil && resp.Telemetry.TraceID != "" {
-				errorResponse.Details.TraceID = &resp.Telemetry.TraceID
+			errorResponse := toReflectionError(err)
+			if resp != nil {
+				errorResponse.setTraceID(resp.Telemetry.TraceID)
 			}
 
 			reflectErr, err := json.Marshal(errorResponse)
 			if err != nil {
-				logger.FromContext(ctx).Error("writing output", "err", err)
+				logger.Error(ctx, "failed to write reflection response", "error", err)
 				return nil
 			}
 
@@ -520,7 +595,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 			data, err := json.Marshal(finalResponse)
 			if err != nil {
-				logger.FromContext(ctx).Error("writing output", "err", err)
+				logger.Error(ctx, "failed to write reflection response", "error", err)
 				return nil
 			}
 
@@ -583,6 +658,7 @@ func configureTelemetry(url string) {
 		} else {
 			tracing.WriteTelemetryImmediate(client)
 		}
+		tracing.EnableLogExport(url)
 		slog.Debug("connected to telemetry server", "url", url, "realtime", realtime)
 	}
 }
@@ -603,7 +679,9 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 		configureTelemetry(body.TelemetryServerURL)
 
 		if body.ReflectionApiSpecVersion != internal.GENKIT_REFLECTION_API_SPEC_VERSION {
-			slog.Error("Genkit CLI version is not compatible with runtime library. Please use `genkit-cli` version compatible with runtime library version.")
+			slog.Warn("Genkit CLI version is not compatible with the runtime library, update genkit-cli to a compatible version",
+				"expectedSpecVersion", internal.GENKIT_REFLECTION_API_SPEC_VERSION,
+				"gotSpecVersion", body.ReflectionApiSpecVersion)
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -719,7 +797,7 @@ type telemetry struct {
 }
 
 type errorResponse struct {
-	Error core.ReflectionError `json:"error"`
+	Error reflectionError `json:"error"`
 }
 
 func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
@@ -802,7 +880,7 @@ func writeJSON(ctx context.Context, w http.ResponseWriter, value any) error {
 	}
 	_, err = w.Write(data)
 	if err != nil {
-		logger.FromContext(ctx).Error("writing output", "err", err)
+		logger.Error(ctx, "failed to write reflection response", "error", err)
 	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()

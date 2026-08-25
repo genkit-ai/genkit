@@ -1,85 +1,116 @@
 # OpenAI Plugin
 
-This plugin provides a simple interface for using OpenAI's services.
+This plugin provides Genkit support for OpenAI chat models and embedders
+through the Chat Completions API.
 
-## Prerequisites
+## Setup
 
-- Go installed on your system
-- An OpenAI API key
-
-## Usage
-
-Here's a simple example of how to use the OpenAI plugin:
-
-```go
-import (
-  // ignoring Genkit imports
-  oai "github.com/firebase/genkit/go/plugins/compat_oai/openai"
-  "github.com/openai/openai-go"
-)
-// Initialize the OpenAI plugin with your API key
-oai := &oai.OpenAI{APIKey: apiKey}
-
-// Initialize Genkit with the OpenAI plugin
-g, err := genkit.Init(ctx,
-    genkit.WithDefaultModel("openai/gpt-4o-mini"),
-    genkit.WithPlugins(oai),
-)
-if err != nil {
-    // handle errors
-}
-
-config := &openai.ChatCompletionNewParams{
-    // define optional config fields
-}
-
-resp, err = genkit.Generate(ctx, g,
-    ai.WithPromptText("Write a short sentence about artificial intelligence."),
-    ai.WithConfig(config),
-)
-```
-
-## Running Tests
-
-First, set your OpenAI API key as an environment variable:
+Set an OpenAI API key:
 
 ```bash
 export OPENAI_API_KEY=<your-api-key>
 ```
 
-### Running All Tests
-To run all tests in the directory:
-```bash
-go test -v .
+```go
+import (
+    "context"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    oai "github.com/firebase/genkit/go/plugins/compat_oai/openai"
+)
+
+ctx := context.Background()
+plugin := &oai.OpenAI{}
+g := genkit.Init(ctx,
+    genkit.WithPlugins(plugin),
+    genkit.WithDefaultModel("openai/gpt-5.4"),
+)
+
+response, err := genkit.Generate(ctx, g, ai.WithPrompt("Write a haiku about Go."))
 ```
 
-### Running Tests from Specific Files
-To run tests from a specific file:
-```bash
-# Run only generate_live_test.go tests
-go test -run "^TestGenerator"
+Client options such as a different base URL or an organization ride the
+plugin's `Opts` (`option.WithBaseURL`, `option.WithOrganization`, and the rest
+of the SDK's request options).
 
-# Run only openai_live_test.go tests
-go test -run "^TestPlugin"
+## Models
+
+The plugin registers a curated catalog spanning the GPT-5 line (`gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and earlier), the GPT-4
+line, and the o-series reasoning models. The catalog is not a ceiling: any
+model ID the API serves resolves on demand, and the models the endpoint
+reports are listed dynamically. Use the `Models` field to describe or correct
+any model, most often one released after this plugin:
+
+```go
+plugin := &oai.OpenAI{Models: map[string]ai.ModelOptions{
+    "gpt-6": {Label: "GPT-6", Supports: &compat_oai.Multimodal},
+}}
 ```
 
-### Running Individual Tests
-To run a specific test case:
-```bash
-# Run only the streaming test from openai_live_test.go
-go test -run "TestPlugin/streaming"
+The current model list and capabilities are at
+https://developers.openai.com/api/docs/models.
 
-# Run only the Complete test from generate_live_test.go
-go test -run "TestGenerator_Complete"
+Models served only by the Responses API (the `-pro` variants) are not part of
+this plugin, which speaks the Chat Completions API; naming one still resolves
+it and fails at request time.
 
-# Run only the Stream test from generate_live_test.go
-go test -run "TestGenerator_Stream"
+## Config
+
+Models take the OpenAI SDK's own request type,
+`openai.ChatCompletionNewParams`, with the SDK's wire names. `oai.ModelRef`
+carries a config with the model ID:
+
+```go
+import "github.com/openai/openai-go"
+
+response, err := genkit.Generate(ctx, g,
+    ai.WithModel(oai.ModelRef("gpt-5.4", &openai.ChatCompletionNewParams{
+        Temperature:         openai.Float(0.2),
+        MaxCompletionTokens: openai.Int(1024),
+    })),
+    ai.WithPrompt("Answer concisely."),
+)
 ```
 
-### Test Output Verbosity
-Add the `-v` flag for verbose output:
-```bash
-go test -v -run "TestPlugin/streaming"
+The GPT-5 generation rejects the legacy `max_tokens`, so cap output with
+`MaxCompletionTokens`; the older field remains for the models that still
+read it.
+
+Set the config's `Model` to a dated snapshot to pin the exact version a
+request is served by. The fields Genkit builds from the request (`messages`,
+`tools`, and their variants) are not config: a config naming one is rejected.
+
+The advertised schema is reflected from the openai-go version your build
+links, so a field OpenAI ships tomorrow becomes usable, and validated, by
+bumping `github.com/openai/openai-go` in your own go.mod.
+
+## Embedders
+
+`text-embedding-3-large`, `text-embedding-3-small`, and
+`text-embedding-ada-002` are registered, and the `Embedders` field overrides
+what the plugin knows the way `Models` does. Embedders take a typed
+`oai.TextEmbeddingConfig`:
+
+```go
+res, err := genkit.Embed(ctx, g,
+    ai.WithEmbedder(oai.NewEmbedderRef("text-embedding-3-small", &oai.TextEmbeddingConfig{
+        Dimensions: 256,
+    })),
+    ai.WithTextDocs("Genkit is an AI framework."),
+)
 ```
 
-Note: All live tests require the OPENAI_API_KEY environment variable to be set. Tests will be skipped if the API key is not provided.
+The embedding config also carries the settings Genkit owns: `apiKey`
+(settable only from Go code) serves one request with a different credential,
+and `extra` forwards request body fields the config does not declare, keyed
+by OpenAI's wire names.
+
+## Live tests
+
+Live tests are skipped unless `OPENAI_API_KEY` is set:
+
+```bash
+go test -v ./plugins/compat_oai/openai
+```

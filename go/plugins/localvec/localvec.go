@@ -238,7 +238,7 @@ func Index(ctx context.Context, docs []*ai.Document, ds *DocStore) error {
 			return err
 		}
 		if _, ok := ds.Data[id]; ok {
-			logger.FromContext(ctx).Debug("localvec skipping document because already present", "id", id)
+			logger.Debug(ctx, "localvec: skipping document already present in the index", "id", id)
 			continue
 		}
 

@@ -29,17 +29,14 @@ import (
 // lists the sub-agents and their descriptions in the system prompt, and runs the
 // chosen sub-agent when the orchestrator model calls its tool.
 //
-// The two sub-agents (researcher, engineer) are client-managed (no session
-// store): each delegation runs them one-shot and leaves no snapshots behind, so
-// only the orchestrator appears in the CLI. Both use the Artifacts middleware so
-// they can persist output as named session artifacts; with
-// ArtifactStrategySession those artifacts are merged into the orchestrator's
-// session, and Artifacts{Readonly: true} gives the orchestrator a read_artifact
-// tool to review them before answering.
+// The sub-agents have no session store, so each delegation runs them one-shot
+// and only the orchestrator appears in the CLI. Both use the Artifacts
+// middleware to persist output as named artifacts, which ArtifactStrategySession
+// merges into the orchestrator's session for its read_artifact tool.
 func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 	researcher := genkitx.DefineAgent(g, "researcher",
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithSystem("You are a research assistant. Be brief. Answer the question " +
 				"concisely. Before saving, send one short sentence saying you're " +
 				"recording your findings, then call write_artifact to store them as a " +
@@ -51,7 +48,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 	engineer := genkitx.DefineAgent(g, "engineer",
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithSystem("You are an expert programmer. Be brief. Write clean, " +
 				"well-commented code. Before saving, send one short sentence saying " +
 				"you're saving the file, then call write_artifact to store it as a " +
@@ -63,7 +60,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 	return genkitx.DefineAgent(g, "orchestrator",
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithSystem("You are a project coordinator. Be concise. Analyze the user's " +
 				"request and delegate to the appropriate sub-agent using its delegation " +
 				"tool. Before each tool call, send one short sentence saying what you're " +

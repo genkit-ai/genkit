@@ -81,6 +81,38 @@ async def test_resolve_snapshot_applies_client_transform() -> None:
     assert 'secret' not in (result.state.custom or {})
 
 
+@pytest.mark.asyncio
+async def test_resolve_snapshot_by_session_returns_failed_leaf() -> None:
+    """Inspect by sessionId returns the stored leaf, even when it isn't resumable.
+
+    A failed leaf has to stay visible so you can see why the last turn died.
+    Resume walks back separately.
+    """
+    store = InMemorySessionStore()
+    completed = SessionSnapshot(
+        snapshot_id='snap-ok',
+        session_id='sess',
+        created_at='2026-01-01T00:00:00Z',
+        status=SnapshotStatus.COMPLETED,
+        state=SessionState(session_id='sess'),
+    )
+    failed = SessionSnapshot(
+        snapshot_id='snap-fail',
+        session_id='sess',
+        parent_id='snap-ok',
+        created_at='2026-01-01T00:01:00Z',
+        status=SnapshotStatus.FAILED,
+        state=SessionState(session_id='sess'),
+    )
+    await store.save_snapshot(completed.snapshot_id, lambda _: completed)
+    await store.save_snapshot(failed.snapshot_id, lambda _: failed)
+
+    inspected = await resolve_snapshot(store=store, session_id='sess')
+    assert inspected is not None
+    assert inspected.snapshot_id == 'snap-fail'
+    assert inspected.status == SnapshotStatus.FAILED
+
+
 def test_is_heartbeat_expired_pending_with_stale_heartbeat() -> None:
     old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     snap = SessionSnapshot(
@@ -148,6 +180,19 @@ async def test_snapshot_action_raises_not_found_for_missing_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_snapshot_data_returns_none_for_missing_snapshot() -> None:
+    """The method returns None on a miss; the action wraps that as NOT_FOUND."""
+    registry = Registry()
+    store = InMemorySessionStore()
+
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        return await session_runner.result()
+
+    agent = define_custom_agent(registry, 'missingMethodSnapTest', fn, store=store)
+    assert await agent.get_snapshot_data(snapshot_id='non-existent-id') is None
+
+
+@pytest.mark.asyncio
 async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     """A turn that raises settles FAILED, keeps the resume handle on the last good
     parent, and rolls the optimistic prompt back instead of crashing the chat."""
@@ -186,9 +231,9 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reload() -> None:
-    """After detach the chat resumes the pending snapshot (JS applyOutput shape).
+    """After detach the chat resumes the pending snapshot.
 
-    A send while it is still pending (or after abort) is rejected; reload by
+    A send while it is still pending (or after abort) is rejected; resume by
     session_id walks back to the last completed turn.
     """
     registry = Registry()
@@ -214,7 +259,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
 
     task = await chat.detach('slow background work')
     assert chat.messages != history_before_detach  # optimistic prompt pushed
-    # Resume handle tracks the pending detached snapshot — same as JS.
+    # Resume handle tracks the pending detached snapshot.
     assert chat.snapshot_id == task.snapshot_id
     assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
 
@@ -222,23 +267,24 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
         await chat.send('too soon')
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
-    # Aborting drops the optimistic prompt; the resume id still names the aborted
-    # snapshot, so a bare send keeps failing until we reload.
-    assert chat.messages == history_before_detach
+    # abort() returns the previous status: pending while the turn was running.
+    assert status == SnapshotStatus.PENDING
+    # The prompt stays — it was still asked. The resume id still names the
+    # aborted snapshot, so a bare send keeps failing until we reload.
+    assert chat.messages != history_before_detach
     with pytest.raises(AgentError, match='not resumable'):
         await chat.send('still stranded')
 
-    chat = await agent.load_chat(session_id=session_id)
+    chat = agent.chat(session_id=session_id)
     out = await chat.send('are you there?')
     assert out.finish_reason == AgentFinishReason.STOP
     assert chat.snapshot_id not in (None, task.snapshot_id)
 
 
 @pytest.mark.asyncio
-async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> None:
-    """Reloading a session whose newest snapshot is an aborted detached turn lands
-    on the last completed turn, not the dead leaf — so the reloaded chat resumes."""
+async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
+    """load_chat is inspect: a session whose newest snapshot is aborted lands
+    on that leaf. send() is rejected; chat(session_id=) walks back to resume."""
     registry = Registry()
     store = InMemorySessionStore()
 
@@ -257,14 +303,22 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     chat = agent.chat()
     await chat.send('hello')
     session_id = chat.session_id
-    last_good_parent = chat.snapshot_id
 
     task = await chat.detach('slow background work')
-    assert await task.abort() == SnapshotStatus.ABORTED
+    assert await task.abort() == SnapshotStatus.PENDING  # previous status
     await asyncio.sleep(1.1)  # let the aborted background turn unwind
 
+    inspected = await agent.get_snapshot(session_id=session_id)
+    assert inspected is not None
+    assert inspected.snapshot_id == task.snapshot_id
+    assert inspected.status == SnapshotStatus.ABORTED
+
     reloaded = await agent.load_chat(session_id=session_id)
-    # Landed on the last completed turn, not the aborted leaf.
-    assert reloaded.snapshot_id == last_good_parent
-    out = await reloaded.send('still there?')
+    assert reloaded.snapshot_id == task.snapshot_id
+    with pytest.raises(AgentError, match='not resumable'):
+        await reloaded.send('still there?')
+
+    resumed = agent.chat(session_id=session_id)
+    out = await resumed.send('still there?')
     assert out.finish_reason == AgentFinishReason.STOP
+    assert resumed.snapshot_id not in (None, task.snapshot_id)

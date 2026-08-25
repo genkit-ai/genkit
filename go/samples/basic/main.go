@@ -12,24 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates basic Genkit flows: a non-streaming flow and a
-// streaming flow that generate jokes about a given topic.
+// This sample demonstrates the two kinds of flow:
 //
-// To run:
+//   - jokesFlow returns its answer whole.
+//   - streamingJokesFlow forwards the model's chunks as they arrive.
+//
+// Run it:
 //
 //	go run .
 //
-// In another terminal, test the non-streaming flow:
+// Or with the Dev UI, to call the flows from a browser and read a trace of
+// every run at http://localhost:4000/traces:
+//
+//	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
+//	genkit start -- go run .
+//
+// Or over HTTP. Streaming needs ?stream=true:
 //
 //	curl -X POST http://localhost:8080/jokesFlow \
 //	  -H "Content-Type: application/json" \
-//	  -d '{"data": "bananas"}'
+//	  -d '{"data": {"topic": "bananas"}}'
 //
-// Test the streaming flow:
-//
-//	curl -N -X POST http://localhost:8080/streamingJokesFlow \
+//	curl -N -X POST 'http://localhost:8080/streamingJokesFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
-//	  -d '{"data": "bananas"}'
+//	  -d '{"data": {"topic": "bananas"}}'
 package main
 
 import (
@@ -45,45 +51,44 @@ import (
 	"google.golang.org/genai"
 )
 
+// JokeRequest is what both flows take. A struct rather than a bare string lets
+// the field carry a description and a default, which the Dev UI pre-fills its
+// form from. The default is not applied in transit, and a field without
+// omitempty is required.
+type JokeRequest struct {
+	Topic string `json:"topic" jsonschema:"default=airplane food" jsonschema_description:"What the joke should be about"`
+}
+
+// model is shared by every flow below, so switching models or thinking levels
+// for the whole sample is a one-line change.
+var model = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	ThinkingConfig: &genai.ThinkingConfig{
+		ThinkingLevel: genai.ThinkingLevelMedium,
+	},
+})
+
 func main() {
 	ctx := context.Background()
 
-	// Initialize Genkit with the Google AI plugin. When you pass nil for the
-	// Config parameter, the Google AI plugin will get the API key from the
-	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
-	// practice.
+	// The Google AI plugin reads the API key from GEMINI_API_KEY or
+	// GOOGLE_API_KEY, which is the recommended practice.
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	// Define a non-streaming flow that generates jokes about a given topic.
-	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input string) (string, error) {
-		if input == "" {
-			input = "airplane food"
+	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input JokeRequest) (string, error) {
+		joke, err := genkit.GenerateText(ctx, g, ai.WithModel(model), ai.WithPrompt("Share a joke about %s.", input.Topic))
+		if err != nil {
+			return "", fmt.Errorf("could not generate joke: %w", err)
 		}
-
-		return genkit.GenerateText(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingLevel: genai.ThinkingLevelMinimal,
-				},
-			})),
-			ai.WithPrompt("Share a joke about %s.", input),
-		)
+		return joke, nil
 	})
 
-	// Define a streaming flow that generates jokes about a given topic with passthrough streaming.
+	// Passing sendChunk straight to WithStreaming forwards the model's chunks
+	// to the caller untouched.
 	genkit.DefineStreamingFlow(g, "streamingJokesFlow",
-		func(ctx context.Context, input string, sendChunk ai.ModelStreamCallback) (string, error) {
-			if input == "" {
-				input = "airplane food"
-			}
-
+		func(ctx context.Context, input JokeRequest, sendChunk ai.ModelStreamCallback) (string, error) {
 			resp, err := genkit.Generate(ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingLevel: genai.ThinkingLevelMinimal,
-					},
-				})),
-				ai.WithPrompt("Share a joke about %s.", input),
+				ai.WithModel(model),
+				ai.WithPrompt("Share a joke about %s.", input.Topic),
 				ai.WithStreaming(sendChunk),
 			)
 			if err != nil {
@@ -94,7 +99,7 @@ func main() {
 		},
 	)
 
-	// Optionally, start a web server to make the flow callable via HTTP.
+	// Serve every flow over HTTP.
 	mux := http.NewServeMux()
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))

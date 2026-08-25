@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel
@@ -28,10 +27,6 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
-
-warnings.filterwarnings(
-    'ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning
-)
 
 
 class AgentFinishReason(StrEnum):
@@ -588,7 +583,7 @@ class OutputConfig(GenkitModel):
         alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
     )
     format: str | None = None
-    schema_: dict[str, Any] | None = None
+    json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
     constrained: bool | None = None
     content_type: str | None = None
 

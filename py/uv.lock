@@ -12,6 +12,7 @@ resolution-markers = [
 [manifest]
 members = [
     "agents",
+    "amazon-bedrock-sample",
     "anthropic-sample",
     "basic-flows",
     "context",
@@ -22,6 +23,7 @@ members = [
     "gemini-code-execution",
     "gemini-context-caching",
     "genkit",
+    "genkit-amazon-bedrock",
     "genkit-anthropic",
     "genkit-django",
     "genkit-evaluators",
@@ -53,9 +55,9 @@ source = { virtual = "samples/agents" }
 dependencies = [
     { name = "fastapi" },
     { name = "genkit" },
-    { name = "genkit-plugin-fastapi" },
-    { name = "genkit-plugin-google-genai" },
-    { name = "genkit-plugin-middleware" },
+    { name = "genkit-fastapi" },
+    { name = "genkit-google-genai" },
+    { name = "genkit-middleware" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
@@ -65,9 +67,9 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "genkit-plugin-fastapi" },
-    { name = "genkit-plugin-google-genai" },
-    { name = "genkit-plugin-middleware" },
+    { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
@@ -96,6 +98,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f7/c0/184a89bd5feba14ff3c41cfaf1dd8a82c05f5ceedbc92145e17042eb08a4/altair-6.0.0.tar.gz", hash = "sha256:614bf5ecbe2337347b590afb111929aa9c16c9527c4887d96c9bc7f6640756b4", size = 763834, upload-time = "2025-11-12T08:59:11.519Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/db/33/ef2f2409450ef6daa61459d5de5c08128e7d3edb773fefd0a324d1310238/altair-6.0.0-py3-none-any.whl", hash = "sha256:09ae95b53d5fe5b16987dccc785a7af8588f2dca50de1e7a156efa8a461515f8", size = 795410, upload-time = "2025-11-12T08:59:09.804Z" },
+]
+
+[[package]]
+name = "amazon-bedrock-sample"
+version = "0.1.0"
+source = { editable = "samples/amazon-bedrock-sample" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-amazon-bedrock" },
+    { name = "pydantic" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
@@ -454,6 +475,34 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c4/cf/85379f13b76f3a69bca86b60237978af17d6aa0bc5998978c3b8cf05abb2/boolean_py-5.0.tar.gz", hash = "sha256:60cbc4bad079753721d32649545505362c754e121570ada4658b852a3a318d95", size = 37047, upload-time = "2025-04-03T10:39:49.734Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/ca/78d423b324b8d77900030fa59c4aa9054261ef0925631cd2501dd015b7b7/boolean_py-5.0-py3-none-any.whl", hash = "sha256:ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9", size = 26577, upload-time = "2025-04-03T10:39:48.449Z" },
+]
+
+[[package]]
+name = "boto3"
+version = "1.40.61"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+    { name = "jmespath" },
+    { name = "s3transfer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ed/f9/6ef8feb52c3cce5ec3967a535a6114b57ac7949fd166b0f3090c2b06e4e5/boto3-1.40.61.tar.gz", hash = "sha256:d6c56277251adf6c2bdd25249feae625abe4966831676689ff23b4694dea5b12", size = 111535, upload-time = "2025-10-28T19:26:57.247Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/24/3bf865b07d15fea85b63504856e137029b6acbc73762496064219cdb265d/boto3-1.40.61-py3-none-any.whl", hash = "sha256:6b9c57b2a922b5d8c17766e29ed792586a818098efe84def27c8f582b33f898c", size = 139321, upload-time = "2025-10-28T19:26:55.007Z" },
+]
+
+[[package]]
+name = "botocore"
+version = "1.40.61"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/a3/81d3a47c2dbfd76f185d3b894f2ad01a75096c006a2dd91f237dca182188/botocore-1.40.61.tar.gz", hash = "sha256:a2487ad69b090f9cccd64cf07c7021cd80ee9c0655ad974f87045b02f3ef52cd", size = 14393956, upload-time = "2025-10-28T19:26:46.108Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/c5/f6ce561004db45f0b847c2cd9b19c67c6bf348a82018a48cb718be6b58b0/botocore-1.40.61-py3-none-any.whl", hash = "sha256:17ebae412692fd4824f99cde0f08d50126dc97954008e5ba2b522eb049238aa7", size = 14055973, upload-time = "2025-10-28T19:26:42.15Z" },
 ]
 
 [[package]]
@@ -1555,7 +1604,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1583,6 +1632,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+amazon-bedrock = [
+    { name = "genkit-amazon-bedrock" },
+]
+anthropic = [
+    { name = "genkit-anthropic" },
+]
+django = [
+    { name = "genkit-django" },
+]
+evaluators = [
+    { name = "genkit-evaluators" },
+]
+fastapi = [
+    { name = "genkit-fastapi" },
+]
 flask = [
     { name = "genkit-flask" },
 ]
@@ -1591,6 +1655,9 @@ google-cloud = [
 ]
 google-genai = [
     { name = "genkit-google-genai" },
+]
+middleware = [
+    { name = "genkit-middleware" },
 ]
 ollama = [
     { name = "genkit-ollama" },
@@ -1607,9 +1674,15 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
     { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
+    { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
+    { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
+    { name = "genkit-django", marker = "extra == 'django'", editable = "packages/genkit-django" },
+    { name = "genkit-evaluators", marker = "extra == 'evaluators'", editable = "packages/genkit-evaluators" },
+    { name = "genkit-fastapi", marker = "extra == 'fastapi'", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
@@ -1633,11 +1706,30 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", "vertex-ai"]
+provides-extras = ["amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "vertex-ai"]
+
+[[package]]
+name = "genkit-amazon-bedrock"
+version = "0.10.0"
+source = { editable = "packages/genkit-amazon-bedrock" }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "genkit" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.37.24" },
+    { name = "botocore", specifier = ">=1.37.24" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "structlog", specifier = ">=25.2.0" },
+]
 
 [[package]]
 name = "genkit-anthropic"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1652,7 +1744,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-django"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-django" }
 dependencies = [
     { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1670,7 +1762,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-evaluators"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1685,7 +1777,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-fastapi"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1702,7 +1794,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-flask"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-flask" }
 dependencies = [
     { name = "flask" },
@@ -1721,10 +1813,11 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-cloud"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
+    { name = "google-cloud-firestore" },
     { name = "google-cloud-logging" },
     { name = "opentelemetry-exporter-gcp-monitoring" },
     { name = "opentelemetry-exporter-gcp-trace" },
@@ -1734,6 +1827,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
+    { name = "google-cloud-firestore", specifier = ">=2.14.0" },
     { name = "google-cloud-logging", specifier = ">=3.10.0" },
     { name = "opentelemetry-exporter-gcp-monitoring", specifier = ">=1.9.0" },
     { name = "opentelemetry-exporter-gcp-trace", specifier = ">=1.9.0" },
@@ -1742,7 +1836,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-genai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1763,7 +1857,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-middleware"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-middleware" }
 dependencies = [
     { name = "genkit" },
@@ -1791,7 +1885,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-ollama"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1808,7 +1902,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-openai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-openai" }
 dependencies = [
     { name = "genkit" },
@@ -1824,51 +1918,8 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-plugin-fastapi"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "genkit" },
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/06/6e/50277d9baf6ae376178d2f5ea643d25fe79f931476161adda14bc601294c/genkit_plugin_fastapi-0.7.0.tar.gz", hash = "sha256:fa17606cd6c725ad1a8458f525d74a5727bc2988ffeeeaed942c0abeb31eb534", size = 8443, upload-time = "2026-06-09T22:47:00.421Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/1e/8ed7316853d7181389bc855615c5f7f32045ee7cb9ae04898fab66859a3d/genkit_plugin_fastapi-0.7.0-py3-none-any.whl", hash = "sha256:b31f186b8c4ef1a37336202cf25bb3691c9536a4b2f1011028bf5be1f230ab9d", size = 9587, upload-time = "2026-06-09T22:46:49.316Z" },
-]
-
-[[package]]
-name = "genkit-plugin-google-genai"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genkit" },
-    { name = "google-cloud-aiplatform" },
-    { name = "google-genai" },
-    { name = "strenum", marker = "python_full_version < '3.11'" },
-    { name = "structlog" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/41/f0/15f74a7e84435bd70a6c8e3afbe750d5fa271bd6ac42f4a14beacc2edd4a/genkit_plugin_google_genai-0.7.0.tar.gz", hash = "sha256:2f743901f58443f5ef8701107719be5ceec2d0b4ccadec1f308c3ff79a7b0212", size = 67618, upload-time = "2026-06-09T22:47:02.891Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/09/6b52ba321e67b9e0814ab302667612a24962bb39d5c43adca03b8206f396/genkit_plugin_google_genai-0.7.0-py3-none-any.whl", hash = "sha256:7c6e553ae9ce0e25c65ab8d35d1053a1d06b403eaf4b1782f9ad48e520c8a8c5", size = 65711, upload-time = "2026-06-09T22:46:52.785Z" },
-]
-
-[[package]]
-name = "genkit-plugin-middleware"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "genkit" },
-    { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/d5/de3cf7d9290c26c63a119fdc517c9ff87ca8a8d562a7f3141ecfe7a11628/genkit_plugin_middleware-0.7.0.tar.gz", hash = "sha256:821482927ca96b9c736ab0d1dc1989da29def3a4a13ea186a90f7156f073a962", size = 17860, upload-time = "2026-06-10T15:53:05.982Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/b1/aacd0e43db84d9f75c8ac8a1abd42606aa990bfd70e859dac18fb0f2be56/genkit_plugin_middleware-0.7.0-py3-none-any.whl", hash = "sha256:fee53c68869bf8931258692c3ba4b178ca5209fedaf163883384c7f5535660d4", size = 20066, upload-time = "2026-06-10T15:53:03.748Z" },
-]
-
-[[package]]
 name = "genkit-vertexai"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "anthropic" },
@@ -1904,6 +1955,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "dotpromptz" },
     { name = "genkit" },
+    { name = "genkit-amazon-bedrock" },
     { name = "genkit-anthropic" },
     { name = "genkit-django" },
     { name = "genkit-evaluators" },
@@ -1969,6 +2021,7 @@ lint = [
 requires-dist = [
     { name = "dotpromptz", specifier = "==0.1.5" },
     { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },
     { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
     { name = "genkit-django", editable = "packages/genkit-django" },
     { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
@@ -1997,7 +2050,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-mock", specifier = ">=3.14.0" },
-    { name = "twine", specifier = ">=6.1.0" },
+    { name = "twine", specifier = ">=7.0.0" },
 ]
 lint = [
     { name = "bandit", specifier = ">=1.7.0" },
@@ -3081,6 +3134,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/73/a009f41c5eed71c49bec53036c4b33555afcdee70682a18c6f66e396c039/jiter-0.13.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:ff732bd0a0e778f43d5009840f20b935e79087b4dc65bd36f1cd0f9b04b8ff7f", size = 303808, upload-time = "2026-02-02T12:37:52.092Z" },
     { url = "https://files.pythonhosted.org/packages/c4/10/528b439290763bff3d939268085d03382471b442f212dca4ff5f12802d43/jiter-0.13.0-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ab44b178f7981fcaea7e0a5df20e773c663d06ffda0198f1a524e91b2fde7e59", size = 337384, upload-time = "2026-02-02T12:37:53.582Z" },
     { url = "https://files.pythonhosted.org/packages/67/8a/a342b2f0251f3dac4ca17618265d93bf244a2a4d089126e81e4c1056ac50/jiter-0.13.0-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7bb00b6d26db67a05fe3e12c76edc75f32077fb51deed13822dc648fa373bc19", size = 343768, upload-time = "2026-02-02T12:37:55.055Z" },
+]
+
+[[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
 ]
 
 [[package]]
@@ -4671,11 +4733,11 @@ wheels = [
 
 [[package]]
 name = "packaging"
-version = "25.0"
+version = "26.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b96ca8f8c3ba19e6a61c8253c72794544580a7b6c24d/packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f", size = 165727, upload-time = "2025-04-19T11:48:59.673Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/fa/3944b40b07da9ce895c0e6303a5ab7d53da063554f534556b134a54d6093/packaging-26.3.tar.gz", hash = "sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79", size = 313412, upload-time = "2026-08-04T18:15:28.737Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484", size = 66469, upload-time = "2025-04-19T11:48:57.875Z" },
+    { url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl", hash = "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c", size = 129956, upload-time = "2026-08-04T18:15:27.159Z" },
 ]
 
 [[package]]
@@ -5966,15 +6028,15 @@ wheels = [
 
 [[package]]
 name = "rich"
-version = "14.3.2"
+version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/99/a4cab2acbb884f80e558b0771e97e21e939c5dfb460f488d19df485e8298/rich-14.3.2.tar.gz", hash = "sha256:e712f11c1a562a11843306f5ed999475f09ac31ffb64281f73ab29ffdda8b3b8", size = 230143, upload-time = "2026-02-01T16:20:47.908Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/45/615f5babd880b4bd7d405cc0dc348234c5ffb6ed1ea33e152ede08b2072d/rich-14.3.2-py3-none-any.whl", hash = "sha256:08e67c3e90884651da3239ea668222d19bea7b589149d8014a21c633420dbb69", size = 309963, upload-time = "2026-02-01T16:20:46.078Z" },
+    { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
 ]
 
 [[package]]
@@ -6149,6 +6211,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/58/ac864a75067dcbd3b95be5ab4eb2b601d7fbc3d3d736a27e391a4f92a5c1/ruff-0.15.1-py3-none-win32.whl", hash = "sha256:660975d9cb49b5d5278b12b03bb9951d554543a90b74ed5d366b20e2c57c2098", size = 10462555, upload-time = "2026-02-12T23:09:29.899Z" },
     { url = "https://files.pythonhosted.org/packages/e0/5e/d4ccc8a27ecdb78116feac4935dfc39d1304536f4296168f91ed3ec00cd2/ruff-0.15.1-py3-none-win_amd64.whl", hash = "sha256:c820fef9dd5d4172a6570e5721704a96c6679b80cf7be41659ed439653f62336", size = 11599956, upload-time = "2026-02-12T23:09:01.157Z" },
     { url = "https://files.pythonhosted.org/packages/2a/07/5bda6a85b220c64c65686bc85bd0bbb23b29c62b3a9f9433fa55f17cda93/ruff-0.15.1-py3-none-win_arm64.whl", hash = "sha256:5ff7d5f0f88567850f45081fac8f4ec212be8d0b963e385c3f7d0d2eb4899416", size = 10874604, upload-time = "2026-02-12T23:09:05.515Z" },
+]
+
+[[package]]
+name = "s3transfer"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/74/8d69dcb7a9efe8baa2046891735e5dfe433ad558ae23d9e3c14c633d1d58/s3transfer-0.14.0.tar.gz", hash = "sha256:eff12264e7c8b4985074ccce27a3b38a485bb7f7422cc8046fee9be4983e4125", size = 151547, upload-time = "2025-09-09T19:23:31.089Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/f0/ae7ca09223a81a1d890b2557186ea015f6e0502e9b8cb8e1813f1d8cfa4e/s3transfer-0.14.0-py3-none-any.whl", hash = "sha256:ea3b790c7077558ed1f02a3072fb3cb992bbbd253392f4b6e9e8976941c7d456", size = 85712, upload-time = "2025-09-09T19:23:30.041Z" },
 ]
 
 [[package]]
@@ -6561,7 +6635,7 @@ wheels = [
 
 [[package]]
 name = "twine"
-version = "6.2.0"
+version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "id" },
@@ -6574,9 +6648,9 @@ dependencies = [
     { name = "rich" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/a8/949edebe3a82774c1ec34f637f5dd82d1cf22c25e963b7d63771083bbee5/twine-6.2.0.tar.gz", hash = "sha256:e5ed0d2fd70c9959770dce51c8f39c8945c574e18173a7b81802dab51b4b75cf", size = 172262, upload-time = "2025-09-04T15:43:17.255Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/3c/58f808a359700f39a967dffede33efeac809262c03303fa3eec6afff8f49/twine-7.0.0.tar.gz", hash = "sha256:85cdb29c518efef867360ae4acd4b0dfd61c8654a22fca08e6f8539f05022177", size = 215032, upload-time = "2026-07-27T15:59:00.825Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl", hash = "sha256:418ebf08ccda9a8caaebe414433b0ba5e25eb5e4a927667122fbe8f829f985d8", size = 42727, upload-time = "2025-09-04T15:43:15.994Z" },
+    { url = "https://files.pythonhosted.org/packages/96/08/ddcdc06225eaad6de0e48e1002b06d919dbde20582d0662c7af51308e5d6/twine-7.0.0-py3-none-any.whl", hash = "sha256:b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7", size = 43204, upload-time = "2026-07-27T15:58:59.26Z" },
 ]
 
 [[package]]

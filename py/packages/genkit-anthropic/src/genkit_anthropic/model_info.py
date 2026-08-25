@@ -16,6 +16,8 @@
 
 """Anthropic Models for Genkit."""
 
+from typing import Literal, TypeAlias, cast
+
 from genkit import (
     Constrained,
     ModelInfo,
@@ -179,7 +181,26 @@ CLAUDE_FABLE_5 = ModelInfo(
     ),
 )
 
-SUPPORTED_ANTHROPIC_MODELS: dict[str, ModelInfo] = {
+# Quote autocomplete needs a Literal. The catalog below is what you edit when
+# a Claude ships; a test requires these members and the dict keys to be the
+# same set, and the dict is typed so a new key that is not in the Literal
+# does not type-check.
+KnownClaude: TypeAlias = Literal[
+    'claude-sonnet-4',
+    'claude-opus-4',
+    'claude-sonnet-4-5',
+    'claude-sonnet-4-6',
+    'claude-sonnet-5',
+    'claude-haiku-4-5',
+    'claude-opus-4-1',
+    'claude-opus-4-5',
+    'claude-opus-4-6',
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-fable-5',
+]
+
+SUPPORTED_ANTHROPIC_MODELS: dict[KnownClaude, ModelInfo] = {
     'claude-sonnet-4': CLAUDE_SONNET_4,
     'claude-opus-4': CLAUDE_OPUS_4,
     'claude-sonnet-4-5': CLAUDE_SONNET_4_5,
@@ -212,10 +233,9 @@ def get_model_info(name: str) -> ModelInfo:
     Returns:
         Model information.
     """
-    return SUPPORTED_ANTHROPIC_MODELS.get(
-        name,
-        ModelInfo(
-            label=f'Anthropic - {name}',
-            supports=DEFAULT_SUPPORTS,
-        ),
+    if name in SUPPORTED_ANTHROPIC_MODELS:
+        return SUPPORTED_ANTHROPIC_MODELS[cast(KnownClaude, name)]
+    return ModelInfo(
+        label=f'Anthropic - {name}',
+        supports=DEFAULT_SUPPORTS,
     )

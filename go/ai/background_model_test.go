@@ -99,7 +99,7 @@ func TestNewBackgroundModelInputSchema(t *testing.T) {
 		m.Register(r)
 		for _, key := range []string{
 			"/background-model/test/bgmodel",
-			"/check-operation/test/bgmodel",
+			"/check-operation/test/bgmodel/check",
 		} {
 			action := r.LookupAction(key)
 			if action == nil {

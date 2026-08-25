@@ -89,8 +89,12 @@ async def main() -> None:
     assert task.snapshot_id
     await asyncio.sleep(2.0)  # let the tool start churning
 
-    status = await worker_chat.abort()  # abort_signal fires inside slowWork; the snapshot settles ABORTED
-    assert status == SnapshotStatus.ABORTED
+    # chat.abort() fires abort_signal inside slowWork. The call returns the
+    # previous status (PENDING) — not ABORTED. The prompt stays in history;
+    # it was still asked. Reload before the next send() so you are not still
+    # pointed at the aborted leaf.
+    status = await worker_chat.abort()
+    assert status == SnapshotStatus.PENDING
     await asyncio.sleep(0.5)  # let the background task unwind
 
     # The stop is durable: read the snapshot back and it stays ABORTED.

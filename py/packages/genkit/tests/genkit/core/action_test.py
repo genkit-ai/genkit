@@ -6,10 +6,12 @@
 """Tests for the action module."""
 
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
+from genkit import Message, ModelRequest, Part, TextPart
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -22,6 +24,7 @@ from genkit._core._action import (
     parse_plugin_name_from_action_name,
 )
 from genkit._core._error import GenkitError
+from genkit._core._model import OutputConfig
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -354,3 +357,81 @@ async def test_run_defaulted_input_arg_allows_none_with_ctx() -> None:
     assert (await action.run(input='Bob')).response == 'hi Bob'
     assert (await action.run(input=None)).response == 'hi world'
     assert (await action.run()).response == 'hi world'
+
+
+@pytest.mark.asyncio
+async def test_action_revalidates_bare_model_request_into_plugin_config() -> None:
+    """Action.run: a bare ModelRequest with a dict config arrives as the plugin class."""
+
+    class PluginConfig(BaseModel):
+        model_config = ConfigDict(extra='allow')
+        api_key: str | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def model_fn(request: ModelRequest[PluginConfig]) -> str:
+        seen['config'] = request.config
+        return 'ok'
+
+    action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
+    # generate may hand the action a bare request that still has a dict config.
+    request = ModelRequest(
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'api_key': 'k'},
+    )
+    assert request.config == {'api_key': 'k'}
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['config'], PluginConfig)
+    assert seen['config'].api_key == 'k'
+
+
+@pytest.mark.asyncio
+async def test_action_rejects_foreign_config_class() -> None:
+    """Action.run: a request already carrying OpenAICfg is not dumped into GeminiCfg."""
+
+    class OpenAICfg(BaseModel):
+        temperature: float | None = None
+
+    class GeminiCfg(BaseModel):
+        temperature: float | None = None
+
+    async def model_fn(request: ModelRequest[GeminiCfg]) -> str:
+        return 'ok'
+
+    action = Action(name='gemini', kind=ActionKind.MODEL, fn=model_fn)
+    request = ModelRequest[OpenAICfg](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config=OpenAICfg(temperature=0.5),
+    )
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.GeminiCfg or a mapping, got .+\.OpenAICfg'):
+        await action.run(input=request)
+
+
+@pytest.mark.asyncio
+async def test_action_coerces_dict_config_from_other_request_type() -> None:
+    """Action.run: a mapping on ModelRequest[dict] still becomes the plugin class."""
+
+    class PluginCfg(BaseModel):
+        temperature: float | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def model_fn(request: ModelRequest[PluginCfg]) -> str:
+        seen['config'] = request.config
+        return 'ok'
+
+    action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
+    request = ModelRequest[dict](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'temperature': 0.5},
+        output=OutputConfig(format='json', constrained=True),
+    )
+    assert type(request.config) is dict
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['config'], PluginCfg)
+    assert seen['config'].temperature == 0.5

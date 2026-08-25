@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -135,15 +136,26 @@ func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, 
 // wrapHandler wraps an HTTP handler function with common logging and error handling.
 func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log := slog.Default().With("reqID", requestID.Add(1))
-		log.Debug("request start", "method", r.Method, "path", r.URL.Path)
+		log := slog.Default().With("reqId", requestID.Add(1))
+		// Carry the request-scoped logger in the context so everything logged
+		// while handling this request (including inside flows and tools) is
+		// tagged with the same reqId.
+		r = r.WithContext(logger.WithContext(r.Context(), log))
+		ctx := r.Context()
+
+		start := time.Now()
+		logger.Debug(ctx, "request started", "method", r.Method, "path", r.URL.Path)
 
 		var err error
 		defer func() {
 			if err != nil {
-				log.Error("request end", "err", err)
+				logger.Error(ctx, "request failed",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"duration", time.Since(start).Round(time.Millisecond),
+					"error", err)
 			} else {
-				log.Debug("request end")
+				logger.Debug(ctx, "request finished", "duration", time.Since(start).Round(time.Millisecond))
 			}
 		}()
 
@@ -276,7 +288,7 @@ func applyContextProviders(ctx context.Context, r *http.Request, providers []cor
 			Input:   input,
 		})
 		if err != nil {
-			logger.FromContext(ctx).Error("error providing action context from request", "err", err)
+			logger.Error(ctx, "context provider rejected the request", "error", err)
 			return ctx, err
 		}
 
@@ -310,7 +322,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFun
 		// The SSE frame carries only the redacted message and this function
 		// returns nil, so wrapHandler never sees the error: this log is the
 		// only server-side record of the real failure.
-		slog.ErrorContext(ctx, "streaming flow failed", "err", err)
+		logger.Error(ctx, "streaming flow failed", "error", err)
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
 		}
@@ -369,7 +381,7 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 		// As in runWithStreaming: the wire carries only the redacted message
 		// and wrapHandler never sees the error, so log the real failure here.
 		// The durable record is no substitute: it expires with the stream.
-		slog.ErrorContext(durableCtx, "streaming flow failed", "err", err)
+		logger.Error(durableCtx, "streaming flow failed", "error", err)
 		durableStream.Error(durableCtx, err)
 		select {
 		case <-clientGone:

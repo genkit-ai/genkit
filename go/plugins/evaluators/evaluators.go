@@ -125,8 +125,8 @@ func configureRegexEvaluator() ai.Evaluator {
 			}
 		} else {
 			// Mark as failed if output is not string type
-			logger.FromContext(ctx).Debug("genkitEval",
-				"regex", fmt.Sprintf("Failed regex evaluation, as output is not string api. TestCaseId: %s", dataPoint.TestCaseId))
+			logger.Debug(ctx, "regex evaluation failed, output is not a string",
+				"testCaseId", dataPoint.TestCaseId)
 			score = ai.Score{
 				Score:  false,
 				Status: ai.ScoreStatusFail.String(),

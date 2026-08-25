@@ -48,6 +48,8 @@ type DownloadMediaOptions struct {
 	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
 }
 
+// CalculateInputOutputUsage fills in the character, image, and video counts on
+// resp.Usage, for providers whose API reports token counts only.
 func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 	if resp.Usage == nil {
 		resp.Usage = &GenerationUsage{}
@@ -255,7 +257,7 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 			}
 
 			if opts.Stage == ModelStageDeprecated {
-				logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
+				logger.Warn(ctx, "model is deprecated and may be removed in a future release", "model", model)
 			}
 
 			if (opts.Supports.Constrained == "" ||
@@ -273,8 +275,14 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 // validateVersion validates that the requested model version is supported.
 // It runs against the raw, pre-conversion config (see [normalizeConfig])
 // because conversion into a Config type without a version field would
-// silently drop the key.
+// silently drop the key. A model that declares no versions is unconstrained:
+// the declared list curates the known versions, it does not exist to forbid
+// pinning on models that never enumerated any.
 func validateVersion(model string, versions []string, config any) error {
+	if len(versions) == 0 {
+		return nil
+	}
+
 	var configMap map[string]any
 
 	switch c := config.(type) {

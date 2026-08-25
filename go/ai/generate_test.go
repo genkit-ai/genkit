@@ -18,14 +18,18 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -2752,6 +2756,118 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 	})
 }
 
+// TestGenerateAbnormalFinishSkipsOutputParsing verifies that a response that
+// did not run to a normal completion (e.g. safety-blocked) is returned as-is
+// when structured output is requested, instead of failing output parsing and
+// masking the finish reason with a schema error.
+func TestGenerateAbnormalFinishSkipsOutputParsing(t *testing.T) {
+	r := childRegistry(t)
+
+	type OutputData struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	tests := []struct {
+		name     string
+		response *ModelResponse
+		opts     []GenerateOption
+		wantErr  error
+	}{
+		{
+			name: "blocked contentless message with output type",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "blocked nil message with output type",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "blocked contentless message with enum output",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			opts: []GenerateOption{WithOutputEnums("YES", "NO")},
+		},
+		{
+			name: "other finish reason keeps unparsed text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonOther,
+				FinishMessage: "malformed function call",
+				Message:       NewModelTextMessage("filter details, not JSON"),
+			},
+			opts: []GenerateOption{WithOutputType(OutputData{})},
+		},
+		{
+			name: "stop with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			opts:    []GenerateOption{WithOutputType(OutputData{})},
+			wantErr: status.ErrInvalidOutput,
+		},
+		{
+			// Plugins map unrecognized provider finish reasons to unknown, so
+			// it keeps the parse path: only reasons known to be abnormal skip
+			// output validation.
+			name: "unknown with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonUnknown,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			opts:    []GenerateOption{WithOutputType(OutputData{})},
+			wantErr: status.ErrInvalidOutput,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/abnormal-finish-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					resp := *tt.response
+					resp.Request = req
+					return &resp, nil
+				})
+			wantText := tt.response.Text()
+
+			resp, err := Generate(context.Background(), r, append([]GenerateOption{
+				WithModel(model),
+				WithPrompt("please respond"),
+			}, tt.opts...)...)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Generate() err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Generate() returned error for %q response: %v", tt.response.FinishReason, err)
+			}
+			if resp.FinishReason != tt.response.FinishReason {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, tt.response.FinishReason)
+			}
+			if resp.FinishMessage != tt.response.FinishMessage {
+				t.Errorf("FinishMessage = %q, want %q", resp.FinishMessage, tt.response.FinishMessage)
+			}
+			if got := resp.Text(); got != wantText {
+				t.Errorf("Text() = %q, want %q", got, wantText)
+			}
+		})
+	}
+}
+
 func TestGenerateNoGoroutineLeak(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
@@ -2811,4 +2927,347 @@ func TestGenerateNoGoroutineLeak(t *testing.T) {
 	}
 
 	t.Fatalf("goroutines leaked: %d", runtime.NumGoroutine()-before)
+}
+
+func TestMessageText(t *testing.T) {
+	tests := []struct {
+		name    string
+		message *Message
+		want    string
+	}{
+		{
+			name:    "nil message",
+			message: nil,
+			want:    "",
+		},
+		{
+			name:    "no content",
+			message: &Message{Role: RoleModel},
+			want:    "",
+		},
+		{
+			name:    "lone text part",
+			message: NewModelTextMessage("hello"),
+			want:    "hello",
+		},
+		{
+			// A model allowed to answer with an image often answers with only
+			// an image. Its data is not the message's text.
+			name:    "lone media part",
+			message: NewMessage(RoleModel, nil, NewMediaPart("image/png", "iVBORw0KGgo=")),
+			want:    "",
+		},
+		{
+			// A data part carries a blob, which the plugins send as bytes.
+			// Concatenating it would splice base64 into the message's prose.
+			name:    "lone data part",
+			message: NewMessage(RoleModel, nil, NewDataPart("data:application/octet-stream;base64,AAAA")),
+			want:    "",
+		},
+		{
+			name: "data part alongside text",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("here is the blob"),
+				NewDataPart("data:application/octet-stream;base64,AAAA"),
+			),
+			want: "here is the blob",
+		},
+		{
+			name:    "lone reasoning part",
+			message: NewMessage(RoleModel, nil, NewReasoningPart("thinking", nil)),
+			want:    "",
+		},
+		{
+			name: "text alongside media",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("a drawing of a cat"),
+				NewMediaPart("image/png", "iVBORw0KGgo="),
+			),
+			want: "a drawing of a cat",
+		},
+		{
+			name: "text parts concatenate",
+			message: NewMessage(RoleModel, nil,
+				NewTextPart("one "),
+				NewTextPart("two"),
+			),
+			want: "one two",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.message.Text(); got != tt.want {
+				t.Errorf("Text() = %q, want %q", got, tt.want)
+			}
+			// ModelResponse.Text() reads through to the message, so the two
+			// must not disagree.
+			resp := &ModelResponse{Message: tt.message}
+			if got := resp.Text(); got != tt.want {
+				t.Errorf("ModelResponse.Text() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMediaParts(t *testing.T) {
+	t.Run("returns every media part with its content type", func(t *testing.T) {
+		resp := &ModelResponse{
+			Message: NewMessage(RoleModel, nil,
+				NewTextPart("two drawings"),
+				NewMediaPart("image/png", "first"),
+				NewMediaPart("image/jpeg", "second"),
+			),
+		}
+
+		parts := resp.MediaParts()
+
+		if len(parts) != 2 {
+			t.Fatalf("MediaParts() returned %d parts, want 2", len(parts))
+		}
+		for i, want := range []struct{ contentType, data string }{
+			{"image/png", "first"},
+			{"image/jpeg", "second"},
+		} {
+			if parts[i].ContentType != want.contentType || parts[i].Text != want.data {
+				t.Errorf("part %d = (%q, %q), want (%q, %q)",
+					i, parts[i].ContentType, parts[i].Text, want.contentType, want.data)
+			}
+		}
+		// Media returns only the first, which is why MediaParts exists.
+		if got := resp.Media(); got != "first" {
+			t.Errorf("Media() = %q, want %q", got, "first")
+		}
+	})
+
+	t.Run("returns nil when there is no media", func(t *testing.T) {
+		resp := &ModelResponse{Message: NewModelTextMessage("just text")}
+
+		if parts := resp.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() = %v, want nil", parts)
+		}
+	})
+
+	t.Run("nil safe", func(t *testing.T) {
+		var resp *ModelResponse
+		if parts := resp.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() on nil response = %v, want nil", parts)
+		}
+		var msg *Message
+		if parts := msg.MediaParts(); parts != nil {
+			t.Errorf("MediaParts() on nil message = %v, want nil", parts)
+		}
+	})
+}
+
+// generateSpanMessageCounts returns, sorted, the number of messages each
+// collected span named "generate" recorded as its input.
+func generateSpanMessageCounts(t *testing.T, c *spanCollector) []int {
+	t.Helper()
+	var counts []int
+	for _, s := range c.allByName("generate") {
+		input, ok := spanAttr(s, "genkit:input")
+		if !ok {
+			t.Errorf("generate span recorded no input")
+			continue
+		}
+		var decoded struct {
+			Messages []*Message `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(input), &decoded); err != nil {
+			t.Errorf("generate span input is not a request: %v", err)
+			continue
+		}
+		counts = append(counts, len(decoded.Messages))
+	}
+	slices.Sort(counts)
+	return counts
+}
+
+// TestGenerateSpanRecordsAccumulatedMessages checks that every tool-loop turn
+// opens a generate span recording the conversation as of that turn, not the
+// messages the call started with.
+func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
+	// Two tool calls and a final answer: three model calls in all, whose
+	// requests hold 1, 3, and 5 messages as each turn appends a model and a
+	// tool message. Through the action the counts are the same, since the
+	// action's own span stands in for the first turn's: a fourth count here
+	// would mean the two are duplicating each other.
+	const turns = 3
+	want := []int{1, 3, 5}
+
+	setup := func(t *testing.T) (api.Registry, *spanCollector) {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/loopModel",
+			handler: loopingToolModel("myTool", turns-1),
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+		return r, collectSpans(t)
+	}
+
+	t.Run("through Generate", func(t *testing.T) {
+		r, spans := setup(t)
+
+		_, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+		)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+		// The loop's spans are annotated by type alone. A subtype would show
+		// up in their trace paths, and in every path built under them.
+		for _, s := range spans.allByName("generate") {
+			assertSpanAttr(t, s, "genkit:type", "util")
+			if got, ok := spanAttr(s, "genkit:metadata:subtype"); ok {
+				t.Errorf("generate span carries subtype %q, want none", got)
+			}
+		}
+	})
+
+	t.Run("through the generate action", func(t *testing.T) {
+		r, spans := setup(t)
+		action := DefineGenerateAction(testCtx, r)
+
+		_, err := action.Run(testCtx, &GenerateActionOptions{
+			Model:    "test/loopModel",
+			Messages: []*Message{NewUserTextMessage("start")},
+			Tools:    []string{"myTool"},
+		}, nil)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+	})
+}
+
+// TestToolLoopLeavesEarlierRequestsAlone checks that each turn of the tool loop
+// works from its own request: middleware holds these, so reusing one would
+// retroactively add the next turn's messages to a request a hook read.
+func TestToolLoopLeavesEarlierRequestsAlone(t *testing.T) {
+	r := newTestRegistry(t)
+	var seen []*ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/loopModel",
+		handler: loopingToolModel("myTool", 2),
+	})
+	defineTool(r, "myTool", "A test tool",
+		func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+
+	recorder := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+				seen = append(seen, p.Request)
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/loopModel"),
+		WithPrompt("start"),
+		WithTools(LookupTool(r, "myTool")),
+		WithUse(recorder),
+	)
+	assertNoError(t, err)
+
+	// One request per turn, each holding what the turn before it appended,
+	// still true once the whole loop has run.
+	want := []int{1, 3, 5}
+	if len(seen) != len(want) {
+		t.Fatalf("middleware saw %d requests, want %d", len(seen), len(want))
+	}
+	for i, n := range want {
+		if got := len(seen[i].Messages); got != n {
+			t.Errorf("request %d holds %d messages after the loop finished, want %d", i, got, n)
+		}
+	}
+}
+
+// interruptedForResume runs a generate that stops on a tool interrupt and
+// returns the registry, the tool, and the interrupted response, ready for a
+// resuming call.
+func interruptedForResume(t *testing.T) (api.Registry, Tool, *ModelResponse) {
+	t.Helper()
+	r := childRegistry(t)
+	tool := defineTool(r, "conditional", "A tool that interrupts on request",
+		func(ctx *ToolContext, in conditionalToolInput) (string, error) {
+			if in.Interrupt {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "test"}})
+			}
+			return "processed: " + in.Value, nil
+		})
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/resumeModel",
+		handler: toolCallingModelHandler("conditional", map[string]any{"Value": "v", "Interrupt": true}, "done"),
+	})
+
+	res, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithPrompt("go"), WithTools(tool))
+	assertNoError(t, err)
+	if res.FinishReason != "interrupted" {
+		t.Fatalf("setup: finish reason = %q, want %q", res.FinishReason, "interrupted")
+	}
+	return r, tool, res
+}
+
+// TestResumeCarriesOptionsForward checks the options the loop switches to once
+// a resumed call has replayed its tools. It reads them for the rest of the
+// call, so whatever the revised copy drops is lost from that point on.
+func TestResumeCarriesOptionsForward(t *testing.T) {
+	t.Run("keeps the caller's step name", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+		spans := collectSpans(t)
+
+		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithStepName("myStep"))
+		assertNoError(t, err)
+
+		// Both turns are the caller's step, so neither may fall back to the default.
+		if got := len(spans.allByName("generate")); got != 0 {
+			t.Errorf("got %d spans named %q, want 0: every iteration is the named step", got, "generate")
+		}
+		if got := len(spans.allByName("myStep")); got != 2 {
+			t.Errorf("got %d spans named %q, want 2 (one per iteration)", got, "myStep")
+		}
+	})
+
+	t.Run("resume survives a hook writing to its options", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+
+		clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Options.Resume != nil {
+						p.Options.Resume.Respond = nil
+						p.Options.Resume.Restart = nil
+					}
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		out, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithUse(clobber))
+		assertNoError(t, err)
+
+		// The hook's writes land on its own copy, so the call resumes as usual.
+		if out.FinishReason == "interrupted" {
+			t.Error("call stayed interrupted: a hook's write to Options reached the loop")
+		}
+		if got := out.Text(); got != "done" {
+			t.Errorf("resumed response = %q, want %q", got, "done")
+		}
+	})
 }

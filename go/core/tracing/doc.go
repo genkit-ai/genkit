@@ -95,10 +95,8 @@ Create spans with rich metadata for better observability:
 
 Extract trace context for correlation with external systems:
 
-	info := tracing.GetTraceInfo(ctx)
-	if info != nil {
-		log.Printf("TraceID: %s, SpanID: %s", info.TraceID, info.SpanID)
-	}
+	info := tracing.SpanTraceInfo(ctx)
+	log.Printf("TraceID: %s, SpanID: %s", info.TraceID, info.SpanID)
 
 This package is primarily intended for Genkit internals and advanced plugin
 development. Most application developers will interact with tracing through

@@ -19,9 +19,8 @@
 Veo is Google's video generation model that creates videos from text prompts.
 """
 
-import asyncio
 import sys
-from typing import Any, cast
+from typing import Any
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -30,22 +29,21 @@ else:
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
-    Media,
-    MediaPart,
-    Message,
     ModelInfo,
     ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
     Supports,
-    TextPart,
 )
 from genkit.model import Error, Operation
-from genkit.plugin_api import ActionRunContext, tracer
+from genkit.plugin_api import ActionRunContext
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 
 
 class VeoVersion(StrEnum):
@@ -74,7 +72,7 @@ def is_veo_model(name: str) -> bool:
     Returns:
         True if this is a Veo model name.
     """
-    return name.lower().startswith('veo')
+    return name.split('/')[-1].lower().startswith('veo-')
 
 
 class VeoConfigSchema(BaseModel):
@@ -106,6 +104,7 @@ DEFAULT_VEO_SUPPORT = Supports(
     tools=False,
     system_role=True,
     output=['media'],
+    long_running=True,
 )
 
 
@@ -140,28 +139,6 @@ def _extract_text(request: ModelRequest) -> str:
         if hasattr(part.root, 'text') and part.root.text
     ]
     return ' '.join(prompt_parts)
-
-
-def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Convert config to Veo API parameters.
-
-    Args:
-        config: The model configuration (VeoConfigSchema or dict).
-
-    Returns:
-        Dictionary of Veo API parameters.
-    """
-    if config is None:
-        return {}
-
-    if isinstance(config, VeoConfigSchema):
-        params = config.model_dump(by_alias=True, exclude_none=True)
-    elif isinstance(config, dict):
-        params = {k: v for k, v in config.items() if v is not None}
-    else:
-        return {}
-
-    return params
 
 
 def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
@@ -228,8 +205,8 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
 class VeoModel:
     """Veo video generation model.
 
-    This class implements both the standard model interface (for Vertex AI)
-    and the background model pattern (for GoogleAI) for Veo video generation.
+    Veo runs as a background operation: callers start a generation and
+    poll it. There is no blocking generate path.
     """
 
     def __init__(self, version: str, client: genai.Client) -> None:
@@ -242,60 +219,7 @@ class VeoModel:
         self._version = version
         self._client = client
 
-    def _build_prompt(self, request: ModelRequest) -> str:
-        """Build prompt request from Genkit request."""
-        prompt = []
-        for message in request.messages:
-            for part in message.content:
-                if isinstance(part.root, TextPart):
-                    prompt.append(part.root.text)
-                else:
-                    # TODO(#4363): Support image input if Veo supports it (e.g. for image-to-video)
-                    # For now, strict text text-to-video
-                    pass
-        return ' '.join(prompt)
-
-    async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
-        """Handle a generation request (synchronous/blocking mode for Vertex AI).
-
-        Args:
-            request: The generation request.
-            _: action context
-
-        Returns:
-            The model's response.
-        """
-        if request.tools:
-            raise ValueError('Tools are not supported for this model.')
-
-        prompt = self._build_prompt(request)
-        config = self._get_config(request)
-
-        with tracer.start_as_current_span('generate_videos'):
-            operation = await self._client.aio.models.generate_videos(model=self._version, prompt=prompt, config=config)
-
-            # Handling LRO. Using cast(Any) to avoid strict type definition issues for operation.result()
-            op = cast(Any, operation)
-            if hasattr(op, 'result'):
-                # Check if result is a coroutine (awaitable) or direct value
-                res = op.result()
-                if asyncio.iscoroutine(res):
-                    response = await res
-                else:
-                    response = res
-            else:
-                response = op
-
-            content = self._contents_from_response(cast(genai_types.GenerateVideosResponse, response))
-
-        return ModelResponse(
-            message=Message(
-                content=content,
-                role=Role.MODEL,
-            )
-        )
-
-    async def start(self, request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(self, request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
         """Start a video generation operation (background model pattern for GoogleAI).
 
         Args:
@@ -312,12 +236,10 @@ class VeoModel:
         if not prompt:
             raise ValueError('Veo requires a text prompt')
 
-        # Call the generateVideos API
         response = await self._client.aio.models.generate_videos(
             model=self._version,
             prompt=prompt,
-            # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
+            config=self._get_config(request),
         )
 
         # Convert to Operation
@@ -355,29 +277,21 @@ class VeoModel:
 
         return _from_veo_operation(op_dict)
 
-    def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfigOrDict | None:
-        if not request.config:
+    def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfig | None:
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=VeoConfigSchema,
+            action_name=self._version,
+        )
+        if not dumped:
             return None
-        return cast(genai_types.GenerateVideosConfigOrDict, request.config)
 
-    def _contents_from_response(self, response: genai_types.GenerateVideosResponse) -> list[Part]:
-        content = []
-        if response.generated_videos:
-            for video in response.generated_videos:
-                # Video URI is typically in video.video.uri
-                if video.video and video.video.uri:
-                    uri = video.video.uri
-                    content.append(
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url=uri,
-                                    content_type='video/mp4',
-                                )
-                            )
-                        )
-                    )
-        return content
+        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
+        try:
+            cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
+        except ValidationError as e:
+            raise sdk_config_error(action_name=self._version, error=e) from e
+        return attach_leftovers(cfg, leftovers, nest='parameters')
 
     @property
     def metadata(self) -> dict:

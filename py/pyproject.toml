@@ -19,6 +19,7 @@ authors = [{ name = "Google" }]
 dependencies = [
   "dotpromptz==0.1.5",
   "genkit",
+  "genkit-amazon-bedrock",
   "genkit-anthropic",
   "genkit-openai",
   "genkit-django",
@@ -50,7 +51,7 @@ dev = [
   "pytest-cov>=6.0.0",
   "datamodel-code-generator>=0.27.3",
   "pytest-mock>=3.14.0",
-  "twine>=6.1.0",
+  "twine>=7.0.0",
   "pip>=25.0.1",
   "nox>=2025.2.9",
   "nox-uv>=0.2.2",
@@ -136,6 +137,7 @@ default = true
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
 agents               = { workspace = true }
+amazon-bedrock-sample = { workspace = true }
 anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
@@ -158,6 +160,7 @@ vertexai-imagen      = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
+genkit-amazon-bedrock = { workspace = true }
 genkit-anthropic    = { workspace = true }
 genkit-openai       = { workspace = true }
 genkit-django       = { workspace = true }
@@ -360,6 +363,7 @@ root = [
   # Core package
   "packages/genkit/src",
   # Integration packages
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -389,6 +393,7 @@ exclude = [
 ]
 extraPaths = [
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -431,6 +436,7 @@ project_includes = [
 search-path = [
   ".",
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",

@@ -34,7 +34,7 @@ The plugin automatically discovers available models from the API upon initializa
 
 ### Dynamic Configuration
 
-New or experimental parameters can be passed flexibly using `model_validate` to bypass strict schema checks:
+New or experimental parameters can be passed on the family config and ride through to the API:
 
 ```python
 from genkit_google_genai import GeminiConfigSchema

@@ -47,6 +47,7 @@ from websockets.asyncio.server import serve
 from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
 from genkit._core._middleware import BaseMiddleware
+from genkit._core._model import ModelConfig
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -54,6 +55,7 @@ from genkit._core._reflection_v2 import (
 )
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInit, AgentInput
+from genkit.model import model_ref
 
 
 class FakeReflectionManager:
@@ -247,6 +249,37 @@ async def test_reflection_server_v2_list_values(fake_manager: FakeReflectionMana
         values = result.get('values')
         assert isinstance(values, dict)
         assert values.get('defaultModel') == 'my-model'
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_model_ref_is_name(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A stored ModelRef lists as its wire name, not the object."""
+    registry = Registry()
+    registry.register_value(
+        'defaultModel',
+        'defaultModel',
+        model_ref('echo-model', config_schema=ModelConfig),
+    )
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'defaultModel'},
+            'id': '2',
+        })
+        resp = await fake_manager.read_rpc()
+        result = resp.get('result')
+        assert isinstance(result, dict)
+        values = result.get('values')
+        assert isinstance(values, dict)
+        assert values.get('defaultModel') == 'echo-model'
     finally:
         await _stop_client(client, task)
 

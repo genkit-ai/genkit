@@ -32,6 +32,7 @@ from genkit._ai._agents._runtime import AgentFn, AgentInitError, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
+    SnapshotStatusStream,
     SnapshotSubscriber,
 )
 from genkit._ai._agents._session_stores._file_store import FileSessionStore
@@ -81,6 +82,7 @@ __all__ = [
     # Session persistence
     'Session',
     'SessionStore',
+    'SnapshotStatusStream',
     'SnapshotSubscriber',
     'InMemorySessionStore',
     'FileSessionStore',

@@ -3661,11 +3661,7 @@ func TestAgent_Detach_SuppressesChunksFromTheDetachedTurn(t *testing.T) {
 	// cannot finish before the turn has emitted. That is the ordering that
 	// used to leak chunks onto the wire.
 	reg := newTestRegistry(t)
-	store := &blockingSaveStore[testState]{
-		testInMemStore: newTestInMemStore[testState](),
-		entered:        make(chan struct{}),
-		release:        make(chan struct{}),
-	}
+	store := newBlockingSaveStore[testState]()
 
 	emitted := make(chan struct{})
 	af := DefineCustomAgent(reg, "detachSuppressesChunks",
@@ -3961,6 +3957,84 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("fn did not exit after client cancel")
 	}
+}
+
+// TestAgent_Detach_CommitSurvivesClientDeadline is the other side of that
+// guard. Once the runtime reads the detach directive the invocation is
+// committed: the pending row is written on a context.WithoutCancel, the
+// background goroutines own the turn, and the snapshot ID handed back is the
+// only handle to the work. A client context that dies inside that window must
+// not turn the handoff into an error. It used to, because the bidi framework
+// adopted the connection context's cancel cause as the session's error
+// whenever the function itself reported none, and a delegating caller reads
+// that error as a failed launch: the sub-agent keeps running with nothing
+// tracking or aborting it.
+func TestAgent_Detach_CommitSurvivesClientDeadline(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newBlockingSaveStore[testState]()
+
+	// The turn outlives the handoff, so the pending row is the only write the
+	// gate below can catch. Released on every exit path: a failed assertion
+	// must not leave the turn (and the runtime goroutines behind it) parked
+	// for the rest of the run.
+	turnRelease := make(chan struct{})
+	releaseTurn := sync.OnceFunc(func() { close(turnRelease) })
+	t.Cleanup(releaseTurn)
+	af := DefineCustomAgent(reg, "detachDeadline",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				<-turnRelease
+				return nil, nil
+			})
+		},
+		WithSessionStore[testState](store),
+	)
+
+	// Cancelled with the cause a lapsed deadline carries: the cause is what
+	// the framework mistook for an abort of its own, and firing it on the
+	// gate pins it inside the commit window instead of guessing a wall-clock
+	// timeout against the directive read.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	go func() {
+		<-store.entered
+		cancel(context.DeadlineExceeded)
+		close(store.release)
+	}()
+
+	input, err := json.Marshal(&AgentInput{Detach: true, Message: ai.NewUserTextMessage("go")})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	// The one-shot JSON path, which is how a delegating caller launches a
+	// background sub-agent.
+	res, err := af.RunBidiJSON(ctx, input, nil, nil)
+	if err != nil {
+		t.Fatalf("RunBidiJSON: %v, want the detached output", err)
+	}
+	var out AgentOutput[testState]
+	if err := json.Unmarshal(res.Result, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonDetached {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("SnapshotID is empty, want the pending snapshot's ID")
+	}
+	// The gate is what puts the cancellation inside the commit window. If a
+	// future store write lands ahead of the pending row, the gate parks on
+	// that instead and this test would pass while covering nothing.
+	if cause := context.Cause(ctx); !errors.Is(cause, context.DeadlineExceeded) {
+		t.Errorf("caller context cause = %v, want the deadline to have lapsed during the handoff", cause)
+	}
+
+	// The handle is good: the background work runs on and finalizes the row
+	// the caller was handed.
+	releaseTurn()
+	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
 }
 
 func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
@@ -6854,6 +6928,14 @@ type blockingSaveStore[State any] struct {
 	once    sync.Once
 }
 
+func newBlockingSaveStore[State any]() *blockingSaveStore[State] {
+	return &blockingSaveStore[State]{
+		testInMemStore: newTestInMemStore[State](),
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+}
+
 func (s *blockingSaveStore[State]) SaveSnapshot(
 	ctx context.Context,
 	id string,
@@ -6875,11 +6957,7 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	// permanently break resume-by-session-ID), and the conversation stays
 	// in one session.
 	reg := newTestRegistry(t)
-	store := &blockingSaveStore[testState]{
-		testInMemStore: newTestInMemStore[testState](),
-		entered:        make(chan struct{}),
-		release:        make(chan struct{}),
-	}
+	store := newBlockingSaveStore[testState]()
 	af := defineLastGoodTestAgent(reg, "detachMidWrite", WithSessionStore[testState](store))
 
 	conn, err := af.Connect(context.Background())

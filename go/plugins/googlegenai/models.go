@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/plugins/internal"
 	"google.golang.org/genai"
 )
 
@@ -77,23 +79,26 @@ var (
 	veoConfigSchema    = configToMap(genai.GenerateVideosConfig{})
 )
 
-// Default options for unknown models of each type.
+// Default options for unknown models of each type. Every catalog entry is
+// stable, but these are a guess at the capabilities of an ID the plugin does
+// not know, so they stay unstable: the stage is the only thing telling a
+// curated model apart from a typo the plugin served anyway.
 var (
 	defaultGeminiOpts = ai.ModelOptions{
 		Supports:     &Multimodal,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: geminiConfigSchema,
 	}
 
 	defaultImagenOpts = ai.ModelOptions{
 		Supports:     &Media,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: imagenConfigSchema,
 	}
 
 	defaultVeoOpts = ai.ModelOptions{
 		Supports:     &VeoSupports,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: veoConfigSchema,
 	}
 
@@ -116,6 +121,7 @@ const (
 	geminiOmniFlashPreview = "gemini-omni-flash-preview"
 
 	gemini3FlashPreview    = "gemini-3-flash-preview"
+	gemini37Flash          = "gemini-3.7-flash"
 	gemini36Flash          = "gemini-3.6-flash"
 	gemini35Flash          = "gemini-3.5-flash"
 	gemini35FlashLite      = "gemini-3.5-flash-lite"
@@ -169,6 +175,7 @@ var (
 		gemini25Pro,
 		geminiOmniFlashPreview,
 		gemini3FlashPreview,
+		gemini37Flash,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -195,6 +202,7 @@ var (
 		gemini25Pro,
 		geminiOmniFlash,
 		gemini3FlashPreview,
+		gemini37Flash,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -259,6 +267,12 @@ var (
 		},
 		gemini3FlashPreview: {
 			Label:    "Gemini 3 Flash Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini37Flash: {
+			Label:    "Gemini 3.7 Flash",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
@@ -495,15 +509,10 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		opts.ConfigSchema = mt.configSchema()
 	}
 
-	// Set label with provider prefix
-	prefix := googleAILabelPrefix
-	if provider == vertexAIProvider {
-		prefix = vertexAILabelPrefix
-	}
 	if opts.Label == "" {
 		opts.Label = name
 	}
-	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+	opts.Label = internal.ProviderLabel(displayName(provider), opts.Label)
 
 	return opts
 }
@@ -515,14 +524,10 @@ func GetEmbedderOptions(name, provider string) ai.EmbedderOptions {
 		opts = defaultEmbedOpts
 	}
 
-	prefix := googleAILabelPrefix
-	if provider == vertexAIProvider {
-		prefix = vertexAILabelPrefix
-	}
 	if opts.Label == "" {
 		opts.Label = name
 	}
-	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+	opts.Label = internal.ProviderLabel(displayName(provider), opts.Label)
 
 	return opts
 }
@@ -538,7 +543,7 @@ func listModels(provider string) (map[string]ai.ModelOptions, error) {
 	case vertexAIProvider:
 		names = vertexAIModels
 	default:
-		return nil, fmt.Errorf("unknown provider detected %s", provider)
+		return nil, status.Errorf(status.ErrInvalidArgument, "unknown provider detected %s", provider)
 	}
 
 	models := make(map[string]ai.ModelOptions, len(names))
@@ -565,7 +570,7 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 	for item, err := range client.Models.All(ctx) {
 		if err != nil {
-			return genaiModels{}, fmt.Errorf("failed to list models: %w", err)
+			return genaiModels{}, fmt.Errorf("failed to list models: %w", wrapAPIError(err))
 		}
 
 		name := strings.TrimPrefix(item.Name, "publishers/google/")

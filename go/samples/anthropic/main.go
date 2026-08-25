@@ -12,91 +12,98 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This sample demonstrates the Anthropic plugin, which speaks Anthropic's
+// native Messages API: a streaming flow that generates a joke with a model
+// pinned through anthropic.ModelRef and the Anthropic SDK's own request type
+// as its config.
+//
+// compat_oai/anthropic reaches the same Claude models through the
+// OpenAI-compatible endpoint instead. What differs is the response: this
+// plugin returns Claude's thinking as Genkit reasoning parts with their
+// signatures preserved, while the compatible endpoint keeps the thinking
+// server-side.
+//
+// Run it:
+//
+//	export ANTHROPIC_API_KEY=...
+//	go run .
+//
+// Or with the Dev UI, to call the flow from a browser and read a trace of
+// every run at http://localhost:4000/traces:
+//
+//	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
+//	genkit start -- go run .
+//
+// Or over HTTP. Streaming needs ?stream=true:
+//
+//	curl -N -X POST 'http://localhost:8080/jokesFlow?stream=true' \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"topic": "bananas"}}'
 package main
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"net/http"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	ant "github.com/firebase/genkit/go/plugins/anthropic"
+	"github.com/firebase/genkit/go/plugins/anthropic"
+	"github.com/firebase/genkit/go/plugins/server"
 )
+
+// JokeRequest is what the flow takes. A struct rather than a bare string lets
+// the field carry a description and a default, which the Dev UI pre-fills its
+// form from. The default is not applied in transit, and a field without
+// omitempty is required.
+type JokeRequest struct {
+	Topic string `json:"topic" jsonschema:"default=airplane food" jsonschema_description:"What the joke should be about"`
+}
+
+// model pins the model and its config in one place, so switching either is a
+// one-line change. Sonnet 5 thinks adaptively, choosing its own budget per
+// request, so a fixed Thinking.OfEnabled budget is rejected outright; Effort is
+// the knob instead, and low keeps a quick joke quick.
+//
+// This package and the Anthropic SDK are both named anthropic, so one of them
+// needs an import alias; the import above aliases the SDK to sdk.
+var model = anthropic.ModelRef("claude-sonnet-5", &sdk.MessageNewParams{
+	MaxTokens: 4000,
+	Thinking: sdk.ThinkingConfigParamUnion{
+		OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{},
+	},
+	OutputConfig: sdk.OutputConfigParam{Effort: sdk.OutputConfigEffortLow},
+})
 
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&ant.Anthropic{}))
+	// The plugin reads the API key from the ANTHROPIC_API_KEY environment variable.
+	g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
 
-	// Define a simple flow that generates a short story about a given topic.
-	genkit.DefineStreamingFlow(g, "storyFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("anthropic/claude-sonnet-4-20250514"),
-			ai.WithConfig(&anthropic.MessageNewParams{
-				Temperature: anthropic.Float(1),
-				MaxTokens:   *anthropic.IntPtr(2000),
-				Thinking: anthropic.ThinkingConfigParamUnion{
-					OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-						BudgetTokens: *anthropic.IntPtr(1024),
-					},
-				},
-			}),
-			ai.WithStreaming(cb),
-			ai.WithPrompt(`Tell a short story about %s`, input))
-		if err != nil {
-			return "", err
-		}
+	// Passing sendChunk straight to WithStreaming forwards the model's chunks
+	// to the caller untouched.
+	genkit.DefineStreamingFlow(g, "jokesFlow",
+		func(ctx context.Context, input JokeRequest, sendChunk ai.ModelStreamCallback) (string, error) {
+			resp, err := genkit.Generate(ctx, g,
+				ai.WithModel(model),
+				ai.WithPrompt("Share a joke about %s.", input.Topic),
+				ai.WithStreaming(sendChunk),
+			)
+			if err != nil {
+				return "", fmt.Errorf("could not generate joke: %w", err)
+			}
 
-		return resp.Text(), nil
-	})
+			return resp.Text(), nil
+		},
+	)
 
-	// Same story flow on the latest Opus model. Opus 4.8 uses adaptive thinking;
-	// note we do NOT set Temperature or a fixed thinking budget — both are
-	// rejected by Opus 4.7+ in favour of adaptive thinking.
-	genkit.DefineStreamingFlow(g, "opusStoryFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("anthropic/claude-opus-4-8"),
-			ai.WithConfig(&anthropic.MessageNewParams{
-				MaxTokens: 8000,
-				Thinking: anthropic.ThinkingConfigParamUnion{
-					OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
-				},
-			}),
-			ai.WithStreaming(cb),
-			ai.WithPrompt(`Tell a short story about %s`, input))
-		if err != nil {
-			return "", err
-		}
-
-		return resp.Text(), nil
-	})
-
-	// Structured-output flow on the latest Sonnet model. This exercises the JSON
-	// output capability that the known Claude models now advertise; Genkit
-	// constrains the response to the Character schema.
-	genkit.DefineFlow(g, "characterFlow", func(ctx context.Context, topic string) (*Character, error) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("anthropic/claude-sonnet-4-6"),
-			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 2000}),
-			ai.WithOutputType(Character{}),
-			ai.WithPrompt(`Invent a memorable character for a story about %s.`, topic))
-		if err != nil {
-			return nil, err
-		}
-
-		var c Character
-		if err := resp.Output(&c); err != nil {
-			return nil, err
-		}
-		return &c, nil
-	})
-
-	<-ctx.Done()
-}
-
-// Character is the structured output produced by characterFlow.
-type Character struct {
-	Name   string   `json:"name"`
-	Role   string   `json:"role"`
-	Traits []string `json:"traits"`
+	// Serve every flow over HTTP.
+	mux := http.NewServeMux()
+	for _, a := range genkit.ListFlows(g) {
+		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
+	}
+	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 }

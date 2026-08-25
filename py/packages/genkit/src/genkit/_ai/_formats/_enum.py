@@ -41,13 +41,11 @@ class EnumFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='enum',
-                schema={
-                    'type': 'string',
-                    'enum': ['positive', 'negative', 'neutral']
-                }
-            )
+            output_format='enum',
+            output_schema={
+                'type': 'string',
+                'enum': ['positive', 'negative', 'neutral']
+            }
         )
     """
 

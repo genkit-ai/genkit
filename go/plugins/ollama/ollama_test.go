@@ -474,11 +474,11 @@ func TestDynamicPlugin(t *testing.T) {
 				t.Fatalf("/api/show calls before cache expiry = %d, want 1", got)
 			}
 
-			o.mu.Lock()
+			o.capMu.Lock()
 			entry := o.capabilitiesCache["recovering-model"]
 			entry.expires = time.Now().Add(-time.Second)
 			o.capabilitiesCache["recovering-model"] = entry
-			o.mu.Unlock()
+			o.capMu.Unlock()
 
 			actions := o.ListActions(t.Context())
 			if len(actions) != 1 {

@@ -51,6 +51,17 @@ func TestBaseSentinelStatuses(t *testing.T) {
 	if len(want) != len(baseSentinels) {
 		t.Errorf("checked %d sentinels, table has %d", len(want), len(baseSentinels))
 	}
+	// Every canonical status needs a base sentinel, or code classifying at
+	// runtime through Base silently degrades that status to UNKNOWN. OK is the
+	// exception: success is not a failure to classify.
+	for n := range statuses {
+		if n == OK {
+			continue
+		}
+		if _, ok := baseSentinels[n]; !ok {
+			t.Errorf("status %q has no base sentinel; Base(%q) would answer ErrUnknown", n, n)
+		}
+	}
 }
 
 // The framework sentinels must keep the statuses their call sites sent before

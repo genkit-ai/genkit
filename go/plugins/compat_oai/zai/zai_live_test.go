@@ -17,11 +17,10 @@ package zai_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
 )
 
@@ -31,63 +30,25 @@ func TestPluginLive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	plugin := &zai.ZAI{}
-	g := genkit.Init(
-		ctx,
-		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&zai.ZAI{}),
+		genkit.WithDefaultModel("zai/glm-5.1"),
 	)
-	config := map[string]any{
-		"thinking": map[string]any{
-			"type": "enabled",
+
+	// Thinking is on by default, so the cheap checks turn it off and the
+	// reasoning checks turn it back on.
+	livetest.Run(t, g, livetest.Suite{
+		Model: zai.ModelRef("glm-5.1", &zai.ChatConfig{
+			Thinking: &zai.ThinkingConfig{Type: "disabled"},
+		}),
+		ReasoningModel: zai.ModelRef("glm-5.1", &zai.ChatConfig{
+			Thinking: &zai.ThinkingConfig{Type: "enabled"},
+		}),
+		ReasoningContent: true,
+		VisionModel:      zai.ModelRef("glm-4.6v-flash", nil),
+		ExtraConfig: map[string]any{
+			"thinking": map[string]any{"type": "disabled"},
+			"extra":    map[string]any{"user_id": "genkit-livetest"},
 		},
-	}
-
-	t.Run("complete", func(t *testing.T) {
-		resp, err := genkit.Generate(
-			ctx,
-			g,
-			ai.WithPrompt("What is the capital of France? Answer with the city only."),
-			ai.WithConfig(config),
-		)
-		if err != nil {
-			t.Fatalf("Generate() error = %v", err)
-		}
-		if !strings.Contains(strings.ToLower(resp.Text()), "paris") {
-			t.Fatalf("Text() = %q, want Paris", resp.Text())
-		}
-		if resp.Reasoning() == "" {
-			t.Fatal("Reasoning() is empty")
-		}
-	})
-
-	t.Run("streaming reasoning", func(t *testing.T) {
-		var reasoning, text strings.Builder
-		resp, err := genkit.Generate(
-			ctx,
-			g,
-			ai.WithPrompt("Explain briefly why the sky appears blue."),
-			ai.WithConfig(config),
-			ai.WithStreaming(func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-				reasoning.WriteString(chunk.Reasoning())
-				text.WriteString(chunk.Text())
-				return nil
-			}),
-		)
-		if err != nil {
-			t.Fatalf("Generate() error = %v", err)
-		}
-		if reasoning.String() == "" {
-			t.Fatal("streamed reasoning is empty")
-		}
-		if text.String() == "" {
-			t.Fatal("streamed text is empty")
-		}
-		if resp.Reasoning() != reasoning.String() {
-			t.Fatalf("final reasoning = %q, want streamed %q", resp.Reasoning(), reasoning.String())
-		}
-		if resp.Text() != text.String() {
-			t.Fatalf("final text = %q, want streamed %q", resp.Text(), text.String())
-		}
 	})
 }

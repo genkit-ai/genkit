@@ -307,7 +307,8 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     assert out.snapshot_id is not None
 
     prev = await abort_snapshot_in_store(store=store, snapshot_id=out.snapshot_id)
-    assert prev == SnapshotStatus.ABORTED
+    # Previous-status semantics: the snapshot was pending when we aborted it.
+    assert prev == SnapshotStatus.PENDING
 
     await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.ABORTED, timeout_s=2.0)
     await asyncio.wait_for(aborted.wait(), timeout=2.0)
@@ -366,3 +367,46 @@ async def test_generate_tool_respects_abort_signal() -> None:
     abort_signal.set()
     await asyncio.wait_for(task, timeout=2.0)
     assert tool_saw_abort.is_set()
+
+
+@pytest.mark.asyncio
+async def test_detach_swallowed_turn_error_finalizes_failed() -> None:
+    """A turn that raises inside SessionRunner.run must finalize as failed.
+
+    run() swallows the exception into last_turn_error and returns. The AgentFn
+    here does not re-raise — that is the documented / user-shaped path. Detached
+    finalize must consult last_turn_error, not only an exception escaping fn.
+    """
+    store = InMemorySessionStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
+    rt, _out_queue = _runtime(session, store)
+    await rt.session_runner.seed_last_good_state()
+
+    async def agent_fn(session_runner: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            raise RuntimeError('intentional failure')
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    in_queue = CloseableQueue()
+    await in_queue.put(
+        AgentInput(
+            message=MessageData(role=Role.USER, content=[Part(TextPart(text='fail'))]),
+            detach=True,
+        )
+    )
+    in_queue.close()
+
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
+    assert out.finish_reason == AgentFinishReason.DETACHED
+    assert out.snapshot_id is not None
+
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.FAILED)
+
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.FAILED
+    assert snap.finish_reason == AgentFinishReason.FAILED
+    assert snap.error is not None
+    assert 'intentional failure' in (snap.error.message or '')

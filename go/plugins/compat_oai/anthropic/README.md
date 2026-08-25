@@ -1,59 +1,98 @@
 # Anthropic Plugin
 
-This plugin provides a simple interface for using Anthropic's services.
+This plugin provides Genkit support for Claude models through Anthropic's
+OpenAI-compatible Chat Completions endpoint.
 
-## Prerequisites
+Anthropic positions that endpoint as a compatibility layer for testing and
+comparing Claude rather than a long-term integration surface: it does not
+return thinking content, ignores `response_format`, and hoists system
+messages to the start of the conversation. The full support matrix is at
+https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk.
+For the native Messages API surface (thinking output, prompt caching,
+citations, structured outputs), use the `go/plugins/anthropic` plugin
+instead; this one is for code that must speak the OpenAI shape.
 
-- Go installed on your system
-- An Anthropic API key
+## Setup
 
-## Running Tests
-
-First, set your Anthropic API key as an environment variable:
+Set an Anthropic API key:
 
 ```bash
 export ANTHROPIC_API_KEY=<your-api-key>
 ```
-By default, `baseURL` is set to "https://api.anthropic.com/v1". However, if you
-want to use a custom value, you can set `ANTHROPIC_BASE_URL` environment variable:
 
-```bash
-export ANTHROPIC_BASE_URL=<your-custom-base-url>
+The plugin's `APIKey` field overrides the environment. The plugin uses
+`https://api.anthropic.com/v1` by default; set `ANTHROPIC_BASE_URL` or pass
+`option.WithBaseURL` through the plugin's `Opts` to use another compatible
+endpoint.
+
+```go
+import (
+    "context"
+
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
+    "github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
+)
+
+ctx := context.Background()
+plugin := &anthropic.Anthropic{}
+g := genkit.Init(ctx,
+    genkit.WithPlugins(plugin),
+    genkit.WithDefaultModel("anthropic/claude-haiku-4-5-20251001"),
+)
+
+response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain constitutional AI."))
 ```
 
-### Running All Tests
-To run all tests in the directory:
-```bash
-go test -v .
+## Models
+
+A catalog of dated Claude releases is registered at Init, and the catalog is
+not a ceiling: any Claude model ID resolves on demand, and the plugin lists
+what Anthropic's native models API reports (paged, authenticated with
+`x-api-key`, since listing is not part of the compatible surface). Use the
+`Models` field to describe or correct any model, most often one released
+after this plugin:
+
+```go
+plugin := &anthropic.Anthropic{Models: map[string]ai.ModelOptions{
+    "claude-opus-5": {Label: "Claude Opus 5", Supports: &compat_oai.Multimodal},
+}}
 ```
 
-### Running Tests from Specific Files
-To run tests from a specific file:
-```bash
-# Run only generate_live_test.go tests
-go test -run "^TestGenerator"
+The current model list is at
+https://platform.claude.com/docs/en/about-claude/models/overview.
 
-# Run only anthropic_live_test.go tests
-go test -run "^TestPlugin"
+## Config
+
+Models take a typed `anthropic.ChatConfig`: the fields the compatible
+endpoint honors, and none of the OpenAI fields it documents as ignored (the
+penalties, `logprobs`, `seed`). `temperature` runs 0 to 1, where the endpoint
+caps it. `anthropic.ModelRef` carries the config with the model ID:
+
+```go
+response, err := genkit.Generate(ctx, g,
+    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5-20250929", &anthropic.ChatConfig{
+        MaxOutputTokens: 2048,
+        Thinking:        &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2000},
+    })),
+    ai.WithPrompt("Work through this carefully."),
+)
 ```
 
-### Running Individual Tests
-To run a specific test case:
+`thinking` spends a reasoning budget, but the compatible endpoint does not
+return the thinking content itself; only the native API does. On Claude 5
+models thinking is adaptive and on by default, which makes the manual control
+a legacy mode.
+
+Every config also carries the settings Genkit owns: `version` pins the exact
+model version a request is served by, `apiKey` (settable only from Go code)
+serves one request with a different credential, and `extra` forwards request
+body fields the config does not declare, keyed by Anthropic's wire names.
+
+## Live tests
+
+Live tests are skipped unless `ANTHROPIC_API_KEY` is set:
+
 ```bash
-# Run only the streaming test from anthropic_live_test.go
-go test -run "TestPlugin/streaming"
-
-# Run only the Complete test from generate_live_test.go
-go test -run "TestGenerator_Complete"
-
-# Run only the Stream test from generate_live_test.go
-go test -run "TestGenerator_Stream"
+go test -v ./plugins/compat_oai/anthropic
 ```
-
-### Test Output Verbosity
-Add the `-v` flag for verbose output:
-```bash
-go test -v -run "TestPlugin/streaming"
-```
-
-Note: All live tests require the ANTHROPIC_API_KEY environment variable to be set. Tests will be skipped if the API key is not provided.

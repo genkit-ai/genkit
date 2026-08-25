@@ -67,7 +67,7 @@ from genkit.model import (
     Constrained,
     FinishReason,
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -92,7 +92,7 @@ __all__ = [
     'EmbedResponse',
     'EmbedderOptions',
     'EmbedderRef',
-    'ModelConfig',
+    'ModelConfigDict',
     'ModelInfo',
     'ModelStreamResponse',
     # Errors
