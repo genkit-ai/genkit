@@ -32,8 +32,7 @@ class RealtimeSpanProcessor(SimpleSpanProcessor):
         """Export span immediately so DevUI can show in-progress traces."""
         if suppress_telemetry.get():
             return
-        # Transport failures are handled in the exporter. A broken encoder
-        # has to stay loud so it isn't mistaken for a quiet collector miss.
+        # Transport failures stay in the exporter. generate() should still return.
         self.span_exporter.export([span])
 
     @override

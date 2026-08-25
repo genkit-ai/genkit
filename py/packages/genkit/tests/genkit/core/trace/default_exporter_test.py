@@ -142,6 +142,12 @@ def test_telemetry_server_exporter_rejects_malformed_url() -> None:
         TraceServerExporter(telemetry_server_url='http://[::1:4033')
 
 
+def test_telemetry_server_exporter_rejects_non_http_url() -> None:
+    """A websocket URL must fail at init, not as a missing Dev UI trace later."""
+    with pytest.raises(ValueError, match='invalid telemetry server URL'):
+        TraceServerExporter(telemetry_server_url='ws://localhost:4033')
+
+
 def test_telemetry_server_exporter_strips_url_whitespace() -> None:
     """A trailing newline in the env var is a common copy-paste, not a bad URL."""
     exporter = TraceServerExporter(telemetry_server_url='  http://localhost:4000\n')
@@ -399,13 +405,26 @@ def test_export_encode_bug_is_loud() -> None:
     assert not [e for e in entries if 'Failed to save trace' in str(e.get('event', ''))]
 
 
-def test_export_non_json_attribute_is_loud() -> None:
-    """A value that cannot JSON-encode must raise on the generate thread."""
-    exporter = TraceServerExporter(telemetry_server_url='http://127.0.0.1:1')
-    mock_span = create_mock_span(attributes={'bad': object()})
+@patch('genkit._core._trace._default_exporter.urllib.request.urlopen')
+def test_export_skips_non_json_attribute(mock_urlopen: MagicMock) -> None:
+    """A bytes attribute is dropped; generate() returns and the rest of the trace POSTs."""
+    mock_urlopen.return_value = mock_urlopen_response()
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
+    mock_span = create_mock_span(attributes={'ok': 'hi', 'payload': b'secret-bytes'})
 
-    with pytest.raises(TypeError):
-        exporter.export([mock_span])
+    with capture_logs() as entries:
+        result = exporter.export([mock_span])
+        assert exporter.force_flush(timeout_millis=2000) is True
+
+    assert result == SpanExportResult.SUCCESS
+    mock_urlopen.assert_called_once()
+    body = json.loads(mock_urlopen.call_args.args[0].data)
+    span_id = format(67890, '016x')
+    assert body['spans'][span_id]['attributes'] == {'ok': 'hi'}
+    skipped = [e for e in entries if 'skipped span attribute' in str(e.get('event', ''))]
+    assert len(skipped) == 1
+    assert "'payload'" in skipped[0]['event']
+    assert 'bytes' in skipped[0]['event']
 
 
 # =============================================================================
@@ -457,6 +476,22 @@ def test_extract_span_data_with_attributes() -> None:
     span_id_hex = format(67890, '016x')
     span_info = data.spans[span_id_hex]
     assert span_info.attributes == {'key1': 'value1', 'key2': 123}
+
+
+def test_extract_span_data_skips_non_json_attributes() -> None:
+    """A value json.dumps cannot store is dropped; neighbors stay on the document."""
+    mock_span = create_mock_span(
+        attributes={'ok': 'hi', 'payload': b'secret-bytes', 'also': object()},
+    )
+
+    with capture_logs() as entries:
+        data = extract_span_data(mock_span)
+
+    span_id_hex = format(67890, '016x')
+    assert data.spans[span_id_hex].attributes == {'ok': 'hi'}
+    skipped = [e['event'] for e in entries if 'skipped span attribute' in str(e.get('event', ''))]
+    assert any("'payload'" in event and 'bytes' in event for event in skipped)
+    assert any("'also'" in event and 'object' in event for event in skipped)
 
 
 def test_extract_span_data_with_parent_span() -> None:

@@ -23,7 +23,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from queue import Queue
 from typing import Any, cast
 from urllib.parse import urljoin, urlparse
@@ -88,7 +88,7 @@ def resolve_telemetry_server_url(*, telemetry_server_url: str, telemetry_server_
     except ValueError as error:
         raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}') from error
     parsed = urlparse(joined)
-    if not parsed.scheme or not parsed.netloc:
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
         raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}')
     return url
 
@@ -116,6 +116,22 @@ def _otel_event_attributes_to_json(attrs: object | None) -> dict[str, Any]:
                 out[key] = str(v)
     except (TypeError, ValueError):
         pass
+    return out
+
+
+def json_safe_attributes(*, attrs: Mapping[Any, Any] | None) -> dict[str, Any]:
+    """Drop values the collector cannot store so the rest of the trace still lands."""
+    if not attrs:
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in attrs.items():
+        name = str(key)
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            logger.warning(f'skipped span attribute {name!r} ({type(value).__name__})')
+            continue
+        out[name] = value
     return out
 
 
@@ -182,9 +198,8 @@ def events_to_time_events(*, span: ReadableSpan) -> TimeEvents:
 def extract_span_data(span: ReadableSpan) -> TraceData:
     """Convert a finished span into the collector document.
 
-    Requires a span context. Encoding happens later on this same thread via
-    ``encode_trace`` so a value the collector cannot store fails in
-    ``export()``, not after generate has moved on.
+    Requires a span context. Values the collector cannot store are dropped
+    so generate() still returns and the rest of the document still POSTs.
     """
     ctx = span.context
     if ctx is None:
@@ -207,7 +222,7 @@ def extract_span_data(span: ReadableSpan) -> TraceData:
         trace_id=trace_id,
         start_time=start,
         end_time=end,
-        attributes=dict(span.attributes or {}),
+        attributes=json_safe_attributes(attrs=span.attributes),
         display_name=span.name,
         span_kind=trace_api.SpanKind(span.kind).name,
         instrumentation_library=INSTRUMENTATION,
@@ -244,11 +259,7 @@ def build_trace_payload(*, spans: Sequence[ReadableSpan]) -> TraceData:
 
 
 def encode_trace(*, trace: TraceData) -> str:
-    """JSON for the collector, with no fallback serializer.
-
-    A bytes or object attribute must raise here so export() is loud.
-    GenkitModel.model_dump would stringify those and hide the bug.
-    """
+    """JSON for the collector. Attributes that cannot encode were already dropped."""
     return json.dumps(BaseModel.model_dump(trace, by_alias=True, exclude_none=True))
 
 
@@ -343,9 +354,8 @@ class TraceServerExporter(SpanExporter):
                 if span.context:
                     filtered_trace_ids.add(format(span.context.trace_id, '032x'))
 
-        # Serialize on this thread so a span that can't encode fails in
-        # export(), not as a silent miss after generate() has moved on.
-        # Group by trace so a batch flush is one POST per flow, not per span.
+        # Encode here so the worker only does I/O. Group by trace so a
+        # batch flush is one POST per flow, not per span.
         by_trace: dict[str, list[ReadableSpan]] = {}
         for span in spans:
             ctx = span.context
