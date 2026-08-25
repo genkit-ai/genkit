@@ -1338,6 +1338,43 @@ describe('openAIResponsesModelRunner', () => {
     );
   });
 
+  test('surfaces an SSE error event as a GenkitError', async () => {
+    // The SDK throws an APIError the moment it sees an `event: error` frame,
+    // so the event never reaches the runner's loop; this pins that the
+    // rejection still comes out as a GenkitError.
+    server.setNextResponse({
+      stream: true,
+      rawSse: [
+        `data: ${JSON.stringify({
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        })}\n\n`,
+        `event: error\ndata: ${JSON.stringify({
+          type: 'error',
+          code: 'server_error',
+          message: 'stream blew up',
+          param: null,
+          sequence_number: 1,
+        })}\n\n`,
+      ],
+    });
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+
+    await expect(
+      runner(
+        { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+        { streamingRequested: true, sendChunk: jest.fn() }
+      )
+    ).rejects.toThrow(
+      expect.objectContaining({
+        name: 'GenkitError',
+        message: expect.stringContaining('stream blew up'),
+      })
+    );
+  });
+
   test('converts an APIError into a GenkitError', async () => {
     const client = {
       responses: {
