@@ -26,7 +26,7 @@ import (
 const provider = "genkit-middleware"
 
 // Middleware provides the built-in middleware (Retry, Fallback, ToolApproval,
-// Skills, Filesystem, ContextCompression) as a Genkit plugin. Register it with
+// Skills, Filesystem) as a Genkit plugin. Register it with
 // [genkit.WithPlugins] during [genkit.Init].
 type Middleware struct{}
 
@@ -41,6 +41,5 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 		ai.NewMiddleware("Require explicit approval before executing tools", ToolApproval{}),
 		ai.NewMiddleware("Expose a local library of skills as loadable system instructions", Skills{}),
 		ai.NewMiddleware("Grant the model file access scoped to a directory", Filesystem{}),
-		ai.NewMiddleware("Compress the model's view of long conversations while preserving the full history", ContextCompression{}),
 	}, nil
 }

@@ -846,7 +846,7 @@ The `middleware` plugin also ships with:
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
-- [`ContextCompression`](samples/basic-middleware/context-compression) — compresses the model's view of long conversations (tool response dedupe and truncation, LLM summarization of older turns) while the caller-visible history stays complete, with compaction recorded as message metadata.
+- [`ContextCompression`](samples/basic-middleware/context-compression) *(preview, in `plugins/middleware/exp`)* — compresses the model's view of long conversations (tool response dedupe and truncation, LLM summarization of older turns) while the caller-visible history stays complete, with compaction recorded as message metadata.
 
 [See the retry + fallback sample](samples/basic-middleware/retry-fallback/main.go) for a full composition.
 

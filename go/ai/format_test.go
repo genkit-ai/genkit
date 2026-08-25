@@ -995,8 +995,8 @@ func TestInjectInstructions(t *testing.T) {
 		if result[0].Content[1].Text != "output instructions" {
 			t.Errorf("injected text = %q, want %q", result[0].Content[1].Text, "output instructions")
 		}
-		// The ContextCompression middleware (plugins/middleware) matches this
-		// purpose=output convention to keep injected instructions out of
+		// The ContextCompression middleware (plugins/middleware/exp) matches
+		// this purpose=output convention to keep injected instructions out of
 		// compaction; renaming the literals silently breaks it.
 		if result[0].Content[1].Metadata["purpose"] != "output" {
 			t.Errorf("injected part should have purpose=output metadata")

@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package middleware
+package exp
 
 import (
 	"context"
@@ -299,11 +299,11 @@ type CompressionToolTruncation struct {
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("Research this topic thoroughly."),
 //	    ai.WithTools(searchTool),
-//	    ai.WithUse(&middleware.ContextCompression{
+//	    ai.WithUse(&middlewarex.ContextCompression{
 //	        MaxInputTokens:        80_000,
-//	        DedupeToolResponses:   &middleware.CompressionDedupe{},
-//	        TruncateToolResponses: &middleware.CompressionToolTruncation{MaxChars: 2000},
-//	        Summarizer: &middleware.CompressionSummarizer{
+//	        DedupeToolResponses:   &middlewarex.CompressionDedupe{},
+//	        TruncateToolResponses: &middlewarex.CompressionToolTruncation{MaxChars: 2000},
+//	        Summarizer: &middlewarex.CompressionSummarizer{
 //	            Model: ai.NewModelRef("googleai/gemini-flash-lite-latest", nil),
 //	        },
 //	    }),

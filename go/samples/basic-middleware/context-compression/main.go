@@ -21,7 +21,7 @@
 // The middleware compresses only the view each model call sends to the
 // provider; the conversation history the caller gets back is never replaced.
 // What happened is recorded as message metadata under
-// middleware.CompressionMetadataKey:
+// middlewarex.CompressionMetadataKey:
 //
 //   - every model message carries {"inputTokens": N}, the provider-reported
 //     context size of the call that produced it, and
@@ -66,7 +66,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/middleware"
+	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -93,9 +93,10 @@ type ResearchResult struct {
 func main() {
 	ctx := context.Background()
 
-	// Registering the Middleware plugin exposes the built-in middleware
-	// (ContextCompression, Retry, Fallback, ...) to the Dev UI.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	// Registering the experimental middleware plugin exposes
+	// ContextCompression (and the other experimental middleware) to the
+	// Dev UI.
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middlewarex.Middleware{}))
 
 	// Both tools return far more text than any answer needs, standing in for
 	// real search APIs and document fetches.
@@ -122,12 +123,12 @@ func main() {
 					"promising documents, then give a concise synthesis.", input.Topic),
 				ai.WithTools(search, readDocument),
 				ai.WithMaxTurns(20),
-				ai.WithUse(&middleware.ContextCompression{
+				ai.WithUse(&middlewarex.ContextCompression{
 					// Unrealistically small, so a compaction fires in this demo.
 					MaxInputTokens:        2000,
-					DedupeToolResponses:   &middleware.CompressionDedupe{},
-					TruncateToolResponses: &middleware.CompressionToolTruncation{MaxChars: 2000},
-					Summarizer: &middleware.CompressionSummarizer{
+					DedupeToolResponses:   &middlewarex.CompressionDedupe{},
+					TruncateToolResponses: &middlewarex.CompressionToolTruncation{MaxChars: 2000},
+					Summarizer: &middlewarex.CompressionSummarizer{
 						// Usually a cheaper model than the primary one; the
 						// same model keeps this sample to one dependency.
 						Model: googlegenai.ModelRef("googleai/gemini-3.6-flash", nil),
@@ -140,12 +141,12 @@ func main() {
 
 			// The full history is intact; the compression record lives in
 			// message metadata. A chat client reads the same stamps (with
-			// middleware.ReadCompressionStamp, or the raw metadata over the
+			// middlewarex.ReadCompressionStamp, or the raw metadata over the
 			// wire) to place "history was compacted here" markers.
 			history := resp.History()
 			result := &ResearchResult{Answer: resp.Text(), Messages: len(history)}
 			for _, msg := range history {
-				stamp, ok := middleware.ReadCompressionStamp(msg)
+				stamp, ok := middlewarex.ReadCompressionStamp(msg)
 				if !ok {
 					continue
 				}
