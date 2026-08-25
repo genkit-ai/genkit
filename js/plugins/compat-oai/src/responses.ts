@@ -365,6 +365,9 @@ export function toOpenAIResponsesRequestBody(
     visualDetailLevel, // consumed while building the input items above
     version: modelVersion,
     store,
+    previousResponseId,
+    reasoningEffort,
+    reasoningSummary,
     instructions: instructionsFromConfig,
     tools: toolsFromConfig,
     include: includeFromConfig,
@@ -449,6 +452,7 @@ export function toOpenAIResponsesRequestBody(
     tools: tools.length ? tools : undefined,
     tool_choice: request.toolChoice,
     include,
+    previous_response_id: previousResponseId,
     // The Responses API retains requests and responses server-side by default;
     // pinning it off matches the Chat Completions retention posture. A
     // `previous_response_id` passthrough still works against an earlier stored
@@ -457,6 +461,16 @@ export function toOpenAIResponsesRequestBody(
     store: storeValue,
     ...restOfConfig,
   };
+
+  // Composed onto any raw `reasoning` object from the passthrough so the
+  // declared fields win without discarding the rest of it.
+  if (reasoningEffort !== undefined || reasoningSummary !== undefined) {
+    body.reasoning = {
+      ...body.reasoning,
+      ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+      ...(reasoningSummary !== undefined ? { summary: reasoningSummary } : {}),
+    };
+  }
 
   // Composed onto any raw `text` object from the passthrough (e.g. verbosity)
   // rather than replacing it wholesale.
