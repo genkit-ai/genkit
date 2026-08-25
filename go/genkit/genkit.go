@@ -1467,6 +1467,12 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 // list of available options. Note that output options like [ai.WithOutputType] are
 // automatically applied based on the Out type parameter.
 //
+// A refusal fails with [ai.ErrGenerationBlocked]. When the response carries no
+// text output (tool requests or interrupts instead), or generation ended
+// aborted, interrupted, or other, the typed output is nil and no error is
+// returned; check the returned response's FinishReason, Interrupts(), and
+// ToolRequests() to handle those.
+//
 // Example:
 //
 //	type BookInfo struct {
@@ -1502,6 +1508,11 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 // GenerateDataStream accepts the same options as [Generate]. See [Generate] for the full
 // list of available options. Note that output options are automatically applied based on
 // the Out type parameter.
+//
+// Like [GenerateData], a refusal fails with [ai.ErrGenerationBlocked], while a
+// response with no text output or one that ended aborted, interrupted, or
+// other yields zero-value Output and no error. Chunks are parsed before the
+// finish reason exists, so the Done value is the authoritative one.
 //
 // Example:
 //
