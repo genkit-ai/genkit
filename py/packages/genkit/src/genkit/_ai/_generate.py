@@ -91,6 +91,46 @@ logger = get_logger(__name__)
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
 
+# A termination known to be abnormal carries no conforming output, so a schema
+# error here would mask the finish reason the caller needs to handle it.
+ABNORMAL_FINISH_REASONS = frozenset({
+    FinishReason.BLOCKED,
+    FinishReason.ABORTED,
+    FinishReason.INTERRUPTED,
+    FinishReason.OTHER,
+})
+
+
+def log_output_parse(
+    *,
+    model: str | None,
+    finish_reason: FinishReason | None,
+    finish_message: str | None,
+    formatter: Formatter[Any, Any] | None,
+    message: Message | None,
+) -> None:
+    """Warn on an abnormal finish; debug when the formatter cannot parse."""
+    if formatter is None:
+        return
+    if finish_reason in ABNORMAL_FINISH_REASONS:
+        logger.warning(
+            'model finished abnormally, skipping output parsing',
+            model=model,
+            finishReason=finish_reason,
+            finishMessage=finish_message,
+        )
+        return
+    if message is None or not is_debug_enabled(logger):
+        return
+    try:
+        formatter.parse_message(message)
+    except Exception as e:
+        logger.debug(
+            'model output does not match the expected schema',
+            model=model,
+            error=e,
+        )
+
 
 def middleware_name(mw: MiddlewareDef) -> str:
     """Class name is what shows up on hook log records."""
@@ -107,10 +147,11 @@ def hook_finished(
     extra: dict[str, object],
 ) -> dict[str, object]:
     """Attributes for the ``middleware hook finished`` record."""
+    ms = max(0, round((time.monotonic() - start) * 1000))
     out: dict[str, object] = {
         'middleware': name,
         'hook': hook,
-        'duration_ms': int((time.monotonic() - start) * 1000),
+        'duration': f'{ms}ms',
         **extra,
     }
     if not next_called:
@@ -600,9 +641,8 @@ async def generate_with_request(
             'max_turns': raw_request.max_turns,
             'streaming': on_chunk is not None,
         }
-        if raw_request.output is not None:
-            resolved['format'] = raw_request.output.format
-            resolved['constrained'] = raw_request.output.constrained
+        resolved['format'] = raw_request.output.format if raw_request.output else None
+        resolved['constrained'] = raw_request.output.constrained if raw_request.output else None
         if middleware:
             resolved['middleware'] = [middleware_name(m) for m in middleware]
         logger.debug('generate request resolved', **resolved)
@@ -660,7 +700,10 @@ class ChunkAccumulator:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
             return
-        ctx.on_chunk(self.make(role=role, chunk=chunk))
+        try:
+            ctx.on_chunk(self.make(role=role, chunk=chunk))
+        except Exception as e:
+            logger.debug('tool stream callback failed, dropping chunk', error=e)
 
     @contextlib.contextmanager
     def intercept_model_stream(
@@ -955,6 +998,14 @@ async def _generate_action_turn(
                 responded['input_tokens'] = response.usage.input_tokens
                 responded['output_tokens'] = response.usage.output_tokens
             logger.debug('model responded', **responded)
+
+        log_output_parse(
+            model=turn_options.model,
+            finish_reason=response.finish_reason,
+            finish_message=response.finish_message,
+            formatter=formatter,
+            message=generated_msg,
+        )
 
         response.assert_valid()
 
@@ -1428,6 +1479,7 @@ async def resolve_tool_requests(
             intr = _interrupt_from_tool_exc(e)
             if intr is None:
                 raise
+            logger.debug('tool triggered an interrupt', tool=trp.tool_request.name)
             return (None, _interrupt_request_part(trp, intr))
 
     outs = await asyncio.gather(*[_resolve_one_tool(tool, trp) for _, tool, trp in work])
@@ -1760,6 +1812,13 @@ async def _run_restart_through_middleware(
     except Exception as e:
         intr = _interrupt_from_tool_exc(e)
         if intr is not None:
+            # run_tool_after_restart already logged when the tool body interrupted.
+            # wrap_tool can raise Interrupt itself; that's the only leftover case.
+            if not isinstance(e, GenkitError):
+                logger.debug(
+                    'restarted tool triggered an interrupt',
+                    tool=restart_trp.tool_request.name,
+                )
             # Re-interrupting during restart is a hard error — same as the legacy
             # run_tool_after_restart path, which raises FAILED_PRECONDITION when
             # the inner tool throws an Interrupt during restart. Surface the

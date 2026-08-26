@@ -32,6 +32,7 @@ from genkit._core._action import (
     get_func_description,
 )
 from genkit._core._error import GenkitError
+from genkit._core._logger import get_logger
 from genkit._core._model import (
     Message,
     ModelConfig as ModelConfig,
@@ -52,6 +53,8 @@ from genkit._core._typing import ActionMetadata, ModelInfo
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
 ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+
+logger = get_logger(__name__)
 
 # Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
 ModelArg: TypeAlias = str | ModelRef[BaseModel]
@@ -143,8 +146,10 @@ def resolve_model_arg(
         )
     resolved = registry.lookup_value('defaultModel', 'defaultModel')
     if isinstance(resolved, ModelRef):
+        logger.debug('no model specified, using default model', model=resolved.name)
         return cast(ModelArg, resolved)
     if isinstance(resolved, str) and resolved:
+        logger.debug('no model specified, using default model', model=resolved)
         return resolved
     if resolved is not None and resolved != '':
         raise GenkitError(

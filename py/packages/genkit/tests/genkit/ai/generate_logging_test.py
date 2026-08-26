@@ -10,10 +10,25 @@ import structlog
 from structlog.testing import capture_logs
 
 from genkit import Genkit, Message, ModelResponse
+from genkit._ai._generate import generate_action
+from genkit._ai._model import resolve_model_arg
 from genkit._ai._testing import define_programmable_model
+from genkit._ai._tools import Interrupt, restart_tool
 from genkit._core._environment import GENKIT_ENV
+from genkit._core._error import GenkitError
 from genkit._core._logger import GENKIT_LOG, get_logger
-from genkit._core._typing import Role, TextPart
+from genkit._core._model import GenerateActionOptions
+from genkit._core._registry import Registry
+from genkit._core._typing import (
+    FinishReason,
+    GenerateActionOutputConfig,
+    Part,
+    Resume,
+    Role,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+)
 
 BLOB = 'A' * 1_000_000
 
@@ -98,3 +113,210 @@ async def test_response_is_not_serialized_when_debug_is_off(monkeypatch: pytest.
     await _generate_once()
 
     assert calls == []
+
+
+def test_default_model_fallback_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting model= leaves a breadcrumb with the constructor default name."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'echo-model')
+
+    with capture_logs() as entries:
+        resolve_model_arg(model=None, registry=registry)
+
+    events = [entry for entry in entries if entry['event'] == 'no model specified, using default model']
+    assert len(events) == 1
+    assert events[0]['model'] == 'echo-model'
+
+
+@pytest.mark.asyncio
+async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked model with a formatter warns instead of parsing."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+        )
+    ]
+
+    with capture_logs() as entries:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+
+    warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
+    assert len(warned) == 1
+    assert warned[0]['finishReason'] == FinishReason.BLOCKED
+    assert warned[0]['finishMessage'] == 'safety'
+    assert 'model output does not match the expected schema' not in [e['event'] for e in entries]
+
+
+@pytest.mark.asyncio
+async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unparseable JSON is a debug breadcrumb; generate still returns."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+
+    assert response.message is not None
+    mismatched = [e for e in entries if e['event'] == 'model output does not match the expected schema']
+    assert len(mismatched) == 1
+    assert mismatched[0]['model'] == 'programmableModel'
+
+
+@pytest.mark.asyncio
+async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupting tool is named on the debug record."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+
+    with capture_logs() as entries:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                tools=['hold'],
+            ),
+        )
+
+    interrupted = [e for e in entries if e['event'] == 'tool triggered an interrupt']
+    assert len(interrupted) == 1
+    assert interrupted[0]['tool'] == 'hold'
+    assert 'generation paused by tool interrupts' in [e['event'] for e in entries]
+
+
+@pytest.mark.asyncio
+async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool that interrupts again on restart leaves the same breadcrumb Go does."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+    first = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            tools=['hold'],
+        ),
+    )
+
+    with capture_logs() as entries, pytest.raises(GenkitError, match='interrupted again'):
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=list(first.messages),
+                tools=['hold'],
+                resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
+            ),
+        )
+
+    restarted = [e for e in entries if e['event'] == 'restarted tool triggered an interrupt']
+    assert len(restarted) == 1
+    assert restarted[0]['tool'] == 'hold'
+
+
+@pytest.mark.asyncio
+async def test_tool_stream_callback_failure_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sinking tool-stream callback is logged and does not fail the tool."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='echo')
+    async def echo(_: dict) -> str:  # noqa: ARG001
+        return 'ok'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='echo', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        ),
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='done')]),
+            finish_reason=FinishReason.STOP,
+        ),
+    ]
+
+    def on_chunk(chunk: object) -> None:
+        if getattr(chunk, 'role', None) == Role.TOOL:
+            raise RuntimeError('sink closed')
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                tools=['echo'],
+            ),
+            on_chunk=on_chunk,
+        )
+
+    assert response.message is not None
+    dropped = [e for e in entries if e['event'] == 'tool stream callback failed, dropping chunk']
+    assert len(dropped) == 1
