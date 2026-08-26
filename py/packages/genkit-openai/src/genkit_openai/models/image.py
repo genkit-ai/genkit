@@ -99,7 +99,7 @@ def _to_image_generate_params(
 
     # GPT Image 1 rejects the response_format parameter; its API always
     # returns base64 image data. DALL-E models retain the existing default.
-    if effective_model != 'gpt-image-1':
+    if 'gpt-image' not in effective_model.lower():
         params['response_format'] = config.pop('response_format', 'b64_json')
     else:
         config.pop('response_format', None)

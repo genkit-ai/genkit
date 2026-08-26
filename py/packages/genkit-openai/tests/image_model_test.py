@@ -97,6 +97,61 @@ class TestToImageGenerateParams:
 
         assert 'response_format' not in got
 
+    @pytest.mark.parametrize(
+        'model_name', ['GPT-IMAGE-1', 'gpt-image-1-mini', 'gpt-image-1.5']
+    )
+    def test_gpt_image_variants_omit_response_format(self, model_name: str) -> None:
+        """Verify GPT Image variants use the API's base64-only response shape."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'response_format': 'url'},
+        )
+
+        got = _to_image_generate_params(model_name, request)
+
+        assert 'response_format' not in got
+
+    def test_gpt_image_version_override_omits_response_format(self) -> None:
+        """Verify the version override is also classified as a GPT Image model."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'version': 'gpt-image-1-mini'},
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert got['model'] == 'gpt-image-1-mini'
+        assert 'response_format' not in got
+
+    def test_gpt_image_config_passthrough(self) -> None:
+        """Verify GPT Image-specific options are forwarded unchanged."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={
+                'background': 'transparent',
+                'moderation': 'low',
+                'output_compression': 80,
+                'output_format': 'png',
+                'size': '1024x1024',
+                'quality': 'high',
+            },
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert got['background'] == 'transparent'
+        assert got['moderation'] == 'low'
+        assert got['output_compression'] == 80
+        assert got['output_format'] == 'png'
+        assert got['size'] == '1024x1024'
+        assert got['quality'] == 'high'
+
     def test_config_passthrough(self) -> None:
         """Verify image-specific config options pass through."""
         request = ModelRequest(
