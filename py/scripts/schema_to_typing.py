@@ -133,6 +133,24 @@ def _models_allowing_extra(schema: dict) -> set[str]:
     return result
 
 
+# Models that silently drop unknown fields (e.g. leftover keys on saved handles)
+# so that Operation.model_validate(saved) does not fail on extra properties.
+_MODELS_IGNORING_EXTRA: frozenset[str] = frozenset({'Operation'})
+
+
+def _models_ignoring_extra(_schema: dict | None = None) -> set[str]:
+    """Names of models that should ignore extra fields (extra='ignore')."""
+    return set(_MODELS_IGNORING_EXTRA)
+
+
+def _extra_policy(name: str, allow: set[str], ignore: set[str]) -> str:
+    if name in allow:
+        return 'allow'
+    if name in ignore:
+        return 'ignore'
+    return 'forbid'
+
+
 def _typed_map_aliases(defs: dict) -> dict[str, str]:
     """Object schemas that are only a string-keyed map become a dict alias.
 
@@ -272,7 +290,13 @@ def _emit_enum(name: str, d: dict) -> list[str]:
 
 
 def _emit_model(
-    name: str, d: dict, schema: dict, defs: dict, allow: set[str], omit: set[str] | None = None
+    name: str,
+    d: dict,
+    schema: dict,
+    defs: dict,
+    allow: set[str],
+    ignore: set[str],
+    omit: set[str] | None = None,
 ) -> list[str]:
     props, req = d.get('properties', {}), set(d.get('required', []))
     if omit:
@@ -280,7 +304,8 @@ def _emit_model(
         req = req - omit - {_camel_to_snake(k) for k in omit}
     ext = ', protected_namespaces=()' if any(_camel_to_snake(k) in ('schema', 'schema_') for k in props) else ''
     frz = ', frozen=True' if name == 'PathMetadata' else ''
-    cfg = f"ConfigDict(alias_generator=to_camel, extra='{'allow' if name in allow else 'forbid'}', populate_by_name=True{ext}{frz})"
+    extra = _extra_policy(name, allow, ignore)
+    cfg = f"ConfigDict(alias_generator=to_camel, extra='{extra}', populate_by_name=True{ext}{frz})"
     lines = [
         f'class {name}(GenkitModel):',
         f'    """Model for {name.lower().replace("_", " ")} data."""',
@@ -343,6 +368,7 @@ def generate(schema_path: Path, _out: Path) -> str:
     defs = dict(schema.get('$defs', {}))
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)
+    ignore_extra = _models_ignoring_extra(schema)
     typed_map_aliases = _typed_map_aliases(defs)
     out = [HEADER.format(year=datetime.now().year, schema_name=schema_path.name)]
     emitted = set()
@@ -383,10 +409,10 @@ def generate(schema_path: Path, _out: Path) -> str:
             ])
         elif name in TRANSFORMATIONS and (cfg := TRANSFORMATIONS[name]).get('omit'):
             omit_set = set(cfg.get('omit', []))
-            out.extend(_emit_model(class_name, defn, schema, defs, allow_extra, omit=omit_set))
+            out.extend(_emit_model(class_name, defn, schema, defs, allow_extra, ignore_extra, omit=omit_set))
             emitted.add(name)
         else:
-            out.extend(_emit_model(class_name, defn, schema, defs, allow_extra))
+            out.extend(_emit_model(class_name, defn, schema, defs, allow_extra, ignore_extra))
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)
