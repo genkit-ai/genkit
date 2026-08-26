@@ -108,4 +108,3 @@ const surfaceIDPlaceholder = "SURFACE_ID"
 // component/id, every component carries catalog-specific props, so components
 // are handled as generic map[string]any objects rather than a dedicated type.
 type Envelope = map[string]any
-

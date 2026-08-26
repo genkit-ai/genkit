@@ -351,7 +351,6 @@ type partSchema struct {
 	Reasoning    string         `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
-
 // unmarshalPartFromSchema updates Part p based on the schema s.
 func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	switch {
@@ -396,7 +395,6 @@ func (p *Part) UnmarshalJSON(b []byte) error {
 	p.unmarshalPartFromSchema(s)
 	return nil
 }
-
 
 // UnmarshalYAML implements goccy/go-yaml library's InterfaceUnmarshaler interface.
 func (p *Part) UnmarshalYAML(unmarshal func(any) error) error {
