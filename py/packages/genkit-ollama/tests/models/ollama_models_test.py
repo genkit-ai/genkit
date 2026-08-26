@@ -29,6 +29,7 @@ from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _co
 
 from genkit import (
     ActionRunContext,
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -53,6 +54,34 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
         self.ctx = ActionRunContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
+
+    async def test_generate_classifies_http_400(self) -> None:
+        """A real HTTP 400 is INVALID_ARGUMENT so retry skips it."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        with patch.object(
+            model,
+            '_generate_classified',
+            AsyncMock(side_effect=ollama_api.ResponseError('bad request', 400)),
+        ):
+            with self.assertRaises(GenkitError) as raised:
+                await model.generate(self.request, self.ctx)
+        self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
+
+    async def test_generate_leaves_missing_http_status_unclassified(self) -> None:
+        """A mid-stream ResponseError(status_code=-1) is not an HTTP status."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        stream_error = ollama_api.ResponseError('model failed')
+        with patch.object(model, '_generate_classified', AsyncMock(side_effect=stream_error)):
+            with self.assertRaises(ollama_api.ResponseError) as raised:
+                await model.generate(self.request, self.ctx)
+        self.assertIs(raised.exception, stream_error)
+        self.assertEqual(raised.exception.status_code, -1)
 
     @patch(
         'genkit.model.get_basic_usage_stats',

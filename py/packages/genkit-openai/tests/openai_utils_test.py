@@ -18,6 +18,7 @@
 
 import base64
 
+import httpx
 import pytest
 from genkit_openai.models.utils import (
     DictMessageAdapter,
@@ -29,10 +30,13 @@ from genkit_openai.models.utils import (
     decode_data_uri_bytes,
     extract_config_dict,
     parse_data_uri_content_type,
+    reraise_openai_error,
 )
+from openai import APIStatusError
 from pydantic import BaseModel
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -744,3 +748,15 @@ class TestMessageConverterToOpenAI:
         message = Message(role=Role.USER, content=[])
         result = MessageConverter.to_openai(message)
         assert result == []
+
+
+def test_reraise_openai_error_marks_503_unavailable() -> None:
+    """A provider 503 must stay retryable, not collapse to INTERNAL."""
+    error = APIStatusError(
+        'overloaded',
+        response=httpx.Response(503, request=httpx.Request('POST', 'https://api.openai.com/v1/chat')),
+        body=None,
+    )
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+    assert raised.value.status == 'UNAVAILABLE'

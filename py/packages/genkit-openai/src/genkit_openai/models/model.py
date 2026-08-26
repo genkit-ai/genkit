@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
 
 from genkit import (
@@ -41,6 +41,7 @@ from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    reraise_openai_error,
     strip_markdown_fences,
 )
 from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
@@ -429,11 +430,13 @@ class OpenAIModel:
         """
         request.config = self.normalize_config(request.config)
 
-        if ctx.is_streaming:
-            logger.debug('OpenAI generate request', model=self._model, streaming=True)
-            return await self._generate_stream(request, ctx.send_chunk)
-        else:
+        try:
+            if ctx.is_streaming:
+                logger.debug('OpenAI generate request', model=self._model, streaming=True)
+                return await self._generate_stream(request, ctx.send_chunk)
             return await self._generate(request)
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)
 
     @staticmethod
     def normalize_config(config: object) -> OpenAIConfig:

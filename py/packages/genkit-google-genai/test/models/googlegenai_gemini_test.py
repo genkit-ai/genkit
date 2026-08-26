@@ -44,6 +44,7 @@ from genkit_google_genai.models.gemini import (
 )
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 from pytest_mock import MockerFixture
 
@@ -1148,3 +1149,18 @@ async def test_gemini_model__build_messages_maps_tool_role_to_user(
     assert contents[0].role == 'user'
     assert contents[1].role == 'model'
     assert contents[2].role == 'user'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> None:
+    """A provider 503 must stay retryable, not collapse to INTERNAL."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content.side_effect = APIError(503, {'error': {'message': 'overloaded'}})
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(request, ActionRunContext())
+    assert raised.value.status == 'UNAVAILABLE'
