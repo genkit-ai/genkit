@@ -241,7 +241,7 @@ def annotation_is_envelope(ret: object) -> bool:
         return True
     origin = get_origin(ret)
     if origin is Union or origin is UnionType:
-        members = [a for a in get_args(ret) if a is not NoneType and a is not type(None)]
+        members = [a for a in get_args(ret) if a is not type(None)]
         return bool(members) and all(annotation_is_envelope(a) for a in members)
     if isinstance(ret, str):
         cleaned = ret.replace(' ', '')
