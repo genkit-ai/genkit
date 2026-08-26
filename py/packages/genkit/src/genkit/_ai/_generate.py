@@ -243,7 +243,7 @@ async def dispatch_tool(
 async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> list[str]:
     """Expand DAP wildcard tool names into individual registry keys.
 
-    A wildcard has the form ``<provider>:tool.v2/*`` (or ``<provider>:tool.v2/<prefix>*``).
+    A wildcard has the form ``<provider>:tool/*`` (or ``<provider>:tool/<prefix>*``).
     Each match becomes a full DAP key
     ``/dynamic-action-provider/<provider>:<actionType>/<toolName>`` so later resolution
     stays bound to that provider (no ambiguous bare-name lookup across DAPs).
@@ -258,7 +258,7 @@ async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> li
 
         colon = name.index(':')
         provider_name = name[:colon]
-        rest = name[colon + 1 :]  # e.g. "tool.v2/*" or "tool.v2/prefix*"
+        rest = name[colon + 1 :]  # e.g. "tool/*" or "tool/prefix*"
 
         provider_action = await registry.resolve_action(ActionKind.DYNAMIC_ACTION_PROVIDER, provider_name)
         if provider_action is None:
@@ -1396,7 +1396,7 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
     """Resolve a tool from a registry name or a Tool instance.
 
     Accepts full action keys (``/dynamic-action-provider/...``), DAP-qualified
-    names (``provider:tool.v2/name``), or plain registered tool names.
+    names (``provider:tool/name``), or plain registered tool names.
 
     Used when building ModelRequest (for example from to_generate_request).
     """

@@ -41,7 +41,7 @@ def test_action_enum_behaves_like_str() -> None:
     assert ActionKind.FLOW == 'flow'
     assert ActionKind.MODEL == 'model'
     assert ActionKind.PROMPT == 'prompt'
-    assert ActionKind.TOOL == 'tool.v2'
+    assert ActionKind.TOOL == 'tool'
     assert ActionKind.UTIL == 'util'
 
 
@@ -57,18 +57,13 @@ def test_parse_action_key_valid() -> None:
         ('/custom/test-action', (ActionKind.CUSTOM, 'test-action')),
         ('/flow/my-flow', (ActionKind.FLOW, 'my-flow')),
         ('/agent/my-agent', (ActionKind.AGENT, 'my-agent')),
-        ('/tool.v2/my-tool', (ActionKind.TOOL, 'my-tool')),
+        ('/tool/my-tool', (ActionKind.TOOL, 'my-tool')),
     ]
 
     for key, expected in test_cases:
         kind, name = parse_action_key(key)
         assert kind == expected[0]
         assert name == expected[1]
-
-
-def test_parse_action_key_tool_is_not_a_kind() -> None:
-    with pytest.raises(ValueError, match='Invalid action kind'):
-        parse_action_key('/tool/my-tool')
 
 
 def test_parse_action_key_invalid_format() -> None:
@@ -88,7 +83,7 @@ def test_parse_action_key_invalid_format() -> None:
 
 def test_parse_dap_qualified_name() -> None:
     """Parse provider:innerKind/innerName segments."""
-    assert parse_dap_qualified_name('my-dap:tool.v2/echo') == DapQualifiedName('my-dap', 'tool.v2', 'echo')
+    assert parse_dap_qualified_name('my-dap:tool/echo') == DapQualifiedName('my-dap', 'tool', 'echo')
     assert parse_dap_qualified_name('plugin/foo:model/bar') is None
     assert parse_dap_qualified_name('plain-name') is None
     assert parse_dap_qualified_name('no-slash:toolonly') is None
@@ -100,7 +95,7 @@ def test_create_action_key() -> None:
     assert create_action_key(ActionKind.CUSTOM, 'foo') == '/custom/foo'
     assert create_action_key(ActionKind.MODEL, 'foo') == '/model/foo'
     assert create_action_key(ActionKind.PROMPT, 'foo') == '/prompt/foo'
-    assert create_action_key(ActionKind.TOOL, 'foo') == '/tool.v2/foo'
+    assert create_action_key(ActionKind.TOOL, 'foo') == '/tool/foo'
     assert create_action_key(ActionKind.UTIL, 'foo') == '/util/foo'
     assert create_action_key(ActionKind.AGENT, 'foo') == '/agent/foo'
 

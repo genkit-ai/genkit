@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tool envelope: ``response()``, direct calls, schemas, and ``tool.v2`` keys."""
+"""Tool envelope: ``response()``, direct calls, schemas, and ``/tool/`` keys."""
 
 from __future__ import annotations
 
@@ -382,22 +382,20 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_registers_under_tool_v2_only() -> None:
+async def test_tool_registers_under_tool() -> None:
     ai = Genkit()
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
         return f'Sunny in {city}'
 
-    assert create_action_key(ActionKind.TOOL, 'weather') == '/tool.v2/weather'
-    assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL, 'weather')
+    assert create_action_key(ActionKind.TOOL, 'weather') == '/tool/weather'
+    assert parse_action_key('/tool/weather') == (ActionKind.TOOL, 'weather')
 
     by_name = await ai.registry.resolve_action(ActionKind.TOOL, 'weather')
-    by_new_key = await ai.registry.resolve_action_by_key('/tool.v2/weather')
+    by_key = await ai.registry.resolve_action_by_key('/tool/weather')
     assert by_name is weather.action()
-    assert by_new_key is weather.action()
-    with pytest.raises(ValueError, match='Invalid action kind'):
-        await ai.registry.resolve_action_by_key('/tool/weather')
+    assert by_key is weather.action()
 
 
 @pytest.mark.asyncio

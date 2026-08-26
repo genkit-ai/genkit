@@ -224,8 +224,8 @@ async def test_gets_action_metadata_record(registry: Registry, tool1: Action, to
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
     record = await dap.list_action_metadata_by_key('my-dap')
-    tool1_key = '/dynamic-action-provider/my-dap:tool.v2/tool1'
-    tool2_key = '/dynamic-action-provider/my-dap:tool.v2/tool2'
+    tool1_key = '/dynamic-action-provider/my-dap:tool/tool1'
+    tool2_key = '/dynamic-action-provider/my-dap:tool/tool2'
     flow1_key = '/dynamic-action-provider/my-dap:flow/tool1'
     assert tool1_key in record
     assert tool2_key in record
@@ -233,13 +233,13 @@ async def test_gets_action_metadata_record(registry: Registry, tool1: Action, to
     tool1_meta = record[tool1_key]
     assert tool1_meta.key == tool1_key
     assert tool1_meta.name == 'tool1'
-    assert tool1_meta.action_type == 'tool.v2'
+    assert tool1_meta.action_type == 'tool'
     assert tool1_meta.description == tool1.description
     assert tool1_meta.input_schema == tool1.input_schema
     assert tool1_meta.output_schema == tool1.output_schema
     assert tool1_meta.metadata == tool1.metadata
     assert record[tool2_key].name == 'tool2'
-    assert record[tool2_key].action_type == 'tool.v2'
+    assert record[tool2_key].action_type == 'tool'
     assert record[tool2_key].metadata == tool2.metadata
     assert record[flow1_key].name == 'tool1'
     assert record[flow1_key].action_type == 'flow'
@@ -312,17 +312,6 @@ async def test_get_action_returns_none_for_unknown_type(registry: Registry, tool
 
     action = await dap.get_action('unknown-type', 'tool1')
     assert action is None
-
-
-@pytest.mark.asyncio
-async def test_get_action_tool_token_does_not_find_tool_v2_bucket(registry: Registry, tool1: Action) -> None:
-    async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
-
-    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
-
-    assert await dap.get_action('tool', tool1.name) is None
-    assert await dap.get_action(ActionKind.TOOL, tool1.name) is tool1
 
 
 @pytest.mark.asyncio

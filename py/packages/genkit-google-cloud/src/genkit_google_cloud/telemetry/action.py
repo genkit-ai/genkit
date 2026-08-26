@@ -75,8 +75,8 @@ class ActionTelemetry:
         action_name = str(attrs.get('genkit:name', '')) or '<unknown>'
         subtype = str(attrs.get('genkit:metadata:subtype', ''))
 
-        # Only log I/O for tools and generate — skip every other action span.
-        if subtype not in ('tool', 'tool.v2') and action_name != 'generate':
+        # Only log for tools and generate actions
+        if subtype != 'tool' and action_name != 'generate':
             return
 
         path = str(attrs.get('genkit:path', '')) or '<unknown>'
