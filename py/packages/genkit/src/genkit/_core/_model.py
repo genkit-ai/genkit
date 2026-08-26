@@ -557,9 +557,12 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         return cast(OutputT, parsed)
 
-    @cached_property
+    @property
     def messages(self) -> list[Message]:
-        """All messages including request history and the response message."""
+        """All messages including request history and the response message.
+
+        Recomputed each read so attaching ``request`` later still shows up.
+        """
         if self.message is None:
             return [Message(m) for m in self.request.messages] if self.request else []
         return [

@@ -356,6 +356,16 @@ async def test_define_model_returning_model_response_with_operation_raises(ai: G
     assert exc_info.value.status == 'FAILED_PRECONDITION'
 
 
+def test_model_response_messages_sees_request_set_after_first_read() -> None:
+    """History is request + message. A first read before request is attached must not stick."""
+    resp = ModelResponse(operation=Operation(id='x'))
+    assert resp.messages == []
+    resp.request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+    )
+    assert [m.text for m in resp.messages] == ['a cat']
+
+
 def test_model_response_eq_uses_operation_id() -> None:
     """Same job id is the same response even when start timing differs."""
     a = ModelResponse(operation=Operation(id='unique-a', metadata={'latencyMs': 0.166}))
