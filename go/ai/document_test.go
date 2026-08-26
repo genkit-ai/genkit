@@ -556,3 +556,42 @@ func TestMessageClone(t *testing.T) {
 		t.Error("nil Message.Clone() should return nil")
 	}
 }
+
+// A []any Data value gets the same top-level isolation as a map, so switching a
+// payload from an object to an array doesn't silently lose Clone's guarantee.
+func TestPartCloneSliceData(t *testing.T) {
+	orig := NewDataPart([]any{"a", "b"})
+	cp := orig.Clone()
+	cpData, ok := cp.Data.([]any)
+	if !ok {
+		t.Fatalf("clone Data type = %T, want []any", cp.Data)
+	}
+	cpData[0] = "mutated"
+	if orig.Data.([]any)[0] != "a" {
+		t.Error("mutating clone's slice Data affected the original")
+	}
+}
+
+func TestPartDataString(t *testing.T) {
+	tests := []struct {
+		name string
+		part *Part
+		want string
+	}{
+		{"string payload as-is", NewDataPart("data:image/png;base64,aGVsbG8="), "data:image/png;base64,aGVsbG8="},
+		{"map payload as JSON", NewDataPart(map[string]any{"k": "v"}), `{"k":"v"}`},
+		{"slice payload as JSON", NewDataPart([]any{1.0, 2.0}), `[1,2]`},
+		{"nil data", NewDataPart(nil), ""},
+		{"nil part", (*Part)(nil), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.part.DataString(); got != tt.want {
+				t.Errorf("DataString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+
+

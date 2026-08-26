@@ -307,3 +307,160 @@ func TestParserPreservesUnknownEnvelopeKeys(t *testing.T) {
 		t.Errorf("futureKey = %v, want keepme (unknown keys must be preserved)", batches[0][0]["futureKey"])
 	}
 }
+
+// Streaming non-ASCII prose one byte at a time must never emit a mid-rune split
+// (the holdback used to slice on a byte boundary, corrupting "18°C" into U+FFFD).
+func TestParserNoMidRuneSplitInStreamedProse(t *testing.T) {
+	p := newStreamParser(parserOptions{surfaceID: fixedSurfaceID("s1")})
+	full := "The temperature is 18°C and rising — 20°C soon. 日本語のテキストもね。"
+	var got strings.Builder
+	for i := 0; i < len(full); i++ {
+		segs, err := p.push(full[i : i+1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		prose, batches := collect(segs)
+		if len(batches) != 0 {
+			t.Fatalf("unexpected envelope batch in pure prose")
+		}
+		got.WriteString(prose)
+	}
+	flushed, _ := p.flush()
+	prose, _ := collect(flushed)
+	got.WriteString(prose)
+	if got.String() != full {
+		t.Errorf("reassembled prose = %q, want %q", got.String(), full)
+	}
+	if strings.ContainsRune(got.String(), '\uFFFD') {
+		t.Errorf("prose contains U+FFFD (mid-rune split): %q", got.String())
+	}
+}
+
+// A padded opening fence ("```a2ui   \n") split across chunk boundaries must not
+// leak backticks as prose: the holdback covers the whole incomplete fence
+// prefix, not a fixed 8 bytes.
+func TestParserPaddedOpenFenceSplit(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	full := "hi ```a2ui   \n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"x"}]}}]` +
+		"\n```"
+	var allSegs []segment
+	for i := 0; i < len(full); i++ {
+		segs, err := p.push(full[i : i+1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		allSegs = append(allSegs, segs...)
+	}
+	flushed, _ := p.flush()
+	allSegs = append(allSegs, flushed...)
+	prose, batches := collect(allSegs)
+	if strings.Contains(prose, "`") {
+		t.Errorf("prose leaked backticks from a padded fence: %q", prose)
+	}
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1 (padded fence must still open a block)", len(batches))
+	}
+}
+
+// A ``` inside a JSON string value (A2UI Text may contain inline Markdown) must
+// not close the block: the close fence is anchored to line start.
+func TestParserBacktickInsideJSONDoesNotCloseBlock(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateStrict,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"use ` + "```" + ` to fence code"}]}}]` +
+		"\n```\nDone."
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatalf("inline ``` in JSON must not break parsing, got %v", err)
+	}
+	flushed, _ := p.flush()
+	prose, batches := collect(append(segs, flushed...))
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1", len(batches))
+	}
+	if !strings.Contains(prose, "Done.") {
+		t.Errorf("prose after the block missing: %q", prose)
+	}
+	uc, _ := batches[0][1]["updateComponents"].(map[string]any)
+	comps, _ := uc["components"].([]any)
+	c0, _ := comps[0].(map[string]any)
+	if !strings.Contains(c0["text"].(string), "```") {
+		t.Errorf("component text lost its inline backticks: %v", c0["text"])
+	}
+}
+
+// A full render may legally split its components across several updateComponents
+// (root in one, leaves in another). Root is a batch-level requirement.
+func TestParserSplitRenderRootInLaterList(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateStrict,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"body","component":"Text","text":"leaf"}]}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Column","children":["body"]}]}}]` +
+		"\n```"
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatalf("split render with root in a later list should be accepted, got %v", err)
+	}
+	flushed, _ := p.flush()
+	_, batches := collect(append(segs, flushed...))
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1", len(batches))
+	}
+}
+
+// A large block delivered in many small deltas parses correctly (also exercises
+// the incremental in-block scan cursor).
+func TestParserLargeBlockManyDeltas(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	var sb strings.Builder
+	sb.WriteString("```a2ui\n")
+	sb.WriteString(`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"}},`)
+	sb.WriteString(`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Column","children":["p"]},`)
+	sb.WriteString(`{"id":"p","component":"Text","text":"`)
+	sb.WriteString(strings.Repeat("lorem ipsum dolor sit amet ", 400)) // ~10KB
+	sb.WriteString(`"}]}}]`)
+	sb.WriteString("\n```")
+	full := sb.String()
+
+	var allSegs []segment
+	for i := 0; i < len(full); i += 7 {
+		end := i + 7
+		if end > len(full) {
+			end = len(full)
+		}
+		segs, err := p.push(full[i:end])
+		if err != nil {
+			t.Fatal(err)
+		}
+		allSegs = append(allSegs, segs...)
+	}
+	flushed, _ := p.flush()
+	allSegs = append(allSegs, flushed...)
+	_, batches := collect(allSegs)
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1", len(batches))
+	}
+	if len(batches[0]) != 2 {
+		t.Errorf("got %d envelopes, want 2", len(batches[0]))
+	}
+}

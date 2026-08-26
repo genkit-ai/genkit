@@ -17,12 +17,12 @@
 package a2ui
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
+	"reflect"
 
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // LoadCatalog registers an A2UI catalog in the Genkit registry under the key
@@ -60,8 +60,13 @@ func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 	// calls for the same id all resolve to the same stored catalog, and the
 	// losers simply observe that an entry already existed.
 	if !genkit.RegisterValueIfAbsent(g, key, catalog) {
-		if existing, ok := genkit.LookupValue(g, key).(*Catalog); ok && existing != catalog {
-			slog.Warn("a2ui: LoadCatalog: a catalog is already registered under this id; keeping the existing one",
+		// Compare by content, not pointer identity: BasicCatalog() and a
+		// re-read LoadCatalogFile each allocate a fresh *Catalog, so a pointer
+		// check would warn on genuinely idempotent re-registration and stay
+		// silent for none of the cases the warning exists for. DeepEqual warns
+		// only when the incoming catalog actually differs from the stored one.
+		if existing, ok := genkit.LookupValue(g, key).(*Catalog); ok && !reflect.DeepEqual(existing, catalog) {
+			slog.Warn("a2ui: LoadCatalog: a different catalog is already registered under this id; keeping the existing one",
 				"id", catalog.ID)
 		}
 	}
@@ -91,15 +96,12 @@ func RegisterBasicCatalog(g *genkit.Genkit) error {
 }
 
 // readCatalogFile reads and parses a catalog from a JSON file (without
-// registering it).
+// registering it). base.ReadJSONFile handles the read-plus-decode; only the
+// a2ui-specific error wrapping and the components check live here.
 func readCatalogFile(path string) (*Catalog, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("a2ui: failed to read catalog file %q: %w", path, err)
-	}
 	var catalog Catalog
-	if err := json.Unmarshal(raw, &catalog); err != nil {
-		return nil, fmt.Errorf("a2ui: catalog file %q is not valid JSON: %w", path, err)
+	if err := base.ReadJSONFile(path, &catalog); err != nil {
+		return nil, fmt.Errorf("a2ui: failed to read catalog file %q: %w", path, err)
 	}
 	if catalog.Components == nil {
 		return nil, fmt.Errorf("a2ui: catalog file %q must have a \"components\" array", path)

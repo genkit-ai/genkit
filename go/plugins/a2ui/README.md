@@ -63,9 +63,10 @@ a2ui data parts.
 | `Catalog`      | nil                | An inline catalog (code-defined use only; not serialized). Overrides `CatalogID` when set.        |
 | `CatalogID`    | `"basic"`          | Id of a catalog registered with `LoadCatalog`. Resolved from the registry at call time.           |
 | `Instructions` | `"system"`         | Where to inject catalog capabilities. `"none"` injects nothing.                                    |
-| `Validate`     | `"warn"`           | Validate emitted envelopes. `"warn"` logs and drops bad blocks; `"strict"` returns an error; `"off"` skips checking. |
+| `Validate`     | `"warn"`           | Validate emitted envelopes. `"warn"` logs and drops bad blocks; `"strict"` returns an error; `"off"` skips checking. This is a well-formedness check, not sanitization (see [Security and the trust boundary](#security-and-the-trust-boundary)). Invalid values are rejected by `New`. |
 | `SurfaceID`    | fresh UUID         | Surface id policy. Provide a fixed string to reuse one id for every surface.                       |
-| `Version`      | `"v0.9"`           | Protocol version stamped on envelopes.                                                            |
+| `Version`      | `"v0.9"`           | Protocol version stamped on envelopes. Must be one of the `SupportedVersions`; a typo is rejected by `New`. |
+
 
 ### Custom catalogs
 
@@ -73,8 +74,15 @@ The bundled `BasicCatalog()` mirrors `@a2ui/web_core`'s basic catalog. To use
 your own components, register a `Catalog` with `LoadCatalog` (or `LoadCatalogFile`)
 and reference it by id. Registered catalogs live in the Genkit registry under
 the value type `a2ui-catalog`, so they are discoverable by tooling (the Dev UI's
-`GET /api/values?type=a2ui-catalog`) and shared identically across the JS, Go,
-and Dart plugins.
+`GET /api/values?type=a2ui-catalog`). The wire representation of a catalog and
+its envelopes is identical across the JS, Go, and Dart plugins, so a surface
+rendered by one is byte-compatible with the renderers of another. The registry
+*key* differs by runtime, though: Go keys strictly by the catalog's own `ID` and
+its config field is `CatalogID`, whereas JS's `loadCatalog` keys by a
+caller-chosen lookup id and its middleware config field is `catalog`. Tooling or
+shared config that matches catalogs by registry key across runtimes will not
+line up; match on the catalog's `id` value instead.
+
 
 ```go
 catalog, err := a2ui.LoadCatalogFile(g, "./my-catalog.json")
@@ -161,6 +169,26 @@ Ask for "the weather in Tokyo" to see a streamed, interactive surface rendered
 by `@a2ui/lit`, including a Refresh button whose action round-trips back to the
 Go agent.
 
+## Security and the trust boundary
+
+`Validate` checks structure and component *type names* against the catalog. It
+is a well-formedness check, **not** a sanitizer, even in `"strict"` mode:
+
+- Model-controlled values pass through untouched. An `Image`'s `url`, a `Text`'s
+  content (which "may use inline Markdown", so a renderer may turn it into
+  HTML), and any other prop value are never inspected or escaped.
+- Validation confirms an envelope is well-formed and its components exist in the
+  catalog. It does not confirm the values are safe to render.
+
+Treat rendered surfaces as untrusted output driven by the model:
+
+- Prop sanitization is the **renderer/catalog's** responsibility. A catalog
+  component should escape or constrain the props it accepts.
+- Hosts should CSP-restrict image and other remote sources so a
+  model-controlled `Image.url` cannot exfiltrate or load hostile content.
+
+This matches the JS plugin's trust boundary exactly.
+
 ## Note on the upstream A2UI SDKs
 
 The A2UI team is standardizing prompt formatting, catalog management, and
@@ -169,6 +197,7 @@ home for the prompt-rendering, parsing, and validation this plugin does today,
 so treat those internals as thin and replaceable. The stable surface is the
 `a2ui.Config` entrypoint and the spec-defined wire part
 (`application/a2ui+json`), both of which are unaffected by an SDK swap.
+
 
 ## License
 

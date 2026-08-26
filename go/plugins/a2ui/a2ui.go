@@ -52,8 +52,15 @@ const (
 //	    ai.WithPrompt("show me the weather in Tokyo"),
 //	    ai.WithUse(&a2ui.Config{}), // defaults to the bundled basic catalog
 //	)
+//
+// Middleware ordering: A2UI keeps per-turn streaming state (a stream parser and
+// its minted surface ids) for the model call it wraps. Place any retrying or
+// fallback middleware (which re-invokes the model) OUTSIDE A2UI so each attempt
+// gets a fresh A2UI turn, i.e. WithUse(retry, &a2ui.Config{}) rather than
+// WithUse(&a2ui.Config{}, retry). WithUse(A, B) means A wraps B.
 type Config struct {
 	// Catalog describes what the agent may render, provided inline. When set it
+
 	// takes precedence over CatalogID. Not serialized, so it is only honored for
 	// code-defined use (not JSON/Dev-UI dispatch); prefer CatalogID with
 	// [LoadCatalog] for a registry-backed catalog that also survives dispatch
@@ -73,7 +80,15 @@ type Config struct {
 
 	// Validate controls validation of emitted envelopes against the catalog.
 	// ValidateWarn (default) logs and drops bad blocks; ValidateStrict returns
-	// an error; ValidateOff skips checking.
+	// an error; ValidateOff skips checking. An unrecognized value is rejected by
+	// New rather than silently downgraded.
+	//
+	// This validates envelope structure and component type names against the
+	// catalog only. It is a well-formedness check, not sanitization: even under
+	// ValidateStrict, model-controlled values (an Image's url, a Text's inline
+	// Markdown, any other prop) pass through untouched. Prop sanitization is the
+	// renderer/catalog's responsibility, and hosts should CSP-restrict remote
+	// sources. See the "Security and the trust boundary" section of the README.
 	Validate ValidateMode `json:"validate,omitempty"`
 
 	// SurfaceID sets the surface-id policy. Provide a fixed id to reuse for
@@ -97,13 +112,28 @@ func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
 	if validate == "" {
 		validate = ValidateWarn
 	}
+	if !validValidateModes[validate] {
+		return nil, fmt.Errorf(
+			"a2ui: invalid Validate %q; want one of %q, %q, %q",
+			validate, ValidateStrict, ValidateWarn, ValidateOff)
+	}
 	version := c.Version
 	if version == "" {
 		version = DefaultVersion
 	}
+	if !supportedVersions[version] {
+		return nil, fmt.Errorf(
+			"a2ui: unsupported Version %q; want one of %s",
+			version, strings.Join(supportedVersionList(), ", "))
+	}
 	instructions := c.Instructions
 	if instructions == "" {
 		instructions = InstructionsSystem
+	}
+	if instructions != InstructionsSystem && instructions != InstructionsNone {
+		return nil, fmt.Errorf(
+			"a2ui: invalid Instructions %q; want %q or %q",
+			instructions, InstructionsSystem, InstructionsNone)
 	}
 	nextSurfaceID := surfaceIDFactory(c.SurfaceID)
 
@@ -154,32 +184,52 @@ func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
 			}
 		}
 
-		// 3) Run the downstream model, then flush the stream parser so the last
-		//    withheld prose tail (the parser holds back up to a partial opening
-		//    fence) and any unterminated trailing block still reach the
-		//    streaming consumer. Without this, clients that render purely from
-		//    stream deltas would show truncated prose / miss a final block (the
-		//    aggregated message recovers it, but the stream would not).
+		// 3) Run the downstream model.
 		resp, err := next(ctx, params)
 		if err != nil {
 			return resp, err
 		}
+
+		// A turn that finished abnormally (blocked, aborted, interrupted,
+		// other) may carry partial, half-emitted text whose a2ui block never
+		// completed. Core deliberately skips output parsing for those finishes;
+		// mirror that here so a malformed partial block does not turn a
+		// recoverable abnormal finish into an opaque strict-mode parse error
+		// that discards FinishReason, FinishMessage, and Usage. Return the
+		// response untouched.
+		if resp != nil && isAbnormalFinish(resp.FinishReason) {
+			return resp, nil
+		}
+
+		// Flush the stream parser so the last withheld prose tail (the parser
+		// holds back up to a partial opening fence) and any unterminated
+		// trailing block still reach the streaming consumer. Without this,
+		// clients that render purely from stream deltas would show truncated
+		// prose / miss a final block (the aggregated message recovers it, but
+		// the stream would not). On a flush error, still return the committed
+		// response alongside the error rather than discarding it.
 		if origCallback != nil {
 			tail, err := streamParser.flush()
 			if err != nil {
-				return nil, err
+				return resp, err
 			}
 			if parts := partsFromSegments(tail); len(parts) > 0 {
 				if err := origCallback(ctx, &ai.ModelResponseChunk{Content: parts}); err != nil {
-					return nil, err
+					return resp, err
 				}
 			}
 		}
 
 		// 4) Transform the final message. The final parse replays the same
-		//    surface ids the stream minted.
+		//    surface ids the stream minted. On a parse error (strict mode),
+		//    return the original response alongside the error so callers keep
+		//    the model's committed state.
 		surfaceIDs.reset()
-		return transformResponse(resp, catalog, validate, version, surfaceIDs.replayNext)
+		out, err := transformResponse(resp, catalog, validate, version, surfaceIDs.replayNext)
+		if err != nil {
+			return resp, err
+		}
+		return out, nil
 	}
 
 	return &ai.Hooks{WrapModel: wrapModel}, nil
@@ -273,6 +323,19 @@ func (r *surfaceIDReplay) reset() {
 	r.cursor = 0
 }
 
+// isAbnormalFinish reports whether a finish reason means the model stopped
+// without a clean, complete answer (blocked, aborted, interrupted, other).
+// Mirrors ai's unexported FinishReason.isAbnormal so the middleware skips
+// parsing exactly the turns core skips output parsing for.
+func isAbnormalFinish(fr ai.FinishReason) bool {
+	switch fr {
+	case ai.FinishReasonBlocked, ai.FinishReasonAborted, ai.FinishReasonInterrupted, ai.FinishReasonOther:
+		return true
+	default:
+		return false
+	}
+}
+
 // partsFromSegments turns parsed segments into ordered prose + a2ui parts,
 // preserving the exact source order.
 func partsFromSegments(segments []segment) []*ai.Part {
@@ -285,6 +348,21 @@ func partsFromSegments(segments []segment) []*ai.Part {
 		}
 	}
 	return out
+}
+
+// partsForTextPart turns the segments a single source text part produced into
+// output parts. When the part carried no a2ui block (the parser yielded exactly
+// its own text back as one prose run), the original part is returned untouched
+// so its Metadata and ContentType survive — critical for Gemini thought
+// signatures (attached as Metadata["signature"] on a plain text part and read
+// back on the next request; losing them degrades or breaks a thinking model in
+// a tool loop) and to avoid re-typing an application/json text part to
+// plain/text. Only a part that actually contained a fence is rebuilt.
+func partsForTextPart(src *ai.Part, segments []segment) []*ai.Part {
+	if len(segments) == 1 && !segments[0].isEnvelope && segments[0].prose == src.Text {
+		return []*ai.Part{src}
+	}
+	return partsFromSegments(segments)
 }
 
 // injectInstructions appends A2UI instructions to (or creates) the system
@@ -312,7 +390,9 @@ func injectInstructions(req *ai.ModelRequest, catalog *Catalog) *ai.ModelRequest
 }
 
 // transformChunk transforms a single streamed chunk; returns nil if there is
-// nothing to emit.
+// nothing to emit. The parser is shared across chunks (streaming state must
+// persist), so this does not flush; the middleware flushes once after the model
+// call to drain the final withheld tail.
 func transformChunk(chunk *ai.ModelResponseChunk, parser *streamParser) (*ai.ModelResponseChunk, error) {
 	if chunk == nil || len(chunk.Content) == 0 {
 		return chunk, nil
@@ -324,7 +404,7 @@ func transformChunk(chunk *ai.ModelResponseChunk, parser *streamParser) (*ai.Mod
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, partsFromSegments(segments)...)
+			newContent = append(newContent, partsForTextPart(part, segments)...)
 		} else {
 			newContent = append(newContent, part)
 		}
@@ -352,25 +432,31 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 	var newContent []*ai.Part
 	for _, part := range resp.Message.Content {
 		if part.IsText() {
-			// Push each text part into the same parser without flushing, so a
-			// block that spans multiple text parts is not finalized early. The
-			// single flush below drains any trailing block once, after the loop.
+			// Push then flush per text part (matching the JS middleware) so a
+			// part's output lands in place, before any following non-text part.
+			// Flushing once after the whole loop would move text the parser held
+			// back from part N behind every later part: a tool-calling turn
+			// [Text("Checking the weather."), toolRequest] would otherwise come
+			// out as [Text("Checking the "), toolRequest, Text("weather.")],
+			// reordering recorded history and the messages replayed to the model
+			// next iteration. Per-part flush keeps ordering; the trade-off is
+			// that an a2ui block split across two adjacent text parts of the
+			// final message is not stitched back together, which does not happen
+			// in practice (the aggregator coalesces adjacent text).
 			pushed, err := parser.push(part.Text)
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, partsFromSegments(pushed)...)
+			flushed, err := parser.flush()
+			if err != nil {
+				return nil, err
+			}
+			segments := append(pushed, flushed...)
+			newContent = append(newContent, partsForTextPart(part, segments)...)
 		} else {
 			newContent = append(newContent, part)
 		}
 	}
-	// Flush once per message (not per text part): finalizes the last withheld
-	// prose tail and any unterminated trailing block, preserving ordering.
-	flushed, err := parser.flush()
-	if err != nil {
-		return nil, err
-	}
-	newContent = append(newContent, partsFromSegments(flushed)...)
 	newResp := *resp
 	msgCopy := resp.Message.Clone()
 	msgCopy.Content = newContent

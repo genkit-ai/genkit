@@ -50,9 +50,11 @@ type Part struct {
 
 // Clone returns a shallow copy of the Part with its own Metadata and Custom
 // maps. Callers can add or remove map keys without mutating the original. When
-// Data holds a map[string]any (the common case for data parts, e.g. A2UI
-// envelopes), that top-level map is cloned too so callers can mutate its keys
-// without disturbing the original; nested values are still shared by reference.
+// Data holds a map[string]any or []any (the common cases for data parts, e.g.
+// A2UI envelopes), the top-level container is cloned too so callers can mutate
+// its keys/elements without disturbing the original; nested values are still
+// shared by reference. Cloning both shapes (rather than only maps) keeps the
+// isolation guarantee independent of whether a payload is an object or an array.
 func (p *Part) Clone() *Part {
 	if p == nil {
 		return nil
@@ -60,8 +62,11 @@ func (p *Part) Clone() *Part {
 	cp := *p
 	cp.Custom = maps.Clone(p.Custom)
 	cp.Metadata = maps.Clone(p.Metadata)
-	if m, ok := p.Data.(map[string]any); ok {
-		cp.Data = maps.Clone(m)
+	switch d := p.Data.(type) {
+	case map[string]any:
+		cp.Data = maps.Clone(d)
+	case []any:
+		cp.Data = slices.Clone(d)
 	}
 	return &cp
 }
@@ -177,6 +182,27 @@ func (p *Part) IsMedia() bool {
 // IsData reports whether the [Part] contains unstructured data.
 func (p *Part) IsData() bool {
 	return p != nil && p.Kind == PartData
+}
+
+// DataString returns a data part's payload as a string: the string as-is if
+// Data already holds one (e.g. a "data:" URI), otherwise its JSON encoding.
+// This is the single place provider converters and [github.com/firebase/genkit/go/plugins/internal/uri.Data]
+// should read a data part's payload from, so a structured Data value (a
+// map/slice, as [NewDataPart] and the A2UI middleware now produce) yields the
+// same answer everywhere instead of failing one converter and silently
+// dropping in another. Returns "" for a nil Part or nil Data.
+func (p *Part) DataString() string {
+	if p == nil || p.Data == nil {
+		return ""
+	}
+	if s, ok := p.Data.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(p.Data)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // IsToolRequest reports whether the [Part] contains a request to run a tool.
@@ -325,6 +351,7 @@ type partSchema struct {
 	Reasoning    string         `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
+
 // unmarshalPartFromSchema updates Part p based on the schema s.
 func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	switch {
@@ -369,6 +396,7 @@ func (p *Part) UnmarshalJSON(b []byte) error {
 	p.unmarshalPartFromSchema(s)
 	return nil
 }
+
 
 // UnmarshalYAML implements goccy/go-yaml library's InterfaceUnmarshaler interface.
 func (p *Part) UnmarshalYAML(unmarshal func(any) error) error {

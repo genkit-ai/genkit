@@ -39,6 +39,40 @@ const A2UIMimeType = "application/a2ui+json"
 // envelopes.
 const DefaultVersion = "v0.9"
 
+// SupportedVersions is the set of A2UI protocol versions the plugin can stamp on
+// emitted envelopes. [Config.Version] is validated against it so a typo cannot
+// stamp a version the renderer will reject at runtime. Matches the JS plugin's
+// SUPPORTED_VERSIONS.
+var SupportedVersions = []string{"v0.9"}
+
+// supportedVersions is SupportedVersions as a set for O(1) validation.
+var supportedVersions = func() map[string]bool {
+	m := make(map[string]bool, len(SupportedVersions))
+	for _, v := range SupportedVersions {
+		m[v] = true
+	}
+	return m
+}()
+
+// supportedVersionList returns the supported versions quoted, for error
+// messages.
+func supportedVersionList() []string {
+	out := make([]string, len(SupportedVersions))
+	for i, v := range SupportedVersions {
+		out[i] = `"` + v + `"`
+	}
+	return out
+}
+
+// validValidateModes is the set of accepted [ValidateMode] values, used to
+// reject a typo like "strick" that would otherwise silently downgrade strict
+// validation to the warn default.
+var validValidateModes = map[ValidateMode]bool{
+	ValidateStrict: true,
+	ValidateWarn:   true,
+	ValidateOff:    true,
+}
+
 // BasicCatalogID is the catalog id of the A2UI "Basic Catalog" (v0.9).
 // Surfaces created with the basic catalog reference this id, and the client
 // renderer registers a catalog under the same id.
@@ -67,10 +101,11 @@ const surfaceIDPlaceholder = "SURFACE_ID"
 // updateComponents, updateDataModel, deleteSurface). It is represented as a
 // generic JSON object because the protocol is open-ended and versioned; the
 // middleware only inspects a few well-known keys.
+//
+// A component within an updateComponents envelope is a single entry in an A2UI
+// adjacency list: UI is a flat list of components, and the tree is reconstructed
+// via id references, with exactly one component having id "root". Beyond
+// component/id, every component carries catalog-specific props, so components
+// are handled as generic map[string]any objects rather than a dedicated type.
 type Envelope = map[string]any
 
-// Component is a single entry in an A2UI adjacency list. UI is expressed as a
-// flat list of components; the tree is reconstructed via id references, with
-// exactly one component having id "root". Beyond component/id, every component
-// carries catalog-specific props, so it is represented as a generic object.
-type Component = map[string]any

@@ -39,11 +39,37 @@ const (
 )
 
 // openFenceRE matches the opening fence (```a2ui) case-insensitively.
+//
+// The fence is deliberately NOT anchored to line start (unlike closeFenceRE): a
+// model may legitimately begin the block right after inline prose on the same
+// line, and the streaming parser must still catch it. The required trailing
+// newline guards against a false positive from prose that merely mentions the
+// fence.
 var openFenceRE = regexp.MustCompile("(?i)```[ \t]*a2ui[ \t]*\r?\n")
 
-// maxPartialFence is the longest prefix of an opening fence, used to hold back a
-// partial fence between chunks.
-const maxPartialFence = len("```a2ui\n")
+// partialOpenFenceRE matches, at the very end of the buffer, the longest suffix
+// that could still be completing an opening fence on the next chunk: 1-3
+// backticks, then a partial "a2ui" tag, then optional trailing spaces/tabs and
+// an optional "\r" awaiting its "\n". It is held back from prose so a fence
+// split across chunks is never leaked.
+//
+// A fixed-length holdback would be wrong on two counts: openFenceRE allows
+// unbounded [ \t]* padding before the newline, so the incomplete-fence suffix
+// has no fixed maximum length (a padded fence like "```a2ui   \r\n" split across
+// chunks would leak backticks as prose); and a byte-count holdback can slice
+// mid-rune, corrupting non-ASCII prose into U+FFFD. Anchoring to the end ($)
+// holds back exactly the fence suffix, which is always ASCII, so the emitted
+// prose always ends on a rune boundary. Mirrors the JS parser's
+// PARTIAL_OPEN_FENCE_RE.
+var partialOpenFenceRE = regexp.MustCompile("(?i)(?:`|``|```(?:a(?:2(?:u(?:i[ \t]*\r?)?)?)?)?)$")
+
+// closeFenceRE matches the closing fence: ``` at the start of a line (optionally
+// indented). Anchoring to line start (mirroring openFenceRE) is important: A2UI
+// Text values "may use inline Markdown", so the JSON payload can legitimately
+// contain a ``` inside a string. A bare strings.Index for "```" would match that
+// and truncate the block mid-JSON, dropping the whole surface. Mirrors the JS
+// parser's CLOSE_FENCE_RE.
+var closeFenceRE = regexp.MustCompile("(?m)^[ \t]*```")
 
 // segment is a single ordered piece of parsed output: either a run of prose or
 // one completed A2UI envelope batch. Segments preserve the exact source order,
@@ -80,6 +106,13 @@ type streamParser struct {
 	// (placeholders map to this).
 	currentSurfaceID string
 	hasSurfaceID     bool
+	// blockScan is the offset (a line start) from which the in-block
+	// close-fence search resumes. Tracking it keeps a large block arriving in
+	// many small deltas close to linear rather than O(n²): each drain scans only
+	// the last, still-incomplete line plus newly appended bytes instead of
+	// rescanning the whole block.
+	blockScan int
+
 	// knownComponents is the catalog's component-name set, computed once so
 	// validation doesn't rebuild it per updateComponents envelope. Nil when no
 	// catalog is configured.
@@ -135,9 +168,13 @@ func (p *streamParser) drain(final bool) ([]segment, error) {
 					proseBuf += p.buffer
 					p.buffer = ""
 				} else {
-					keep := maxPartialFence
-					if keep > len(p.buffer) {
-						keep = len(p.buffer)
+					// Hold back a trailing suffix that could still be completing
+					// an opening fence on the next chunk (e.g. "```a2u" or
+					// "```a2ui  \r"). The suffix is always ASCII, so the emitted
+					// prose ends on a rune boundary — no mid-rune split.
+					keep := 0
+					if m := partialOpenFenceRE.FindStringIndex(p.buffer); m != nil {
+						keep = len(p.buffer) - m[0]
 					}
 					safeLen := len(p.buffer) - keep
 					if safeLen > 0 {
@@ -151,14 +188,19 @@ func (p *streamParser) drain(final bool) ([]segment, error) {
 			proseBuf += p.buffer[:loc[0]]
 			p.buffer = p.buffer[loc[1]:]
 			p.inBlock = true
+			p.blockScan = 0
 			p.currentSurfaceID = p.opts.surfaceID()
 			p.hasSurfaceID = true
 			continue
 		}
 
-		// In a block: look for the closing fence.
-		closeIdx := strings.Index(p.buffer, "```")
-		if closeIdx < 0 {
+		// In a block: look for the closing fence, anchored to line start so a
+		// ``` inside a JSON string (A2UI Text may contain inline Markdown) does
+		// not truncate the block. Resume the search from blockScan, which always
+		// sits at a line start, so a large block arriving in many deltas stays
+		// close to linear instead of rescanning the whole block each delta.
+		loc := closeFenceRE.FindStringIndex(p.buffer[p.blockScan:])
+		if loc == nil {
 			if final {
 				// Unterminated block at end of stream — try to parse what we have.
 				batch, err := p.finalizeBlock(p.buffer)
@@ -171,14 +213,35 @@ func (p *streamParser) drain(final bool) ([]segment, error) {
 				}
 				p.buffer = ""
 				p.inBlock = false
+				p.blockScan = 0
+			} else {
+				// Advance the scan cursor to the start of the last (still
+				// incomplete) line. The close fence is line-anchored, so it can
+				// only appear at a line start; resuming there avoids rescanning
+				// completed lines while keeping blockScan on a real line
+				// boundary (so closeFenceRE's ^ never matches a false mid-line
+				// position on the next drain). A fence split across this chunk
+				// boundary is still caught because its own line has not
+				// completed yet.
+				if nl := strings.LastIndexByte(p.buffer, '\n'); nl+1 > p.blockScan {
+					p.blockScan = nl + 1
+				}
 			}
 			break
 		}
-		blockText := p.buffer[:closeIdx]
-		p.buffer = p.buffer[closeIdx+3:]
+		// loc is relative to buffer[blockScan:]; the ``` is preceded by the
+		// matched line-start (^ or \n) plus optional indentation. Keep the block
+		// text up to that match, dropping the newline/indent that begins the
+		// close-fence match; TrimSpace in finalizeBlock removes the rest.
+		matchStart := p.blockScan + loc[0]
+		matchEnd := p.blockScan + loc[1]
+		blockText := p.buffer[:matchStart]
+		p.buffer = p.buffer[matchEnd:]
+
 		// Consume an optional trailing newline after the closing fence.
 		p.buffer = trimLeadingNewline(p.buffer)
 		p.inBlock = false
+		p.blockScan = 0
 		batch, err := p.finalizeBlock(blockText)
 		if err != nil {
 			return segments, err
@@ -334,11 +397,17 @@ func envelopeSurfaceID(e Envelope) string {
 }
 
 // validateRoot enforces the "RE-RENDER THE WHOLE SURFACE" protocol rule for
-// full-surface renders: any updateComponents in the batch must contain a
-// component with id "root". Returns an error message, or "" if valid. Unlike
-// validateComponents this is a protocol check, not a catalog check, so it runs
-// regardless of whether a catalog is configured.
+// full-surface renders. The v0.9 spec requires that "one of the components in
+// one of the component lists MUST have an id of root" — a batch-level rule, not
+// a per-message one. A split render is therefore legal: the root (and layout)
+// may live in one updateComponents while its leaf components arrive in a later
+// one within the same batch. So this checks that at least one updateComponents
+// in the batch declares a root, not that every one does. Returns an error
+// message, or "" if valid. Unlike validateComponents this is a protocol check,
+// not a catalog check, so it runs regardless of whether a catalog is configured.
+// Mirrors the JS parser's validateRoot.
 func validateRoot(envelopes []Envelope) string {
+	sawComponentList := false
 	for _, e := range envelopes {
 		uc, ok := e["updateComponents"].(map[string]any)
 		if !ok {
@@ -348,20 +417,20 @@ func validateRoot(envelopes []Envelope) string {
 		if !ok {
 			continue
 		}
-		hasRoot := false
+		sawComponentList = true
 		for _, c := range arr {
 			if cm, ok := c.(map[string]any); ok {
 				if id, _ := cm["id"].(string); id == "root" {
-					hasRoot = true
-					break
+					return ""
 				}
 			}
 		}
-		if !hasRoot {
-			return `component list must contain a component id "root".`
-		}
 	}
-	return ""
+	// Only a batch that actually carries component lists must declare a root.
+	if !sawComponentList {
+		return ""
+	}
+	return `component list must contain a component id "root".`
 }
 
 // normalizeEnvelope validates a single envelope, substitutes the real surface

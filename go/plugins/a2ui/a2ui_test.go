@@ -249,3 +249,98 @@ func TestMiddlewareSanitizesInboundA2UI(t *testing.T) {
 		t.Errorf("expected sanitized action summary in messages, got %q", joined)
 	}
 }
+
+// A plain text part with no a2ui block must pass through with its Metadata and
+// ContentType intact (e.g. Gemini thought signatures on Metadata["signature"],
+// or an application/json content type), rather than being rebuilt as a fresh
+// plain text part.
+func TestMiddlewarePreservesTextPartMetadata(t *testing.T) {
+	r := newTestRegistry(t)
+	sig := "thought-sig-123"
+	m := ai.NewModel("test/meta", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		part := ai.NewTextPart("just prose, no UI")
+		part.ContentType = "application/json"
+		part.Metadata = map[string]any{"signature": sig}
+		return &ai.ModelResponse{Request: req, Message: ai.NewMessage(ai.RoleModel, nil, part)}, nil
+	})
+	m.Register(r)
+
+	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Message.Content) != 1 {
+		t.Fatalf("got %d parts, want 1", len(resp.Message.Content))
+	}
+	p := resp.Message.Content[0]
+	if p.Metadata == nil || p.Metadata["signature"] != sig {
+		t.Errorf("thought signature dropped: metadata=%v", p.Metadata)
+	}
+	if p.ContentType != "application/json" {
+		t.Errorf("content type = %q, want application/json (not re-typed)", p.ContentType)
+	}
+}
+
+// A turn that finished abnormally (e.g. blocked) whose partial text contains a
+// malformed a2ui block must not be turned into a strict-mode parse error that
+// discards the response; the response passes through untouched.
+func TestMiddlewareSkipsParseOnAbnormalFinish(t *testing.T) {
+	r := newTestRegistry(t)
+	// A malformed, unterminated a2ui block that strict mode would reject.
+	reply := "partial ```a2ui\n[{\"createSurface\": bad"
+	m := ai.NewModel("test/blocked", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			Request:       req,
+			Message:       ai.NewModelTextMessage(reply),
+			FinishReason:  ai.FinishReasonBlocked,
+			FinishMessage: "blocked by safety settings",
+		}, nil
+	})
+	m.Register(r)
+
+	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	// Generate itself surfaces a blocked finish as an error, but the middleware
+	// must not replace it with an a2ui parse error, and the response state must
+	// survive. Call the model through the middleware directly to observe that.
+	hooks, err := cfg.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := hooks.WrapModel(ctx, &ai.ModelParams{Request: &ai.ModelRequest{
+		Messages: []*ai.Message{ai.NewUserTextMessage("hi")},
+	}}, func(ctx context.Context, p *ai.ModelParams) (*ai.ModelResponse, error) {
+		return m.Generate(ctx, p.Request, p.Callback)
+	})
+	if err != nil {
+		t.Fatalf("abnormal finish should not surface as a middleware error, got %v", err)
+	}
+	if resp == nil || resp.FinishReason != ai.FinishReasonBlocked {
+		t.Fatalf("response state lost; resp=%v", resp)
+	}
+	if resp.FinishMessage != "blocked by safety settings" {
+		t.Errorf("FinishMessage lost: %q", resp.FinishMessage)
+	}
+}
+
+func TestConfigRejectsInvalidValidateMode(t *testing.T) {
+	if _, err := (&Config{Validate: "strick"}).New(ctx); err == nil {
+		t.Fatal("expected an error for an invalid Validate mode")
+	}
+}
+
+func TestConfigRejectsUnsupportedVersion(t *testing.T) {
+	if _, err := (&Config{Version: "0.9"}).New(ctx); err == nil {
+		t.Fatal("expected an error for an unsupported Version")
+	}
+}
+
+func TestConfigRejectsInvalidInstructions(t *testing.T) {
+	if _, err := (&Config{Instructions: "prompt"}).New(ctx); err == nil {
+		t.Fatal("expected an error for invalid Instructions")
+	}
+}
