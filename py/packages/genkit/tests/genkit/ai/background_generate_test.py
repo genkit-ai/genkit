@@ -315,7 +315,7 @@ async def test_background_start_model_response_without_operation_raises(ai: Genk
 
     _register_raw_background(ai, name='empty-bg', start=start)
 
-    with pytest.raises(GenkitError, match='Background model') as exc_info:
+    with pytest.raises(GenkitError, match="Background model 'empty-bg' did not return an operation") as exc_info:
         await ai.generate(model='empty-bg', prompt='a cat')
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'

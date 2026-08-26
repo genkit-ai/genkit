@@ -47,7 +47,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
 )
-from genkit._core._background import _ensure_operation
+from genkit._core._background import _ensure_operation, missing_operation_error
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -657,10 +657,7 @@ def box_background_start(*, raw: object, request: ModelRequest, name: str) -> Mo
     """
     if isinstance(raw, ModelResponse):
         if raw.operation is None:
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message=f"Background model '{name}' did not return an operation",
-            )
+            raise missing_operation_error(name=name)
         if raw.latency_ms is None:
             raw.latency_ms = _latency_ms_from_operation(raw.operation)
         return raw

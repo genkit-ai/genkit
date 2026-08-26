@@ -152,14 +152,19 @@ class BackgroundAction(Generic[OutputT]):
         return _ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
+def missing_operation_error(*, name: str) -> GenkitError:
+    """The caller asked for a handle and the model did not return one."""
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=f"Background model '{name}' did not return an operation.",
+    )
+
+
 def _ensure_operation(*, response: object, name: str) -> Operation:
     """A start/check/cancel fn returns an Operation, not a dict."""
     if isinstance(response, Operation):
         return response
-    raise GenkitError(
-        status='FAILED_PRECONDITION',
-        message=f"Background model '{name}' did not return an operation",
-    )
+    raise missing_operation_error(name=name)
 
 
 class DefineBackgroundModelOptions(BaseModel):

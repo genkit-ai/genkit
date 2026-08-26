@@ -95,6 +95,7 @@ from genkit._core._background import (
     check_operation,
     define_background_model,
     lookup_background_action,
+    missing_operation_error,
 )
 from genkit._core._channel import Channel, run_loop
 from genkit._core._dap import (
@@ -1754,9 +1755,6 @@ class Genkit:
 
         # Extract operation from response
         if not hasattr(response, 'operation') or not response.operation:
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message=f"Model '{model_action.name}' did not return an operation.",
-            )
+            raise missing_operation_error(name=model_action.name)
 
         return response.operation
