@@ -19,7 +19,6 @@ from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelRe
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
-from genkit._ai._resource import ResourceInput, ResourceOutput, define_resource
 from genkit._ai._testing import (
     ProgrammableModel,
     define_echo_model,
@@ -34,7 +33,6 @@ from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,
     GenerationUsage,
-    Resource1,
     Role,
     ToolChoice,
     ToolRequest,
@@ -6536,38 +6534,6 @@ async def test_unknown_middleware_raises_with_invalid_input() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unmatched_resource_raises_with_invalid_input() -> None:
-    """A resource URI that matches nothing is a bad argument, not a missing action."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
-
-    async def other_resource(inp: ResourceInput, ctx: ActionRunContext) -> ResourceOutput:
-        return ResourceOutput(content=[Part.from_text('other')])
-
-    define_resource(ai.registry, {'uri': 'test://other'}, other_resource)
-
-    with pytest.raises(GenkitError) as raised:
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=[Part(resource=Resource1(uri='test://missing'))],
-                    )
-                ],
-                resources=['test://other'],
-            ),
-        )
-    error = raised.value
-    assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'test://missing' in error.original_message
-    assert 'ACTION_NOT_FOUND' not in error.original_message
-
-
-@pytest.mark.asyncio
 async def test_unknown_model_raises_with_model_not_found() -> None:
     """A missing model raises; the message stays human and reason is MODEL_NOT_FOUND."""
     ai = Genkit()
@@ -6653,60 +6619,6 @@ async def test_generate_array_with_object_schema_raises_invalid_schema() -> None
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
     assert 'array' in error.original_message
     assert 'INVALID_SCHEMA' not in error.original_message
-
-
-@pytest.mark.asyncio
-async def test_generate_unknown_resource_name_raises_not_found() -> None:
-    """A resource name that is not registered is NOT_FOUND, same as an unmatched URI."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
-
-    with pytest.raises(GenkitError) as raised:
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=[Part(resource=Resource1(uri='test://file'))],
-                    )
-                ],
-                resources=['ghost'],
-            ),
-        )
-    error = raised.value
-    assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ghost' in error.original_message
-    assert 'INVALID_INPUT' not in error.original_message
-
-
-@pytest.mark.asyncio
-async def test_generate_numeric_resource_raises_invalid_input() -> None:
-    """A resource entry that is not a name or action is a bad argument."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
-
-    with pytest.raises(GenkitError) as raised:
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions.model_construct(
-                model='programmableModel',
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=[Part(resource=Resource1(uri='test://file'))],
-                    )
-                ],
-                resources=[123],
-            ),
-        )
-    error = raised.value
-    assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'Resources must be strings or actions' in error.original_message
-    assert 'INVALID_INPUT' not in error.original_message
 
 
 @pytest.mark.asyncio

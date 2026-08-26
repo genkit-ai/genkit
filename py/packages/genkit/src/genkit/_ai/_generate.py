@@ -38,7 +38,6 @@ from genkit._ai._model import (
     resolve_model_name,
     text_from_content,
 )
-from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     Interrupt,
@@ -1252,8 +1251,6 @@ async def resolve_door(
             reason=RuntimeErrorReason.INVALID_RESUME,
         )
     options, formatter = apply_format(options=options, format_def=format_def)
-    if options.resources:
-        options = await apply_resources(registry=registry, options=options, abort_signal=abort_signal)
     assert_valid_tool_names(turn_tools)
     return options, ResolvedTurn(model=turn_model, tools=turn_tools, formatter=formatter)
 
@@ -1834,114 +1831,6 @@ def resolve_instructions(*, formatter: Formatter[Any, Any], instructions: str | 
     if not formatter:
         return None  # pyright: ignore[reportUnreachable] - defensive check
     return formatter.instructions
-
-
-def extract_resource_uri(*, resource: Any) -> str | None:  # noqa: ANN401
-    """Extract URI from a resource object, unwrapping Pydantic structures as needed."""
-    if hasattr(resource, 'uri'):
-        return resource.uri
-    if hasattr(resource, 'root'):
-        return extract_resource_uri(resource=resource.root)
-    if hasattr(resource, 'resource'):
-        return extract_resource_uri(resource=resource.resource)
-    if isinstance(resource, dict) and 'uri' in resource:
-        return resource['uri']
-    return None
-
-
-async def apply_resources(
-    *,
-    registry: Registry,
-    options: GenerateActionOptions,
-    abort_signal: asyncio.Event,
-) -> GenerateActionOptions:
-    """Resolve and hydrate resource parts in the request messages."""
-    # Quick check if any message has a resource part
-    has_resource = False
-    for msg in options.messages:
-        for part in msg.content:
-            if part.resource:
-                has_resource = True
-                break
-        if has_resource:
-            break
-
-    if not has_resource:
-        return options
-
-    # Resolve all declared resources
-    resources = []
-    if options.resources:
-        resources = await resolve_resources(registry, cast(list[ResourceArgument], options.resources))
-
-    updated_messages = []
-    for msg in options.messages:
-        if not any(p.resource for p in msg.content):
-            updated_messages.append(msg)
-            continue
-
-        updated_content = []
-        for part in msg.content:
-            if not part.resource:
-                updated_content.append(part)
-                continue
-
-            resource_obj = part.resource
-
-            # Extract URI from the resource object
-            # The resource can be wrapped in various Pydantic structures (Resource, Resource1, etc.)
-            ref_uri = extract_resource_uri(resource=resource_obj)
-            if not ref_uri:
-                logger.warning(
-                    f'Unable to extract URI from resource part: {type(resource_obj).__name__}. '
-                    + 'Resource part will be skipped.'
-                )
-                continue
-
-            # Find matching resource action
-            if not resources:
-                raise GenkitError(
-                    status='NOT_FOUND',
-                    message=f'failed to find matching resource for {ref_uri}',
-                    reason=RuntimeErrorReason.INVALID_INPUT,
-                )
-
-            # Normalize to ResourceInput for matching
-            resource_input = ResourceInput(uri=ref_uri)
-            resource_action = await find_matching_resource(registry, resources, resource_input)
-
-            if not resource_action:
-                raise GenkitError(
-                    status='NOT_FOUND',
-                    message=f'failed to find matching resource for {ref_uri}',
-                    reason=RuntimeErrorReason.INVALID_INPUT,
-                )
-
-            # Execute the resource
-            response = await resource_action.run(
-                resource_input,
-                on_chunk=None,
-                context=None,
-                abort_signal=abort_signal,
-            )
-
-            # response.response is ResourceOutput which has .content (list of Parts)
-            # It usually returns a dict if coming from dynamic_resource (model_dump called)
-            output_content = None
-            if hasattr(response.response, 'content'):
-                output_content = response.response.content
-            elif isinstance(response.response, dict) and 'content' in response.response:
-                output_content = response.response['content']
-
-            if output_content:
-                updated_content.extend(output_content)
-
-        updated_messages.append(Message(role=msg.role, content=updated_content, metadata=msg.metadata))
-
-    # Return a new request with updated messages
-    new_request = options.model_copy()
-    new_request.messages = updated_messages
-    return new_request
 
 
 def tool_short_name(*, name: str) -> str:

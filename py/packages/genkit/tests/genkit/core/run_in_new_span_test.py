@@ -300,7 +300,7 @@ async def test_action_span_metadata_uses_short_keys(exporter: InMemorySpanExport
     """``Action.span_metadata`` uses short keys; ``run_in_new_span`` adds ``genkit:metadata:`` once.
 
     Locks in the simplified contract introduced alongside this refactor: framework call
-    sites (e.g. ``_flow.py``, ``_resource.py``) pass short keys like ``flow:name``, and
+    sites (e.g. ``_flow.py``) pass short keys like ``flow:name``, and
     the helper produces ``genkit:metadata:flow:name`` on the span.
     """
 

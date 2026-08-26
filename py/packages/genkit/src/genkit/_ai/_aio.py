@@ -73,11 +73,6 @@ from genkit._ai._prompt import (
     register_prompt_actions,
     to_generate_options,
 )
-from genkit._ai._resource import (
-    ResourceFn,
-    ResourceOptions,
-    define_resource,
-)
 from genkit._ai._tools import Tool, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (
@@ -825,31 +820,6 @@ class Genkit:
             input_schema=input_schema,
             output_schema=output_schema,
         )
-
-    def define_resource(
-        self,
-        *,
-        fn: ResourceFn,
-        name: str | None = None,
-        uri: str | None = None,
-        template: str | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Action:
-        """Register a resource action."""
-        opts: ResourceOptions = {}
-        if name:
-            opts['name'] = name
-        if uri:
-            opts['uri'] = uri
-        if template:
-            opts['template'] = template
-        if description:
-            opts['description'] = description
-        if metadata:
-            opts['metadata'] = metadata
-
-        return define_resource(self.registry, opts, fn)
 
     # -------------------------------------------------------------------------
     # Server infrastructure methods

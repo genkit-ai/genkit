@@ -263,7 +263,7 @@ class Registry:
         """Register an existing Action instance.
 
         Allows registering a pre-configured Action object, such as one created via
-        `dynamic_resource` or other factory methods.
+        a factory method.
 
         Args:
            action: The action instance to register.
@@ -292,7 +292,7 @@ class Registry:
         ensures all action metadata is fully loaded before returning.
 
         Args:
-            kind: The type of actions to retrieve (e.g., TOOL, MODEL, RESOURCE).
+            kind: The type of actions to retrieve (e.g., TOOL, MODEL).
 
         Returns:
             A dictionary mapping action names to Action instances with fully loaded metadata.
