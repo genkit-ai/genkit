@@ -1264,6 +1264,10 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 // provided via [ai.GenerateOption] arguments. It's a convenient way to make
 // generation calls without pre-defining a prompt object.
 //
+// A generation failure returns the classified error together with a partial
+// [ai.ModelResponse] that preserves the progress the tool loop made before
+// failing; see [ai.Generate] for the contract.
+//
 // # Options
 //
 // Model and Configuration:
@@ -1406,7 +1410,8 @@ func CheckModelOperation(ctx context.Context, g *Genkit, op *ai.ModelOperation) 
 
 // GenerateText performs a model generation request similar to [Generate], but
 // directly returns the generated text content as a string. It's a convenience
-// wrapper for cases where only the textual output is needed.
+// wrapper for cases where only the textual output is needed. On error, the
+// text of the partial response (usually empty) is returned with the error.
 //
 // GenerateText accepts the same options as [Generate]. See [Generate] for the full
 // list of available options.
@@ -1437,7 +1442,8 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 // text output (tool requests or interrupts instead), or generation ended
 // aborted, interrupted, or other, the typed output is nil and no error is
 // returned; check the returned response's FinishReason, Interrupts(), and
-// ToolRequests() to handle those.
+// ToolRequests() to handle those. A generation failure returns its error
+// alongside the partial response [ai.Generate] documents, with a nil output.
 //
 // Example:
 //

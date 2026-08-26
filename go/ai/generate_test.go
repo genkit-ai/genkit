@@ -2920,6 +2920,16 @@ func TestGenerateDataAbnormalFinish(t *testing.T) {
 			},
 		},
 		{
+			// What the loop's failure partial reports; parsing must skip it
+			// the same way.
+			name: "failed with failure text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonFailed,
+				FinishMessage: "provider down",
+				Message:       NewModelTextMessage("Error: provider down"),
+			},
+		},
+		{
 			name: "other with filter details",
 			response: &ModelResponse{
 				FinishReason:  FinishReasonOther,
@@ -3539,4 +3549,1051 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 			t.Errorf("resumed response = %q, want %q", got, "done")
 		}
 	})
+}
+
+// TestGeneratePartialResponseOnFailure covers the partial-response contract:
+// when the generate loop fails after the request has resolved, the classified
+// error is returned together with a partial [ModelResponse] that preserves
+// the loop's progress.
+func TestGeneratePartialResponseOnFailure(t *testing.T) {
+	t.Parallel()
+
+	// loopSetup defines a model that always answers with a tool request and a
+	// tool that succeeds, so only the configured turn limit ends the loop.
+	loopSetup := func(t *testing.T) api.Registry {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/loopModel",
+			handler: loopingToolModel("myTool", 100),
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+		return r
+	}
+
+	// badJSONSetup defines a model whose final text does not parse against a
+	// requested JSON output schema.
+	badJSONSetup := func(t *testing.T) api.Registry {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/badJSON",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{
+					Request:      req,
+					FinishReason: FinishReasonStop,
+					Message:      NewModelTextMessage("this is not json"),
+				}, nil
+			},
+		})
+		return r
+	}
+
+	t.Run("max turns drops the round it will not run", func(t *testing.T) {
+		r := loopSetup(t)
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithMaxTurns(2),
+		)
+		if !errors.Is(err, ErrMaxTurnsExceeded) {
+			t.Fatalf("err = %v, want ErrMaxTurnsExceeded", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+		if !strings.Contains(resp.FinishMessage, "exceeded maximum tool call iterations (2)") {
+			t.Errorf("FinishMessage = %q, want the max-turns cause", resp.FinishMessage)
+		}
+		// The same cause classified, so a consumer reading the response as
+		// data branches on a status rather than matching the message.
+		if resp.Error == nil {
+			t.Fatal("Error is nil, want the classified cause")
+		}
+		if resp.Error.Status != status.Aborted {
+			t.Errorf("Error.Status = %q, want %q", resp.Error.Status, status.Aborted)
+		}
+		if resp.Error.Message != resp.FinishMessage {
+			t.Errorf("Error.Message = %q, want the FinishMessage %q", resp.Error.Message, resp.FinishMessage)
+		}
+		// Two completed rounds and nothing else: the model message whose
+		// tools the limit refused to run goes with the round it opened.
+		history := resp.History()
+		if len(history) != 5 {
+			t.Fatalf("History() has %d messages, want 5 (user, model, tool, model, tool)", len(history))
+		}
+		if history[4].Role != RoleTool {
+			t.Errorf("history ends with a %s message, want the tool message closing the last round", history[4].Role)
+		}
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil: the refused round is not handed back", resp.Message)
+		}
+	})
+
+	t.Run("model failure keeps completed turns", func(t *testing.T) {
+		r := newTestRegistry(t)
+		calls := 0
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/failsSecond",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				calls++
+				if calls == 1 {
+					return &ModelResponse{Request: req, Message: &Message{
+						Role:    RoleModel,
+						Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "myTool", Input: map[string]any{}})},
+					}}, nil
+				}
+				return nil, errors.New("model exploded")
+			},
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/failsSecond"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+		)
+		errorContains(t, err, "model exploded")
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+		if !strings.Contains(resp.FinishMessage, "model exploded") {
+			t.Errorf("FinishMessage = %q, want the model error", resp.FinishMessage)
+		}
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil: the failing call produced nothing", resp.Message)
+		}
+		history := resp.History()
+		if len(history) != 3 {
+			t.Fatalf("History() has %d messages, want 3 (user, model, tool)", len(history))
+		}
+		if history[1].Role != RoleModel || history[2].Role != RoleTool {
+			t.Errorf("history roles = %s, %s, want model, tool", history[1].Role, history[2].Role)
+		}
+	})
+
+	t.Run("cancellation reports aborted, not failed", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/cancelled",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return nil, fmt.Errorf("call gave up: %w", context.Canceled)
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/cancelled"),
+			WithPrompt("start"),
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q: the caller stopped the loop", resp.FinishReason, FinishReasonAborted)
+		}
+		if resp.Error == nil || resp.Error.Status != status.Cancelled {
+			t.Errorf("Error = %+v, want a CANCELLED classification", resp.Error)
+		}
+	})
+
+	t.Run("mid-stream failure drops the unfinished message", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/failsMidStream",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("Hello, ")}})
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("wor")}})
+				return nil, errors.New("stream died")
+			},
+		})
+
+		var streamed strings.Builder
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/failsMidStream"),
+			WithPrompt("start"),
+			WithStreaming(func(ctx context.Context, c *ModelResponseChunk) error {
+				streamed.WriteString(c.Text())
+				return nil
+			}),
+		)
+		errorContains(t, err, "stream died")
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		// The prefix reached the caller through the stream; it does not also
+		// ride back on a conversation the caller would send again.
+		if got := streamed.String(); got != "Hello, wor" {
+			t.Errorf("streamed = %q, want the prefix %q", got, "Hello, wor")
+		}
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil: the model never finished it", resp.Message)
+		}
+		if got := len(resp.History()); got != 1 {
+			t.Errorf("History() has %d messages, want 1 (the user message alone)", got)
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+	})
+
+	t.Run("tool failure drops the whole round", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/twoTools",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "boomTool", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "okTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+		// The handshake orders the failure after okTool completes, so the
+		// round demonstrably held a finished sibling before it was dropped.
+		okDone := make(chan struct{})
+		defineTool(r, "boomTool", "always fails",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				<-okDone
+				return "", errors.New("boom")
+			})
+		defineTool(r, "okTool", "succeeds",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				defer close(okDone)
+				return "fine", nil
+			})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/twoTools"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "boomTool"), LookupTool(r, "okTool")),
+		)
+		if !errors.Is(err, ErrToolFailed) {
+			t.Fatalf("err = %v, want ErrToolFailed", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+		// okTool finished, but its output cannot be handed back on its own:
+		// the round's other request has no response, and a conversation that
+		// ends there is one no provider accepts.
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil: the round goes with the tool that failed", resp.Message)
+		}
+		if got := len(resp.ToolRequests()); got != 0 {
+			t.Errorf("ToolRequests() = %d parts, want none", got)
+		}
+		history := resp.History()
+		if len(history) != 1 || history[0].Role != RoleUser {
+			t.Errorf("History() = %d messages ending in %v, want the user message alone", len(history), history[len(history)-1].Role)
+		}
+	})
+
+	t.Run("invalid structured output returns the full response", func(t *testing.T) {
+		r := badJSONSetup(t)
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/badJSON"),
+			WithPrompt("start"),
+			WithOutputType(StructuredResponse{}),
+		)
+		if !errors.Is(err, status.ErrInvalidOutput) {
+			t.Fatalf("err = %v, want ErrInvalidOutput", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the model's full response")
+		}
+		// The model finished; only post-processing failed. The response keeps
+		// the model's own finish reason and raw output.
+		if resp.FinishReason != FinishReasonStop {
+			t.Errorf("FinishReason = %q, want the model's own %q", resp.FinishReason, FinishReasonStop)
+		}
+		if got := resp.Text(); got != "this is not json" {
+			t.Errorf("Text() = %q, want the raw model output", got)
+		}
+	})
+
+	t.Run("GenerateData returns the partial response with the error", func(t *testing.T) {
+		r := badJSONSetup(t)
+
+		out, resp, err := GenerateData[StructuredResponse](testCtx, r,
+			WithModelName("test/badJSON"),
+			WithPrompt("start"),
+		)
+		if !errors.Is(err, status.ErrInvalidOutput) {
+			t.Fatalf("err = %v, want ErrInvalidOutput", err)
+		}
+		if out != nil {
+			t.Errorf("output = %v, want nil", out)
+		}
+		if resp == nil || resp.Text() != "this is not json" {
+			t.Errorf("response = %v, want the raw model output", resp)
+		}
+	})
+
+	t.Run("GenerateText returns the partial text", func(t *testing.T) {
+		r := badJSONSetup(t)
+
+		text, err := GenerateText(testCtx, r,
+			WithModelName("test/badJSON"),
+			WithPrompt("start"),
+			WithOutputType(StructuredResponse{}),
+		)
+		if !errors.Is(err, status.ErrInvalidOutput) {
+			t.Fatalf("err = %v, want ErrInvalidOutput", err)
+		}
+		if text != "this is not json" {
+			t.Errorf("text = %q, want the raw model output", text)
+		}
+	})
+
+	t.Run("a hook dropping the response still yields the partial", func(t *testing.T) {
+		r := loopSetup(t)
+		drop := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					resp, err := next(ctx, p)
+					if err != nil {
+						return nil, err // The common reflex that loses the response.
+					}
+					return resp, nil
+				},
+			}, nil
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithMaxTurns(1),
+			WithUse(drop),
+		)
+		if !errors.Is(err, ErrMaxTurnsExceeded) {
+			t.Fatalf("err = %v, want ErrMaxTurnsExceeded", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's recorded partial restored")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+		// One completed round: the model message the limit refused goes with
+		// the round it opened, restored partial or not.
+		if got := len(resp.History()); got != 3 {
+			t.Errorf("History() has %d messages, want 3 (user, model, tool)", got)
+		}
+	})
+
+	t.Run("an error outside a turn synthesizes a partial", func(t *testing.T) {
+		r := loopSetup(t)
+		deny := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Iteration == 1 {
+						return nil, errors.New("hook denied")
+					}
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithUse(deny),
+		)
+		errorContains(t, err, "hook denied")
+		if resp == nil {
+			t.Fatal("response is nil, want a synthesized partial")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil: no turn produced a message for this failure", resp.Message)
+		}
+		// The conversation entering the denied turn: user, model, tool.
+		if got := len(resp.History()); got != 3 {
+			t.Errorf("History() has %d messages, want 3", got)
+		}
+	})
+
+	t.Run("the stream helpers yield the partial with the error", func(t *testing.T) {
+		r := loopSetup(t)
+
+		var last *ModelStreamValue
+		var streamErr error
+		for v, err := range GenerateStream(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithMaxTurns(1),
+		) {
+			if err != nil {
+				last, streamErr = v, err
+			}
+		}
+		if !errors.Is(streamErr, ErrMaxTurnsExceeded) {
+			t.Fatalf("err = %v, want ErrMaxTurnsExceeded", streamErr)
+		}
+		if last == nil || last.Response == nil {
+			t.Fatal("stream yielded no response with its error, want the partial")
+		}
+		if !last.Done {
+			t.Error("the failing value is not marked Done")
+		}
+		if got := len(last.Response.History()); got != 3 {
+			t.Errorf("History() has %d messages, want 3 (user, model, tool)", got)
+		}
+
+		var typed *StreamValue[StructuredResponse, StructuredResponse]
+		for v, err := range GenerateDataStream[StructuredResponse](testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithMaxTurns(1),
+		) {
+			if err != nil {
+				typed, streamErr = v, err
+			}
+		}
+		if !errors.Is(streamErr, ErrMaxTurnsExceeded) {
+			t.Fatalf("typed err = %v, want ErrMaxTurnsExceeded", streamErr)
+		}
+		if typed == nil || typed.Response == nil {
+			t.Fatal("typed stream yielded no response with its error, want the partial")
+		}
+		var zero StructuredResponse
+		if typed.Output != zero {
+			t.Errorf("Output = %v, want the zero value: the call produced none", typed.Output)
+		}
+	})
+}
+
+// TestGenerateLoopFailureHardening covers edge cases of the partial-response
+// machinery: stale partials do not survive recovered failures, sibling
+// outcomes (interrupts, resolved restarts) survive into partials and
+// resumes, and the model layer's own partial responses are adopted.
+func TestGenerateLoopFailureHardening(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a recovered failure does not leak a stale partial", func(t *testing.T) {
+		r := newTestRegistry(t)
+		calls := 0
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/flakyThenTool",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				calls++
+				if calls == 1 {
+					return nil, errors.New("transient model error")
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "myTool", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+
+		retryThenDeny := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Iteration == 1 {
+						return nil, errors.New("budget denied")
+					}
+					resp, err := next(ctx, p)
+					if err != nil {
+						return next(ctx, p) // Retry the turn once.
+					}
+					return resp, nil
+				},
+			}, nil
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/flakyThenTool"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithUse(retryThenDeny),
+		)
+		errorContains(t, err, "budget denied")
+		if resp == nil {
+			t.Fatal("response is nil, want a synthesized partial")
+		}
+		if !strings.Contains(resp.FinishMessage, "budget denied") {
+			t.Errorf("FinishMessage = %q, want the current failure, not the recovered one", resp.FinishMessage)
+		}
+		// The conversation entering the denied turn: user, model, tool. The
+		// recovered turn-0 failure must not regress it to just the user
+		// message.
+		if got := len(resp.History()); got != 3 {
+			t.Errorf("History() has %d messages, want 3", got)
+		}
+	})
+
+	t.Run("a sibling interrupt goes with the failed round", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/interruptAndBoom",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "pauser", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "boomTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+		pauseDone := make(chan struct{})
+		pauser := defineTool(r, "pauser", "interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				defer close(pauseDone)
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "approval"}})
+			})
+		boom := defineTool(r, "boomTool", "fails after the interrupt arrived",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				<-pauseDone
+				return "", errors.New("boom")
+			})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/interruptAndBoom"),
+			WithPrompt("start"),
+			WithTools(pauser, boom),
+		)
+		if !errors.Is(err, ErrToolFailed) {
+			t.Fatalf("err = %v, want ErrToolFailed", err)
+		}
+		// An interrupt is a resume point only while its round can still be
+		// answered. This one cannot, so it is dropped rather than handed
+		// back as an interrupt the caller could never resolve.
+		if got := len(resp.Interrupts()); got != 0 {
+			t.Errorf("partial has %d interrupt parts, want none", got)
+		}
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil", resp.Message)
+		}
+		if got := len(resp.History()); got != 1 {
+			t.Errorf("History() has %d messages, want 1 (the user message alone)", got)
+		}
+	})
+
+	t.Run("response metadata survives a resume replay", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/auditPlusInterrupt",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				for _, m := range req.Messages {
+					if m.Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "pauser", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "auditTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+		pauser := defineTool(r, "pauser", "interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "approval"}})
+			})
+		audit := defineMultipartTool(r, "auditTool", "annotates its response",
+			func(ctx *ToolContext, in map[string]any) (*MultipartToolResponse, error) {
+				return &MultipartToolResponse{
+					Output:   "ok",
+					Metadata: map[string]any{"audit": "checked"},
+				}, nil
+			})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/auditPlusInterrupt"),
+			WithPrompt("start"),
+			WithTools(pauser, audit),
+		)
+		assertNoError(t, err)
+		if res.FinishReason != FinishReasonInterrupted {
+			t.Fatalf("FinishReason = %q, want interrupted", res.FinishReason)
+		}
+
+		respond := pauser.Respond(res.Interrupts()[0], "approved", nil)
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/auditPlusInterrupt"),
+			WithMessages(res.History()...),
+			WithTools(pauser, audit),
+			WithToolResponses(respond),
+		)
+		assertNoError(t, err)
+
+		var auditResp *Part
+		for _, m := range resumed.History() {
+			if m.Role != RoleTool {
+				continue
+			}
+			for _, p := range m.Content {
+				if p.IsToolResponse() && p.ToolResponse.Name == "auditTool" {
+					auditResp = p
+				}
+			}
+		}
+		if auditResp == nil {
+			t.Fatal("resumed history has no tool response for auditTool")
+		}
+		if auditResp.Metadata["audit"] != "checked" {
+			t.Errorf("replayed metadata = %v, want the tool's own audit key restored", auditResp.Metadata)
+		}
+		if auditResp.Metadata["source"] != "pending" {
+			t.Errorf("replayed metadata = %v, want source pending kept", auditResp.Metadata)
+		}
+	})
+
+	t.Run("the model layer's accounting outlives its dropped message", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{name: "test/plainModel"})
+
+		partialModel := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+					return &ModelResponse{
+						Message: NewModelTextMessage("half an answer"),
+						Usage:   &GenerationUsage{OutputTokens: 7},
+					}, errors.New("model died")
+				},
+			}, nil
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/plainModel"),
+			WithPrompt("start"),
+			WithUse(partialModel),
+		)
+		errorContains(t, err, "model died")
+		// The tokens were spent, so the accounting rides back; the message
+		// they produced does not, since the call did not finish.
+		if resp.Message != nil {
+			t.Errorf("Message = %v, want nil", resp.Message)
+		}
+		if resp.Usage == nil || resp.Usage.OutputTokens != 7 {
+			t.Errorf("Usage = %+v, want the model layer's accounting kept", resp.Usage)
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		}
+	})
+
+	t.Run("restarted interrupt with no metadata is still an interrupt", func(t *testing.T) {
+		r := newTestRegistry(t)
+		calls := 0
+		fragile := defineTool(r, "fragile", "always interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				calls++
+				return "", ctx.Interrupt(&InterruptOptions{})
+			})
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/reinterrupt",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "fragile", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/reinterrupt"),
+			WithPrompt("start"),
+			WithTools(fragile),
+		)
+		assertNoError(t, err)
+
+		restart := fragile.Restart(res.Interrupts()[0], nil)
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/reinterrupt"),
+			WithMessages(res.History()...),
+			WithTools(fragile),
+			WithToolRestarts(restart),
+		)
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Fatalf("err = %v, want FAILED_PRECONDITION", err)
+		}
+		if resumed == nil {
+			t.Fatal("response is nil, want the re-interrupted partial")
+		}
+		if resumed.FinishReason != FinishReasonInterrupted {
+			t.Errorf("FinishReason = %q, want interrupted", resumed.FinishReason)
+		}
+		if got := len(resumed.Interrupts()); got != 1 {
+			t.Errorf("Interrupts() = %d parts, want the metadata-free interrupt detectable", got)
+		}
+		if got := len(resumed.History()); got != len(res.History()) {
+			t.Errorf("History() has %d messages, want %d", got, len(res.History()))
+		}
+		if calls != 2 {
+			t.Errorf("tool ran %d times, want 2", calls)
+		}
+	})
+
+	t.Run("re-interrupt preserves resolved siblings", func(t *testing.T) {
+		r := newTestRegistry(t)
+		aCalls, bCalls := 0, 0
+		toolA := defineTool(r, "toolA", "interrupts once, then succeeds",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				aCalls++
+				if aCalls == 1 {
+					return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "A"}})
+				}
+				return "A done", nil
+			})
+		toolB := defineTool(r, "toolB", "always interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				bCalls++
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "B"}})
+			})
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/twoInterrupts",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "toolA", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "toolB", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/twoInterrupts"),
+			WithPrompt("start"),
+			WithTools(toolA, toolB),
+		)
+		assertNoError(t, err)
+
+		var partA, partB *Part
+		for _, p := range res.Interrupts() {
+			switch p.ToolRequest.Name {
+			case "toolA":
+				partA = p
+			case "toolB":
+				partB = p
+			}
+		}
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/twoInterrupts"),
+			WithMessages(res.History()...),
+			WithTools(toolA, toolB),
+			WithToolRestarts(toolA.Restart(partA, nil), toolB.Restart(partB, nil)),
+		)
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Fatalf("err = %v, want FAILED_PRECONDITION from toolB's re-interrupt", err)
+		}
+		if resumed == nil {
+			t.Fatal("response is nil, want the re-interrupted partial")
+		}
+		var resolvedA *Part
+		for _, p := range resumed.Message.Content {
+			if p.IsToolRequest() && p.ToolRequest.Name == "toolA" {
+				resolvedA = p
+			}
+		}
+		if resolvedA == nil {
+			t.Fatal("toolA's request part missing from the partial")
+		}
+		if resolvedA.Metadata["pendingOutput"] != "A done" {
+			t.Errorf("toolA pendingOutput = %v, want its completed output preserved", resolvedA.Metadata["pendingOutput"])
+		}
+	})
+}
+
+// TestGenerateResumePreservesMultipartContent covers pendingContent: a
+// multipart tool's content parts survive an interrupted turn and a wire
+// round-trip, and reappear on the replayed tool response when the
+// generation resumes.
+func TestGenerateResumePreservesMultipartContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replay restores multipart content", func(t *testing.T) {
+		r := newTestRegistry(t)
+		pauser := defineTool(r, "pauser", "interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "approval"}})
+			})
+		media := NewMultipartTool("mediaTool", "returns a chart",
+			func(ctx *ToolContext, in map[string]any) (*MultipartToolResponse, error) {
+				return &MultipartToolResponse{
+					Output:  "described",
+					Content: []*Part{NewMediaPart("image/png", "data:image/png;base64,AAA")},
+				}, nil
+			})
+		media.Register(r)
+
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/mediaAndPause",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				for _, m := range req.Messages {
+					if m.Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "pauser", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "mediaTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/mediaAndPause"),
+			WithPrompt("start"),
+			WithTools(pauser, media),
+		)
+		assertNoError(t, err)
+		if res.FinishReason != FinishReasonInterrupted {
+			t.Fatalf("FinishReason = %q, want interrupted", res.FinishReason)
+		}
+
+		// A persistence round-trip degrades metadata values to generic JSON;
+		// the replay must decode pendingContent from that form too.
+		raw, err := json.Marshal(res.History())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var msgs []*Message
+		if err := json.Unmarshal(raw, &msgs); err != nil {
+			t.Fatal(err)
+		}
+
+		var interruptPart *Part
+		for _, p := range msgs[len(msgs)-1].Content {
+			if p.IsInterrupt() {
+				interruptPart = p
+			}
+		}
+		if interruptPart == nil {
+			t.Fatal("no interrupt part survived the round-trip")
+		}
+
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/mediaAndPause"),
+			WithMessages(msgs...),
+			WithTools(pauser, media),
+			WithToolResponses(pauser.Respond(interruptPart, "approved", nil)),
+		)
+		assertNoError(t, err)
+
+		var mediaResp *Part
+		for _, m := range resumed.History() {
+			if m.Role != RoleTool {
+				continue
+			}
+			for _, p := range m.Content {
+				if p.IsToolResponse() && p.ToolResponse.Name == "mediaTool" {
+					mediaResp = p
+				}
+			}
+		}
+		if mediaResp == nil {
+			t.Fatal("resumed history has no tool response for mediaTool")
+		}
+		if mediaResp.ToolResponse.Output != "described" {
+			t.Errorf("replayed output = %v, want %q", mediaResp.ToolResponse.Output, "described")
+		}
+		content := mediaResp.ToolResponse.Content
+		if len(content) != 1 || !content[0].IsMedia() || content[0].ContentType != "image/png" {
+			t.Fatalf("replayed content = %+v, want the tool's media part restored", content)
+		}
+		if _, ok := mediaResp.Metadata["pendingContent"]; ok {
+			t.Error("pendingContent metadata leaked onto the replayed response")
+		}
+	})
+
+	t.Run("re-interrupt stamps content for resolved siblings", func(t *testing.T) {
+		r := newTestRegistry(t)
+		aCalls := 0
+		multiA := NewMultipartTool("multiA", "interrupts once, then returns media",
+			func(ctx *ToolContext, in map[string]any) (*MultipartToolResponse, error) {
+				aCalls++
+				if aCalls == 1 {
+					return nil, ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "A"}})
+				}
+				return &MultipartToolResponse{
+					Output:  "A done",
+					Content: []*Part{NewMediaPart("image/png", "data:image/png;base64,BBB")},
+				}, nil
+			})
+		multiA.Register(r)
+		toolB := defineTool(r, "toolB", "always interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "B"}})
+			})
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/multiInterrupts",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "multiA", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "toolB", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/multiInterrupts"),
+			WithPrompt("start"),
+			WithTools(multiA, toolB),
+		)
+		assertNoError(t, err)
+
+		var partA, partB *Part
+		for _, p := range res.Interrupts() {
+			switch p.ToolRequest.Name {
+			case "multiA":
+				partA = p
+			case "toolB":
+				partB = p
+			}
+		}
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/multiInterrupts"),
+			WithMessages(res.History()...),
+			WithTools(multiA, toolB),
+			WithToolRestarts(multiA.Restart(partA, nil), toolB.Restart(partB, nil)),
+		)
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Fatalf("err = %v, want FAILED_PRECONDITION from toolB's re-interrupt", err)
+		}
+		var resolvedA *Part
+		for _, p := range resumed.Message.Content {
+			if p.IsToolRequest() && p.ToolRequest.Name == "multiA" {
+				resolvedA = p
+			}
+		}
+		if resolvedA == nil {
+			t.Fatal("multiA's request part missing from the partial")
+		}
+		content, ok := resolvedA.Metadata["pendingContent"].([]*Part)
+		if !ok || len(content) != 1 || !content[0].IsMedia() {
+			t.Errorf("multiA pendingContent = %v, want its media part preserved", resolvedA.Metadata["pendingContent"])
+		}
+	})
+}
+
+// TestResumedToolMessageOrder pins that a resumed tool message carries its
+// responses in the order their requests appear in the model message, not the
+// order the concurrent resolutions finished, the same guarantee
+// handleToolRequests gives the first run.
+func TestResumedToolMessageOrder(t *testing.T) {
+	t.Parallel()
+	r := newTestRegistry(t)
+
+	// On restart, beta finishes first and alpha waits for it, so completion
+	// order inverts request order. The sleep gives beta's result time to
+	// reach the collection loop ahead of alpha's.
+	betaDone := make(chan struct{})
+	aCalls, bCalls := 0, 0
+	alpha := defineTool(r, "alpha", "interrupts once, then finishes last",
+		func(ctx *ToolContext, in map[string]any) (string, error) {
+			aCalls++
+			if aCalls == 1 {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "A"}})
+			}
+			<-betaDone
+			time.Sleep(10 * time.Millisecond)
+			return "A", nil
+		})
+	beta := defineTool(r, "beta", "interrupts once, then finishes first",
+		func(ctx *ToolContext, in map[string]any) (string, error) {
+			bCalls++
+			if bCalls == 1 {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"which": "B"}})
+			}
+			defer close(betaDone)
+			return "B", nil
+		})
+
+	var resumedToolMsg *Message
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/orderedResume",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if last := req.Messages[len(req.Messages)-1]; last.Role == RoleTool {
+				resumedToolMsg = last
+				return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+			}
+			return &ModelResponse{Request: req, Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "alpha", Input: map[string]any{}}),
+					NewToolRequestPart(&ToolRequest{Name: "beta", Input: map[string]any{}}),
+				},
+			}}, nil
+		},
+	})
+
+	res, err := Generate(testCtx, r,
+		WithModelName("test/orderedResume"),
+		WithPrompt("start"),
+		WithTools(alpha, beta),
+	)
+	assertNoError(t, err)
+
+	var partA, partB *Part
+	for _, p := range res.Interrupts() {
+		switch p.ToolRequest.Name {
+		case "alpha":
+			partA = p
+		case "beta":
+			partB = p
+		}
+	}
+	resumed, err := Generate(testCtx, r,
+		WithModelName("test/orderedResume"),
+		WithMessages(res.History()...),
+		WithTools(alpha, beta),
+		WithToolRestarts(alpha.Restart(partA, nil), beta.Restart(partB, nil)),
+	)
+	assertNoError(t, err)
+	if got := resumed.Text(); got != "done" {
+		t.Errorf("Text() = %q, want %q", got, "done")
+	}
+
+	if resumedToolMsg == nil {
+		t.Fatal("the model never received a tool message")
+	}
+	var names []string
+	for _, p := range resumedToolMsg.Content {
+		if p.IsToolResponse() {
+			names = append(names, p.ToolResponse.Name)
+		}
+	}
+	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
+		t.Errorf("resumed tool message order = %v, want %v", names, want)
+	}
 }

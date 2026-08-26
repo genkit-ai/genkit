@@ -36,13 +36,15 @@ var (
 
 	// ErrMaxTurnsExceeded means the tool-calling loop hit its turn limit before
 	// the model produced a final response. Raise the limit with WithMaxTurns, or
-	// look for a tool the model keeps retrying.
+	// look for a tool the model keeps retrying. The loop's partial
+	// [ModelResponse] rides alongside this error (see [Generate]).
 	ErrMaxTurnsExceeded = status.ErrAborted.Subtype("max turns exceeded")
 
 	// ErrToolFailed means a tool returned an error or produced output that does
 	// not match its declared schema. The tool's own error is wrapped, so
 	// errors.Is and errors.As still reach it; the status is INTERNAL because a
-	// tool's failure is not a failure of the caller's request.
+	// tool's failure is not a failure of the caller's request. The loop's
+	// partial [ModelResponse] rides alongside this error (see [Generate]).
 	ErrToolFailed = status.ErrInternal.Subtype("tool failed")
 
 	// ErrUnsupportedByModel means the request used a capability the model does

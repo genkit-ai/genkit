@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
@@ -230,12 +231,15 @@ func isNilValue(v any) bool {
 func (a *Action[In, Out, Stream]) Name() string { return a.desc.Name }
 
 // Run executes the Action's function in a new trace span.
+//
+// A failure returns whatever the function produced alongside its error rather
+// than a zero value: the generate loop returns the conversation it completed,
+// and an output that failed its own schema is still the output. The value is
+// the function's, so an action that returns nothing on error still yields the
+// zero one, and a caller that checks err first sees no difference.
 func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCallback[Stream]) (output Out, err error) {
 	r, err := a.runWithTelemetry(ctx, input, cb, a.fn, nil)
-	if err != nil {
-		return base.Zero[Out](), err
-	}
-	return r.Result, nil
+	return r.Result, err
 }
 
 // runWithTelemetry executes fn in a new trace span and returns telemetry
@@ -331,13 +335,14 @@ func (a *Action[In, Out, Stream]) validateOutput(out Out, schema map[string]any)
 	return nil
 }
 
-// RunJSON runs the action with a JSON input, and returns a JSON result.
+// RunJSON runs the action with a JSON input, and returns a JSON result. Like
+// [Action.Run], a failure carries whatever the function produced.
 func (a *Action[In, Out, Stream]) RunJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (json.RawMessage, error) {
 	r, err := a.RunJSONWithTelemetry(ctx, input, cb)
-	if err != nil {
+	if r == nil {
 		return nil, err
 	}
-	return r.Result, nil
+	return r.Result, err
 }
 
 // RunJSONWithTelemetry runs the action with a JSON input, and returns a JSON result along with telemetry info.
@@ -366,10 +371,23 @@ func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, inpu
 
 	r, err := a.runWithTelemetry(ctx, i, scb, fn, spanInit)
 	if err != nil {
-		return &api.ActionRunResult[json.RawMessage]{
+		res := &api.ActionRunResult[json.RawMessage]{
 			TraceId: r.TraceId,
 			SpanId:  r.SpanId,
-		}, err
+		}
+		// Carry the partial result the way [Action.Run] does. Guarded, since
+		// a function that returns nothing on error would otherwise put a null
+		// result on every failure; a marshal that fails is logged and dropped
+		// rather than replacing the error the caller is waiting for.
+		if !base.IsNil(r.Result) {
+			if bytes, merr := json.Marshal(r.Result); merr != nil {
+				logger.Error(ctx, "failed to marshal partial action result",
+					"action", a.desc.Key, "error", merr)
+			} else {
+				res.Result = json.RawMessage(bytes)
+			}
+		}
+		return res, err
 	}
 
 	bytes, err := json.Marshal(r.Result)
