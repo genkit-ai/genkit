@@ -199,6 +199,10 @@ class SpecTest(SpecModel):
     name: str
     description: str | None = None
     agent: str
+    # Capabilities the test depends on. A test naming a capability outside
+    # SUPPORTED_REQUIRES is skipped, so the shared spec can carry cases for
+    # features this runtime has not adopted yet.
+    requires: list[str] | None = None
     steps: list[SpecStep]
 
 
@@ -836,9 +840,16 @@ async def execute_wait_until_completed(*, agent: Agent, step: WaitUntilCompleted
 # ---------------------------------------------------------------------------
 
 
+# Gated spec capabilities this runtime implements; see SpecTest.requires.
+SUPPORTED_REQUIRES: frozenset[str] = frozenset()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('spec_test', SPEC_TESTS, ids=[t.name for t in SPEC_TESTS])
 async def test_agent_conformance(spec_test: SpecTest) -> None:
+    unsupported = [r for r in (spec_test.requires or []) if r not in SUPPORTED_REQUIRES]
+    if unsupported:
+        pytest.skip(f'requires unsupported capabilities: {", ".join(unsupported)}')
     harness = setup_harness()
     agent = harness.agents.get(spec_test.agent)
     assert agent is not None, f'Unknown agent {spec_test.agent!r} in test {spec_test.name!r}'

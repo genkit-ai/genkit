@@ -1156,6 +1156,93 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 	}
 }
 
+// defineCommittingFailureAgent is defineLastGoodTestAgent's counterpart for a
+// turn that fails holding state worth continuing from: it mutates the session
+// and returns a TurnResult alongside the error, which commits the turn.
+func defineCommittingFailureAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
+	return DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("as far as it got"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter = 5
+					return s
+				})
+				return &TurnResult{FinishReason: AgentFinishReasonFailed},
+					status.Errorf(status.ErrUnavailable, "model timeout")
+			})
+		},
+		opts...,
+	)
+}
+
+func TestAgent_CommittedFailedTurn_SnapshotsUnderFailed(t *testing.T) {
+	// A failed turn that committed writes its own row: status failed, the
+	// error on it for the client to judge, and the state the turn reached.
+	// That row is the resume point the failed output reports.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := defineCommittingFailureAgent(reg, "committedFailure", WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("committed failure wrote no snapshot")
+	}
+
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusFailed {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusFailed)
+	}
+	if snap.Error == nil || snap.Error.Status != core.UNAVAILABLE {
+		t.Errorf("snapshot error = %+v, want the turn's UNAVAILABLE", snap.Error)
+	}
+	if got := snap.State.Custom.Counter; got != 5 {
+		t.Errorf("snapshot counter = %d, want the failed turn's own 5", got)
+	}
+	if got := len(snap.State.Messages); got != 2 {
+		t.Errorf("snapshot has %d messages, want 2 (the input and what the turn added)", got)
+	}
+}
+
+func TestAgent_CommittedFailedTurn_AdvancesLastGoodState(t *testing.T) {
+	// Client-managed: the state a committed failure hands back is the failed
+	// turn's own, not the state it started with. Nothing else moves
+	// lastGoodState, so this pins the capture on a committed failure.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineCommittingFailureAgent(reg, "committedFailureClient")
+
+	out, err := af.RunText(ctx, "go", WithState(&SessionState[testState]{
+		Messages: []*ai.Message{ai.NewUserTextMessage("earlier")},
+		Custom:   testState{Counter: 1},
+	}))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.State == nil {
+		t.Fatal("expected state on the failed output")
+	}
+	if got := out.State.Custom.Counter; got != 5 {
+		t.Errorf("counter = %d, want the failed turn's own 5", got)
+	}
+	last := out.State.Messages[len(out.State.Messages)-1]
+	if got := last.Content[0].Text; got != "as far as it got" {
+		t.Errorf("last message = %q, want what the failed turn added", got)
+	}
+}
+
 func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T) {
 	// Resuming from a snapshot and failing before any turn completes:
 	// the parent snapshot already captures the last-good state, so the
@@ -3794,14 +3881,17 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		t.Errorf("expected snapshot.Error.Message to contain %q, got %+v", "kaboom", snap.Error)
 	}
 
-	// Resuming from an errored detached snapshot is rejected before the
-	// invocation starts, so the action fails with the original error.
+	// The failure is recorded, not sealed: the row carries the error for the
+	// caller to judge, and resuming from it is admitted rather than rejected
+	// at init. This agent fails the same way every turn, so the resumed
+	// invocation resolves with a failed output instead of an init error.
+	go func() { <-entered }()
 	resumeOut, err := af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
-	if err == nil {
-		t.Fatalf("expected error resuming errored snapshot, got output: %+v", resumeOut)
+	if err != nil {
+		t.Fatalf("resume from the failed snapshot was rejected: %v", err)
 	}
-	if !strings.Contains(err.Error(), "kaboom") {
-		t.Errorf("expected resume error to surface the original failure, got: %v", err)
+	if resumeOut.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("resumed FinishReason = %q, want %q", resumeOut.FinishReason, AgentFinishReasonFailed)
 	}
 }
 
@@ -4037,7 +4127,10 @@ func TestAgent_Detach_CommitSurvivesClientDeadline(t *testing.T) {
 	})
 }
 
-func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
+func TestAgent_ResumeFromErrorSnapshot_Allowed(t *testing.T) {
+	// A failed row is a resume point, not a dead end: its state is what the
+	// turn committed, and whether the recorded error is worth another attempt
+	// is the caller's call.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
@@ -4050,29 +4143,32 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 					Status:  core.INTERNAL,
 					Message: "underlying failure",
 				},
-				State: &SessionState[testState]{},
+				State: &SessionState[testState]{
+					Custom: testState{Counter: 7},
+				},
 			}, nil
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 
+	var resumed testState
 	af := DefineCustomAgent(reg, "resumeErrored",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			resumed = sess.State().Custom
 			return nil, nil
 		},
 		WithSessionStore(store),
 	)
 
 	out, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
-	if err == nil {
-		t.Fatalf("expected error when resuming from errored snapshot, got output: %+v", out)
+	if err != nil {
+		t.Fatalf("resume from the failed snapshot: %v", err)
 	}
-	ge := core.AsGenkitError(err)
-	if ge.Status != core.FAILED_PRECONDITION {
-		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, ge.Status)
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("resumed invocation failed: %+v", out.Error)
 	}
-	if !strings.Contains(ge.Message, "underlying failure") {
-		t.Errorf("expected error to surface underlying failure, got: %v", err)
+	if resumed.Counter != 7 {
+		t.Errorf("resumed counter = %d, want the failed row's committed state (7)", resumed.Counter)
 	}
 }
 
@@ -6522,11 +6618,11 @@ func TestAgent_ResumeFromSessionID_ForkContinuesLatestBranch(t *testing.T) {
 	}
 }
 
-func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
-	// GetLatestSnapshot returns the session's literal latest row, so a failed
-	// (or aborted) tip is no longer skipped: resuming the session by ID hits
-	// the dead end and is rejected. To continue past it the caller names an
-	// earlier good snapshot via WithSnapshotID.
+func TestAgent_ResumeFromSessionID_FailedTipResumes(t *testing.T) {
+	// GetLatestSnapshot returns the session's literal latest row. A failed tip
+	// is a resume point, so resuming the session by ID continues from it; to
+	// go back further the caller names an earlier snapshot via WithSnapshotID,
+	// which is how a failed turn's state is rolled back rather than continued.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -6553,14 +6649,16 @@ func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
 		t.Fatalf("SaveSnapshot failed row: %v", err)
 	}
 
-	// Resuming by session ID hits the failed tip and is rejected.
-	if _, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID)); err == nil {
-		t.Fatal("expected resume to be rejected for a failed tip, got nil")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
-		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
+	// Resuming by session ID continues from the failed tip.
+	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("resume from the failed tip: %v", err)
+	}
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("resume from the failed tip failed: %+v", out2.Error)
 	}
 
-	// Naming the last good snapshot explicitly still resumes past the dead end.
+	// Naming the earlier snapshot explicitly rewinds past the failed tip.
 	out3, err := af.RunText(ctx, "third", WithSnapshotID[testState](out1.SnapshotID))
 	if err != nil {
 		t.Fatalf("RunText resume from good snapshot: %v", err)

@@ -323,11 +323,13 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 // state). Combined with [WithSnapshotID], the snapshot picks the resume point
 // and the session ID is validated against it.
 //
-// The resume is rejected if the latest snapshot is a failed, aborted, or
-// pending dead end; a pending tip means a detached invocation is still running,
-// so wait for it to finalize or abort it. If history was forked, the most
-// recently updated branch wins; use [WithSnapshotID] for a specific branch. An
-// empty ID is an error, not a no-op.
+// The resume is rejected if the latest snapshot is an aborted or pending dead
+// end; a pending tip means a detached invocation is still running, so wait for
+// it to finalize or abort it. A failed tip is not a dead end: it resumes with
+// what the failed turn committed, and an input with no payload of its own
+// re-attempts the turn. If history was forked, the most recently created
+// branch wins; use [WithSnapshotID] for a specific branch. An empty ID is an
+// error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
 }

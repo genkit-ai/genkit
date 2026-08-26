@@ -108,6 +108,7 @@ Multi-turn conversations that own their own loop and state.
 [Load the Prompt from a File](#load-the-prompt-from-a-file) &middot;
 [Custom Turn Loops](#custom-turn-loops) &middot;
 [Persist and Resume](#persist-and-resume) &middot;
+[Re-attempt Failed Turns](#re-attempt-failed-turns) &middot;
 [Redact on the Way Out](#redact-on-the-way-out) &middot;
 [Background Agents](#background-agents) &middot;
 [Delegate to Sub-Agents](#delegate-to-sub-agents) &middot;
@@ -340,7 +341,7 @@ chatAgent := genkitx.DefineCustomAgent(g, "chat",
 
 ### Persist and Resume
 
-With a session store configured, every successful turn writes a snapshot. The caller only needs the `SessionID` from a previous result to pick the conversation back up:
+With a session store configured, each turn writes a snapshot as it ends. The caller only needs the `SessionID` from a previous result to pick the conversation back up:
 
 ```go
 first, _ := chatAgent.RunText(ctx, "My name is Alex and I'm planning a trip to Japan.")
@@ -354,6 +355,25 @@ fmt.Println(second.Message.Text()) // "Your name is Alex."
 Resume from one specific point in history with `aix.WithSnapshotID`, or skip the server store entirely and round-trip the state yourself with `aix.WithState` (the conversation's identity travels inside the state object).
 
 [See full example](samples/basic-agents)
+
+### Re-attempt Failed Turns
+
+A turn that fails keeps the tool rounds it completed. The generate call hands back the conversation as it stood at the last turn seam, the agent commits that, and it persists as a `failed` snapshot carrying the error. Resume that snapshot like any other and send an input with no payload: the turn runs again on the committed messages, so the tool calls that already succeeded are not repeated.
+
+```go
+out, _ := agent.RunText(ctx, "Book the full itinerary.")
+if out.FinishReason == aix.AgentFinishReasonFailed {
+    // out.Error carries the status. Retry the transient ones.
+    if out.Error.Status == status.Unavailable {
+        retried, _ := agent.Run(ctx, &aix.AgentInput{},
+            aix.WithSessionID[any](out.SessionID))
+    }
+}
+```
+
+Whether a failure is worth another attempt is yours to decide; the framework records the error and leaves the snapshot resumable either way. A new message works there too, and rewinding past the failure is a resume from the previous snapshot ID.
+
+Without a store, the failed output's `State` carries the same resume point inline; initialize the next invocation with it. A turn rejected before it reached the model (an invalid input, for example) commits nothing, and the resume point stays the turn before it. Custom agents opt in by returning a `TurnResult` alongside the turn's error; a bare error keeps the discard-the-turn behavior.
 
 ### Redact on the Way Out
 
@@ -388,7 +408,7 @@ snap, _ := chatAgent.GetSnapshot(ctx, snapshotID)
 switch snap.Status {
 case aix.SnapshotStatusPending:   // still working
 case aix.SnapshotStatusCompleted: // snap.State holds the final state; resume it
-case aix.SnapshotStatusFailed:    // snap.Error holds the structured failure
+case aix.SnapshotStatusFailed:    // snap.Error holds the failure; still resumable
 }
 
 // Or stop it early; the runtime observes the abort and cancels the work.

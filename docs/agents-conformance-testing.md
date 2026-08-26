@@ -26,10 +26,20 @@ tests:
   - name: <string>              # Human-readable test name
     description: <string>       # Optional description
     agent: <string>             # Name of the harness-provided agent
+    requires: [<capability>]    # Optional capability gate; see below
     steps:                      # Ordered sequence of operations
       - type: send | getSnapshotData | abort | waitUntilCompleted
         ...                     # Fields depend on step type
 ```
+
+`requires` lists the capabilities a test depends on. Each harness declares
+the capabilities its runtime implements and **skips** (not fails) any test
+naming one it does not, so the shared spec can carry cases for features an
+SDK has not adopted yet. Known capabilities:
+
+| Capability | Meaning |
+|------------|---------|
+| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go. |
 
 ### Step Types
 
@@ -42,8 +52,8 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 |-------|------|-------------|
 | `type` | `"send"` | Required. |
 | `init` | `AgentInit` | Initialization payload. May contain `snapshotId`, `state`, or be empty `{}`. |
-| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `resume` (with `respond` and/or `restart`), and/or `detach`. |
-| `modelResponses` | `GenerateResponseData[]` | Pre-programmed responses for the programmable model, one per `generate` call made by the agent. |
+| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `resume` (with `respond` and/or `restart`), and/or `detach`. An input with none of those continues the conversation already in the session (requires `resumable-failures`). |
+| `modelResponses` | `GenerateResponseData[]` | Pre-programmed turns for the programmable model, one per `generate` call made by the agent. An entry whose `error` is set (`{ status, message }`) fails that call with a classified error rather than returning (requires `resumable-failures`). |
 | `streamChunks` | `GenerateResponseChunkData[][]` | Optional. Pre-programmed streaming chunks, indexed by model call. Each inner array is emitted as a stream before the corresponding `modelResponses` entry. |
 | `expectChunks` | `AgentStreamChunk[]` | **Strict ordered** list of expected stream chunks. |
 | `expectOutput` | Object | Expected fields on the `AgentOutput`. See [Output Assertions](#output-assertions). |
@@ -185,6 +195,7 @@ via the `modelResponses` / `streamChunks` fields in `send` steps.
 | `promptAgentWithTools` | A prompt agent with `testTool` registered. Client-managed state. |
 | `promptAgentWithInterrupt` | A prompt agent with `interruptTool` registered and a server-managed store (for snapshot-based resume). |
 | `promptAgentWithRestartTool` | A prompt agent with `restartTool` registered and a server-managed store. Used for `resume.restart` tests. |
+| `promptAgentWithToolsAndStore` | A prompt agent with `testTool` and `flakyTool` registered and a server-managed store. Used for `resumable-failures` tests; only required by harnesses declaring that capability. |
 
 #### Custom agents (hardcoded behavior)
 
@@ -209,6 +220,7 @@ is not needed for tests targeting these agents.
 | `testTool` | A simple tool | `{}` (empty) | `"tool called"` (string) |
 | `interruptTool` | An interrupt tool | `{ query: string }` | `{ answer: string }` |
 | `restartTool` | A tool that requires confirmation; throws `ToolInterruptError` on first call, succeeds when `resumed` metadata is provided | `{ action: string }` | `{ result: string }` |
+| `flakyTool` | Fails its first call in each test with an UNAVAILABLE error (`flaky tool failed`), succeeds after with `"tool recovered"`. Requires `resumable-failures`. | `{}` (empty) | `"tool recovered"` (string) |
 
 ### Programmable Model
 

@@ -377,10 +377,10 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 				return nil, true
 			}
 			fmt.Println(style(fmt.Sprintf("Done (%s).", final.Status), ansiGreen))
-			if final.Status != aix.SnapshotStatusCompleted {
-				// failed / aborted snapshots aren't resumable; the
-				// agent runtime would reject WithSnapshotID on them.
-				// Fall through to a fresh chat instead.
+			if !resumableStatus(final.Status) {
+				// aborted / pending snapshots are dead ends; the agent
+				// runtime would reject WithSnapshotID on them. Fall
+				// through to a fresh chat instead.
 				fmt.Println(style("Cannot resume this snapshot. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
@@ -397,12 +397,19 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 	}
 }
 
+// resumableStatus reports whether a settled snapshot can be continued from.
+// A failed row qualifies: it holds what its turn committed before the
+// failure, so resuming it picks up there and re-attempts that turn.
+func resumableStatus(s aix.SnapshotStatus) bool {
+	return s == aix.SnapshotStatusCompleted || s == aix.SnapshotStatusFailed
+}
+
 // pickSession decides which snapshot (if any) to resume from. It only
 // offers two paths so the demo stays focused: resume from the most
 // recent terminal snapshot (returns the snapshot pointer), or start
 // fresh (returns nil).
 func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], latest *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], bool) {
-	if latest == nil || latest.Status != aix.SnapshotStatusCompleted {
+	if latest == nil || !resumableStatus(latest.Status) {
 		fmt.Printf("\nStarting a new conversation with %s.\n", style(a.Name(), ansiBold))
 		return nil, true
 	}
@@ -414,6 +421,13 @@ func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.A
 	fmt.Printf("\nLast %s session: %s\n",
 		style(a.Name(), ansiBold),
 		style(fmt.Sprintf("%s (%s, %d msgs)", shortID(latest.SnapshotID), latest.UpdatedAt.Format(time.RFC822), msgs), ansiDim))
+	if latest.Status == aix.SnapshotStatusFailed {
+		why := "its last turn failed"
+		if latest.Error != nil && latest.Error.Message != "" {
+			why = latest.Error.Message
+		}
+		fmt.Println(style("Resuming re-attempts the failed turn: "+why, ansiYellow))
+	}
 	fmt.Println("Resume from it? " + style("[Y/n] (n = start a new conversation)", ansiDim))
 
 	line, ok := promptLine(ctx, inputCh, chevron)
@@ -485,8 +499,29 @@ func runChat[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent
 		failedTurn bool
 	)
 
+	// A failed snapshot opens on the turn that failed, holding the messages
+	// it committed. An input with no payload runs that turn again on them,
+	// which is the whole re-attempt: nothing the turn already did is redone.
+	if resume != nil && resume.Status == aix.SnapshotStatusFailed {
+		fmt.Println(style("Re-attempting the failed turn...", ansiYellow))
+		fmt.Println()
+		if err := conn.Send(&aix.AgentInput{}); err != nil {
+			fmt.Fprintf(os.Stderr, "Re-attempt error: %v\n", err)
+		} else if end, _, ok := streamReply(conn, hooks, prompter); !ok {
+			failedTurn = true
+		} else if end.FinishReason == aix.AgentFinishReasonFailed {
+			// It failed again, so the invocation is over; Output below
+			// reports the error and the snapshot to pick up from.
+			failedTurn = true
+		}
+		fmt.Println()
+	}
+
 repl:
 	for {
+		if failedTurn {
+			break
+		}
 		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			break
@@ -602,7 +637,9 @@ repl:
 			}
 		}
 		if out.SnapshotID != "" {
-			fmt.Printf("%s\n", style(fmt.Sprintf("Last-good snapshot: %s. Pick this agent again to resume from it.", shortID(out.SnapshotID)), ansiDim))
+			// The failed turn's own row when it committed anything, the turn
+			// before it otherwise. Either way it is where to pick up.
+			fmt.Printf("%s\n", style(fmt.Sprintf("Resume point: %s. Pick this agent again to continue from it.", shortID(out.SnapshotID)), ansiDim))
 		}
 	case out != nil && out.SnapshotID != "":
 		fmt.Printf("%s Final snapshot: %s.\n",
