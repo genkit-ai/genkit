@@ -645,7 +645,7 @@ class Registry:
 
         For nested actions exposed by a dynamic action provider, use
         ``/dynamic-action-provider/<provider>:<innerKind>/<innerName>`` (for
-        example ``/dynamic-action-provider/my-mcp:tool/echo``).
+        example ``/dynamic-action-provider/my-mcp:tool.v2/echo``).
 
         Args:
             key: The action key in the format ``/<kind>/<name>``.

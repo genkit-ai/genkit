@@ -103,7 +103,13 @@ class DynamicActionProvider:
     async def list_action_metadata(self, action_type: str, action_name: str) -> list[ActionMetadataLike]:
         """List metadata matching pattern: '*'=all, 'prefix*'=prefix match, else exact."""
         result = await self._get_or_fetch()
-        actions = result.get(action_type, [])
+        actions: list[Action[Any, Any]] = []
+        seen: set[str] = set()
+        for action in result.get(action_type, []):
+            if action.name in seen:
+                continue
+            seen.add(action.name)
+            actions.append(action)
         if not actions:
             return []
 
@@ -124,13 +130,14 @@ class DynamicActionProvider:
             for action in actions:
                 if not action.name:
                     raise ValueError(f'Invalid metadata from {dap_prefix} - name required')
+                listed_type = action_type
                 key = create_action_key(
                     ActionKind.DYNAMIC_ACTION_PROVIDER,
-                    f'{dap_prefix}:{action_type}/{action.name}',
+                    f'{dap_prefix}:{listed_type}/{action.name}',
                 )
                 dap_actions[key] = ActionMetadata(
                     key=key,
-                    action_type=action_type,
+                    action_type=listed_type,
                     name=action.name,
                     description=action.description,
                     input_schema=action.input_schema,

@@ -236,7 +236,7 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
                     # Report generate metrics for all model actions
                     generate_telemetry.tick(span, self._log_input_and_output, self._project_id)
 
-                if span_type == 'action' and subtype == 'tool':
+                if span_type == 'action' and subtype in ('tool', 'tool.v2'):
                     # TODO(#4359): Report input and output for tool actions (matching JS comment)
                     pass
 

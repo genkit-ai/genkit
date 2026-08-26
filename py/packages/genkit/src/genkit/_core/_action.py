@@ -129,7 +129,7 @@ class ActionKind(StrEnum):
     RERANKER = 'reranker'
     RESOURCE = 'resource'
     RETRIEVER = 'retriever'
-    TOOL = 'tool'
+    TOOL = 'tool.v2'
     UTIL = 'util'
 
 

@@ -20,16 +20,330 @@ import inspect
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Any, cast
+from types import NoneType, UnionType
+from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
 from opentelemetry import trace as trace_api
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._registry import Registry
-from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+from genkit._core._schema import to_json_schema
+from genkit._core._typing import (
+    CustomPart,
+    DataPart,
+    MediaPart,
+    Metadata,
+    MultipartToolResponse,
+    Part,
+    ReasoningPart,
+    ResourcePart,
+    TextPart,
+    ToolDefinition,
+    ToolRequest,
+    ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
+)
+
+PART_VARIANTS = (
+    TextPart,
+    MediaPart,
+    ToolRequestPart,
+    ToolResponsePart,
+    DataPart,
+    CustomPart,
+    ReasoningPart,
+    ResourcePart,
+)
+
+
+def response(
+    output: Any = None,  # noqa: ANN401 - tool output is JSON of any shape
+    *,
+    parts: list[Part] | Part | None = None,
+    metadata: Metadata | None = None,
+) -> MultipartToolResponse:
+    """Build a tool result the model can see as structured output plus media.
+
+    Return this from a tool when the reply is more than a JSON value — a caption
+    and a screenshot, for example. A plain ``return value`` still works; that is
+    treated as ``output`` only. ``parts`` may be one part or a list.
+    """
+    if metadata is not None and not isinstance(metadata, dict):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'response() metadata must be a dict, got {type(metadata).__name__}.',
+        )
+    return MultipartToolResponse(output=output, content=normalize_response_parts(parts), metadata=metadata)
+
+
+def coerce_part(value: object) -> Part | None:
+    if isinstance(value, Part):
+        return value
+    if isinstance(value, PART_VARIANTS):
+        return Part(root=value)
+    return None
+
+
+def normalize_response_parts(parts: object) -> list[Part] | None:
+    if parts is None:
+        return None
+    if isinstance(parts, list):
+        out: list[Part] = []
+        for item in parts:
+            part = coerce_part(item)
+            if part is None:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'response() parts must be a list of Parts, got {type(item).__name__} in the list.',
+                )
+            out.append(require_live_part(part))
+        return out
+    part = coerce_part(parts)
+    if part is not None:
+        return [require_live_part(part)]
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'response() parts must be a Part or a list of Parts, got {type(parts).__name__}.',
+    )
+
+
+def normalize_pending_content(pending_content: object, *, tool_name: str) -> list[dict[str, Any]] | None:
+    """Validate a resume stash as the same part list ``response()`` accepts."""
+    if pending_content is None:
+        return None
+    if not isinstance(pending_content, list):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'Tool {tool_name!r} pendingContent must be a list of parts, got {type(pending_content).__name__}.'
+            ),
+        )
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(pending_content):
+        part = coerce_part(item)
+        if part is None and isinstance(item, dict):
+            try:
+                part = Part.model_validate(item)
+            except Exception as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
+                    cause=e,
+                ) from e
+        if part is None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
+            )
+        dumped = dump_part(part, tool_name=tool_name, what=f'pendingContent[{i}]')
+        if not wire_part_is_live(dumped):
+            raise live_payload_error(tool_name=tool_name, where=f'pendingContent[{i}]')
+        out.append(dumped)
+    return out
+
+
+DECLARED_OUTPUT_SCHEMA_KEY = 'declaredOutputSchema'
+
+
+def wire_part_is_live(dumped: dict[str, Any]) -> bool:
+    """True when a dumped part has a payload a model plugin can actually use."""
+    if isinstance(dumped.get('text'), str):
+        return True
+    media = dumped.get('media')
+    if isinstance(media, dict) and _usable_locator(media.get('url')):
+        return True
+    if dumped.get('data') is not None or dumped.get('custom') is not None:
+        return True
+    if isinstance(dumped.get('reasoning'), str):
+        return True
+    resource = dumped.get('resource')
+    if isinstance(resource, dict) and _usable_locator(resource.get('uri')):
+        return True
+    tool_request = dumped.get('toolRequest')
+    if isinstance(tool_request, dict) and _usable_locator(tool_request.get('name')):
+        return True
+    tool_response = dumped.get('toolResponse')
+    if isinstance(tool_response, dict) and _usable_locator(tool_response.get('name')):
+        return True
+    return False
+
+
+def _usable_locator(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def parts_to_wire(parts: list[Part] | None, *, tool_name: str | None = None) -> list[dict[str, Any]] | None:
+    """Dump parts the way a model plugin expects them on the tool message.
+
+    A bare dump keeps every unused union sibling as null and uses snake_case
+    field names. The model request — and anything that later re-parses that
+    history — wants only the live fields, in camelCase.
+    """
+    if not parts:
+        return None
+    out: list[dict[str, Any]] = []
+    name = tool_name if tool_name is not None else 'tool'
+    for part in parts:
+        dumped = dump_part(part, tool_name=name, what='content')
+        if not wire_part_is_live(dumped):
+            raise live_payload_error(tool_name=name, where='content')
+        out.append(dumped)
+    return out
+
+
+def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content') -> dict[str, Any]:
+    try:
+        return part.model_dump(mode='json', by_alias=True, exclude_none=True)
+    except GenkitError:
+        raise
+    except Exception as e:
+        if tool_name is not None:
+            message = f'Tool {tool_name!r} {what} is not JSON-serializable.'
+        else:
+            message = f'response() {what} is not JSON-serializable.'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=message,
+            cause=e,
+        ) from e
+
+
+def live_payload_error(*, tool_name: str, where: str) -> GenkitError:
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'Tool {tool_name!r} {where} includes a part with no live payload.',
+    )
+
+
+def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 'content') -> Part:
+    dumped = dump_part(part, tool_name=tool_name, what=where)
+    if wire_part_is_live(dumped):
+        return part
+    if tool_name is not None:
+        raise live_payload_error(tool_name=tool_name, where=where)
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message='response() parts include a part with no live payload.',
+    )
+
+
+def annotation_is_envelope(ret: object) -> bool:
+    """True when ``ret`` is the envelope type, including ``Optional`` / ``| None``."""
+    # PEP 695 ``type Out = MultipartToolResponse`` is a TypeAliasType; unwrap it
+    # so the model does not bind the envelope graph as outputSchema.
+    if type(ret).__name__ == 'TypeAliasType':
+        return annotation_is_envelope(getattr(ret, '__value__', None))
+    if ret is MultipartToolResponse:
+        return True
+    origin = get_origin(ret)
+    if origin is Union or origin is UnionType:
+        members = [a for a in get_args(ret) if a is not NoneType and a is not type(None)]
+        return bool(members) and all(annotation_is_envelope(a) for a in members)
+    if isinstance(ret, str):
+        cleaned = ret.replace(' ', '')
+        if cleaned.startswith('Optional[') and cleaned.endswith(']'):
+            return annotation_is_envelope(cleaned[len('Optional[') : -1])
+        members = [m for m in cleaned.replace(',', '|').split('|') if m and m not in {'None', 'NoneType'}]
+        return bool(members) and all(m.rsplit('.', 1)[-1] == 'MultipartToolResponse' for m in members)
+    return False
+
+
+def annotation_includes_envelope(ret: object) -> bool:
+    """True when any leaf is the envelope — the model should not bind that graph."""
+    if annotation_is_envelope(ret):
+        return True
+    if type(ret).__name__ == 'TypeAliasType':
+        return annotation_includes_envelope(getattr(ret, '__value__', None))
+    if isinstance(ret, str):
+        return 'MultipartToolResponse' in ret.replace(' ', '')
+    origin = get_origin(ret)
+    if origin is None:
+        return False
+    return any(annotation_includes_envelope(a) for a in get_args(ret))
+
+
+def return_annotation_is_envelope(func: Callable[..., Any]) -> bool:
+    """True when the handler annotation includes the envelope ``run`` already returns."""
+    try:
+        hints = get_type_hints(func)
+    except Exception:
+        hints = dict(getattr(func, '__annotations__', {}))
+    return annotation_includes_envelope(hints.get('return'))
+
+
+def override_output_schema(output_schema: object, *, tool_name: str) -> dict[str, Any]:
+    if isinstance(output_schema, dict):
+        return cast(dict[str, Any], output_schema)
+    if isinstance(output_schema, type) and issubclass(output_schema, BaseModel):
+        try:
+            return to_json_schema(output_schema)
+        except Exception as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'Tool {tool_name!r} output_schema is not a JSON Schema or Pydantic model, got {output_schema!r}.'
+                ),
+                cause=e,
+            ) from e
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f'Tool {tool_name!r} output_schema must be a Pydantic model or a JSON Schema dict, got {output_schema!r}.'
+        ),
+    )
+
+
+def dump_tool_output(value: Any, *, tool_name: str | None = None, what: str = 'output') -> Any:  # noqa: ANN401
+    """Dump structured output the way the advertised JSON Schema describes it."""
+    try:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode='json', by_alias=True)
+        return TypeAdapter(object).dump_python(value, mode='json', by_alias=True)
+    except GenkitError:
+        raise
+    except Exception as e:
+        # The handler already ran. A dump crash here would look like an
+        # internal failure, and a retry would do the side effect twice.
+        name = tool_name if tool_name is not None else 'tool'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Tool {name!r} {what} is not JSON-serializable.',
+            cause=e,
+        ) from e
+
+
+def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = None) -> dict[str, Any] | None:
+    """Dump envelope metadata the same way as structured output."""
+    if value is None:
+        return None
+    dumped = dump_tool_output(value, tool_name=tool_name, what='metadata')
+    if isinstance(dumped, dict):
+        return dumped
+    name = tool_name if tool_name is not None else 'tool'
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'Tool {name!r} metadata is not a JSON object.',
+    )
+
+
+def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> MultipartToolResponse:  # noqa: ANN401
+    """Normalize a tool handler return into the envelope generate already speaks."""
+    if isinstance(value, MultipartToolResponse):
+        content = value.content
+        if content:
+            content = [require_live_part(part, tool_name=tool_name) for part in content]
+        return MultipartToolResponse(
+            output=dump_tool_output(value.output, tool_name=tool_name),
+            content=content,
+            metadata=dump_tool_metadata(value.metadata, tool_name=tool_name),
+        )
+    if isinstance(value, BaseModel):
+        return MultipartToolResponse(output=dump_tool_output(value, tool_name=tool_name))
+    return MultipartToolResponse(output=dump_tool_output(value, tool_name=tool_name))
 
 
 class Tool:
@@ -39,8 +353,16 @@ class Tool:
     ``@ai.tool`` decorator rather than constructing directly.
     """
 
-    def __init__(self, action: Action) -> None:
+    def __init__(
+        self,
+        action: Action,
+        *,
+        declared_output_schema: dict[str, object] | None = None,
+    ) -> None:
         self._action = action
+        # What the model should expect as ``output``. ``action.output_schema`` is
+        # the envelope ``run`` actually returns (output plus optional media).
+        self._declared_output_schema = declared_output_schema
 
     @property
     def name(self) -> str:
@@ -59,8 +381,13 @@ class Tool:
 
     @property
     def output_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's output."""
-        return self._action.output_schema
+        """JSON Schema for the structured ``output`` the model should expect.
+
+        ``None`` means the handler is annotated as the envelope itself — the
+        model should not bind a schema. An unannotated handler still infers
+        ``{}``.
+        """
+        return self._declared_output_schema
 
     def definition(self) -> ToolDefinition:
         """Return the wire-format ToolDefinition for this tool."""
@@ -75,9 +402,10 @@ class Tool:
         """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
         return self._action
 
-    async def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Run the tool and return the unwrapped response value."""
-        return (await self._action.run(*args, **kwargs)).response
+    async def __call__(self, *args: Any, **kwargs: Any) -> MultipartToolResponse:  # noqa: ANN401
+        """Run the tool and return the envelope (structured output plus optional media)."""
+        result = (await self._action.run(*args, **kwargs)).response
+        return as_multipart_tool_response(result, tool_name=self.name)
 
 
 # Context variables for propagating resumed metadata to tools
@@ -305,7 +633,7 @@ async def run_tool_after_restart(
     a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
     """
     try:
-        tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+        raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
     except (GenkitError, Interrupt) as e:
         intr = (
             e.cause
@@ -316,12 +644,15 @@ async def run_tool_after_restart(
             raise restart_interrupt_error(intr) from e
         raise
 
+    envelope = as_multipart_tool_response(raw, tool_name=restart_trp.tool_request.name)
     return ToolResponsePart(
         tool_response=ToolResponse(
             name=restart_trp.tool_request.name,
             ref=restart_trp.tool_request.ref,
-            output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
-        )
+            output=envelope.output,
+            content=parts_to_wire(envelope.content, tool_name=restart_trp.tool_request.name),
+        ),
+        metadata=envelope.metadata,
     )
 
 
@@ -341,6 +672,7 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
+    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Register a function as a tool.
 
@@ -375,12 +707,12 @@ def _define_tool(
         # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
         match len(input_spec.args):
             case 0:
-                return await func()
+                raw = await func()
             case 1:
-                return await func(args[0])
+                raw = await func(args[0])
             case 2:
                 original_input = _tool_original_input.get()
-                return await func(
+                raw = await func(
                     args[0],
                     ToolRunContext(
                         cast(ActionRunContext, args[1]),
@@ -390,6 +722,7 @@ def _define_tool(
                 )
             case _:
                 raise ValueError('tool must have 0-2 args...')
+        return as_multipart_tool_response(raw, tool_name=tool_name)
 
     action = registry.register_action(
         name=tool_name,
@@ -401,7 +734,19 @@ def _define_tool(
     if input_schema is not None:
         action._override_input_schema(input_schema)
 
-    return Tool(action)
+    # A bare return is the inner output (and the model schema). response() is
+    # already the action result — don't advertise that wrapper as outputSchema
+    # unless output_schema= says otherwise.
+    if output_schema is not None:
+        declared_output_schema = override_output_schema(output_schema, tool_name=tool_name)
+    elif return_annotation_is_envelope(func):
+        declared_output_schema = None
+    else:
+        declared_output_schema = action.output_schema
+    action.metadata[DECLARED_OUTPUT_SCHEMA_KEY] = declared_output_schema
+    action.output_schema = TypeAdapter(MultipartToolResponse).json_schema()
+
+    return Tool(action, declared_output_schema=declared_output_schema)
 
 
 def define_tool(
@@ -411,10 +756,13 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
+    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Register a function as a tool.
 
-    Tool input/output JSON Schemas are inferred from ``func`` (first parameter and return type).
+    The model sees the handler's return type as ``outputSchema`` (or
+    ``output_schema=`` if you pass one). ``Action.output_schema`` / Dev UI
+    ``run`` advertise the envelope that can also carry media.
 
     Args:
         registry: The registry to register the tool in.
@@ -422,11 +770,14 @@ def define_tool(
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
+        output_schema: Optional inner schema for ``tools[].outputSchema``.
+            Use this when the handler returns ``response(...)`` and you still
+            want the model to see a shape for ``output``.
 
     Raises:
         TypeError: If func is not an async function.
     """
-    return _define_tool(registry, func, name, description, input_schema=input_schema)
+    return _define_tool(registry, func, name, description, input_schema=input_schema, output_schema=output_schema)
 
 
 def tool(
@@ -435,6 +786,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
+    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Dynamically define a tool that can passed into a `generate` call.
 
@@ -449,12 +801,13 @@ def tool(
         name: Tool name for the model. Defaults to ``func.__name__``.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
+        output_schema: Optional output schema the model should bind.
 
     Raises:
         TypeError: If ``func`` is not a coroutine function.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
     """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
+    return _define_tool(Registry(), func, name, description, input_schema=input_schema, output_schema=output_schema)
 
 
 def define_interrupt(

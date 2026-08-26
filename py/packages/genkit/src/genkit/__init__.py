@@ -27,6 +27,7 @@ from genkit._ai._tools import (
     Tool,
     ToolRunContext,
     respond_to_interrupt,
+    response,
     restart_tool,
     tool,
 )
@@ -103,6 +104,7 @@ __all__ = [
     'Interrupt',
     'Tool',
     'respond_to_interrupt',
+    'response',
     'restart_tool',
     'tool',
     # Content types
