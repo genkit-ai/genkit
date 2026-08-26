@@ -20,7 +20,7 @@ import inspect
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
-from types import NoneType, UnionType
+from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
 from opentelemetry import trace as trace_api
@@ -341,8 +341,6 @@ def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> M
             content=content,
             metadata=dump_tool_metadata(value.metadata, tool_name=tool_name),
         )
-    if isinstance(value, BaseModel):
-        return MultipartToolResponse(output=dump_tool_output(value, tool_name=tool_name))
     return MultipartToolResponse(output=dump_tool_output(value, tool_name=tool_name))
 
 
@@ -743,8 +741,6 @@ def _define_tool(
         declared_output_schema = None
     else:
         declared_output_schema = action.output_schema
-    if action.metadata is None:
-        action.metadata = {}
     action.metadata[DECLARED_OUTPUT_SCHEMA_KEY] = declared_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponse).json_schema()
 
