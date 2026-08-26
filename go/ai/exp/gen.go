@@ -49,10 +49,11 @@ type AgentAbortResponse struct {
 // [AgentFinishReasonBlocked], [AgentFinishReasonInterrupted],
 // [AgentFinishReasonOther] and [AgentFinishReasonUnknown].
 //
-// The remaining values are agent-specific outcomes with no generate-level
-// equivalent (they never arise from forwarding a model finish reason):
-// [AgentFinishReasonAborted], [AgentFinishReasonDetached] and
-// [AgentFinishReasonFailed].
+// The remaining values are agent-specific outcomes that never arise from
+// forwarding a model finish reason: [AgentFinishReasonAborted],
+// [AgentFinishReasonDetached] and [AgentFinishReasonFailed]. The
+// model-level namesakes of aborted and failed accompany generate errors,
+// whose turns the agent reports as failed rather than forwarding a reason.
 type AgentFinishReason string
 
 const (
@@ -100,10 +101,11 @@ type AgentInit[State any] struct {
 	// SessionID identifies the session (conversation) to resume or start. Only
 	// valid when the agent is server-managed (a session store is configured);
 	// mutually exclusive with State. Alone, it resumes the session's latest
-	// snapshot, rejected if that snapshot is a failed, aborted, or pending dead
-	// end. If the session has no snapshots yet, a fresh conversation starts under
-	// this caller-chosen ID. Combined with SnapshotID, it asserts the snapshot
-	// belongs to that session.
+	// snapshot, rejected if that snapshot is an aborted or pending dead end; a
+	// [SnapshotStatusFailed] snapshot resumes with what the failed turn
+	// committed. If the session has no snapshots yet, a fresh conversation
+	// starts under this caller-chosen ID. Combined with SnapshotID, it asserts
+	// the snapshot belongs to that session.
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID loads state from a persisted snapshot. Only valid when the
 	// agent is server-managed (a session store is configured). May be
@@ -118,6 +120,12 @@ type AgentInit[State any] struct {
 }
 
 // AgentInput is the input sent to an agent during a conversation turn.
+//
+// An input with neither Message nor Resume continues the conversation from
+// where it stands, which is how a failed turn is re-attempted: resume the
+// [SnapshotStatusFailed] snapshot, send an empty input, and the agent runs
+// the turn again on the messages it committed. It is rejected on a
+// conversation with no messages to continue.
 type AgentInput struct {
 	// Detach signals the client will disconnect after this input is accepted. The
 	// server writes a pending snapshot, returns [AgentOutput] with its ID, and
@@ -188,15 +196,15 @@ type AgentOutput[State any] struct {
 	// SnapshotID is the ID of the most recent turn-end snapshot for this
 	// invocation. Empty when no store is configured or no turn committed. When
 	// FinishReason is [AgentFinishReasonDetached] it is the pending detach
-	// snapshot; when [AgentFinishReasonFailed], it is the last committed turn's
-	// snapshot (the resume point, holding state through the last successful turn
-	// and excluding the failed turn's partial mutations).
+	// snapshot. When [AgentFinishReasonFailed], it is the resume point: the
+	// failed turn's own [SnapshotStatusFailed] snapshot when the turn committed
+	// anything, otherwise the last committed turn's snapshot.
 	SnapshotID string `json:"snapshotId,omitempty"`
 	// State contains the final conversation state.
 	// Only populated when state is client-managed (no store configured).
-	// When FinishReason is [AgentFinishReasonFailed], it is the last-good state:
-	// everything through the last successful turn, excluding the failed turn's
-	// partial mutations.
+	// When FinishReason is [AgentFinishReasonFailed], it is the resume point:
+	// what the failed turn committed, or the last-good state through the last
+	// successful turn when the turn failed before committing anything.
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
@@ -384,18 +392,17 @@ type SessionState[State any] struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
-// written for synchronous turns or invocations are always
-// [SnapshotStatusCompleted] (an empty value is also treated as completed
-// for backwards compatibility).
+// SnapshotStatus describes the lifecycle state of a snapshot. A synchronous
+// turn writes [SnapshotStatusCompleted] on success (an empty value is also
+// treated as completed for backwards compatibility) and
+// [SnapshotStatusFailed] when it fails.
 //
 // When a client sets [AgentInput.Detach], the server writes a single
 // snapshot with [SnapshotStatusPending] (and empty state) and returns its
 // ID immediately. Background processing then either rewrites that snapshot
 // with the cumulative final state and [SnapshotStatusCompleted] /
 // [SnapshotStatusFailed] when the agent finishes, or with
-// [SnapshotStatusAborted] if the client called abort in the
-// meantime.
+// [SnapshotStatusAborted] if the client called abort in the meantime.
 //
 // [SnapshotStatusExpired] is never persisted: it is computed on read for a
 // pending snapshot whose background worker is presumed dead (its heartbeat
@@ -412,9 +419,11 @@ const (
 	// SnapshotStatusAborted indicates the snapshot's invocation was aborted
 	// while detached (e.g. via the abort companion action).
 	SnapshotStatusAborted SnapshotStatus = "aborted"
-	// SnapshotStatusFailed indicates the invocation terminated with an error.
-	// The snapshot's Error field describes the failure and resume is
-	// rejected with that same error.
+	// SnapshotStatusFailed indicates a turn ended with an error. The snapshot's
+	// Error field describes the failure, and its state is what the turn
+	// committed before it: the conversation trimmed back to the last completed
+	// tool round. Resume is permitted, so whether the failure is worth another
+	// attempt is the client's call, taken from the error's status.
 	SnapshotStatusFailed SnapshotStatus = "failed"
 	// SnapshotStatusExpired indicates a pending snapshot whose detached background
 	// worker is presumed dead: its [SessionSnapshot.HeartbeatAt] went stale. It is
@@ -434,11 +443,12 @@ type TurnEnd struct {
 	//
 	// [AgentFinishReasonFailed] reports a failed turn; unless the agent
 	// recovers and keeps processing, the invocation then resolves with a failed
-	// [AgentOutput] carrying the error and the last-good state, and further
+	// [AgentOutput] carrying the error and the resume point, and further
 	// sends fail with [core.ErrActionCompleted].
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
-	// Empty if no snapshot was written (no store configured, the turn failed, or
-	// snapshots were suspended after detach).
+	// SnapshotID is the ID of the snapshot persisted at the end of this turn,
+	// whether it succeeded or failed. Empty if no snapshot was written (no store
+	// configured, a turn that failed before committing anything, or snapshots
+	// were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
 }

@@ -86,6 +86,7 @@ class FinishReason(StrEnum):
     LENGTH = 'length'
     BLOCKED = 'blocked'
     ABORTED = 'aborted'
+    FAILED = 'failed'
     INTERRUPTED = 'interrupted'
     OTHER = 'other'
     UNKNOWN = 'unknown'
