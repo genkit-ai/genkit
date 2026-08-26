@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,23 +158,26 @@ func TestAgentsValidation(t *testing.T) {
 
 func TestAgentsBackgroundToolNames(t *testing.T) {
 	// Default and empty prefixes keep the well-known bare names; an explicit
-	// non-empty prefix namespaces them so two Async instances can coexist.
+	// non-empty prefix namespaces all three so two Async instances can coexist.
+	bare := []string{"check_background_tasks", "wait_for_background_tasks", "abort_background_tasks"}
 	cases := []struct {
-		name      string
-		prefix    *string
-		wantCheck string
-		wantWait  string
+		name   string
+		prefix *string
+		want   []string
 	}{
-		{name: "nil prefix", prefix: nil, wantCheck: "check_background_tasks", wantWait: "wait_for_background_tasks"},
-		{name: "empty prefix", prefix: ptr(""), wantCheck: "check_background_tasks", wantWait: "wait_for_background_tasks"},
-		{name: "custom prefix", prefix: ptr("research"), wantCheck: "research_check_background_tasks", wantWait: "research_wait_for_background_tasks"},
+		{name: "nil prefix", prefix: nil, want: bare},
+		{name: "empty prefix", prefix: ptr(""), want: bare},
+		{name: "custom prefix", prefix: ptr("research"), want: []string{
+			"research_check_background_tasks",
+			"research_wait_for_background_tasks",
+			"research_abort_background_tasks",
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &Agents{ToolPrefix: tc.prefix}
-			check, wait := a.backgroundToolNames()
-			if check != tc.wantCheck || wait != tc.wantWait {
-				t.Errorf("backgroundToolNames() = %q, %q; want %q, %q", check, wait, tc.wantCheck, tc.wantWait)
+			if got := a.backgroundToolNames().all(); !slices.Equal(got, tc.want) {
+				t.Errorf("backgroundToolNames().all() = %q; want %q", got, tc.want)
 			}
 		})
 	}

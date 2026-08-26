@@ -485,7 +485,7 @@ out, _ := orchestrator.RunText(ctx, "Research goroutine scheduling and summarize
 fmt.Println(out.Message.Text())
 ```
 
-Set `Async: true` to let the orchestrator keep working while a sub-agent runs. Each delegation tool gains a `background` flag that returns a task ID instead of waiting, and two shared tools, `check_background_tasks` and `wait_for_background_tasks`, collect the results. The *sub-agent* is what needs the session store here: background work is tracked by a snapshot, so a sub-agent without one can only be delegated to synchronously (see `AgentMetadata.Abortable`).
+Set `Async: true` to let the orchestrator keep working while a sub-agent runs. Each delegation tool gains a `background` flag that returns a task ID instead of waiting, and three shared tools give the orchestrator one control per thing it can do with a launched task: `check_background_tasks` reads statuses without waiting, `wait_for_background_tasks` blocks until they settle, and `abort_background_tasks` stops the ones whose results are no longer needed. The *sub-agent* is what needs the session store here: background work is tracked by a snapshot, so a sub-agent without one can only be delegated to synchronously (see `AgentMetadata.Abortable`).
 
 ```go
 // The sub-agent needs its own store to be delegated to in the background.
@@ -504,7 +504,7 @@ ai.WithUse(&middlewarex.Agents{
 })
 ```
 
-The orchestrator then launches with `{"task": "...", "background": true}`, posts an update while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn.
+The orchestrator then launches with `{"task": "...", "background": true}`, posts an update while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn. An abort is safe to call on any task: one that had already finished is left alone and reports its result, so the orchestrator never loses an answer by giving up on it.
 
 Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give a sub-agent `&middlewarex.Artifacts{}` so it can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
 

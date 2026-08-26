@@ -33,9 +33,10 @@ package exp
 // Status goes through the sub-agent's [aix.AgentHandle] (resolved via
 // resolveAgent, i.e. genkit/exp.LookupAgent, the sanctioned path for
 // third-party middleware): the check tool dispatches the agent's getSnapshot
-// companion action, and the wait tool its waitForSnapshot counterpart, which
+// companion action, the wait tool its waitForSnapshot counterpart, which
 // blocks next to the store rather than making this middleware re-read on a
-// timer.
+// timer, and the abort tool its abort counterpart, which flips a pending row
+// to aborted so the sub-agent's runtime cancels the work.
 
 import (
 	"context"
@@ -58,6 +59,7 @@ import (
 const (
 	checkBackgroundTasksToolName = "check_background_tasks"
 	waitBackgroundTasksToolName  = "wait_for_background_tasks"
+	abortBackgroundTasksToolName = "abort_background_tasks"
 )
 
 // taskStatusUnknown is the report status for a task that could not be resolved
@@ -77,7 +79,8 @@ type asyncDelegateInput struct {
 	Background bool   `json:"background,omitempty" jsonschema_description:"Run the delegation in the background. The tool returns immediately with a taskId; collect the result later with check_background_tasks or wait_for_background_tasks."`
 }
 
-// backgroundTasksInput is the input of the check tool.
+// backgroundTasksInput is the input of the check and abort tools: a bare list
+// of handles, the whole of what either needs.
 type backgroundTasksInput struct {
 	TaskIDs []string `json:"taskIds" jsonschema_description:"Task IDs returned by background delegations (form \"<agent>:<snapshotId>\")."`
 }
@@ -171,15 +174,15 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 	switch out.FinishReason {
 	case aix.AgentFinishReasonDetached:
 		taskID := formatTaskID(ref.Name, out.SnapshotID)
-		checkName, waitName := a.backgroundToolNames()
+		names := a.backgroundToolNames()
 		logger.Debug(ctx, "background task started",
 			"agent", ref.Name, "taskId", taskID, "sessionId", out.SessionID)
 		return delegationResult{
 			TaskID: taskID,
 			Status: string(aix.SnapshotStatusPending),
 			Response: fmt.Sprintf(
-				"Background task %s started for agent %q. Collect the result with %s or %s.",
-				taskID, ref.Name, checkName, waitName),
+				"Background task %s started for agent %q. Collect the result with %s or %s, or stop it with %s.",
+				taskID, ref.Name, names.check, names.wait, names.abort),
 		}, nil
 	case aix.AgentFinishReasonFailed:
 		// FAILED_PRECONDITION is how the runtime rejects a detach-incapable
@@ -219,29 +222,36 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 	}
 }
 
-// backgroundTaskTools builds the shared status tools added when [Agents.Async]
-// is set, named per this configuration (see [Agents.backgroundToolNames]).
-// st carries the per-call cache of terminal reports.
+// backgroundTaskTools builds the shared background-task tools added when
+// [Agents.Async] is set, one per control the orchestrator has over a launched
+// task, named per this configuration (see [Agents.backgroundToolNames]). st
+// carries the per-call cache of terminal reports.
 func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
-	checkName, waitName := a.backgroundToolNames()
+	names := a.backgroundToolNames()
 	return []ai.Tool{
-		aix.NewTool(checkName,
+		aix.NewTool(names.check,
 			"Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.",
-			a.checkBackgroundTasks(st)),
-		aix.NewTool(waitName,
+			a.taskReportTool(st, readSnapshotOnce)),
+		aix.NewTool(names.wait,
 			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned.",
 			a.waitForBackgroundTasks(st)),
+		aix.NewTool(names.abort,
+			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.",
+			a.taskReportTool(st, abortSnapshot)),
 	}
 }
 
-// checkBackgroundTasks is the non-blocking status tool: one snapshot read per
-// task, no waiting.
-func (a *Agents) checkBackgroundTasks(st *agentsState) func(context.Context, backgroundTasksInput) (backgroundTasksResult, error) {
+// taskReportTool builds a non-blocking background-task tool: one companion
+// dispatch per task, then a report of where that left it. The dispatch is the
+// only difference between the two tools built this way. The check tool reads a
+// task's row; the abort tool stops the task first and reports the row it left
+// behind.
+func (a *Agents) taskReportTool(st *agentsState, fetch snapshotFetch) func(context.Context, backgroundTasksInput) (backgroundTasksResult, error) {
 	return func(ctx context.Context, in backgroundTasksInput) (backgroundTasksResult, error) {
 		if len(in.TaskIDs) == 0 {
 			return backgroundTasksResult{Note: noTaskIDsNote}, nil
 		}
-		return a.reportTasks(ctx, st, in.TaskIDs), nil
+		return a.reportTasks(ctx, st, in.TaskIDs, fetch), nil
 	}
 }
 
@@ -268,7 +278,7 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 		}
 		// A negative timeout means "don't wait": report the current statuses.
 		if in.TimeoutSeconds < 0 {
-			return a.reportTasks(ctx, st, in.TaskIDs), nil
+			return a.reportTasks(ctx, st, in.TaskIDs, readSnapshotOnce), nil
 		}
 
 		waitCtx := ctx
@@ -348,14 +358,14 @@ func (a *Agents) awaitTask(ctx context.Context, g *genkit.Genkit, st *agentsStat
 	return report
 }
 
-// reportTasks builds one report per task ID with a single read each, for the
-// check tool and the wait tool's don't-wait path.
-func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []string) backgroundTasksResult {
+// reportTasks builds one report per task ID with a single fetch each, for the
+// check and abort tools and the wait tool's don't-wait path.
+func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []string, fetch snapshotFetch) backgroundTasksResult {
 	g := genkit.FromContext(ctx)
 	return backgroundTasksResult{Tasks: collectReports(taskIDs, func(taskID string) backgroundTaskReport {
-		// A check never waits, so a failure is the report; the raw error is
-		// only of interest to the wait tool, which classifies it.
-		report, _ := a.reportTask(ctx, g, st, taskID, readSnapshotOnce)
+		// None of these callers wait, so a failure is the report; the raw
+		// error is only of interest to the wait tool, which classifies it.
+		report, _ := a.reportTask(ctx, g, st, taskID, fetch)
 		return report
 	})}
 }
@@ -392,9 +402,11 @@ func collectReports(taskIDs []string, report func(taskID string) backgroundTaskR
 }
 
 // snapshotFetch is how a task's snapshot is obtained: read once for the check
-// tool, waited for by the wait tool. Both dispatch a companion action of the
-// sub-agent, so both apply the runtime's read shaping and both keep the error
-// chain live for classification.
+// tool, waited for by the wait tool, aborted first by the abort tool. All three
+// dispatch companion actions of the sub-agent, so all three apply the runtime's
+// read shaping and all three keep the error chain live for classification.
+// Ending on the row, rather than on each tool's own idea of an outcome, is what
+// lets one report path serve every tool.
 type snapshotFetch func(context.Context, *aix.AgentHandle, string) (*aix.SessionSnapshot[json.RawMessage], error)
 
 var (
@@ -403,6 +415,20 @@ var (
 	}
 	awaitSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
 		return agent.WaitForSnapshot(ctx, snapshotID)
+	}
+	// abortSnapshot stops the work, then reads the row the abort left behind.
+	// The read is not redundant with the abort's own return value: the abort
+	// reports a status and nothing else, while a task that had already
+	// finished still owes the caller the response and artifacts only the row
+	// carries. Reading is safe because the abort settles the row before it
+	// returns (the sub-agent's runtime observes the flip and cancels the work
+	// afterwards), so the read that follows sees the outcome rather than a
+	// lingering pending.
+	abortSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
+		if _, err := agent.Abort(ctx, snapshotID); err != nil {
+			return nil, err
+		}
+		return agent.GetSnapshot(ctx, snapshotID)
 	}
 )
 

@@ -30,7 +30,8 @@
 // The parts worth reading:
 //
 //   - Agents.Async on the middleware. It adds the "background" flag to every
-//     delegation tool and the two collection tools that go with it.
+//     delegation tool and the three task tools that go with it: check, wait
+//     and abort.
 //   - Both sub-agents have a session store. A background delegation records a
 //     pending snapshot as the durable task, so a store is what makes an agent
 //     able to run in the background at all; a store-less agent is refused at

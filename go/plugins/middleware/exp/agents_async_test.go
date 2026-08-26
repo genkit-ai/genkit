@@ -573,3 +573,163 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 		t.Errorf("expected the missing snapshot to settle as unknown/not-found, got %+v", res.Tasks)
 	}
 }
+
+// TestAgentsAbortBackgroundTask drives the abort control end to end. The task
+// is stopped mid-flight, so the abort has to reach the work and not just the
+// row, and a later check has to agree: an orchestrator told "pending" after it
+// aborted would go back to waiting on work that is gone.
+func TestAgentsAbortBackgroundTask(t *testing.T) {
+	g := newTestGenkit(t)
+
+	// The sub-agent never finishes on its own, so the abort is the only thing
+	// that can end this task. It signals its own cancellation, which is how
+	// the test tells a stopped task from a merely rewritten row.
+	stopped := make(chan struct{})
+	var stopOnce sync.Once
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				<-ctx.Done()
+				stopOnce.Do(func() { close(stopped) })
+				return nil, ctx.Err()
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	// Scripted orchestrator: launch in background, abort, then check that the
+	// abort stuck.
+	var capturedSystem string
+	orch := toolModel(t, g, "test/orch-abort", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if sys := findSystem(req.Messages); sys != nil {
+			capturedSystem = systemText(sys)
+		}
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		aborts := toolOutputs(req.Messages, abortBackgroundTasksToolName)
+		checks := toolOutputs(req.Messages, checkBackgroundTasksToolName)
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_researcher",
+				Input: map[string]any{"task": "dig into X", "background": true},
+			}), nil
+		case len(aborts) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  abortBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		case len(checks) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  checkBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := resp.History()
+
+	if !strings.Contains(capturedSystem, abortBackgroundTasksToolName) {
+		t.Errorf("async system prompt missing %q; got:\n%s", abortBackgroundTasksToolName, capturedSystem)
+	}
+
+	abortOuts := toolOutputs(history, abortBackgroundTasksToolName)
+	if len(abortOuts) != 1 {
+		t.Fatalf("expected 1 abort response, got %d", len(abortOuts))
+	}
+	aborted := decodeToolOutput[backgroundTasksResult](t, abortOuts[0])
+	if len(aborted.Tasks) != 1 {
+		t.Fatalf("expected 1 aborted task, got %+v", aborted.Tasks)
+	}
+	if got := aborted.Tasks[0]; got.Status != string(aix.SnapshotStatusAborted) || got.Error == "" {
+		t.Errorf("unexpected abort report: %+v", got)
+	}
+
+	// The row said aborted; the runtime observes that flip and cancels the
+	// work, which is the half a status write alone would not prove.
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Error("the sub-agent was never cancelled: the abort reached the row but not the work")
+	}
+
+	checkOuts := toolOutputs(history, checkBackgroundTasksToolName)
+	if len(checkOuts) != 1 {
+		t.Fatalf("expected 1 check response, got %d", len(checkOuts))
+	}
+	checked := decodeToolOutput[backgroundTasksResult](t, checkOuts[0])
+	if len(checked.Tasks) != 1 || checked.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
+		t.Errorf("check after abort: want 1 aborted task, got %+v", checked.Tasks)
+	}
+}
+
+// TestAgentsAbortAfterCompletionReportsTheResult pins what an abort owes a
+// caller when there was nothing left to stop. The abort action returns a bare
+// status, so reporting that alone would answer "completed" and strand the
+// answer the sub-agent had already produced; the abort reads the row it left
+// behind instead and folds it like any other report.
+func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
+	g := newTestGenkit(t)
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			var last *ai.Message
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				resp.SendArtifact(&aix.Artifact{
+					Name:  "findings.md",
+					Parts: []*ai.Part{ai.NewTextPart("the findings body")},
+				})
+				last = ai.NewModelTextMessage("research complete")
+				sess.AddMessages(last)
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{Message: last, Artifacts: sess.Artifacts()}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	// Launch and settle the task outside the middleware. Collecting it through
+	// the tools first would cache its report, and the abort would then answer
+	// from that cache without ever dispatching the call under test.
+	h, err := genkitx.LookupAgent(g, "researcher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := h.Start(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("dig into X")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.WaitForSnapshot(ctx, task.SnapshotID()); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}
+	st := &agentsState{settledReports: map[string]backgroundTaskReport{}}
+	got, err := a.reportTask(ctx, g, st, formatTaskID("researcher", task.SnapshotID()), abortSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != string(aix.SnapshotStatusCompleted) {
+		t.Errorf("Status = %q, want %q: the abort had nothing to stop", got.Status, aix.SnapshotStatusCompleted)
+	}
+	if got.Response != "research complete" {
+		t.Errorf("Response = %q, want the answer the task had already produced", got.Response)
+	}
+	wantArtifact := "researcher_" + shortSnapshotID(task.SnapshotID()) + "/findings.md"
+	if len(got.Artifacts) != 1 || got.Artifacts[0].Name != wantArtifact ||
+		!strings.Contains(got.Artifacts[0].Content, "the findings body") {
+		t.Errorf("unexpected artifacts (want %q with inline content): %+v", wantArtifact, got.Artifacts)
+	}
+}

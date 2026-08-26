@@ -105,9 +105,10 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) 
 // snapshot, hands back a task ID immediately, and keeps working in the
 // background, so the orchestrator can continue calling tools and collect the
 // result later through the added check_background_tasks and
-// wait_for_background_tasks tools. The pending snapshot (heartbeated while the
-// worker lives, finalized in place with the cumulative state when the work
-// settles) is the durable record, and task IDs are self-contained
+// wait_for_background_tasks tools, or drop it with abort_background_tasks. The
+// pending snapshot (heartbeated while the worker lives, finalized in place
+// with the cumulative state when the work settles) is the durable record, and
+// task IDs are self-contained
 // ("<agent>:<snapshotId>"), so a re-instantiated orchestrator can pick results
 // up using nothing but the IDs recorded in its conversation history. Background
 // delegation requires server-managed sub-agents whose stores implement
@@ -174,12 +175,14 @@ type Agents struct {
 	ArtifactStrategy ArtifactStrategy `json:"artifactStrategy,omitempty" jsonschema_description:"How sub-agent artifacts are surfaced. \"inline\" adds artifact content to the delegation tool result and merges it into the parent session. \"session\" merges into the session only. Defaults to \"inline\"."`
 	// Async enables background delegation. Delegation tools gain a "background"
 	// input flag that starts the sub-agent through its detach support and
-	// returns a task ID immediately, and two shared tools are added:
-	// check_background_tasks (non-blocking status and results) and
-	// wait_for_background_tasks (blocks until the listed tasks settle).
+	// returns a task ID immediately, and three shared tools are added, one per
+	// control the orchestrator has over a launched task:
+	// check_background_tasks (non-blocking status and results),
+	// wait_for_background_tasks (blocks until the listed tasks settle), and
+	// abort_background_tasks (stops tasks whose results are no longer needed).
 	// Background delegation requires server-managed sub-agents whose stores
 	// implement [aix.SnapshotSubscriber].
-	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
+	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks / abort_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
 }
 
 func (a Agents) Name() string { return provider + "/agents" }
@@ -234,7 +237,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	// delegation tool landing on a background-task tool's name) would
 	// otherwise surface only at generate time as a duplicate-tool rejection
 	// of the whole request.
-	names := make(map[string]string, len(a.Agents)+2)
+	names := make(map[string]string, len(a.Agents)+3)
 	claimName := func(name, owner string) error {
 		if prev, ok := names[name]; ok {
 			return status.Errorf(status.ErrInvalidArgument,
@@ -244,7 +247,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		return nil
 	}
 
-	tools := make([]ai.Tool, 0, len(a.Agents)+2)
+	tools := make([]ai.Tool, 0, len(a.Agents)+3)
 	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" {
@@ -263,8 +266,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		}
 	}
 	if a.Async {
-		checkName, waitName := a.backgroundToolNames()
-		for _, n := range []string{checkName, waitName} {
+		for _, n := range a.backgroundToolNames().all() {
 			if err := claimName(n, "the background-task tools"); err != nil {
 				return nil, err
 			}
@@ -308,7 +310,7 @@ type delegationResult struct {
 	Artifacts []delegatedArtifact `json:"artifacts,omitempty"`
 	// TaskID is the background task handle ("<agent>:<snapshotId>") when the
 	// delegation was started with background=true; empty otherwise. It is the
-	// input to check_background_tasks / wait_for_background_tasks.
+	// input to the background-task tools (check, wait, abort).
 	TaskID string `json:"taskId,omitempty"`
 	// Status is "pending" when a background delegation was started; empty for
 	// synchronous delegations.
@@ -554,18 +556,30 @@ func (a *Agents) prefix() string {
 	return *a.ToolPrefix
 }
 
+// taskToolNames are the names of the shared background-task tools for one
+// [Agents] configuration.
+type taskToolNames struct{ check, wait, abort string }
+
+// all returns the names in a fixed order, for collision checking.
+func (n taskToolNames) all() []string { return []string{n.check, n.wait, n.abort} }
+
 // backgroundToolNames returns the names of the shared background-task tools
 // for this configuration. They are the bare well-known names by default and
 // prefixed with an explicitly set [Agents.ToolPrefix], so two Async instances
 // with distinct prefixes can coexist on one generate call without colliding
 // on the shared names (the default delegate_to prefix is a delegation verb,
-// not an instance namespace, so it is deliberately not applied here).
-func (a *Agents) backgroundToolNames() (check, wait string) {
-	if a.ToolPrefix == nil {
-		return checkBackgroundTasksToolName, waitBackgroundTasksToolName
+// not an instance namespace, so it is deliberately not applied here, and a
+// nil prefix is therefore the same as an empty one).
+func (a *Agents) backgroundToolNames() taskToolNames {
+	prefix := ""
+	if a.ToolPrefix != nil {
+		prefix = *a.ToolPrefix
 	}
-	return makeToolName(*a.ToolPrefix, checkBackgroundTasksToolName),
-		makeToolName(*a.ToolPrefix, waitBackgroundTasksToolName)
+	return taskToolNames{
+		check: makeToolName(prefix, checkBackgroundTasksToolName),
+		wait:  makeToolName(prefix, waitBackgroundTasksToolName),
+		abort: makeToolName(prefix, abortBackgroundTasksToolName),
+	}
 }
 
 // strategy resolves the artifact strategy, defaulting to inline.
@@ -608,16 +622,17 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 	b.WriteString("When a task is better handled by a specialized agent, delegate it using the ")
 	b.WriteString("appropriate tool. Provide a clear, self-contained task description.\n")
 	if a.Async {
-		checkName, waitName := a.backgroundToolNames()
+		names := a.backgroundToolNames()
 		b.WriteString("\n")
 		b.WriteString("Delegations can run in the background: set \"background\": true on a ")
 		b.WriteString("delegation tool call to get a taskId back immediately while the ")
 		b.WriteString("sub-agent keeps working. Continue with other work, then collect ")
-		b.WriteString("results with " + checkName + " (returns current ")
-		b.WriteString("status without waiting) or " + waitName + " ")
-		b.WriteString("(blocks until the tasks settle). Background tasks keep running ")
-		b.WriteString("across turns, and task IDs from earlier tool results stay valid: ")
-		b.WriteString("check them before delegating the same work again.\n")
+		b.WriteString("results with " + names.check + " (returns current ")
+		b.WriteString("status without waiting) or " + names.wait + " ")
+		b.WriteString("(blocks until the tasks settle). Use " + names.abort + " to stop ")
+		b.WriteString("tasks whose results are no longer needed. Background tasks keep ")
+		b.WriteString("running across turns, and task IDs from earlier tool results stay ")
+		b.WriteString("valid: check them before delegating the same work again.\n")
 	}
 	b.WriteString("</sub-agents>")
 	return b.String()
