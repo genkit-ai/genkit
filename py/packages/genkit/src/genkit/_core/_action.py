@@ -429,8 +429,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
         self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
-        # Optional matcher function for resource actions
-        self.matches: Callable[[object], bool] | None = None
 
         # All action handlers must be async
         if not inspect.iscoroutinefunction(fn):
