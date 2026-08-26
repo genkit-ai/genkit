@@ -118,8 +118,15 @@ export const logList = new Command('log:list')
           );
           logs.forEach((log) => {
             let time = 'unknown';
-            if (typeof log.timestamp === 'number') {
-              time = new Date(log.timestamp).toLocaleString();
+            if (
+              typeof log.timestamp === 'number' &&
+              Number.isFinite(log.timestamp)
+            ) {
+              try {
+                time = new Date(log.timestamp).toLocaleString();
+              } catch {
+                // Fallback to 'unknown' if timestamp is out of range
+              }
             }
 
             const id = log.logId || 'unknown';

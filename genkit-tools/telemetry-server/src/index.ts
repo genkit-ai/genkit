@@ -228,13 +228,13 @@ export async function startTelemetryServer(params: {
       } = request.query;
       response.json(
         await params.logStore.list({
-          limit: limit ? Number.parseInt(limit.toString()) : 100,
+          limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
           continuationToken: continuationToken
             ? continuationToken.toString()
             : undefined,
           severityText: severityText ? severityText.toString() : undefined,
           severityNumber: severityNumber
-            ? Number.parseInt(severityNumber.toString())
+            ? Number.parseInt(severityNumber.toString(), 10) || undefined
             : undefined,
           traceId: traceId ? traceId.toString() : undefined,
           spanId: spanId ? spanId.toString() : undefined,
@@ -252,14 +252,14 @@ export async function startTelemetryServer(params: {
       const { traceId } = request.params;
       response.json(
         await params.logStore.list({
-          limit: limit ? Number.parseInt(limit.toString()) : 100,
+          limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
           continuationToken: continuationToken
             ? continuationToken.toString()
             : undefined,
           traceId,
           severityText: severityText ? severityText.toString() : undefined,
           severityNumber: severityNumber
-            ? Number.parseInt(severityNumber.toString())
+            ? Number.parseInt(severityNumber.toString(), 10) || undefined
             : undefined,
         })
       );
@@ -277,7 +277,7 @@ export async function startTelemetryServer(params: {
         const { traceId, spanId } = request.params;
         response.json(
           await params.logStore.list({
-            limit: limit ? Number.parseInt(limit.toString()) : 100,
+            limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
             continuationToken: continuationToken
               ? continuationToken.toString()
               : undefined,
@@ -285,7 +285,7 @@ export async function startTelemetryServer(params: {
             spanId,
             severityText: severityText ? severityText.toString() : undefined,
             severityNumber: severityNumber
-              ? Number.parseInt(severityNumber.toString())
+              ? Number.parseInt(severityNumber.toString(), 10) || undefined
               : undefined,
           })
         );
