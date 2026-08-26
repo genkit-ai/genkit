@@ -743,6 +743,8 @@ def _define_tool(
         declared_output_schema = None
     else:
         declared_output_schema = action.output_schema
+    if action.metadata is None:
+        action.metadata = {}
     action.metadata[DECLARED_OUTPUT_SCHEMA_KEY] = declared_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponse).json_schema()
 
