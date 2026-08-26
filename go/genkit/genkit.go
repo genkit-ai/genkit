@@ -485,14 +485,11 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //		},
 //	)
 //
-//	// Later, run the flow with streaming:
-//	streamCh, err := counterFlow.Stream(ctx, 5)
-//	if err != nil {
-//		// handle error
-//	}
-//	for result := range streamCh {
-//		if result.Err != nil {
-//			log.Printf("Stream error: %v", result.Err)
+//	// Later, run the flow with streaming. Stream returns a range-over-func
+//	// iterator, so the error arrives as the loop's second value.
+//	for result, err := range counterFlow.Stream(ctx, 5) {
+//		if err != nil {
+//			log.Printf("Stream error: %v", err)
 //			break
 //		}
 //		if result.Done {
