@@ -26,6 +26,7 @@ from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import (
+    Error,
     FinishReason,
     Operation,
     Part,
@@ -150,17 +151,17 @@ class DropsOperation(BaseMiddleware):
 
 
 @pytest.mark.asyncio
-async def test_generate_operation_fails_when_wrap_model_drops_operation(ai: Genkit) -> None:
-    """generate() stays quiet; generate_operation is the one missing-handle error."""
+async def test_generate_fails_when_wrap_model_drops_operation(ai: Genkit) -> None:
+    """A hook that drops a billed ticket is a missing handle on both doors."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
-    assert response.operation is None
+    with pytest.raises(GenkitError, match='did not return an operation') as generate_info:
+        await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
+    assert generate_info.value.status == 'FAILED_PRECONDITION'
 
-    with pytest.raises(GenkitError, match='did not return an operation') as exc_info:
+    with pytest.raises(GenkitError, match='did not return an operation') as operation_info:
         await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
-
-    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert operation_info.value.status == 'FAILED_PRECONDITION'
 
 
 class DropsGenerate(BaseMiddleware):
@@ -175,17 +176,17 @@ class DropsGenerate(BaseMiddleware):
 
 
 @pytest.mark.asyncio
-async def test_generate_operation_fails_when_wrap_generate_drops_operation(ai: Genkit) -> None:
-    """Same one error if wrap_generate rebuilds the response without the handle."""
+async def test_generate_fails_when_wrap_generate_drops_operation(ai: Genkit) -> None:
+    """Same missing-handle error if wrap_generate rebuilds the response without the ticket."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
-    assert response.operation is None
+    with pytest.raises(GenkitError, match='did not return an operation') as generate_info:
+        await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
+    assert generate_info.value.status == 'FAILED_PRECONDITION'
 
-    with pytest.raises(GenkitError, match='did not return an operation') as exc_info:
+    with pytest.raises(GenkitError, match='did not return an operation') as operation_info:
         await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
-
-    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert operation_info.value.status == 'FAILED_PRECONDITION'
 
 
 class SwallowsStart(BaseMiddleware):
@@ -274,14 +275,20 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_forwards_start_latency(ai: Genkit) -> None:
-    """wrapped_start already measured the call; the boxed response should carry it."""
+async def test_generate_stamps_latency_from_action_run(ai: Genkit) -> None:
+    """Action.run's clock lands on the boxed response for both registration shapes."""
     register_bg_model(ai)
+    wrapped = await ai.generate(model='bg-model', prompt='a cat')
+    assert wrapped.latency_ms is not None
+    assert wrapped.latency_ms >= 0
 
-    response = await ai.generate(model='bg-model', prompt='a cat')
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='raw-1', done=False)
 
-    assert response.latency_ms is not None
-    assert response.latency_ms >= 0
+    _register_raw_background(ai, name='raw-bg', start=start)
+    raw = await ai.generate(model='raw-bg', prompt='a cat')
+    assert raw.latency_ms is not None
+    assert raw.latency_ms >= 0
 
 
 def _register_raw_background(ai: Genkit, *, name: str, start: Callable[..., Awaitable[object]]) -> None:
@@ -289,37 +296,40 @@ def _register_raw_background(ai: Genkit, *, name: str, start: Callable[..., Awai
 
 
 @pytest.mark.asyncio
-async def test_background_start_already_boxed_model_response(ai: Genkit) -> None:
-    """start() that already returned ModelResponse(operation=...) is passed through."""
+async def test_box_stamps_operation_action_so_check_can_poll(ai: Genkit) -> None:
+    """A raw start that forgot action can still be polled after generate()."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='raw-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return Operation(id=op.id, done=True, action=op.action)
+
+    _register_raw_background(ai, name='raw-bg', start=start)
+    ai.registry.register_action(name='raw-bg/check', kind=ActionKind.CHECK_OPERATION, fn=check)
+
+    response = await ai.generate(model='raw-bg', prompt='a cat')
+    assert response.operation is not None
+    assert response.operation.action == '/background-model/raw-bg'
+
+    updated = await ai.check_operation(response.operation)
+    assert updated.id == 'raw-1'
+    assert updated.done is True
+
+
+@pytest.mark.asyncio
+async def test_background_start_must_return_operation(ai: Genkit) -> None:
+    """start() returns an Operation. A ModelResponse is a plugin bug."""
 
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
         return ModelResponse(operation=Operation(id='boxed-1', done=False))
 
     _register_raw_background(ai, name='boxed-bg', start=start)
 
-    response = await ai.generate(model='boxed-bg', prompt='a cat')
-
-    assert response.operation is not None
-    assert response.operation.id == 'boxed-1'
-    assert response.message is None
-
-
-@pytest.mark.asyncio
-async def test_background_start_model_response_without_operation_raises(ai: Genkit) -> None:
-    """A background start that returns a chat turn has no handle to poll."""
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
-        )
-
-    _register_raw_background(ai, name='empty-bg', start=start)
-
-    with pytest.raises(GenkitError, match="Background model 'empty-bg' did not return an operation") as exc_info:
-        await ai.generate(model='empty-bg', prompt='a cat')
+    with pytest.raises(GenkitError, match="'boxed-bg' did not return an operation") as exc_info:
+        await ai.generate(model='boxed-bg', prompt='a cat')
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert 'did not return an operation' in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -336,6 +346,36 @@ async def test_define_model_returning_operation_raises(ai: Genkit) -> None:
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
     assert 'plain' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_define_model_returning_dict_raises(ai: Genkit) -> None:
+    """A chat model that returns a dict is a plugin bug, not an AttributeError."""
+
+    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> dict[str, object]:
+        return {'operation': {'id': 'op-1', 'done': False}}
+
+    ai.define_model(name='plain-dict', fn=model_fn)
+
+    with pytest.raises(GenkitError, match="Model 'plain-dict' did not return a ModelResponse") as exc_info:
+        await ai.generate(model='plain-dict', prompt='hi')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_define_model_returning_none_raises(ai: Genkit) -> None:
+    """A chat model that returns None is a plugin bug, not an AttributeError."""
+
+    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> None:
+        return None
+
+    ai.define_model(name='plain-none', fn=model_fn)
+
+    with pytest.raises(GenkitError, match="Model 'plain-none' did not return a ModelResponse") as exc_info:
+        await ai.generate(model='plain-none', prompt='hi')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
 
 
 @pytest.mark.asyncio
@@ -366,10 +406,43 @@ def test_model_response_messages_sees_request_set_after_first_read() -> None:
     assert [m.text for m in resp.messages] == ['a cat']
 
 
-def test_model_response_eq_uses_operation_id() -> None:
-    """Same job id is the same response even when start timing differs."""
+def test_model_response_views_see_message_set_after_first_read() -> None:
+    """A hook that touches text/interrupts/output before message is set must not freeze empty."""
+    resp = ModelResponse()
+    assert resp.text == ''
+    assert resp.interrupts == []
+    assert resp.tool_requests == []
+    assert resp.media == []
+    assert resp.output is None
+
+    resp.message = Message(
+        role=Role.MODEL,
+        content=[
+            Part(
+                root=ToolRequestPart(
+                    tool_request=ToolRequest(name='ping', input={}),
+                    metadata={'interrupt': True},
+                )
+            ),
+            Part(root=TextPart(text='{"ok": true}')),
+        ],
+    )
+    assert resp.text == '{"ok": true}'
+    assert len(resp.interrupts) == 1
+    assert len(resp.tool_requests) == 1
+    assert resp.output == {'ok': True}
+
+
+def test_model_response_eq_uses_operation_snapshot() -> None:
+    """Same job and poll state match even when start timing differs."""
     a = ModelResponse(operation=Operation(id='unique-a', metadata={'latencyMs': 0.166}))
     b = ModelResponse(operation=Operation(id='unique-a', metadata={'latencyMs': 0.002}))
     c = ModelResponse(operation=Operation(id='unique-b'))
     assert a == b
     assert a != c
+
+    in_flight = ModelResponse(operation=Operation(id='job1', done=False))
+    finished = ModelResponse(operation=Operation(id='job1', done=True, output={'url': 'x'}))
+    failed = ModelResponse(operation=Operation(id='job1', done=True, error=Error(message='boom')))
+    assert in_flight != finished
+    assert finished != failed

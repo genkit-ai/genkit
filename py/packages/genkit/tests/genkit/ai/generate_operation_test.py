@@ -141,37 +141,22 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
     assert 'does not support long running operations' in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_generate_operation_no_operation_returned(ai: Genkit) -> None:
-    """Test error when model supports LRO but doesn't return an operation.
+def test_define_model_rejects_long_running(ai: Genkit) -> None:
+    """A chat model cannot advertise a background job. Use define_background_model."""
 
-    This matches the JS FAILED_PRECONDITION error case.
-    """
-
-    # Define a model that claims to support long_running but doesn't return an operation
     async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        # Return a normal response without an operation
         return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Hello'))],
-            ),
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hello'))]),
         )
 
-    ai.define_model(
-        name='fake-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,  # Claims to support LRO
-            ),
-        ),
-    )
+    with pytest.raises(GenkitError, match='define_background_model') as exc_info:
+        ai.define_model(
+            name='fake-lro-model',
+            fn=model_fn,
+            info=ModelInfo(supports=Supports(long_running=True)),
+        )
 
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.generate_operation(model='fake-lro-model', prompt='Hi')
-
-    assert 'did not return an operation' in str(exc_info.value)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
@@ -236,4 +221,11 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     )
 
     assert captured_request is not None
-    assert captured_request.config is not None
+    config = captured_request.config
+    if isinstance(config, dict):
+        assert config.get('temperature') == 0.7
+    else:
+        assert config is not None
+        assert getattr(config, 'temperature', None) == 0.7
+    assert any(m.role == Role.SYSTEM and 'test assistant' in m.text.lower() for m in captured_request.messages)
+    assert any(m.role == Role.USER and 'Test prompt' in m.text for m in captured_request.messages)

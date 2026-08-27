@@ -51,6 +51,13 @@ def _make_action_key(action_type: ActionKind | str, name: str) -> str:
     return f'/{action_type}/{name}'
 
 
+def stamp_operation_action(*, operation: Operation, name: str) -> None:
+    """A handle needs the start action key so check/cancel can find the job."""
+    if operation.action:
+        return
+    operation.action = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
+
+
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
 CheckModelOpFn = Callable[[Operation], Awaitable[Operation]]
 CancelModelOpFn = Callable[[Operation], Awaitable[Operation]]
@@ -153,10 +160,10 @@ class BackgroundAction(Generic[OutputT]):
 
 
 def missing_operation_error(*, name: str) -> GenkitError:
-    """The caller asked for a handle and the model did not return one."""
+    """The caller asked for a handle and this action did not return one."""
     return GenkitError(
         status='FAILED_PRECONDITION',
-        message=f"Background model '{name}' did not return an operation.",
+        message=f"'{name}' did not return an operation.",
     )
 
 

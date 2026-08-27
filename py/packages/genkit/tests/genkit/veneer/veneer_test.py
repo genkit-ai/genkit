@@ -1596,7 +1596,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
         fn=foo_model_fn,
         info=ModelInfo(
             label='Foo Bar',
-            supports=Supports(multiturn=True, tools=True, system_role=True, long_running=True),
+            supports=Supports(multiturn=True, tools=True, system_role=True),
         ),
     )
     assert action.metadata['model'] == {
@@ -1605,7 +1605,6 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
             'multiturn': True,
             'tools': True,
             'systemRole': True,
-            'longRunning': True,
         },
     }
 

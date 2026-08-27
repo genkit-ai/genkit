@@ -282,6 +282,15 @@ def _check_request_annotation(name: str, fn: ModelFn) -> None:
     )
 
 
+def claims_long_running(*, model_options: dict[str, object]) -> bool:
+    """True when this model metadata asked for a background job."""
+    supports = model_options.get('supports')
+    if isinstance(supports, dict):
+        supports_dict = cast(dict[str, object], supports)
+        return bool(supports_dict.get('longRunning'))
+    return False
+
+
 def define_model(
     registry: Registry,
     name: str,
@@ -312,6 +321,12 @@ def define_model(
     # Default label to name if not set
     if 'label' not in model_options or not model_options['label']:
         model_options['label'] = name
+
+    if claims_long_running(model_options=model_options):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"define_model '{name}' cannot set longRunning. Use define_background_model.",
+        )
 
     # Add config schema if provided
     if config_schema:

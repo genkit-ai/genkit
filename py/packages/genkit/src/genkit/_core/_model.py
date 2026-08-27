@@ -238,17 +238,17 @@ class Message(MessageData):
         """Return identity-based hash."""
         return hash(id(self))
 
-    @cached_property
+    @property
     def text(self) -> str:
         """All text parts concatenated into a single string."""
         return text_from_message(self)
 
-    @cached_property
+    @property
     def tool_requests(self) -> list[ToolRequestPart]:
         """All tool request parts in this message."""
         return [p.root for p in self.content if isinstance(p.root, ToolRequestPart)]
 
-    @cached_property
+    @property
     def interrupts(self) -> list[ToolRequestPart]:
         """Tool requests marked as interrupted."""
         return [p for p in self.tool_requests if p.metadata and p.metadata.get('interrupt')]
@@ -481,6 +481,13 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         self.output.content_type = v
 
 
+def operation_snapshot(*, operation: Operation | None) -> tuple[object, object, object, object]:
+    """Job id plus the fields that change when a check lands."""
+    if operation is None:
+        return (None, None, None, None)
+    return (operation.id, operation.done, operation.error, operation.output)
+
+
 class ModelResponse(GenkitModel, Generic[OutputT]):
     """Model response with utilities for text extraction, output parsing, and validation."""
 
@@ -519,31 +526,37 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         pass
 
     def __eq__(self, other: object) -> bool:
-        """Compare responses by message, finish_reason, and operation id.
+        """Compare responses by message, finish_reason, and poll snapshot.
 
-        Two start handles with different job ids are not the same response.
-        Timing on the handle is not part of the job.
+        Same job id with a later done/error/output is a later check, not
+        the same response. Timing on the handle is not part of the job.
         """
         if isinstance(other, ModelResponse):
-            self_op = self.operation.id if self.operation is not None else None
-            other_op = other.operation.id if other.operation is not None else None
-            return self.message == other.message and self.finish_reason == other.finish_reason and self_op == other_op
+            return (
+                self.message == other.message
+                and self.finish_reason == other.finish_reason
+                and operation_snapshot(operation=self.operation) == operation_snapshot(operation=other.operation)
+            )
         return super().__eq__(other)
 
     def __hash__(self) -> int:
         """Return identity-based hash."""
         return hash(id(self))
 
-    @cached_property
+    @property
     def text(self) -> str:
         """All text parts concatenated into a single string."""
         if self.message is None:
             return ''
         return self.message.text
 
-    @cached_property
+    @property
     def output(self) -> OutputT:
-        """Parsed JSON output from the response text, validated against schema if set."""
+        """Parsed JSON output from the response text, validated against schema if set.
+
+        Recomputed each read so attaching a schema after a first touch still
+        returns the typed model.
+        """
         if self._message_parser and self.message is not None:
             parsed = self._message_parser(self.message)
         else:
@@ -570,14 +583,17 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.message,
         ]
 
-    @cached_property
+    @property
     def tool_requests(self) -> list[ToolRequestPart]:
-        """All tool request parts in the response message."""
+        """All tool request parts in the response message.
+
+        Recomputed each read so a later message still shows up.
+        """
         if self.message is None:
             return []
         return self.message.tool_requests
 
-    @cached_property
+    @property
     def media(self) -> list[Media]:
         """All media parts in the response message."""
         if self.message is None:
@@ -588,7 +604,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             if isinstance(part.root, MediaPart) and part.root.media is not None
         ]
 
-    @cached_property
+    @property
     def interrupts(self) -> list[ToolRequestPart]:
         """Tool requests marked as interrupted."""
         if self.message is None:
@@ -637,7 +653,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         """Return hash."""
         return hash(id(self))
 
-    @cached_property
+    @property
     def text(self) -> str:
         """Text content of this chunk."""
         parts: list[str] = []
@@ -651,7 +667,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
                     parts.append(str(text_val))
         return ''.join(parts)
 
-    @cached_property
+    @property
     def accumulated_text(self) -> str:
         """Text from all previous chunks plus this chunk."""
         parts: list[str] = []
@@ -667,7 +683,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
                             parts.append(str(text_val))
         return ''.join(parts) + self.text
 
-    @cached_property
+    @property
     def output(self) -> OutputT:
         """Parsed JSON output from accumulated text."""
         if self.chunk_parser:
