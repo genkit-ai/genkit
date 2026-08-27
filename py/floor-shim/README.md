@@ -20,7 +20,7 @@ because those pre-transfer releases (0.1.0–0.2.0) declare
   real latest genkit.
 - On Python <= 3.9, version 0.3.0 outranks the pre-transfer 0.2.0, pip
   commits to it, and `setup.py` fails the **install phase** with a boxed
-  message: the 3.10 requirement plus Homebrew / uv / python.org
+  message: the 3.10 requirement plus uv / Homebrew / python.org
   instructions. The failure must stay out of the metadata phase
   (`egg_info`/`dist_info`/`sdist` succeed on purpose): old pip treats a
   metadata failure as a discardable candidate and backtracks to the

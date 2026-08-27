@@ -44,32 +44,72 @@ MIN_PYTHON = (3, 10)
 # message and nothing gets installed.
 _METADATA_ONLY_COMMANDS = {'egg_info', 'dist_info', 'sdist'}
 
-if sys.version_info < MIN_PYTHON and not _METADATA_ONLY_COMMANDS.intersection(sys.argv[1:]):
-    sys.exit(
+
+def _format_error_message(min_ver: tuple[int, ...], cur_ver: tuple[int, ...]) -> str:
+    min_str = '.'.join(map(str, min_ver))
+    cur_str = '.'.join(map(str, cur_ver[:3]))
+
+    if sys.platform == 'win32':
+        platform_hint = f'Windows requires Python {min_str}+ to run Genkit.'
+        recipes = (
+            '  # Option 1 (Recommended): uv (manages Python versions automatically)\n'
+            '  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"\n'
+            '  uv init && uv add genkit\n'
+            '\n'
+            f'  # Option 2: Download Python (>= {min_str}) from https://www.python.org/downloads/\n'
+            '  python -m venv .venv && .venv\\Scripts\\pip install genkit'
+        )
+    elif sys.platform == 'darwin':
+        platform_hint = (
+            'macOS ships an older Python at /usr/bin/python3.\n'
+            f'To use Genkit, install Python {min_str}+ using one of the options below:'
+        )
+        recipes = (
+            '  # Option 1 (Recommended): uv (manages Python for you)\n'
+            '  curl -LsSf https://astral.sh/uv/install.sh | sh\n'
+            '  uv init && uv add genkit\n'
+            '\n'
+            '  # Option 2: Homebrew\n'
+            '  brew install python\n'
+            '  python3 -m venv .venv && source .venv/bin/activate\n'
+            '  pip install genkit\n'
+            '\n'
+            '  # Option 3: Download installer from https://www.python.org/downloads/'
+        )
+    else:
+        platform_hint = (
+            f'Your system Python is older than the required Python {min_str}+.\n'
+            f'To use Genkit, install Python {min_str}+ using one of the options below:'
+        )
+        recipes = (
+            '  # Option 1 (Recommended): uv (standalone, no root required)\n'
+            '  curl -LsSf https://astral.sh/uv/install.sh | sh\n'
+            '  uv init && uv add genkit\n'
+            '\n'
+            '  # Option 2: System Package Manager\n'
+            '  sudo apt update && sudo apt install python3 python3-venv\n'
+            '  python3 -m venv .venv && source .venv/bin/activate\n'
+            '  pip install genkit\n'
+            '\n'
+            '  # Option 3: Download installer from https://www.python.org/downloads/'
+        )
+
+    return (
         '\n'
         '========================================================================\n'
-        'Genkit requires Python {min}+, but you are running Python {cur}.\n'
+        f'Genkit requires Python {min_str}+, but you are running Python {cur_str}.\n'
         '\n'
-        'macOS ships an older Python at /usr/bin/python3. To use Genkit,\n'
-        'install a current Python first. Any one of these works:\n'
+        f'{platform_hint}\n'
         '\n'
-        '  # Homebrew\n'
-        '  brew install python\n'
-        '  python3 -m venv .venv && source .venv/bin/activate\n'
-        '  pip install genkit\n'
-        '\n'
-        '  # uv (recommended - manages Python for you)\n'
-        '  curl -LsSf https://astral.sh/uv/install.sh | sh\n'
-        '  uv init && uv add genkit\n'
-        '\n'
-        '  # Or download an installer from https://www.python.org/downloads/\n'
+        f'{recipes}\n'
         '\n'
         'Docs: https://genkit.dev/docs/python/get-started/\n'
-        '========================================================================\n'.format(
-            min='.'.join(map(str, MIN_PYTHON)),
-            cur='.'.join(map(str, sys.version_info[:3])),
-        )
+        '========================================================================\n'
     )
+
+
+if sys.version_info < MIN_PYTHON and not _METADATA_ONLY_COMMANDS.intersection(sys.argv[1:]):
+    sys.exit(_format_error_message(MIN_PYTHON, sys.version_info))
 
 from setuptools import setup  # noqa: E402
 
