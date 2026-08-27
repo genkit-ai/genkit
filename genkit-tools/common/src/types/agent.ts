@@ -46,8 +46,11 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  * - `completed`: the snapshot captures a settled state.
  * - `aborted`: the snapshot's invocation was aborted via the
  *   `abort` companion action while detached.
- * - `failed`: the invocation terminated with an error. The snapshot's `error`
- *   field describes the failure and resume is rejected with that same error.
+ * - `failed`: a turn ended with an error. The snapshot's `error` field
+ *   describes the failure, and its state is what the turn committed before
+ *   it: the conversation trimmed back to the last completed tool round.
+ *   Resume is permitted, so whether the failure is worth another attempt is
+ *   the client's decision, taken from `error.status`.
  * - `expired`: a `pending` snapshot whose detached background worker is
  *   presumed dead because its heartbeat went stale. Computed on read from a
  *   stale `heartbeatAt`; never persisted (the dead worker can no longer write
@@ -75,8 +78,10 @@ export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
  *   (e.g. human approval); the turn can be resumed with a `resume` payload.
  * - `other` / `unknown`: anything else / unspecified.
  *
- * The remaining values are agent-specific outcomes with no `generate`-level
- * equivalent (they never arise from forwarding a model finish reason):
+ * The remaining values are agent-specific outcomes that never arise from
+ * forwarding a model finish reason (the model-level namesakes of `aborted`
+ * and `failed` accompany generate errors, which the agent reports as a
+ * failed turn instead):
  *
  * - `aborted`: the turn or invocation was aborted (e.g. a detached
  *   invocation aborted via the `abort` companion action).
@@ -122,6 +127,12 @@ export type SessionState = z.infer<typeof SessionStateSchema>;
 
 /**
  * Zod schema for agent input (per-turn).
+ *
+ * An input with neither `message` nor `resume` continues the conversation
+ * from where it stands, which is how a failed turn is re-attempted: resume
+ * the `failed` snapshot, send an empty input, and the agent runs the turn
+ * again on the messages it committed. It is rejected on a conversation with
+ * no messages to continue.
  */
 export const AgentInputSchema = z.object({
   /**
@@ -156,14 +167,15 @@ export const AgentInitSchema = z.object({
    * mutually exclusive with state (a client-managed conversation carries
    * its identity inside `state.sessionId`). Alone it resumes the session
    * from its latest snapshot: the most recently updated row, whatever its
-   * status. If that row is a failed, aborted, or still-pending dead end
-   * the resume is rejected (pass snapshotId to continue from a specific
-   * earlier point); if the session's history was forked by re-resuming an
-   * earlier snapshot, the most recently updated branch wins. If the
-   * session has no snapshots yet, a brand-new conversation is started
-   * under this caller-chosen ID, and every snapshot it persists carries
-   * it. Combined with snapshotId, it asserts which session the snapshot
-   * belongs to, and a mismatch is rejected.
+   * status. If that row is an aborted or still-pending dead end the resume
+   * is rejected (pass snapshotId to continue from a specific earlier
+   * point); a `failed` row resumes with what the failed turn committed; if
+   * the session's history was forked by re-resuming an earlier snapshot,
+   * the most recently updated branch wins. If the session has no snapshots
+   * yet, a brand-new conversation is started under this caller-chosen ID,
+   * and every snapshot it persists carries it. Combined with snapshotId, it
+   * asserts which session the snapshot belongs to, and a mismatch is
+   * rejected.
    */
   sessionId: z.string().optional(),
   /**
@@ -219,17 +231,16 @@ export const AgentOutputSchema = z.object({
   /**
    * ID of the most recent turn-end snapshot for this invocation. Empty
    * when no store is configured or no turn committed. When `finishReason`
-   * is `detached` it is the pending detach snapshot; when `failed`, it is
-   * the last committed turn's snapshot (the resume point, holding state
-   * through the last successful turn and excluding the failed turn's
-   * partial mutations).
+   * is `detached` it is the pending detach snapshot. When `failed`, it is
+   * the resume point: the failed turn's own snapshot when the turn
+   * committed anything, otherwise the last committed turn's snapshot.
    */
   snapshotId: z.string().optional(),
   /**
    * Final conversation state (only when client-managed). When
-   * `finishReason` is `failed`, this is the last-good state: everything
-   * through the last successful turn, excluding the failed turn's
-   * partial mutations.
+   * `finishReason` is `failed`, this is the resume point: what the failed
+   * turn committed, or the last successful turn's state when the turn
+   * failed before committing anything.
    */
   state: SessionStateSchema.optional(),
   /** Last model response message from the conversation. */
@@ -263,8 +274,9 @@ export type AgentOutput = z.infer<typeof AgentOutputSchema>;
  */
 export const TurnEndSchema = z.object({
   /**
-   * ID of the snapshot persisted at the end of this turn. Empty if no
-   * snapshot was written (no store configured, the turn failed, or
+   * ID of the snapshot persisted at the end of this turn, whether it
+   * succeeded or failed. Empty if no snapshot was written (no store
+   * configured, a turn that failed before committing anything, or
    * snapshots were suspended after detach).
    */
   snapshotId: z.string().optional(),
