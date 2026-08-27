@@ -238,6 +238,126 @@ describe('a2ui() middleware', () => {
     assert.match(joined, /Tokyo/);
   });
 
+  it('replays a prior assistant surface as a fenced a2ui block, not a sentinel', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              { text: 'Here you go:' },
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                      version: 'v0.9',
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'hi' },
+                        ],
+                      },
+                      version: 'v0.9',
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'thanks' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    // The a2ui part is gone (the model converter never sees the mime type)...
+    assert.ok(!modelMsg.content.some((p: any) => isA2uiPart(p)));
+    const joined = modelMsg.content.map((p: any) => p.text).join('\n');
+    // ...replaced by the canonical fenced block the model originally emitted,
+    // NOT the old `[rendered UI surface]` sentinel that poisoned the model.
+    assert.doesNotMatch(joined, /\[rendered UI surface\]/);
+    assert.doesNotMatch(joined, /\[UI surface/);
+    assert.match(joined, /```a2ui/);
+    assert.match(joined, /createSurface/);
+    assert.match(joined, /updateComponents/);
+    assert.match(joined, /Here you go:/);
+
+    // The reconstructed block round-trips: parsing it yields the envelopes.
+    const block = joined.slice(
+      joined.indexOf('```a2ui') + '```a2ui'.length,
+      joined.lastIndexOf('```')
+    );
+    const decoded = JSON.parse(block.trim());
+    assert.strictEqual(decoded.length, 2);
+    assert.ok(decoded[0].createSurface);
+
+    // The concrete surface id is rewritten back to the placeholder, so the
+    // model can't copy a real id into a fresh render and reuse (overwrite) the
+    // prior surface. The parser mints a fresh id per turn instead.
+    assert.doesNotMatch(joined, /s1/);
+    assert.strictEqual(decoded[0].createSurface.surfaceId, 'SURFACE_ID');
+    assert.strictEqual(decoded[1].updateComponents.surfaceId, 'SURFACE_ID');
+  });
+
+
+  it('groups consecutive surface envelopes into one block but splits around an action', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    { updateComponents: { surfaceId: 's1', components: [] } },
+                    { action: { name: 'refresh', surfaceId: 's1' } },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const joined = userMsg.content.map((p: any) => p.text).join('\n');
+    // Exactly one fenced block (the two surface envelopes grouped together)...
+    assert.strictEqual((joined.match(/```a2ui/g) ?? []).length, 1);
+    // ...plus the action rendered as a text summary after it.
+    assert.match(joined, /UI action "refresh"/);
+    // The block precedes the action line (source order preserved).
+    assert.ok(joined.indexOf('```a2ui') < joined.indexOf('UI action'));
+  });
+
+
   it('mints the same surface id in the stream and the final message', async () => {
     // Default surface-id policy (random UUID). The stream parse and the final
     // parse must agree on the id for the same surface.
