@@ -314,7 +314,10 @@ type partSchema struct {
 	Resource     *ResourcePart  `json:"resource,omitempty" yaml:"resource,omitempty"`
 	Custom       map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty"`
-	Reasoning    string         `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+	// Reasoning is a pointer so that a reasoning part with empty text stays a
+	// reasoning part: what marks the kind is the key being present, not the
+	// text being non-empty.
+	Reasoning *string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
 // unmarshalPartFromSchema updates Part p based on the schema s.
@@ -336,9 +339,9 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	case s.Custom != nil:
 		p.Kind = PartCustom
 		p.Custom = s.Custom
-	case s.Reasoning != "":
+	case s.Reasoning != nil:
 		p.Kind = PartReasoning
-		p.Text = s.Reasoning
+		p.Text = *s.Reasoning
 		p.ContentType = "plain/text"
 	default:
 		p.Kind = PartText

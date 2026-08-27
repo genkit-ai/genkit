@@ -165,6 +165,30 @@ func TestReasoningPartWithoutSignature(t *testing.T) {
 	}
 }
 
+func TestEmptyReasoningPartRoundTrip(t *testing.T) {
+	// The reasoning key marks the kind, so it has to survive an empty text:
+	// dropping it turns the part into an empty text part on the way back, and
+	// the wire schema lists reasoning as required.
+	p := NewReasoningPart("", []byte("sig123"))
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+
+	var got Part
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("failed to unmarshal reasoning part: %v", err)
+	}
+
+	if !got.IsReasoning() {
+		t.Errorf("empty reasoning part became kind %v, want %v (marshaled as %s)", got.Kind, PartReasoning, b)
+	}
+	if got.Text != "" {
+		t.Errorf("Text = %q, want empty", got.Text)
+	}
+}
+
 func TestNewDataPart(t *testing.T) {
 	t.Run("creates data part with content", func(t *testing.T) {
 		p := NewDataPart("some binary data")

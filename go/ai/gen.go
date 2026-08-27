@@ -445,7 +445,7 @@ type reasoningPart struct {
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
-	Reasoning string `json:"reasoning,omitempty"`
+	Reasoning string `json:"reasoning"`
 }
 
 // RerankerRequest represents a request to rerank documents based on relevance.
