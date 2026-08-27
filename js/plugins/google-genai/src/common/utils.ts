@@ -21,6 +21,8 @@ import {
   JSONSchema,
   MediaPart,
   ModelReference,
+  StatusName,
+  StatusNameSchema,
   getClientHeader as defaultGetClientHeader,
   z,
 } from 'genkit';
@@ -346,6 +348,83 @@ export function cleanSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
+ * Maps an HTTP status code to the corresponding Genkit `StatusName`.
+ *
+ * @param code The HTTP status code.
+ * @returns The matching `StatusName`, or `'UNKNOWN'` if there is no mapping.
+ */
+export function httpStatusToGenkitStatus(code?: number): StatusName {
+  switch (code) {
+    case 400:
+      return 'INVALID_ARGUMENT';
+    case 401:
+      return 'UNAUTHENTICATED';
+    case 403:
+      return 'PERMISSION_DENIED';
+    case 404:
+      return 'NOT_FOUND';
+    case 429:
+      return 'RESOURCE_EXHAUSTED';
+    case 499:
+      return 'CANCELLED';
+    case 500:
+      return 'INTERNAL';
+    case 503:
+      return 'UNAVAILABLE';
+    case 504:
+      return 'DEADLINE_EXCEEDED';
+    default:
+      return 'UNKNOWN';
+  }
+}
+
+/**
+ * Builds an error for leftover, unparsed stream text. When the model API is
+ * overloaded (or otherwise fails), it may return HTTP 200 with a plain JSON
+ * error body instead of SSE `data:` frames. In that case we surface a proper
+ * `GenkitError` with the correct status so downstream middleware (e.g. retry)
+ * can react appropriately, rather than a generic parse error.
+ *
+ * @param text The leftover text that could not be parsed as a stream chunk.
+ * @returns A `GenkitError` if the text is a recognizable API error body,
+ *  otherwise a generic `Error`.
+ */
+export function parseStreamErrorText(text: string): Error {
+  try {
+    const json = JSON.parse(text);
+    const apiError = json?.error;
+    if (
+      apiError &&
+      typeof apiError === 'object' &&
+      (apiError.code || apiError.status)
+    ) {
+      // Coerce `code` to a number so a stringified code (e.g. "503") still maps.
+      const rawCode = Number(apiError.code);
+      const status: StatusName = StatusNameSchema.safeParse(apiError.status)
+        .success
+        ? (apiError.status as StatusName)
+        : httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
+      const message =
+        typeof apiError.message === 'string'
+          ? apiError.message
+          : 'Error streaming from the model';
+      return new GenkitError({
+        status,
+        message,
+        detail: json,
+      });
+    }
+  } catch (e) {
+    // Not JSON or not a recognizable error body, fall through to generic error.
+  }
+  // Truncate to avoid memory/log bloat from large non-JSON payloads (e.g. an
+  // HTML error page from an upstream proxy).
+  const truncatedText =
+    text.length > 500 ? text.substring(0, 500) + '...' : text;
+  return new Error('Failed to parse stream: ' + truncatedText);
+}
+
+/**
  * Processes the streaming body of a Response object. It decodes the stream as
  * UTF-8 text, parses JSON objects from specially formatted lines (e.g., "data: {}"),
  * and returns both an async generator for individual responses and a promise
@@ -365,9 +444,15 @@ export function processStream(response: Response): GenerateContentStreamResult {
   );
   const responseStream = getResponseStream(inputStream);
   const [stream1, stream2] = responseStream.tee();
+  const responsePromise = getResponsePromise(stream2);
+  // Attach a no-op catch so that if the caller only consumes `stream` and it
+  // errors before `response` is ever awaited, the teed response promise does
+  // not become an unhandled rejection (which would crash the process). This
+  // does not swallow the rejection for a real awaiter of `response`.
+  responsePromise.catch(() => {});
   return {
     stream: generateResponseSequence(stream1),
-    response: getResponsePromise(stream2),
+    response: responsePromise,
   };
 }
 
@@ -387,7 +472,7 @@ function getResponseStream(
             if (done) {
               reader.releaseLock();
               if (currentText.trim()) {
-                controller.error(new Error('Failed to parse stream'));
+                controller.error(parseStreamErrorText(currentText));
                 return;
               }
               controller.close();

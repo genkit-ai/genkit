@@ -157,6 +157,87 @@ func TestSendReportsAbortWhileActionRuns(t *testing.T) {
 	})
 }
 
+// TestBidiCompletionSurvivesParentCancelCause extends completion over
+// cancellation to the result itself. When the function reports no error of
+// its own, run adopts a cause recorded against the connection: that is how an
+// invalid inbound chunk or a failed stream callback becomes the session's
+// error even though the function ignored the cancellation and returned
+// cleanly. The override used to read the cause off the connection context,
+// which also carries whatever cancelled the caller's context, so a deadline
+// or a custom cause that fired while the function was committing its result
+// replaced a success with a cancellation error. A plain Canceled cause was
+// already excluded; a deadline and a custom cause now behave the same way.
+//
+// The lost result is not always work the caller can repeat. A detached agent
+// invocation persists its pending snapshot on a context.WithoutCancel and
+// returns the snapshot ID while background goroutines carry the work; drop
+// that output and the work keeps running with no handle to track or abort it.
+func TestBidiCompletionSurvivesParentCancelCause(t *testing.T) {
+	// Commits only once the caller's context is done, which is the window
+	// the override used to corrupt.
+	commitAfterDone := func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+		<-ctx.Done()
+		return "committed", nil
+	}
+	connect := func(t *testing.T, ctx context.Context, fn BidiFunc[string, string, string, struct{}]) *BidiConnection[string, string, string] {
+		t.Helper()
+		conn, err := NewBidiActionOf(api.ActionTypeCustom, "commits", nil, fn).Connect(ctx, struct{}{})
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		return conn
+	}
+	wantCommitted := func(t *testing.T, conn *BidiConnection[string, string, string]) {
+		t.Helper()
+		<-conn.Done()
+		out, err := conn.Output()
+		if err != nil {
+			t.Errorf("Output() error = %v, want the committed result", err)
+		}
+		if out != "committed" {
+			t.Errorf("Output() = %q, want %q", out, "committed")
+		}
+	}
+
+	t.Run("parent deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		wantCommitted(t, connect(t, ctx, commitAfterDone))
+	})
+
+	t.Run("parent cancel cause", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		conn := connect(t, ctx, commitAfterDone)
+		cancel(errors.New("caller gave up"))
+		wantCommitted(t, conn)
+	})
+
+	// The contrast: a cause the framework recorded against this connection
+	// still becomes the session's error, and still does so when the caller's
+	// context was cancelled first. The context keeps only the first cause, so
+	// reading the abort off the context would have surfaced the caller's.
+	t.Run("recorded abort still wins", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		conn := connect(t, ctx,
+			func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+				for range inCh {
+				}
+				return "committed", nil
+			})
+		abort := errors.New("stream callback failed")
+		cancel(errors.New("caller gave up"))
+		conn.cancel(abort)
+		if err := conn.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		<-conn.Done()
+		if _, err := conn.Output(); !errors.Is(err, abort) {
+			t.Errorf("Output() error = %v, want the recorded abort %v", err, abort)
+		}
+	})
+}
+
 func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()
 
