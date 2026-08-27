@@ -141,6 +141,28 @@ func TestReasoningPartJSON(t *testing.T) {
 	if unmarshaledPart.ContentType != "plain/text" {
 		t.Errorf("unmarshaled reasoning content type = %q, want %q", unmarshaledPart.ContentType, "plain/text")
 	}
+
+	if got := unmarshaledPart.Metadata["signature"]; got == nil {
+		t.Errorf("unmarshaled reasoning part lost its signature, metadata = %v", unmarshaledPart.Metadata)
+	}
+}
+
+func TestReasoningPartWithoutSignature(t *testing.T) {
+	// A part with no signature carries no metadata at all. A metadata map
+	// holding only a nil signature reads as "this part has metadata" to
+	// consumers, which stops adjacent reasoning parts from being merged.
+	p := NewReasoningPart("thinking", nil)
+	if p.Metadata != nil {
+		t.Errorf("Metadata = %v, want nil", p.Metadata)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+	if got, want := string(b), `{"reasoning":"thinking"}`; got != want {
+		t.Errorf("marshaled = %s, want %s", got, want)
+	}
 }
 
 func TestNewDataPart(t *testing.T) {

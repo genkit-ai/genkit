@@ -140,14 +140,15 @@ func NewCustomPart(customData map[string]any) *Part {
 
 // NewReasoningPart returns a Part containing reasoning text
 func NewReasoningPart(text string, signature []byte) *Part {
-	return &Part{
+	p := &Part{
 		Kind:        PartReasoning,
 		ContentType: "plain/text",
 		Text:        text,
-		Metadata: map[string]any{
-			"signature": signature,
-		},
 	}
+	if len(signature) > 0 {
+		p.Metadata = map[string]any{"signature": signature}
+	}
+	return p
 }
 
 // NewResourcePart returns a Part containing a resource reference.
