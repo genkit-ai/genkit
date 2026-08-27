@@ -26,9 +26,10 @@ instead of a resolver error.
 
 Publish as sdist ONLY (`uv build --sdist`). A wheel would install
 "successfully" as an empty package on old Pythons, which is the silent
-failure this shim exists to prevent. Version 0.2.1 sorts above the
-pre-transfer squatter releases (<= 0.2.0) and below every real genkit
-release (>= 0.3.x); it never needs to change.
+failure this shim exists to prevent. Version 0.3.0 was never published
+(the history goes 0.3.0.dev2 -> 0.3.1), so the shim fills that hole:
+above the pre-transfer squatter releases (<= 0.2.0), below every real
+genkit release (>= 0.3.1). It never needs to change.
 """
 
 import sys
@@ -66,7 +67,7 @@ from setuptools import setup  # noqa: E402
 
 setup(
     name='genkit',
-    version='0.2.1',
+    version='0.3.0',
     description=(
         'Genkit requires Python >= 3.10. This placeholder release exists only '
         'to give older interpreters a clear upgrade message.'

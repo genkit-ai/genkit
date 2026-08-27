@@ -1,6 +1,6 @@
 # genkit Python-floor shim
 
-A one-time PyPI release (`genkit 0.2.1`, sdist only) that turns the
+A one-time PyPI release (`genkit 0.3.0`, sdist only) that turns the
 old-Python install experience from a silent wrong install into a clear
 upgrade message.
 
@@ -18,15 +18,16 @@ because those pre-transfer releases (0.1.0–0.2.0) declare
 - The shim declares `Requires-Python: <3.10`, so Python >= 3.10 can
   never select it. Fresh installs on current Pythons keep getting the
   real latest genkit.
-- On Python <= 3.9, version 0.2.1 outranks the pre-transfer 0.2.0, pip
+- On Python <= 3.9, version 0.3.0 outranks the pre-transfer 0.2.0, pip
   tries to build the sdist, and `setup.py` stops with a boxed message:
   the 3.10 requirement plus Homebrew / uv / python.org instructions.
 - It is published as an **sdist only**. A wheel would install cleanly as
   an empty package on old Pythons — exactly the silent failure this
   prevents. Keep the `--sdist` flag in `publish_python.yml`.
 
-The version never changes: it must stay above 0.2.0 (the last
-pre-transfer release) and below 0.3.x (the first real genkit release).
+The version never changes: 0.3.0 was never published (the history goes
+0.3.0.dev2 -> 0.3.1), and it sits above 0.2.0 (the last pre-transfer
+release) and below 0.3.1 (the first real genkit release).
 `skip-existing: true` in the publish workflow makes re-publishing it on
 every release tag a no-op after the first upload.
 

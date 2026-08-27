@@ -84,7 +84,7 @@ jobs:
             echo "::endgroup::"
           done
 
-          # Python-floor shim (genkit 0.2.1): gives Python <= 3.9 users a clear
+          # Python-floor shim (genkit 0.3.0): gives Python <= 3.9 users a clear
           # upgrade message instead of resolving an unrelated pre-transfer
           # package. sdist ONLY - a wheel would install as an empty package on
           # old Pythons. skip-existing makes this a no-op after first publish.
