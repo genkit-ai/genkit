@@ -29,6 +29,7 @@ from pydantic import BaseModel, TypeAdapter
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._model import MultipartToolResponse, MultipartToolResponseData, OutputT
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -36,7 +37,6 @@ from genkit._core._typing import (
     DataPart,
     MediaPart,
     Metadata,
-    MultipartToolResponse,
     Part,
     ReasoningPart,
     ResourcePart,
@@ -61,11 +61,11 @@ PART_VARIANTS = (
 
 
 def response(
-    output: Any = None,  # noqa: ANN401 - tool output is JSON of any shape
+    output: OutputT | None = None,
     *,
     parts: list[Part] | Part | None = None,
     metadata: Metadata | None = None,
-) -> MultipartToolResponse:
+) -> MultipartToolResponse[OutputT]:
     """Build a tool result the model can see as structured output plus media.
 
     Return this from a tool when the reply is more than a JSON value — a caption
@@ -146,7 +146,7 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
     return out
 
 
-DECLARED_OUTPUT_SCHEMA_KEY = 'declaredOutputSchema'
+ORIGINAL_OUTPUT_SCHEMA_KEY = 'originalOutputSchema'
 
 
 def wire_part_is_live(dumped: dict[str, Any]) -> bool:
@@ -231,72 +231,6 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
     )
 
 
-def annotation_is_envelope(ret: object) -> bool:
-    """True when ``ret`` is the envelope type, including ``Optional`` / ``| None``."""
-    # PEP 695 ``type Out = MultipartToolResponse`` is a TypeAliasType; unwrap it
-    # so the model does not bind the envelope graph as outputSchema.
-    if type(ret).__name__ == 'TypeAliasType':
-        return annotation_is_envelope(getattr(ret, '__value__', None))
-    if ret is MultipartToolResponse:
-        return True
-    origin = get_origin(ret)
-    if origin is Union or origin is UnionType:
-        members = [a for a in get_args(ret) if a is not type(None)]
-        return bool(members) and all(annotation_is_envelope(a) for a in members)
-    if isinstance(ret, str):
-        cleaned = ret.replace(' ', '')
-        if cleaned.startswith('Optional[') and cleaned.endswith(']'):
-            return annotation_is_envelope(cleaned[len('Optional[') : -1])
-        members = [m for m in cleaned.replace(',', '|').split('|') if m and m not in {'None', 'NoneType'}]
-        return bool(members) and all(m.rsplit('.', 1)[-1] == 'MultipartToolResponse' for m in members)
-    return False
-
-
-def annotation_includes_envelope(ret: object) -> bool:
-    """True when any leaf is the envelope — the model should not bind that graph."""
-    if annotation_is_envelope(ret):
-        return True
-    if type(ret).__name__ == 'TypeAliasType':
-        return annotation_includes_envelope(getattr(ret, '__value__', None))
-    if isinstance(ret, str):
-        return 'MultipartToolResponse' in ret.replace(' ', '')
-    origin = get_origin(ret)
-    if origin is None:
-        return False
-    return any(annotation_includes_envelope(a) for a in get_args(ret))
-
-
-def return_annotation_is_envelope(func: Callable[..., Any]) -> bool:
-    """True when the handler annotation includes the envelope ``run`` already returns."""
-    try:
-        hints = get_type_hints(func)
-    except Exception:
-        hints = dict(getattr(func, '__annotations__', {}))
-    return annotation_includes_envelope(hints.get('return'))
-
-
-def override_output_schema(output_schema: object, *, tool_name: str) -> dict[str, Any]:
-    if isinstance(output_schema, dict):
-        return cast(dict[str, Any], output_schema)
-    if isinstance(output_schema, type) and issubclass(output_schema, BaseModel):
-        try:
-            return to_json_schema(output_schema)
-        except Exception as e:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'Tool {tool_name!r} output_schema is not a JSON Schema or Pydantic model, got {output_schema!r}.'
-                ),
-                cause=e,
-            ) from e
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(
-            f'Tool {tool_name!r} output_schema must be a Pydantic model or a JSON Schema dict, got {output_schema!r}.'
-        ),
-    )
-
-
 def dump_tool_output(value: Any, *, tool_name: str | None = None, what: str = 'output') -> Any:  # noqa: ANN401
     """Dump structured output the way the advertised JSON Schema describes it."""
     try:
@@ -332,7 +266,7 @@ def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = 
 
 def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> MultipartToolResponse:  # noqa: ANN401
     """Normalize a tool handler return into the envelope generate already speaks."""
-    if isinstance(value, MultipartToolResponse):
+    if isinstance(value, MultipartToolResponseData):
         content = value.content
         if content:
             content = [require_live_part(part, tool_name=tool_name) for part in content]
@@ -355,12 +289,12 @@ class Tool:
         self,
         action: Action,
         *,
-        declared_output_schema: dict[str, object] | None = None,
+        original_output_schema: dict[str, object] | None = None,
     ) -> None:
         self._action = action
         # What the model should expect as ``output``. ``action.output_schema`` is
         # the envelope ``run`` actually returns (output plus optional media).
-        self._declared_output_schema = declared_output_schema
+        self._original_output_schema = original_output_schema
 
     @property
     def name(self) -> str:
@@ -385,7 +319,7 @@ class Tool:
         model should not bind a schema. An unannotated handler still infers
         ``{}``.
         """
-        return self._declared_output_schema
+        return self._original_output_schema
 
     def definition(self) -> ToolDefinition:
         """Return the wire-format ToolDefinition for this tool."""
@@ -654,6 +588,62 @@ async def run_tool_after_restart(
     )
 
 
+NOT_ENVELOPE = object()
+
+
+def envelope_output_type(ret: object) -> object:
+    """Inner ``output`` type from a return annotation, or ``NOT_ENVELOPE``.
+
+    People write ``-> MultipartToolResponse[ShotOut]`` so the model binds
+    ``ShotOut``. This only peels that ``[T]``. Anything else (``-> str``,
+    ``-> ShotOut``, no annotation) is ``NOT_ENVELOPE`` and define uses the
+    inferred schema instead.
+    """
+    # ``type Shot = MultipartToolResponse[ShotOut]`` — unwrap and try again.
+    if type(ret).__name__ == 'TypeAliasType':
+        return envelope_output_type(getattr(ret, '__value__', None))
+    # ``MultipartToolResponse[ShotOut]`` is a real Pydantic subclass at
+    # runtime. ``get_origin`` is None; ``[ShotOut]`` lives here.
+    meta = getattr(ret, '__pydantic_generic_metadata__', None)
+    if isinstance(meta, dict):
+        origin = meta.get('origin')
+        if origin is MultipartToolResponse or origin is MultipartToolResponseData:
+            args = meta.get('args') or ()
+            return args[0] if args else Any
+    origin = get_origin(ret)
+    # Typing-only form, if the annotation never became a Pydantic subclass.
+    if origin is MultipartToolResponse or origin is MultipartToolResponseData:
+        args = get_args(ret)
+        return args[0] if args else Any
+    # Bare ``-> MultipartToolResponse``: output is anything.
+    if ret is MultipartToolResponse or ret is MultipartToolResponseData:
+        return Any
+    # ``-> MultipartToolResponse[ShotOut] | None`` — one real type, peel it.
+    if origin is Union or origin is UnionType:
+        members = [a for a in get_args(ret) if a is not type(None)]
+        if len(members) == 1:
+            return envelope_output_type(members[0])
+    return NOT_ENVELOPE
+
+
+def model_schema_from_return_annotation(
+    func: Callable[..., Any],
+    *,
+    inferred: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """JSON Schema the model should bind, from the handler's return annotation."""
+    try:
+        hints = get_type_hints(func)
+    except Exception:
+        hints = dict(getattr(func, '__annotations__', {}))
+    inner = envelope_output_type(hints.get('return'))
+    if inner is NOT_ENVELOPE:
+        return inferred
+    if inner is Any or inner is object:
+        return None
+    return to_json_schema(cast(type | dict[str, Any] | str, inner))
+
+
 def _get_func_description(func: Callable[..., Any], description: str | None = None) -> str:
     """Return description if provided, otherwise use the function's docstring."""
     if description is not None:
@@ -670,16 +660,12 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Register a function as a tool.
 
-    Normally, the input_schema and output_schema are inferred from func. However,
-    in some cases, like define_interrupt, the app developer doesn't have a way to
-    express the input schema in the func signature.
-
-    In that case, the app developer can pass in an input_schema to override the inferred schema.
-    This will ensure that the model requesting the tool will see the correct input shape.
+    The return annotation is what the model binds. ``input_schema=`` is for
+    cases like define_interrupt where the handler signature cannot express
+    the input shape.
     """
     if not inspect.iscoroutinefunction(func):
         raise TypeError(f'Tool function must be async. Got sync function: {getattr(func, "__name__", repr(func))}')
@@ -732,19 +718,13 @@ def _define_tool(
     if input_schema is not None:
         action._override_input_schema(input_schema)
 
-    # A bare return is the inner output (and the model schema). response() is
-    # already the action result — don't advertise that wrapper as outputSchema
-    # unless output_schema= says otherwise.
-    if output_schema is not None:
-        declared_output_schema = override_output_schema(output_schema, tool_name=tool_name)
-    elif return_annotation_is_envelope(func):
-        declared_output_schema = None
-    else:
-        declared_output_schema = action.output_schema
-    action.metadata[DECLARED_OUTPUT_SCHEMA_KEY] = declared_output_schema
-    action.output_schema = TypeAdapter(MultipartToolResponse).json_schema()
+    # The return annotation is what the model binds. MultipartToolResponse[T]
+    # means T. A bare MultipartToolResponse means output is anything.
+    original_output_schema = model_schema_from_return_annotation(func, inferred=action.output_schema)
+    action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
+    action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return Tool(action, declared_output_schema=declared_output_schema)
+    return Tool(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -754,13 +734,12 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Register a function as a tool.
 
-    The model sees the handler's return type as ``outputSchema`` (or
-    ``output_schema=`` if you pass one). ``Action.output_schema`` / Dev UI
-    ``run`` advertise the envelope that can also carry media.
+    The model sees the handler's return annotation as ``outputSchema``.
+    ``Action.output_schema`` / Dev UI ``run`` advertise the envelope that
+    can also carry media.
 
     Args:
         registry: The registry to register the tool in.
@@ -768,14 +747,11 @@ def define_tool(
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-        output_schema: Optional inner schema for ``tools[].outputSchema``.
-            Use this when the handler returns ``response(...)`` and you still
-            want the model to see a shape for ``output``.
 
     Raises:
         TypeError: If func is not an async function.
     """
-    return _define_tool(registry, func, name, description, input_schema=input_schema, output_schema=output_schema)
+    return _define_tool(registry, func, name, description, input_schema=input_schema)
 
 
 def tool(
@@ -784,7 +760,6 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-    output_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Dynamically define a tool that can passed into a `generate` call.
 
@@ -799,13 +774,12 @@ def tool(
         name: Tool name for the model. Defaults to ``func.__name__``.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-        output_schema: Optional output schema the model should bind.
 
     Raises:
         TypeError: If ``func`` is not a coroutine function.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
     """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema, output_schema=output_schema)
+    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(

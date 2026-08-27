@@ -69,20 +69,20 @@ def test_start_attributes_includes_input_excludes_outcome() -> None:
         SpanMetadata(
             name='myTool',
             type='action',
-            subtype='tool',
+            subtype='tool.v2',
             input='in',
             output='out',
             is_root=True,
             metadata={'key': 'value'},
         ),
-        qualified_path='/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        qualified_path='/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
     )
     assert attrs == {
         'genkit:name': 'myTool',
-        'genkit:path': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
-        'genkit:qualifiedPath': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        'genkit:path': '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
+        'genkit:qualifiedPath': '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
         'genkit:type': 'action',
-        'genkit:metadata:subtype': 'tool',
+        'genkit:metadata:subtype': 'tool.v2',
         'genkit:isRoot': True,
         'genkit:metadata:key': 'value',
         'genkit:input': '"in"',
@@ -173,14 +173,14 @@ def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     class Payload(BaseModel):
         msg: str
 
-    with run_in_new_span(SpanMetadata(name='echo', type='action', subtype='tool', input=Payload(msg='hi'))):
+    with run_in_new_span(SpanMetadata(name='echo', type='action', subtype='tool.v2', input=Payload(msg='hi'))):
         pass
 
     span = _by_name(exporter.get_finished_spans(), 'echo')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:input'] == '{"msg":"hi"}'
-    assert attrs['genkit:path'] == '/{echo,t:action,s:tool}'
-    assert attrs['genkit:metadata:subtype'] == 'tool'
+    assert attrs['genkit:path'] == '/{echo,t:action,s:tool.v2}'
+    assert attrs['genkit:metadata:subtype'] == 'tool.v2'
 
 
 def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:

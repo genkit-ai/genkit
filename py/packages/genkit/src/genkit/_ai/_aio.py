@@ -298,9 +298,11 @@ class Genkit:
         description: str | None = None,
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-        output_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Callable[[Callable[..., Any]], Tool]:
-        """Decorator to register a function as a tool."""
+        """Decorator to register a function as a tool.
+
+        The return annotation is what the model binds as ``outputSchema``.
+        """
 
         def wrapper(func: Callable[..., Any]) -> Tool:
             return define_tool(
@@ -309,7 +311,6 @@ class Genkit:
                 name,
                 description,
                 input_schema=input_schema,
-                output_schema=output_schema,
             )
 
         return wrapper

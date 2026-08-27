@@ -20,10 +20,11 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse
-from genkit._ai._generate import expand_wildcard_tools
+from genkit._ai._generate import expand_wildcard_tools, resolve_tool
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._error import GenkitError
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -73,35 +74,126 @@ async def test_expand_wildcard_all() -> None:
     t2 = registry.register_action(name='ping', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'ping'})
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [t1, t2]}
+        return {'tool': [t1, t2]}
 
     define_dynamic_action_provider(registry, 'mcp', dap_fn)
 
     result = await expand_wildcard_tools(registry, ['mcp:tool/*'])
     assert sorted(result) == [
-        '/dynamic-action-provider/mcp:tool/echo',
-        '/dynamic-action-provider/mcp:tool/ping',
+        '/tool.v2/echo',
+        '/tool.v2/ping',
     ]
+    assert set(registry._entries.get(ActionKind.TOOL, {})) == {'echo', 'ping'}
 
 
 @pytest.mark.asyncio
-async def test_reflection_and_wildcard_agree_on_tool_bucket_key() -> None:
-    """Dev UI list and generate wildcards must emit the same key for a tool bucket."""
+async def test_dap_selector_binds_to_tool_v2_catalog_key() -> None:
+    """``mcp:tool/echo`` becomes the same catalog key as a local tool."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
         return x
 
-    echo = registry.register_action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [echo]}
+        return {'tool': [echo]}
 
-    dap = define_dynamic_action_provider(registry, 'mcp', dap_fn)
-    listed = await dap.list_action_metadata_by_key('mcp')
-    expanded = await expand_wildcard_tools(registry, ['mcp:tool/*'])
-    assert list(listed) == expanded == ['/dynamic-action-provider/mcp:tool/echo']
-    assert listed['/dynamic-action-provider/mcp:tool/echo'].action_type == 'tool'
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+
+    # The provider is a catalog row. Its tools are not — people pick them
+    # with a selector, and generate binds them on the child it passes in.
+    before = await registry.list_actions()
+    assert '/dynamic-action-provider/mcp' in before
+    assert '/dynamic-action-provider/mcp:tool/echo' not in before
+    assert '/tool.v2/echo' not in before
+
+    expanded = await expand_wildcard_tools(registry, ['mcp:tool/echo'])
+    assert expanded == ['/tool.v2/echo']
+    assert registry._entries.get(ActionKind.TOOL, {}).get('echo') is echo
+    catalog = await registry.list_actions()
+    assert catalog['/tool.v2/echo'].name == 'echo'
+    assert '/dynamic-action-provider/mcp:tool/echo' not in catalog
+    assert '/dynamic-action-provider/mcp' in catalog
+
+
+@pytest.mark.asyncio
+async def test_dap_wildcard_registers_on_passed_registry() -> None:
+    """``mcp:tool/*`` binds each tool onto the registry generate handed us."""
+    registry = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+    ping = Action(name='ping', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'ping'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo, ping]}
+
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+    child = registry.new_child()
+
+    result = await expand_wildcard_tools(child, ['mcp:tool/*'])
+    assert sorted(result) == [
+        '/tool.v2/echo',
+        '/tool.v2/ping',
+    ]
+    assert child._entries.get(ActionKind.TOOL, {}).get('echo') is echo
+    assert child._entries.get(ActionKind.TOOL, {}).get('ping') is ping
+    assert 'echo' not in registry._entries.get(ActionKind.TOOL, {})
+    assert 'ping' not in registry._entries.get(ActionKind.TOOL, {})
+
+
+@pytest.mark.asyncio
+async def test_dap_bind_stays_on_child_parent_catalog_is_provider_only() -> None:
+    """Parent catalog keeps the provider row. Bind lives on the generate child."""
+    parent = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo]}
+
+    define_dynamic_action_provider(parent, 'mcp', dap_fn)
+    child = parent.new_child()
+
+    expanded = await expand_wildcard_tools(child, ['mcp:tool/echo'])
+    assert expanded == ['/tool.v2/echo']
+    assert child._entries.get(ActionKind.TOOL, {}).get('echo') is echo
+    assert 'echo' not in parent._entries.get(ActionKind.TOOL, {})
+
+    parent_catalog = await parent.list_actions()
+    assert '/dynamic-action-provider/mcp' in parent_catalog
+    assert '/dynamic-action-provider/mcp:tool/echo' not in parent_catalog
+    assert '/tool.v2/echo' not in parent_catalog
+
+    child_catalog = await child.list_actions()
+    assert child_catalog['/tool.v2/echo'].name == 'echo'
+
+
+@pytest.mark.asyncio
+async def test_tool_v2_dap_selector_does_not_bind() -> None:
+    """``mcp:tool.v2/…`` is a catalog kind, not a selector. Expand leaves it."""
+    registry = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo]}
+
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+
+    for selector in ('mcp:tool.v2/echo', 'mcp:tool.v2/*'):
+        expanded = await expand_wildcard_tools(registry, [selector])
+        assert expanded == [selector]
+        assert 'echo' not in registry._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio
@@ -119,15 +211,86 @@ async def test_expand_wildcard_prefix() -> None:
     t3 = registry.register_action(name='set_alarm', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'set_alarm'})
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [t1, t2, t3]}
+        return {'tool': [t1, t2, t3]}
 
     define_dynamic_action_provider(registry, 'mcp', dap_fn)
 
     result = await expand_wildcard_tools(registry, ['mcp:tool/get_*'])
     assert sorted(result) == [
-        '/dynamic-action-provider/mcp:tool/get_time',
-        '/dynamic-action-provider/mcp:tool/get_weather',
+        '/tool.v2/get_time',
+        '/tool.v2/get_weather',
     ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_catalog_key_and_bare_name() -> None:
+    """After a local register, both /tool.v2/name and the short name resolve."""
+    registry = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = registry.register_action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+
+    by_key = await resolve_tool(registry, '/tool.v2/echo')
+    by_name = await resolve_tool(registry, 'echo')
+    assert by_key is echo
+    assert by_name is echo
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_does_not_bind_dap_selector() -> None:
+    """``mcp:tool/echo`` is a selector. resolve_tool does not walk the DAP."""
+    registry = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo]}
+
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+
+    for ref in (
+        'mcp:tool/echo',
+        'mcp:tool.v2/echo',
+        '/dynamic-action-provider/mcp:tool/echo',
+        '/tool/echo',
+    ):
+        with pytest.raises(GenkitError, match=f'Unable to resolve tool {ref}'):
+            await resolve_tool(registry, ref)
+
+    assert 'echo' not in registry._entries.get(ActionKind.TOOL, {})
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_after_expand_bind() -> None:
+    """Expand binds onto the child. resolve_tool then uses the catalog key or name."""
+    parent = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo]}
+
+    define_dynamic_action_provider(parent, 'mcp', dap_fn)
+    child = parent.new_child()
+
+    expanded = await expand_wildcard_tools(child, ['mcp:tool/echo'])
+    assert expanded == ['/tool.v2/echo']
+
+    assert (await resolve_tool(child, '/tool.v2/echo')) is echo
+    assert (await resolve_tool(child, 'echo')) is echo
+
+    with pytest.raises(GenkitError, match='Unable to resolve tool mcp:tool/echo'):
+        await resolve_tool(child, 'mcp:tool/echo')
+    with pytest.raises(GenkitError, match='Unable to resolve tool /tool.v2/echo'):
+        await resolve_tool(parent, '/tool.v2/echo')
 
 
 @pytest.mark.asyncio
@@ -167,7 +330,7 @@ async def test_dap_tool_resolved_in_generate() -> None:
     )
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [echo_action]}
+        return {'tool': [echo_action]}
 
     ai.define_dynamic_action_provider('mcp', dap_fn)
 
@@ -189,11 +352,15 @@ async def test_dap_tool_resolved_in_generate() -> None:
     assert call_log == ['hello']
     assert pm.last_request is not None
     assert pm.last_request.tools
-    # Raw DAP Action — no declaredOutputSchema key — still advertises the handler return.
+    # Raw DAP Action — no originalOutputSchema key — still advertises the handler return.
     assert pm.last_request.tools[0].output_schema == {'type': 'string'}
     # Postcondition: resolving/running the tool via DAP still does not
     # persist `echo` under the root registry as a static tool (same check as above).
     assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
+    root_catalog = await ai.registry.list_actions()
+    assert '/dynamic-action-provider/mcp' in root_catalog
+    assert '/dynamic-action-provider/mcp:tool/echo' not in root_catalog
+    assert '/tool.v2/echo' not in root_catalog
 
 
 @pytest.mark.asyncio
@@ -212,7 +379,7 @@ async def test_dap_tools_do_not_pollute_root_registry() -> None:
     dap_only_action = Action(name='dap_only_tool', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'dap_only_tool'})
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [dap_only_action]}
+        return {'tool': [dap_only_action]}
 
     ai.define_dynamic_action_provider('mcp', dap_fn)
 
@@ -227,6 +394,10 @@ async def test_dap_tools_do_not_pollute_root_registry() -> None:
     # Root registry should NOT have dap_only_tool cached — it was never registered there
     root_tools = ai.registry._entries.get(ActionKind.TOOL, {})
     assert 'dap_only_tool' not in root_tools
+    root_catalog = await ai.registry.list_actions()
+    assert '/dynamic-action-provider/mcp' in root_catalog
+    assert '/dynamic-action-provider/mcp:tool/dap_only_tool' not in root_catalog
+    assert '/tool.v2/dap_only_tool' not in root_catalog
 
 
 @pytest.mark.asyncio
@@ -255,7 +426,7 @@ async def test_wildcard_tools_in_generate() -> None:
     tool_b = ai.registry.register_action(name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'})
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool_a, tool_b]}
+        return {'tool': [tool_a, tool_b]}
 
     ai.define_dynamic_action_provider('mcp', dap_fn)
 
@@ -298,10 +469,10 @@ async def test_wildcard_tools_avoids_shadowing_conflict() -> None:
     echo2_action = Action(name='echo', kind=ActionKind.TOOL, fn=echo2_fn, metadata={'name': 'echo'})
 
     async def dap1_fn() -> DapValue:
-        return {ActionKind.TOOL: [echo1_action]}
+        return {'tool': [echo1_action]}
 
     async def dap2_fn() -> DapValue:
-        return {ActionKind.TOOL: [echo2_action]}
+        return {'tool': [echo2_action]}
 
     # Register mcp1 first. If resolution falls back to an unqualified lookup, mcp1 will "win".
     ai.define_dynamic_action_provider('mcp1', dap1_fn)

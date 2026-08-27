@@ -81,13 +81,44 @@ async def test_gets_specific_action(registry: Registry, tool1: Action, tool2: Ac
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    action = await dap.get_action(ActionKind.TOOL, 'tool1')
+    action = await dap.get_action('tool', 'tool1')
     assert action is tool1
     assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_bucket_is_the_selector(registry: Registry, tool1: Action) -> None:
+    """Authors write ``{tool: [...]}``. That is what ``provider:tool/name`` reads."""
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+
+    assert await dap.get_action('tool', 'tool1') is tool1
+    listed = await dap.list_action_metadata_by_key('my-dap')
+    assert list(listed) == ['/dynamic-action-provider/my-dap:tool/tool1']
+    assert listed['/dynamic-action-provider/my-dap:tool/tool1'].action_type == 'tool'
+
+
+@pytest.mark.asyncio
+async def test_tool_v2_bucket_is_not_the_selector(registry: Registry, tool1: Action) -> None:
+    """``{tool.v2: [...]}`` is not a promised slot. ``provider:tool/name`` misses it."""
+
+    async def dap_fn() -> DapValue:
+        return {ActionKind.TOOL: [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+
+    assert await dap.get_action('tool', 'tool1') is None
+    assert await dap.list_action_metadata('tool', '*') == []
+    listed = await dap.list_action_metadata_by_key('my-dap')
+    assert list(listed) == ['/dynamic-action-provider/my-dap:tool.v2/tool1']
+    assert '/dynamic-action-provider/my-dap:tool/tool1' not in listed
 
 
 @pytest.mark.asyncio
@@ -97,11 +128,11 @@ async def test_lists_action_metadata(registry: Registry, tool1: Action, tool2: A
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    metadata = await dap.list_action_metadata(ActionKind.TOOL, '*')
+    metadata = await dap.list_action_metadata('tool', '*')
     assert len(metadata) == 2
     assert metadata[0] == tool1.metadata
     assert metadata[1] == tool2.metadata
@@ -115,20 +146,20 @@ async def test_caches_actions(registry: Registry, tool1: Action, tool2: Action) 
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    action = await dap.get_action(ActionKind.TOOL, 'tool1')
+    action = await dap.get_action('tool', 'tool1')
     assert action is tool1
     assert call_count == 1
 
     # This should be cached
-    action = await dap.get_action(ActionKind.TOOL, 'tool2')
+    action = await dap.get_action('tool', 'tool2')
     assert action is tool2
     assert call_count == 1
 
-    metadata = await dap.list_action_metadata(ActionKind.TOOL, '*')
+    metadata = await dap.list_action_metadata('tool', '*')
     assert len(metadata) == 2
     assert call_count == 1
 
@@ -140,16 +171,16 @@ async def test_invalidates_cache(registry: Registry, tool1: Action, tool2: Actio
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    await dap.get_action(ActionKind.TOOL, 'tool1')
+    await dap.get_action('tool', 'tool1')
     assert call_count == 1
 
     dap.invalidate_cache()
 
-    await dap.get_action(ActionKind.TOOL, 'tool2')
+    await dap.get_action('tool', 'tool2')
     assert call_count == 2
 
 
@@ -160,17 +191,17 @@ async def test_respects_cache_ttl(registry: Registry, tool1: Action, tool2: Acti
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=10)
 
-    await dap.get_action(ActionKind.TOOL, 'tool1')
+    await dap.get_action('tool', 'tool1')
     assert call_count == 1
 
     # Wait for TTL to expire
     await asyncio.sleep(0.025)  # 25ms > 10ms TTL
 
-    await dap.get_action(ActionKind.TOOL, 'tool2')
+    await dap.get_action('tool', 'tool2')
     assert call_count == 2
 
 
@@ -181,11 +212,11 @@ async def test_lists_actions_with_prefix(registry: Registry, tool1: Action, tool
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2, other_tool]}
+        return {'tool': [tool1, tool2, other_tool]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    metadata = await dap.list_action_metadata(ActionKind.TOOL, 'tool*')
+    metadata = await dap.list_action_metadata('tool', 'tool*')
     assert len(metadata) == 2
     assert metadata[0] == tool1.metadata
     assert metadata[1] == tool2.metadata
@@ -199,11 +230,11 @@ async def test_lists_actions_exact_match(registry: Registry, tool1: Action, tool
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    metadata = await dap.list_action_metadata(ActionKind.TOOL, 'tool1')
+    metadata = await dap.list_action_metadata('tool', 'tool1')
     assert len(metadata) == 1
     assert metadata[0] == tool1.metadata
     assert call_count == 1
@@ -217,7 +248,7 @@ async def test_gets_action_metadata_record(registry: Registry, tool1: Action, to
         nonlocal call_count
         call_count += 1
         return {
-            ActionKind.TOOL: [tool1, tool2],
+            'tool': [tool1, tool2],
             'flow': [tool1],
         }
 
@@ -254,13 +285,13 @@ async def test_handles_concurrent_requests(registry: Registry, tool1: Action, to
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0.01)
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
     results = await asyncio.gather(
-        dap.list_action_metadata(ActionKind.TOOL, '*'),
-        dap.list_action_metadata(ActionKind.TOOL, '*'),
+        dap.list_action_metadata('tool', '*'),
+        dap.list_action_metadata('tool', '*'),
     )
 
     metadata1, metadata2 = results
@@ -280,15 +311,15 @@ async def test_handles_fetch_errors(registry: Registry, tool1: Action, tool2: Ac
         call_count += 1
         if call_count == 1:
             raise RuntimeError('Fetch failed')
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
     with pytest.raises(RuntimeError, match='Fetch failed'):
-        await dap.list_action_metadata(ActionKind.TOOL, '*')
+        await dap.list_action_metadata('tool', '*')
     assert call_count == 1
 
-    metadata = await dap.list_action_metadata(ActionKind.TOOL, '*')
+    metadata = await dap.list_action_metadata('tool', '*')
     assert len(metadata) == 2
     assert call_count == 2
 
@@ -306,7 +337,7 @@ async def test_identifies_dap(registry: Registry, tool1: Action) -> None:
 @pytest.mark.asyncio
 async def test_get_action_returns_none_for_unknown_type(registry: Registry, tool1: Action) -> None:
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
+        return {'tool': [tool1]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
@@ -317,18 +348,18 @@ async def test_get_action_returns_none_for_unknown_type(registry: Registry, tool
 @pytest.mark.asyncio
 async def test_get_action_returns_none_for_unknown_name(registry: Registry, tool1: Action) -> None:
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
+        return {'tool': [tool1]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    action = await dap.get_action(ActionKind.TOOL, 'unknown-name')
+    action = await dap.get_action('tool', 'unknown-name')
     assert action is None
 
 
 @pytest.mark.asyncio
 async def test_list_action_metadata_returns_empty_for_unknown_type(registry: Registry, tool1: Action) -> None:
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
+        return {'tool': [tool1]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
@@ -343,15 +374,15 @@ async def test_negative_ttl_disables_caching(registry: Registry, tool1: Action, 
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=-1)
 
-    await dap.get_action(ActionKind.TOOL, 'tool1')
+    await dap.get_action('tool', 'tool1')
     assert call_count == 1
 
     # With negative TTL, this should trigger another fetch
-    await dap.get_action(ActionKind.TOOL, 'tool2')
+    await dap.get_action('tool', 'tool2')
     assert call_count == 2
 
 
@@ -362,15 +393,15 @@ async def test_zero_ttl_uses_default(registry: Registry, tool1: Action, tool2: A
     async def dap_fn() -> DapValue:
         nonlocal call_count
         call_count += 1
-        return {ActionKind.TOOL: [tool1, tool2]}
+        return {'tool': [tool1, tool2]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=0)
 
-    await dap.get_action(ActionKind.TOOL, 'tool1')
+    await dap.get_action('tool', 'tool1')
     assert call_count == 1
 
     # With default TTL (3s), this should still be cached
-    await dap.get_action(ActionKind.TOOL, 'tool2')
+    await dap.get_action('tool', 'tool2')
     assert call_count == 1
 
 
@@ -388,7 +419,7 @@ async def test_list_action_metadata_by_key_raises_on_missing_name(registry: Regi
     nameless_action._name = ''
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [nameless_action]}
+        return {'tool': [nameless_action]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 

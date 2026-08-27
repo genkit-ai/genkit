@@ -24,6 +24,7 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import (
     Interrupt,
+    MultipartToolResponse,
     Tool,
     ToolRunContext,
     respond_to_interrupt,
@@ -42,7 +43,6 @@ from genkit._core._typing import (
     MediaPart,
     Metadata,
     MiddlewareRef,
-    MultipartToolResponse,
     Part,
     ReasoningPart,
     Role,

@@ -129,7 +129,8 @@ class ActionKind(StrEnum):
     RERANKER = 'reranker'
     RESOURCE = 'resource'
     RETRIEVER = 'retriever'
-    TOOL = 'tool'
+    # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
+    TOOL = 'tool.v2'
     UTIL = 'util'
 
 
@@ -282,6 +283,9 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
         return None
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
+        return None
+    # Catalog kind, not a selector. People write provider:tool/name.
+    if inner_kind == ActionKind.TOOL:
         return None
     return DapQualifiedName(provider, inner_kind, inner_name)
 

@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tool envelope: ``response()``, direct calls, schemas, and ``/tool/`` keys."""
+"""Tool envelope: ``response()``, direct calls, schemas, and ``/tool.v2/`` keys."""
 
 from __future__ import annotations
 
@@ -9,23 +9,28 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from genkit import ActionKind, Genkit, Message, MiddlewareRef, ModelResponse
-from genkit._ai._generate import generate_action
+from genkit._ai._generate import generate_action, to_tool_definition
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import parts_to_wire, response
-from genkit._core._action import create_action_key, parse_action_key
+from genkit._ai._tools import (
+    ORIGINAL_OUTPUT_SCHEMA_KEY,
+    MultipartToolResponse,
+    envelope_output_type,
+    parts_to_wire,
+    response,
+)
+from genkit._core._action import Action, create_action_key, parse_action_key
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions
+from genkit._core._model import GenerateActionOptions, MultipartToolResponseData
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     DataPart,
     FinishReason,
     Media,
     MediaPart,
-    MultipartToolResponse,
     Part,
     ReasoningPart,
     Resource,
@@ -144,6 +149,61 @@ async def test_bare_return_is_still_output_only() -> None:
     assert out.content is None
 
 
+def test_define_tool_stamps_envelope_and_declared_schema() -> None:
+    """Dev UI / Action.run see the envelope; the model binds the return type."""
+    ai = Genkit()
+
+    @ai.tool(name='weather')
+    async def weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    action = weather.action()
+    envelope = TypeAdapter(MultipartToolResponseData).json_schema()
+    assert action.kind == ActionKind.TOOL
+    assert create_action_key(action.kind, action.name) == '/tool.v2/weather'
+    assert action.output_schema == envelope
+    assert action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
+
+
+def test_bare_envelope_annotation_has_no_inner_schema() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return response({'ok': True})
+
+    action = shot.action()
+    envelope = TypeAdapter(MultipartToolResponseData).json_schema()
+    assert action.output_schema == envelope
+    assert action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+
+
+def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
+    """The model sees originalOutputSchema. Dev UI / run still see the envelope."""
+    ai = Genkit()
+
+    @ai.tool(name='weather')
+    async def weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    defined = to_tool_definition(weather.action())
+    assert defined.output_schema == {'type': 'string'}
+    assert weather.action().output_schema == TypeAdapter(MultipartToolResponseData).json_schema()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return response({'ok': True})
+
+    assert to_tool_definition(shot.action()).output_schema is None
+
+    async def echo_fn(x: str) -> str:
+        return x
+
+    raw = Action(name='echo', kind=ActionKind.TOOL, fn=echo_fn, metadata={'name': 'echo'})
+    assert ORIGINAL_OUTPUT_SCHEMA_KEY not in (raw.metadata or {})
+    assert to_tool_definition(raw).output_schema == {'type': 'string'}
+
+
 @pytest.mark.asyncio
 async def test_pydantic_return_dumps_json_aliases() -> None:
     ai = Genkit()
@@ -230,7 +290,7 @@ async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict |
 
 
 @pytest.mark.asyncio
-async def test_envelope_annotation_does_not_advertise_wrapper_to_model() -> None:
+async def test_envelope_annotation_is_what_the_model_sees() -> None:
     ai = Genkit()
 
     @ai.tool(name='shot')
@@ -250,6 +310,13 @@ class ShotOut(BaseModel):
     label: str
 
 
+def test_envelope_output_type_reads_pydantic_generic_args() -> None:
+    from typing import Any
+
+    assert envelope_output_type(MultipartToolResponse[ShotOut]) is ShotOut
+    assert envelope_output_type(MultipartToolResponse) is Any
+
+
 @pytest.mark.asyncio
 async def test_input_schema_override_is_what_the_model_sees() -> None:
     ai = Genkit()
@@ -266,7 +333,7 @@ async def test_input_schema_override_is_what_the_model_sees() -> None:
 async def test_output_schema_pydantic_model_is_what_the_model_sees() -> None:
     ai = Genkit()
 
-    @ai.tool(name='shot', output_schema=ShotOut)
+    @ai.tool(name='shot')
     async def shot() -> ShotOut:
         return ShotOut(ok=True, label='lab')
 
@@ -275,30 +342,20 @@ async def test_output_schema_pydantic_model_is_what_the_model_sees() -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_schema_override_with_response() -> None:
+async def test_generic_envelope_annotation_is_the_inner_schema() -> None:
     ai = Genkit()
 
-    @ai.tool(name='shot', output_schema=ShotOut)
-    async def shot() -> MultipartToolResponse:
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse[ShotOut]:
         return response(ShotOut(ok=True, label='lab'), parts=[_png()])
+
+    action = shot.action()
+    assert action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == to_json_schema(ShotOut)
+    assert to_tool_definition(action).output_schema == to_json_schema(ShotOut)
+    assert action.output_schema == TypeAdapter(MultipartToolResponseData).json_schema()
 
     tools = await _tools_sent_to_model(ai, 'shot')
     assert tools[0].output_schema == to_json_schema(ShotOut)
-
-
-@pytest.mark.asyncio
-async def test_output_schema_plain_type_is_invalid_argument() -> None:
-    ai = Genkit()
-
-    with pytest.raises(GenkitError) as ei:
-
-        @ai.tool(name='shot', output_schema=str)  # type: ignore[arg-type]
-        async def shot() -> str:
-            return 'ok'
-
-    assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'shot' in ei.value.original_message
-    assert repr(str) in ei.value.original_message
 
 
 @pytest.mark.asyncio
@@ -346,6 +403,92 @@ async def test_generate_copies_parts_onto_tool_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_bare_pydantic_return_is_output_only() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='shot')
+    async def shot(_: dict) -> ShotOut:  # noqa: ARG001
+        return ShotOut(ok=True, label='lab')
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 's1', 'name': 'shot', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+
+    res = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
+            tools=['shot'],
+        ),
+    )
+    tool_msg = next(m for m in res.messages if m.role == 'tool')
+    tr = tool_msg.content[0].root.tool_response
+    assert tr is not None
+    assert tr.output == {'ok': True, 'label': 'lab'}
+    assert tr.content is None
+    assert pm.last_request is not None
+    assert pm.last_request.tools
+    assert pm.last_request.tools[0].output_schema == to_json_schema(ShotOut)
+
+
+@pytest.mark.asyncio
+async def test_generate_generic_envelope_peels_output_and_parts() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='shot')
+    async def shot(_: dict) -> MultipartToolResponse[ShotOut]:  # noqa: ARG001
+        return response(ShotOut(ok=True, label='lab'), parts=[_png()])
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 's1', 'name': 'shot', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+
+    res = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
+            tools=['shot'],
+        ),
+    )
+    tool_msg = next(m for m in res.messages if m.role == 'tool')
+    tr = tool_msg.content[0].root.tool_response
+    assert tr is not None
+    assert tr.output == {'ok': True, 'label': 'lab'}
+    assert tr.content == [WIRE_PNG]
+    assert pm.last_request is not None
+    assert pm.last_request.tools
+    assert pm.last_request.tools[0].output_schema == to_json_schema(ShotOut)
+
+
+@pytest.mark.asyncio
 async def test_unserializable_tool_output_is_invalid_argument() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
@@ -389,17 +532,20 @@ async def test_tool_registers_under_tool() -> None:
     async def weather(city: str) -> str:
         return f'Sunny in {city}'
 
-    assert create_action_key(ActionKind.TOOL, 'weather') == '/tool/weather'
-    assert parse_action_key('/tool/weather') == (ActionKind.TOOL, 'weather')
+    assert create_action_key(ActionKind.TOOL, 'weather') == '/tool.v2/weather'
+    assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL, 'weather')
 
     by_name = await ai.registry.resolve_action(ActionKind.TOOL, 'weather')
-    by_key = await ai.registry.resolve_action_by_key('/tool/weather')
+    by_key = await ai.registry.resolve_action_by_key('/tool.v2/weather')
     assert by_name is weather.action()
     assert by_key is weather.action()
 
+    with pytest.raises(ValueError, match='Invalid action kind'):
+        parse_action_key('/tool/weather')
+
 
 @pytest.mark.asyncio
-async def test_generate_sends_declared_output_schema_on_the_model_request() -> None:
+async def test_generate_sends_original_output_schema_on_the_model_request() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 

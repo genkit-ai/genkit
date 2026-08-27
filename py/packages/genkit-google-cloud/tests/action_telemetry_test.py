@@ -33,10 +33,10 @@ def _span(*, subtype: str, name: str = 'weather', extra: dict[str, str] | None =
     return span
 
 
-def test_tick_logs_tool_input() -> None:
+def test_tick_logs_tool_v2_input() -> None:
     tel = ActionTelemetry()
     with patch.object(tel, '_write_log') as write:
-        tel.tick(_span(subtype='tool'), log_input_and_output=True, project_id='p')
+        tel.tick(_span(subtype='tool.v2'), log_input_and_output=True, project_id='p')
     write.assert_called()
     assert write.call_args.args[1] == 'Input'
 

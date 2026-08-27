@@ -35,7 +35,8 @@ from genkit._ai._testing import (
     define_echo_model,
     define_programmable_model,
 )
-from genkit._core._action import ActionKind
+from genkit._core._action import Action, ActionKind
+from genkit._core._dap import DapValue, define_dynamic_action_provider
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._typing import Part, Role, TextPart, ToolChoice, ToolRequest, ToolRequestPart
@@ -467,6 +468,33 @@ async def test_prompt_with_tools_list() -> None:
     # Verify tools are in the rendered options
     assert rendered.tools is not None
     assert 'myTool' in rendered.tools
+
+
+@pytest.mark.asyncio
+async def test_prompt_action_binds_dap_selector() -> None:
+    """PROMPT action expands ``mcp:tool/echo`` before resolve_tool."""
+    ai, *_ = setup_test()
+
+    async def echo_fn(x: str) -> str:
+        return x
+
+    echo = Action(name='echo', kind=ActionKind.TOOL, fn=echo_fn, metadata={'name': 'echo'})
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [echo]}
+
+    define_dynamic_action_provider(ai.registry, 'mcp', dap_fn)
+
+    ai.define_prompt(name='withDap', prompt='ping', tools=['mcp:tool/echo'])
+    prompt_action = await ai.registry.resolve_action(ActionKind.PROMPT, 'withDap')
+    assert prompt_action is not None
+
+    result = await prompt_action.run()
+    request = result.response
+    assert isinstance(request, ModelRequest)
+    assert request.tools is not None
+    assert [t.name for t in request.tools] == ['echo']
+    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio

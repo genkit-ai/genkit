@@ -38,7 +38,7 @@ from genkit._ai._generate import (
     generate_action,
     register_middleware,
     register_tools,
-    resolve_tool,
+    resolve_tools_from_options,
     to_tool_definition,
     tools_to_action_names,
 )
@@ -701,11 +701,7 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
 
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
-    tools: list[Action] = []
-    if options.tools:
-        for tool_ref in options.tools:
-            tools.append(await resolve_tool(registry, tool_ref))
-
+    tools = await resolve_tools_from_options(registry, options.tools)
     tool_defs = [to_tool_definition(tool) for tool in tools] if tools else []
 
     if not options.messages:
