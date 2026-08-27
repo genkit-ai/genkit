@@ -49,6 +49,7 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     assert_correct_config_class,
+    config_schema_at_define,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
@@ -297,6 +298,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._name = name
         self._ns = ns
         self._prompt_action: Action | None = None
+        define_name, define_schema = config_schema_at_define(model=model, registry=registry)
+        # Hop identity is what we knew at define time, not today's defaultModel.
+        self._defined_model_name = define_name
+        assert_correct_config_class(config=config, schema=define_schema, model=define_name)
 
     @property
     def ref(self) -> dict[str, Any]:
@@ -318,6 +323,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         resolved = await lookup_prompt(self._registry, self._name, self._variant)
         self._model = resolved._model
         self._config = resolved._config
+        self._defined_model_name = resolved._defined_model_name
         self._description = resolved._description
         self._input_schema = resolved._input_schema
         self._system = resolved._system
@@ -391,7 +397,19 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             config=merged_config,
             registry=self._registry,
         )
-        assert_correct_config_class(config=opts.get('config'), schema=resolved.config_schema)
+        assert_correct_config_class(
+            config=opts.get('config'),
+            schema=resolved.config_schema,
+            model=resolved.name,
+        )
+        # Re-check the stored typed config unless this call hops models.
+        # Leftover-key overlay lives in overlay_config, not here.
+        if self._defined_model_name is None or self._defined_model_name == resolved.name:
+            assert_correct_config_class(
+                config=self._config,
+                schema=resolved.config_schema,
+                model=resolved.name,
+            )
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata

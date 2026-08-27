@@ -31,7 +31,7 @@ from genkit import Document, ModelRequest, ModelResponse
 
 # DocumentData has no public re-export yet; the rerank helper is built on it.
 from genkit._core._typing import DocumentData
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
+from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
 from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
@@ -246,10 +246,9 @@ class Bedrock(Plugin):
             embedder = BedrockEmbedder(model_id=model_id, transport=self._transport)
             return await embedder.embed(request)
 
-        return Action(
-            kind=ActionKind.EMBEDDER,
-            name=bedrock_name(model_id),
-            fn=_embed,
+        return embedder(
+            bedrock_name(model_id),
+            _embed,
             # Same helper as list_actions, so the two can never drift apart.
             metadata=embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id)).metadata,
         )

@@ -178,8 +178,8 @@ class ModelRef(Generic[ModelRefConfigT]):
                 message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
             )
         if self.config is not None and not isinstance(self.config, schema):
-            expected = f'{schema.__module__}.{schema.__name__}'
-            actual = f'{type(self.config).__module__}.{type(self.config).__name__}'
+            expected = config_type_path(schema)
+            actual = config_type_path(type(self.config))
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{self.name}: config must be an instance of {expected}, got {actual}',

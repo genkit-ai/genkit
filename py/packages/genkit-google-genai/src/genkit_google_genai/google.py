@@ -64,7 +64,7 @@ import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit.embedder import EmbedderRef, embedder_action_metadata
+from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, ModelRef, Operation, background_model, model, model_action_metadata
 from genkit.plugin_api import (
@@ -342,12 +342,7 @@ def _create_embedder_action(
         )
         return await embedder.generate(request)
 
-    action = Action(
-        kind=ActionKind.EMBEDDER,
-        name=full_name,
-        fn=_run,
-        metadata=action_metadata.metadata,
-    )
+    action = embedder(full_name, _run, metadata=action_metadata.metadata)
 
     # Explicitly set schemas (no 'if' needed as they are always present in metadata)
     action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]

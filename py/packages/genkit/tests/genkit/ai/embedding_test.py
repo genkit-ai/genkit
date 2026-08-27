@@ -28,6 +28,7 @@ from genkit._ai._embedding import (
     EmbedderOptions,
     EmbedderSupports,
     create_embedder_ref,
+    embedder,
     embedder_action_metadata,
 )
 from genkit._core._action import Action, ActionResponse
@@ -97,6 +98,28 @@ def test_embedder_action_metadata_no_options() -> None:
     action_metadata = embedder_action_metadata(name='default_model')
     assert isinstance(action_metadata, ActionMetadata)
     assert action_metadata.metadata == {'embedder': {'customOptions': None, 'dimensions': None}}
+
+
+@pytest.mark.asyncio
+async def test_embedder_factory_stashes_class_without_registering() -> None:
+    """Plugin resolve builds via embedder(); the registry is what registers."""
+
+    class EmbedderConfig(BaseModel):
+        task_type: str | None = None
+
+    async def embed_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    ai = Genkit()
+    action = embedder('text-plugin-style', embed_fn, config_schema=EmbedderConfig)
+
+    assert action._config_schema is EmbedderConfig
+    assert await ai.registry.resolve_action(action.kind, action.name) is None
+
+    ai.registry.register_action_from_instance(action)
+    resolved = await ai.registry.resolve_action(action.kind, action.name)
+    assert resolved is action
+    assert resolved._config_schema is EmbedderConfig
 
 
 def test_create_embedder_ref_basic() -> None:

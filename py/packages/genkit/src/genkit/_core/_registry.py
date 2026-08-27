@@ -268,6 +268,18 @@ class Registry:
                 self._entries[action.kind] = {}
             self._entries[action.kind][action.name] = action
 
+    def registered_action(self, kind: ActionKind, name: str) -> Action | None:
+        """Return an action that is already in this registry.
+
+        Does not initialize plugins or run resolve. Falls back to the parent
+        registry.
+        """
+        with self._lock:
+            local = self._entries.get(kind, {}).get(name)
+        if local is not None:
+            return local
+        return self._parent.registered_action(kind, name) if self._parent is not None else None
+
     async def resolve_actions_by_kind(self, kind: ActionKind) -> dict[str, Action]:
         """Returns all registered actions for a specific kind, triggering lazy loading.
 

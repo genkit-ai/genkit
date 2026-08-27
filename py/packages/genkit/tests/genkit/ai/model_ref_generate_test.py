@@ -557,6 +557,33 @@ async def test_prompt_family_hop_keeps_leftover_keys() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prompt_lookup_family_hop_keeps_leftover_keys() -> None:
+    """ai.prompt('joke') inherits hop identity from the defined prompt."""
+    ai = Genkit()
+    _, _ = define_echo_model(ai, name='flash')
+    gpt_echo, _ = define_echo_model(ai, name='gpt')
+    flash = model_ref('flash', config_schema=CustomConfig)
+    gpt = model_ref(
+        'gpt',
+        config_schema=OtherFamilyConfig,
+        config=OtherFamilyConfig(frequency_penalty=0.5),
+    )
+    ai.define_prompt(
+        name='joke',
+        model=flash,
+        config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
+        prompt='hi',
+    )
+
+    await ai.prompt('joke')(model=gpt)
+
+    assert gpt_echo.last_request is not None
+    assert _config_value(gpt_echo.last_request.config, 'frequency_penalty') == 0.5
+    assert _config_value(gpt_echo.last_request.config, 'temperature') == 0.7
+    assert _config_value(gpt_echo.last_request.config, 'safety_settings') == {'HARM': 'BLOCK'}
+
+
+@pytest.mark.asyncio
 async def test_explicit_string_does_not_leak_constructor_ref() -> None:
     """An explicit name is a different model; constructor knobs stay off it."""
     flash = model_ref(
@@ -990,7 +1017,7 @@ async def test_generate_rejects_wrong_config_class_on_ref() -> None:
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     ref = model_ref('flash', config_schema=CustomConfig)
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
 
 
@@ -1000,8 +1027,46 @@ async def test_generate_rejects_wrong_config_class_on_string_model() -> None:
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(model='flash', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_rejects_wrong_config_class() -> None:
+    """The class check is on .response; iterating the stream alone will not fail."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+    stream = ai.generate_stream(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await stream.response
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_rejects_wrong_config_class() -> None:
+    """generate_operation checks the class before it re-enters generate with a dict."""
+    ai = Genkit()
+
+    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Started'))]),
+            operation=Operation(id='op-1', done=False, action='/background-model/lro'),
+        )
+
+    ai.define_model(
+        name='lro',
+        fn=model_fn,
+        config_schema=CustomConfig,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+    ref = model_ref('lro', config_schema=CustomConfig)
+    wrong = OtherFamilyConfig(frequency_penalty=0.2)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await ai.generate_operation(model=ref, prompt='hi', config=wrong)
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await ai.generate_operation(model='lro', prompt='hi', config=wrong)
 
 
 @pytest.mark.asyncio
@@ -1019,7 +1084,7 @@ async def test_model_factory_stashes_class_without_registering() -> None:
     assert await ai.registry.resolve_action(action.kind, action.name) is None
 
     ai.registry.register_action_from_instance(action)
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(
             model='flash-plugin-style',
             prompt='hi',
@@ -1059,8 +1124,179 @@ async def test_prompt_rejects_wrong_config_class() -> None:
     ref = model_ref('flash', config_schema=CustomConfig)
     joke = ai.define_prompt(name='joke', prompt='hi', model=ref)
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+def test_define_prompt_rejects_wrong_config_class() -> None:
+    """A typed config on define_prompt is checked before the prompt exists."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        ai.define_prompt(
+            name='joke',
+            prompt='hi',
+            model=ref,
+            config=OtherFamilyConfig(frequency_penalty=0.2),
+        )
+
+
+def test_define_prompt_rejects_wrong_config_class_on_string_model() -> None:
+    """A string model already on the registry is checked at define time."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        ai.define_prompt(
+            name='joke',
+            prompt='hi',
+            model='flash',
+            config=OtherFamilyConfig(frequency_penalty=0.2),
+        )
+
+
+def test_define_prompt_accepts_matching_class() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+
+    joke = ai.define_prompt(name='joke', prompt='hi', model=ref, config=CustomConfig(temperature=0.4))
+    assert joke is not None
+
+
+def test_define_prompt_string_without_registered_model_skips_class_check() -> None:
+    """No registered model means no class to check against at define time."""
+    ai = Genkit()
+    joke = ai.define_prompt(
+        name='joke',
+        prompt='hi',
+        model='flash',
+        config=OtherFamilyConfig(frequency_penalty=0.2),
+    )
+    assert joke is not None
+
+
+def test_define_prompt_rejects_wrong_class_on_constructor_ref() -> None:
+    """A prompt with no model= still checks against the constructor ModelRef."""
+    flash = model_ref('flash', config_schema=CustomConfig)
+    ai = Genkit(model=flash)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+def test_define_agent_rejects_wrong_config_class() -> None:
+    """define_agent uses the same define-time check as define_prompt."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        ai.define_agent(
+            name='echoAgent',
+            model=ref,
+            system='Reply briefly.',
+            config=OtherFamilyConfig(frequency_penalty=0.2),
+        )
+
+
+def test_define_agent_accepts_matching_class() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+
+    agent = ai.define_agent(
+        name='echoAgent',
+        model=ref,
+        system='Reply briefly.',
+        config=CustomConfig(temperature=0.3),
+    )
+    assert agent is not None
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_matching_class_reaches_plugin() -> None:
+    """A matching class stored on the prompt still dumps and reaches the model."""
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+    joke = ai.define_prompt(name='joke', prompt='hi', model=ref, config=CustomConfig(temperature=0.4))
+
+    await joke()
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.4
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_stored_wrong_class_rejected_on_call() -> None:
+    """If define time had no class, joke() still checks the stored object."""
+    ai = Genkit()
+    joke = ai.define_prompt(
+        name='joke',
+        prompt='hi',
+        model='flash',
+        config=OtherFamilyConfig(frequency_penalty=0.2),
+    )
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await joke()
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_stored_wrong_class_rejected_when_call_restates_model() -> None:
+    """Restating the prompt's own model is not a family hop."""
+    ai = Genkit()
+    joke = ai.define_prompt(
+        name='joke',
+        prompt='hi',
+        model='flash',
+        config=OtherFamilyConfig(frequency_penalty=0.2),
+    )
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await joke(model='flash')
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_stored_wrong_class_rejected_when_defined_without_model() -> None:
+    """No model at define time is not a hop; the stored object is still checked."""
+    ai = Genkit()
+    joke = ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await joke(model='flash')
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_stored_wrong_class_not_a_hop_after_later_default() -> None:
+    """A defaultModel registered after define does not rewrite hop identity."""
+    ai = Genkit()
+    joke = ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
+    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await joke(model='flash')
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_stored_wrong_class_not_a_hop_after_later_default() -> None:
+    """ai.prompt('joke') keeps the define-time snap after a later defaultModel."""
+    ai = Genkit()
+    ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
+    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        await ai.prompt('joke')(model='flash')
 
 
 @pytest.mark.asyncio
@@ -1070,7 +1306,7 @@ async def test_generate_rejects_wrong_class_on_constructor_ref() -> None:
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
 
 
@@ -1114,7 +1350,7 @@ async def test_prompt_model_beats_constructor_and_rejects_wrong_class() -> None:
     assert _config_value(echo.last_request.config, 'temperature') == 0.7
     assert _config_value(echo.last_request.config, 'frequency_penalty') is None
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
 
 
@@ -1126,5 +1362,5 @@ async def test_prompt_without_model_rejects_wrong_class_on_constructor_ref() -> 
     define_echo_model(ai, name='flash')
     joke = ai.define_prompt(name='joke', prompt='hi')
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(config=OtherFamilyConfig(frequency_penalty=0.2))

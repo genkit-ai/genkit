@@ -116,23 +116,29 @@ def create_embedder_ref(name: str, config: dict[str, Any] | None = None, version
     return EmbedderRef(name=name, config=config, version=version)
 
 
-def define_embedder(
-    registry: Registry,
+def embedder(
     name: str,
     fn: EmbedderFn,
-    options: EmbedderOptions | None = None,
+    *,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
+    options: EmbedderOptions | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register a custom embedder action."""
-    embedder_meta: dict[str, object] = dict(metadata) if metadata else {}
-    embedder_info: dict[str, object]
-    existing_embedder = embedder_meta.get('embedder')
-    if isinstance(existing_embedder, dict):
-        embedder_info = {str(key): value for key, value in existing_embedder.items()}
-    else:
-        embedder_info = {}
-    embedder_meta['embedder'] = embedder_info
+    """Build an embedder action without registering it.
+
+    Plugin ``init`` / ``resolve`` return this. ``define_embedder`` registers it.
+    The config class stays on the action so a later isinstance check can see it.
+    """
+    embedder_info: dict[str, object] = {}
+
+    if metadata and 'embedder' in metadata:
+        existing = metadata['embedder']
+        if isinstance(existing, dict):
+            existing_dict = cast(dict[str, object], existing)
+            for key, value in existing_dict.items():
+                if isinstance(key, str) and key not in embedder_info:
+                    embedder_info[key] = value
 
     if options:
         if options.label:
@@ -141,14 +147,45 @@ def define_embedder(
             embedder_info['dimensions'] = options.dimensions
         if options.supports:
             embedder_info['supports'] = options.supports.model_dump(exclude_none=True, by_alias=True)
-        if options.config_schema:
+        if options.config_schema and config_schema is None:
             embedder_info['customOptions'] = to_json_schema(options.config_schema)
 
-    embedder_description = get_func_description(fn, description)
-    return registry.register_action(
-        name=name,
+    if 'label' not in embedder_info or not embedder_info['label']:
+        embedder_info['label'] = name
+
+    if config_schema:
+        embedder_info['customOptions'] = to_json_schema(config_schema)
+
+    embedder_meta: dict[str, object] = metadata.copy() if metadata else {}
+    embedder_meta['embedder'] = embedder_info
+
+    return Action(
         kind=ActionKind.EMBEDDER,
+        name=name,
         fn=fn,
         metadata=embedder_meta,
-        description=embedder_description,
+        description=get_func_description(fn, description),
+        config_schema=config_schema,
     )
+
+
+def define_embedder(
+    registry: Registry,
+    name: str,
+    fn: EmbedderFn,
+    options: EmbedderOptions | None = None,
+    metadata: dict[str, object] | None = None,
+    description: str | None = None,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> Action:
+    """Register a custom embedder action."""
+    action = embedder(
+        name,
+        fn,
+        config_schema=config_schema if config_schema is not None else (options.config_schema if options else None),
+        metadata=metadata,
+        options=options,
+        description=description,
+    )
+    registry.register_action_from_instance(action)
+    return action

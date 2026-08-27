@@ -24,7 +24,7 @@ from openai import AsyncOpenAI
 from openai.types import Model
 
 from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder, embedder_action_metadata
 from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
@@ -486,10 +486,9 @@ class OpenAI(Plugin):
             embeddings = [Embedding(embedding=item.embedding) for item in response.data]
             return EmbedResponse(embeddings=embeddings)
 
-        return Action(
-            kind=ActionKind.EMBEDDER,
-            name=name,
-            fn=embed_fn,
+        return embedder(
+            name,
+            embed_fn,
             metadata=embedder_action_metadata(
                 name=name,
                 options=EmbedderOptions(

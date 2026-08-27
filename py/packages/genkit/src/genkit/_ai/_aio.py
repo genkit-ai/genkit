@@ -456,9 +456,10 @@ class Genkit:
         options: EmbedderOptions | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Action:
         """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, options, metadata, description)
+        return define_embedder(self.registry, name, fn, options, metadata, description, config_schema)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
@@ -1272,7 +1273,7 @@ class Genkit:
         await register_tools(child_registry, tools)
         refs = register_middleware(child_registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-        assert_correct_config_class(config=config, schema=resolved.config_schema)
+        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
         prompt_config = PromptConfig(
             model=resolved.name,
             prompt=prompt,
@@ -1448,7 +1449,7 @@ class Genkit:
             await register_tools(child_registry, tools)
             refs = register_middleware(child_registry, use)
             resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-            assert_correct_config_class(config=config, schema=resolved.config_schema)
+            assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
             prompt_config = PromptConfig(
                 model=resolved.name,
                 prompt=prompt,
@@ -1719,7 +1720,7 @@ class Genkit:
             registry=self.registry,
             message='No model specified for generate_operation.',
         )
-        assert_correct_config_class(config=config, schema=resolved.config_schema)
+        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
 
         model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:

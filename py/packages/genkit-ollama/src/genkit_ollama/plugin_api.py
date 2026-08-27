@@ -31,6 +31,7 @@ from genkit.embedder import (
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
+    embedder as create_embedder,
     embedder_action_metadata,
 )
 from genkit.model import model as create_model, model_action_metadata
@@ -388,18 +389,15 @@ class Ollama(Plugin):
                 async with wrap_connection_errors(server_address):
                     return await embedder.embed(request, client=client)
 
-        return Action(
-            kind=ActionKind.EMBEDDER,
-            name=name,
-            fn=_run,
-            metadata={
-                'embedder': {
-                    'label': f'Ollama Embedding - {clean_name}',
-                    'dimensions': embedder_ref.dimensions,
-                    'supports': {'input': ['text']},
-                    'customOptions': to_json_schema(ollama_api.Options),
-                },
-            },
+        return create_embedder(
+            name,
+            _run,
+            config_schema=ollama_api.Options,
+            options=EmbedderOptions(
+                label=f'Ollama Embedding - {clean_name}',
+                dimensions=embedder_ref.dimensions,
+                supports=EmbedderSupports(input=['text']),
+            ),
         )
 
     async def list_actions(self) -> list[ActionMetadata]:

@@ -23,6 +23,7 @@ Example:
     from genkit.embedder import (
         EmbedRequest,
         EmbedResponse,
+        embedder,
         embedder_action_metadata,
         EmbedderRef,
     )
@@ -33,6 +34,7 @@ from genkit._ai._embedding import (
     EmbedderRef,
     EmbedderSupports,
     create_embedder_ref as embedder_ref,
+    embedder,
     embedder_action_metadata,
 )
 from genkit._core._typing import (
@@ -47,6 +49,7 @@ __all__ = [
     'EmbedResponse',
     'Embedding',
     # Factory functions and metadata
+    'embedder',
     'embedder_action_metadata',
     'embedder_ref',
     # Reference types

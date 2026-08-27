@@ -36,6 +36,7 @@ from genkit._core._typing import ActionMetadata
 # Embedder domain re-exports
 from genkit.embedder import (
     EmbedderRef,
+    embedder,
     embedder_action_metadata,
     embedder_ref,
 )
@@ -95,6 +96,7 @@ __all__ = [
     'model_ref',
     'ModelRef',
     # Embedder domain
+    'embedder',
     'embedder_action_metadata',
     'embedder_ref',
     'EmbedderRef',

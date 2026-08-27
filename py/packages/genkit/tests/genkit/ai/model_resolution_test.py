@@ -19,6 +19,7 @@ from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
     assert_correct_config_class,
+    config_schema_at_define,
     fold_config_aliases,
     get_request_api_key,
     model,
@@ -409,6 +410,26 @@ async def test_resolve_for_generate_string_without_action_has_no_class() -> None
     assert resolved.config_schema is None
 
 
+def test_config_schema_at_define_reads_ref_and_registered_action() -> None:
+    """Define-time lookup is sync: ModelRef or an already-registered model."""
+    registry = Registry()
+    ref = model_ref('flash', config_schema=CustomConfig)
+    assert config_schema_at_define(model=ref, registry=registry) == ('flash', CustomConfig)
+
+    assert config_schema_at_define(model='flash', registry=registry) == ('flash', None)
+    registry.register_action_from_instance(model('flash', _unused_model_fn, config_schema=CustomConfig))
+    assert config_schema_at_define(model='flash', registry=registry) == ('flash', CustomConfig)
+
+    empty = Registry()
+    assert config_schema_at_define(model=None, registry=empty) == (None, None)
+    assert config_schema_at_define(model='', registry=empty) == (None, None)
+    empty.register_value('defaultModel', 'defaultModel', '')
+    assert config_schema_at_define(model=None, registry=empty) == (None, None)
+    empty2 = Registry()
+    empty2.register_value('defaultModel', 'defaultModel', ref)
+    assert config_schema_at_define(model=None, registry=empty2) == ('flash', CustomConfig)
+
+
 def test_assert_correct_config_class_uses_schema_only() -> None:
     """Reject does not look anything up. It just compares the instance."""
     assert_correct_config_class(config=CustomConfig(temperature=0.4), schema=CustomConfig)
@@ -416,7 +437,7 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
     class OtherFamilyConfig(BaseModel):
         frequency_penalty: float | None = None
 
-    with pytest.raises(GenkitError, match='config must be CustomConfig or a mapping, got OtherFamilyConfig'):
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
 
 

@@ -228,6 +228,7 @@ async def test_googleai_resolve_gemini_image_is_not_imagen(mock_list_models: Mag
     assert action is not None
     assert _custom_options(action) == to_json_schema(GeminiImageConfigSchema)
     assert _request_config_type(action) is GeminiImageConfigSchema
+    assert action._config_schema is GeminiImageConfigSchema
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -257,6 +258,7 @@ async def test_googleai_resolve_types_family_config(
 
     assert action is not None
     assert _request_config_type(action) is config_type
+    assert action._config_schema is config_type
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -286,6 +288,7 @@ async def test_vertexai_resolve_types_family_config(
 
     assert action is not None
     assert _request_config_type(action) is config_type
+    assert action._config_schema is config_type
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -324,6 +327,7 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
         action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, name)
         assert action is not None
         assert _request_config_type(action) is VeoConfigSchema
+        assert action._config_schema is VeoConfigSchema
 
         with patch('genkit_google_genai.google.VeoModel.start', new_callable=AsyncMock) as mock_start:
             await action.run({

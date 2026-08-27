@@ -41,6 +41,7 @@ from genkit._core._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    config_type_path,
     get_basic_usage_stats,
     text_from_content,
     text_from_message,
@@ -207,7 +208,7 @@ async def resolve_for_generate(
     """Name, config bag, and the config class this generate will check against.
 
     A ModelRef already has the class. A string name reads it off the
-    registered action.
+    registered model action.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
     if resolved.config_schema is not None:
@@ -215,6 +216,25 @@ async def resolve_for_generate(
     action = await registry.resolve_model(resolved.name)
     raw = getattr(action, '_config_schema', None) if action is not None else None
     return replace(resolved, config_schema=python_config_schema(raw))
+
+
+def config_schema_at_define(*, model: object | None, registry: Registry) -> tuple[str | None, type[BaseModel] | None]:
+    """Name and class a define-time typed config is checked against.
+
+    A ModelRef already has the class. A string name only sees an already-registered
+    model — define_prompt is sync, so plugin resolve waits until generate.
+    """
+    omitted = model is None or model == ''
+    if omitted:
+        default = registry.lookup_value('defaultModel', 'defaultModel')
+        if default is None or default == '':
+            return None, None
+    resolved = resolve_model_arg(model=model, registry=registry, message='No model configured.')
+    if isinstance(resolved, ModelRef):
+        return resolved.name, python_config_schema(resolved.config_schema)
+    action = registry.registered_action(ActionKind.MODEL, resolved)
+    raw = getattr(action, '_config_schema', None) if action is not None else None
+    return resolved, python_config_schema(raw)
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
@@ -379,7 +399,12 @@ def define_model(
     return action
 
 
-def assert_correct_config_class(*, config: object, schema: type[BaseModel] | None) -> None:
+def assert_correct_config_class(
+    *,
+    config: object,
+    schema: type[BaseModel] | None,
+    model: str | None = None,
+) -> None:
     """A typed config object has to belong to the model this call hits.
 
     Dicts stay legal. Omit / ``None`` skip this. A model with no Python
@@ -389,9 +414,10 @@ def assert_correct_config_class(*, config: object, schema: type[BaseModel] | Non
         return
     if schema is None or isinstance(config, schema):
         return
+    body = f'config must be {config_type_path(schema)} or a mapping, got {config_type_path(type(config))}'
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message=f'config must be {schema.__name__} or a mapping, got {type(config).__name__}',
+        message=f'{model}: {body}' if model else body,
     )
 
 
