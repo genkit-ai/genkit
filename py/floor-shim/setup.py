@@ -45,7 +45,12 @@ MIN_PYTHON = (3, 10)
 _METADATA_ONLY_COMMANDS = {'egg_info', 'dist_info', 'sdist'}
 
 
-def _format_error_message(min_ver: tuple[int, ...], cur_ver: tuple[int, ...]) -> str:
+# Annotations here must stay plain builtin names: this function runs on
+# whatever ancient interpreter the user has (the shim's whole audience), and
+# subscripted generics like `tuple[int, ...]` evaluate at def time and raise
+# TypeError before 3.9 — the user would get a traceback instead of the
+# upgrade message.
+def _format_error_message(min_ver: tuple, cur_ver: tuple) -> str:
     min_str = '.'.join(map(str, min_ver))
     cur_str = '.'.join(map(str, cur_ver[:3]))
 
@@ -110,6 +115,14 @@ def _format_error_message(min_ver: tuple[int, ...], cur_ver: tuple[int, ...]) ->
 
 if sys.version_info < MIN_PYTHON and not _METADATA_ONLY_COMMANDS.intersection(sys.argv[1:]):
     sys.exit(_format_error_message(MIN_PYTHON, sys.version_info))
+
+# The shim must never ship as a wheel: wheels run no code at install time,
+# so on an old Python a wheel would install "successfully" as an empty
+# package — the exact silent failure this shim exists to prevent. Refusing
+# here (after the version guard, so old interpreters still get the upgrade
+# box) makes sdist-only self-enforcing instead of workflow-flag-dependent.
+if 'bdist_wheel' in sys.argv[1:]:
+    sys.exit('The genkit floor shim is sdist-only; refusing to build a wheel. See py/floor-shim/README.md.')
 
 from setuptools import setup  # noqa: E402
 
