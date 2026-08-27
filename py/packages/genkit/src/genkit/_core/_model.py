@@ -45,6 +45,7 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
+    GenkitRuntimeError,
     Media,
     MediaModel,
     MediaPart,
@@ -491,6 +492,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     message: Message | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
+    error: GenkitRuntimeError | None = None
     latency_ms: float | None = None
     usage: GenerationUsage | None = None
     custom: dict[str, Any] | None = None
