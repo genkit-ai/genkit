@@ -6,10 +6,13 @@
 """Tests for typed streaming output (issue #6007).
 
 Covers:
-- ModelResponseChunk.output partial validation into the output schema type
+- ModelResponseChunk.output wrapping extracted JSON in a synthesized
+  all-optional partial of the output schema type
 - ActionRunContext genericity over the chunk type
-- End-to-end generate_stream with output_schema producing typed chunks
+- End-to-end generate_stream with output_schema producing partial chunks
 """
+
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -36,25 +39,43 @@ def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelRespon
     )
 
 
-class TestChunkPartialValidation:
-    """chunk.output with a schema type validates partials into that type."""
+class TestChunkPartialOutput:
+    """chunk.output with a schema type wraps extracted JSON in a partial."""
 
-    def test_unparseable_prefix_returns_none(self) -> None:
-        assert _chunk('{"ti', schema_type=Recipe).output is None
+    def test_preamble_returns_none(self) -> None:
+        # No JSON object has started yet.
+        assert _chunk('Here is the JSON:', schema_type=Recipe).output is None
+        assert _chunk('Here is the JSON:').output is None
 
-    def test_missing_required_field_returns_none(self) -> None:
-        # title present but steps has not started streaming yet
-        assert _chunk('{"title": "Chocolate C', schema_type=Recipe).output is None
+    def test_prefix_with_no_fields_is_empty_partial(self) -> None:
+        # The object has started but no key has finished; all fields None.
+        out = _chunk('{"ti', schema_type=Recipe).output
+        assert out is not None
+        assert not isinstance(out, Recipe)
+        assert out.title is None
+        assert out.steps is None
 
-    def test_partial_trailing_value_returns_model_instance(self) -> None:
+    def test_first_field_is_available_immediately(self) -> None:
+        # title present but steps has not started streaming yet:
+        # the partial carries title, steps stays None. Not None overall.
+        out = _chunk('{"title": "Chocolate C', schema_type=Recipe).output
+        assert out is not None
+        assert not isinstance(out, Recipe)
+        assert out.title == 'Chocolate C'
+        assert out.steps is None
+
+    def test_partial_trailing_value(self) -> None:
         out = _chunk('{"title": "Chocolate Cake", "steps": ["mi', schema_type=Recipe).output
-        assert isinstance(out, Recipe)
+        assert out is not None
         assert out.title == 'Chocolate Cake'
         assert out.steps == ['mi']
 
-    def test_complete_json_returns_model_instance(self) -> None:
+    def test_complete_json_is_still_the_partial_type(self) -> None:
+        # Chunks never hand back the real model; only ModelResponse.output does.
         out = _chunk('{"title": "Cake", "steps": ["mix", "bake"]}', schema_type=Recipe).output
-        assert isinstance(out, Recipe)
+        assert out is not None
+        assert not isinstance(out, Recipe)
+        assert type(out).__name__ == 'RecipePartial'
         assert out.steps == ['mix', 'bake']
 
     def test_no_schema_type_preserves_raw_json_behavior(self) -> None:
@@ -63,8 +84,8 @@ class TestChunkPartialValidation:
         assert out == {'title': 'Cake', 'steps': ['mix']}
         assert not isinstance(out, Recipe)
 
-    def test_schema_validation_applies_to_chunk_parser_result(self) -> None:
-        # chunk_parser output (used by format definitions) is also validated
+    def test_partial_wraps_chunk_parser_result(self) -> None:
+        # chunk_parser output (used by format definitions) is also wrapped
         wrapper = ModelResponseChunk(
             role='model',
             content=[Part(root=TextPart(text='ignored'))],
@@ -72,7 +93,8 @@ class TestChunkPartialValidation:
             schema_type=Recipe,
         )
         out = wrapper.output
-        assert isinstance(out, Recipe)
+        assert out is not None
+        assert not isinstance(out, Recipe)
         assert out.title == 'Parsed'
 
     def test_non_dict_parse_result_passes_through(self) -> None:
@@ -102,8 +124,8 @@ class TestActionRunContextGenerics:
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
-    """End to end: generate_stream(output_schema=...) chunks validate into the schema."""
+async def test_generate_stream_with_output_schema_yields_partial_chunks() -> None:
+    """End to end: generate_stream(output_schema=...) chunks are partials of the schema."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 
@@ -123,18 +145,20 @@ async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
 
     stream_result = ai.generate_stream(prompt='hi', output_schema=Recipe)
 
-    outputs: list[object] = []
+    outputs: list[Any] = []
     async for chunk in stream_result.stream:
         outputs.append(chunk.output)
 
-    # First chunk: required field `steps` hasn't started -> None.
-    assert outputs[0] is None
-    # Later chunks: real, partially-populated Recipe instances.
-    assert isinstance(outputs[1], Recipe)
+    # First chunk: title is already usable; steps has not started -> None.
+    assert outputs[0] is not None
+    assert not isinstance(outputs[0], Recipe)
+    assert outputs[0].title == 'Chocolate C'
+    assert outputs[0].steps is None
+    # Later chunks fill in as keys arrive; still partials, never the real model.
     assert outputs[1].title == 'Chocolate Cake'
     assert outputs[1].steps == ['mi']
-    assert isinstance(outputs[2], Recipe)
     assert outputs[2].steps == ['mix', 'bake']
+    assert not isinstance(outputs[2], Recipe)
 
     # Final response is fully validated, as before.
     response = await stream_result.response

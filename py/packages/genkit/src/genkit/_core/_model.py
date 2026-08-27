@@ -24,15 +24,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from functools import cached_property, lru_cache
+from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, ValidationError, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
+from genkit._core._partial import partial_model
 from genkit._core._typing import (
     Candidate,
     DocumentData,
@@ -399,12 +400,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.interrupts
 
 
-@lru_cache(maxsize=128)
-def _schema_adapter(schema_type: type[BaseModel]) -> TypeAdapter[BaseModel]:
-    """Cache one TypeAdapter per output schema class for partial chunk validation."""
-    return TypeAdapter(schema_type)
-
-
 class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
     """Streaming chunk with text, accumulated text, and output parsing."""
 
@@ -481,24 +476,25 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
 
     @cached_property
     def output(self) -> OutputT | None:
-        """Parsed output from accumulated text (None until parseable).
+        """Parsed output from accumulated text.
 
-        When an output schema type is known, the accumulated partial JSON is
-        validated into that Pydantic type using partial validation, so callers
-        get a real (possibly trailing-truncated) model instance. Until every
-        required field has started streaming, this returns None. Without a
-        schema type, returns the raw extracted JSON value.
+        With no ``output_schema`` class, this is the extracted JSON value
+        (a dict, list, scalar, or ``None`` if an object has not started).
+
+        When ``output_schema`` is a Pydantic model, the extracted dict is
+        validated into a synthesized all-optional sibling (``RecipePartial``),
+        so fields that have not arrived yet are ``None``. This is **not** the
+        original model: ``isinstance(chunk.output, Recipe)`` is false, and a
+        type checker still sees ``Recipe | None``. The final
+        ``ModelResponse.output`` validates into the real type.
         """
-        parsed = self.chunk_parser(self) if self.chunk_parser else extract_json(self.accumulated_text)
+        parsed = (
+            self.chunk_parser(self)
+            if self.chunk_parser
+            else extract_json(self.accumulated_text, throw_on_bad_json=False)
+        )
         if self.schema_type is not None and isinstance(parsed, dict):
-            try:
-                return cast(
-                    'OutputT | None',
-                    _schema_adapter(self.schema_type).validate_python(parsed, experimental_allow_partial=True),
-                )
-            except ValidationError:
-                # Not enough of the payload has streamed to satisfy the schema yet.
-                return None
+            return cast('OutputT | None', partial_model(self.schema_type).model_validate(parsed))
         return cast('OutputT | None', parsed)
 
 

@@ -699,7 +699,7 @@ async def _generate_action_turn(
     chunks = ChunkAccumulator(
         message_index,
         formatter,
-        schema_type=raw_request.output.schema_type if raw_request.output else None,
+        schema_type=getattr(raw_request.output, 'schema_type', None) if raw_request.output else None,
     )
 
     async def dispatch_generate(
