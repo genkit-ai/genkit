@@ -1492,6 +1492,19 @@ func clone[T any](obj *T) *T {
 	return &newObj
 }
 
+// toolFailureError classifies a tool's error for the loop. A tool that failed
+// on its own terms is [ErrToolFailed], which the loop reports as a failed
+// generation. A tool that stopped because the call's context ended is not a
+// tool failure at all: the cancellation is returned with its own status, so
+// the partial response carries [FinishReasonAborted] rather than blaming the
+// tool for a stop the caller asked for.
+func toolFailureError(ctx context.Context, name string, cause error) error {
+	if ctx.Err() != nil {
+		return status.Errorf(status.ErrCancelled, "tool %q stopped: %w", name, cause)
+	}
+	return status.Errorf(ErrToolFailed, "tool %q failed: %w", name, cause)
+}
+
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
 type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
@@ -1622,7 +1635,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					return
 				}
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolFailed, "tool %q failed: %w", toolReq.Name, err)}
+				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
 				return
 			}
 
@@ -2241,7 +2254,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 						}, nil
 					}
 
-					return nil, status.Errorf(ErrToolFailed, "tool %q failed: %w", restartPart.ToolRequest.Name, err)
+					return nil, toolFailureError(ctx, restartPart.ToolRequest.Name, err)
 				}
 
 				newToolReq := clone(p)

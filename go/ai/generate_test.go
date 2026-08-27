@@ -3709,6 +3709,58 @@ func TestGeneratePartialResponseOnFailure(t *testing.T) {
 		}
 	})
 
+	t.Run("cancellation inside a tool reports aborted", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/toolCancel",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "blockingTool", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+		running := make(chan struct{})
+		defineTool(r, "blockingTool", "blocks until the call is cancelled",
+			func(tc *ToolContext, in map[string]any) (string, error) {
+				close(running)
+				<-tc.Context.Done()
+				return "", tc.Context.Err()
+			})
+
+		ctx, cancel := context.WithCancel(testCtx)
+		go func() {
+			<-running
+			cancel()
+		}()
+		resp, err := Generate(ctx, r,
+			WithModelName("test/toolCancel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "blockingTool")),
+		)
+		// The tool stopped because the caller did, so the loop reports the
+		// cancellation rather than blaming the tool for it.
+		if errors.Is(err, ErrToolFailed) {
+			t.Errorf("err = %v, want a cancellation rather than ErrToolFailed", err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q: the caller stopped the loop", resp.FinishReason, FinishReasonAborted)
+		}
+		if resp.Error == nil || resp.Error.Status != status.Cancelled {
+			t.Errorf("Error = %+v, want a CANCELLED classification", resp.Error)
+		}
+		history := resp.History()
+		if len(history) != 1 || history[0].Role != RoleUser {
+			t.Errorf("History() = %d messages, want the user message alone: the unfinished round goes", len(history))
+		}
+	})
+
 	t.Run("mid-stream failure drops the unfinished message", func(t *testing.T) {
 		r := newTestRegistry(t)
 		defineFakeModel(t, r, fakeModelConfig{

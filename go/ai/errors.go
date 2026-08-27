@@ -45,6 +45,10 @@ var (
 	// errors.Is and errors.As still reach it; the status is INTERNAL because a
 	// tool's failure is not a failure of the caller's request. The loop's
 	// partial [ModelResponse] rides alongside this error (see [Generate]).
+	//
+	// A tool that stopped because the call's context ended is not a tool
+	// failure: that error carries CANCELLED instead, so the partial response
+	// reports [FinishReasonAborted].
 	ErrToolFailed = status.ErrInternal.Subtype("tool failed")
 
 	// ErrUnsupportedByModel means the request used a capability the model does
