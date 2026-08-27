@@ -135,6 +135,10 @@ class BackgroundAction(Generic[OutputT]):
 
         Returns:
             Updated Operation with current status.
+
+        Raises:
+            GenkitError: INVALID_ARGUMENT if ``operation`` is not a live
+                ``Operation`` (e.g. a dump or a ``ModelResponse``).
         """
         operation = require_operation(value=operation)
         result = await self.check_action.run(operation)
@@ -150,9 +154,13 @@ class BackgroundAction(Generic[OutputT]):
             Updated Operation reflecting cancellation attempt.
 
         Raises:
-            GenkitError: If this action does not implement cancel.
+            GenkitError: UNIMPLEMENTED if this action does not implement
+                cancel, INVALID_ARGUMENT if ``operation`` is not a live
+                ``Operation``.
         """
         operation = require_operation(value=operation)
+        # Raising here is deliberate: returning the operation unchanged would
+        # make "this model can't cancel" indistinguishable from "cancelled".
         if self.cancel_action is None:
             raise GenkitError(
                 status='UNIMPLEMENTED',
@@ -387,7 +395,7 @@ def require_operation(*, value: object) -> Operation:
 async def resolve_operation_action(
     registry: Registry,
     operation: Operation,
-) -> tuple[Operation, BackgroundAction]:
+) -> BackgroundAction[ModelResponse]:
     """Turn a poll handle into the background action that owns it."""
     operation = require_operation(value=operation)
     if not operation.action:
@@ -396,13 +404,21 @@ async def resolve_operation_action(
             message='Provided operation is missing original request information',
         )
 
-    background_action = await lookup_background_action(registry, operation.action)
+    try:
+        background_action = await lookup_background_action(registry, operation.action)
+    except ValueError as e:
+        # operation.action is caller data (often reloaded from storage), so a
+        # mangled key is the caller's bad argument, not an internal failure.
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to resolve background action from original request: {operation.action}',
+        ) from e
     if background_action is None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve background action from original request: {operation.action}',
         )
-    return operation, background_action
+    return background_action
 
 
 async def check_operation(
@@ -422,8 +438,8 @@ async def check_operation(
         GenkitError: If the handle is missing action, or the action is
             not found.
     """
-    resolved, background_action = await resolve_operation_action(registry, operation)
-    return await background_action.check(resolved)
+    background_action = await resolve_operation_action(registry, operation)
+    return await background_action.check(operation)
 
 
 async def cancel_operation(
@@ -441,12 +457,8 @@ async def cancel_operation(
 
     Raises:
         GenkitError: If the handle is missing action, the action is not
-            found, or cancel is not implemented.
+            found, or cancel is not implemented (UNIMPLEMENTED, raised by
+            ``BackgroundAction.cancel``).
     """
-    resolved, background_action = await resolve_operation_action(registry, operation)
-    if not background_action.supports_cancel:
-        raise GenkitError(
-            status='UNIMPLEMENTED',
-            message=f'Background action {resolved.action} does not support cancellation.',
-        )
-    return await background_action.cancel(resolved)
+    background_action = await resolve_operation_action(registry, operation)
+    return await background_action.cancel(operation)

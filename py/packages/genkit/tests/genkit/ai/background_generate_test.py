@@ -450,29 +450,27 @@ def test_model_response_eq_uses_operation_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_check_action_accepts_dumped_operation_with_extra_keys(ai: Genkit) -> None:
-    """A persisted dump still checks, even with leftover keys like latencyMs."""
+async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> None:
+    """The dump of a real start() handle reloads and polls without edits."""
 
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='bg-op-123', done=False)
 
     async def check(op: Operation) -> Operation:
-        return op
+        return Operation(id=op.id, done=True)
 
-    action = ai.define_background_model(
+    ai.define_background_model(
         name='bg-model',
         start=start,
         check=check,
     )
-    dumped = {
-        'id': 'bg-op-123',
-        'done': False,
-        'action': '/background-model/bg-model',
-        'latencyMs': 42,
-    }
+    started = await ai.generate_operation(model='bg-model', prompt='a cat video')
+    # wrapped_start nests timing under metadata, so the dump has no stray keys.
+    assert started.metadata is not None and 'latencyMs' in started.metadata
 
-    result = await action.check_action.run(dumped)
+    reloaded = Operation.model_validate(started.model_dump(by_alias=True))
+    updated = await ai.check_operation(reloaded)
 
-    assert result.response.id == 'bg-op-123'
-    assert result.response.action == '/background-model/bg-model'
-    assert 'latencyMs' not in result.response.model_dump()
+    assert updated.id == 'bg-op-123'
+    assert updated.done is True
+    assert updated.action == '/background-model/bg-model'
