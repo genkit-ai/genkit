@@ -312,7 +312,6 @@ describe('a2ui() middleware', () => {
     assert.strictEqual(decoded[1].updateComponents.surfaceId, 'SURFACE_ID');
   });
 
-
   it('groups consecutive surface envelopes into one block but splits around an action', async () => {
     const mw = modelHook({});
     let seen: any;
@@ -356,7 +355,6 @@ describe('a2ui() middleware', () => {
     // The block precedes the action line (source order preserved).
     assert.ok(joined.indexOf('```a2ui') < joined.indexOf('UI action'));
   });
-
 
   it('mints the same surface id in the stream and the final message', async () => {
     // Default surface-id policy (random UUID). The stream parse and the final
