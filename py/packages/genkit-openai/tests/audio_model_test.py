@@ -36,6 +36,7 @@ from genkit_openai.models.audio import (
 )
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -352,8 +353,29 @@ class TestOpenAISTTModel:
         assert isinstance(part, TextPart)
         assert part.text == 'Translated text'
 
+    @pytest.mark.parametrize('model_name', ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe'])
     @pytest.mark.asyncio
-    async def test_generate_calls_transcription_create(self) -> None:
+    async def test_generate_rejects_translation_for_non_whisper_models(self, model_name: str) -> None:
+        """Verify translation is rejected for models unsupported by the API."""
+        mock_client = AsyncMock()
+        model = OpenAISTTModel(model_name, mock_client)
+        request = ModelRequest(messages=[], config={'translate': True})
+
+        with pytest.raises(GenkitError) as exc_info:
+            await model.generate(request, MagicMock())
+
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert 'whisper-1' in str(exc_info.value)
+        mock_client.audio.translations.create.assert_not_called()
+        mock_client.audio.transcriptions.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'config',
+        [None, {'translate': False}],
+        ids=['translate-unset', 'translate-explicitly-false'],
+    )
+    async def test_generate_calls_transcription_create(self, config: dict[str, bool] | None) -> None:
         """Verify generate() calls client.audio.transcriptions.create."""
         mock_result = MagicMock()
         mock_result.text = 'Transcribed text'
@@ -379,6 +401,7 @@ class TestOpenAISTTModel:
                     ],
                 ),
             ],
+            config=config,
         )
 
         ctx = MagicMock()

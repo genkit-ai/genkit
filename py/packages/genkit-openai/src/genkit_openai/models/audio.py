@@ -33,6 +33,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -372,8 +373,17 @@ class OpenAISTTModel:
         Returns:
             A ModelResponse containing the transcribed text.
         """
-        params = _to_stt_params(self._model_name, request)
         translate = extract_config_dict(request).get('translate', False)
+        if translate and self._model_name != 'whisper-1':
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    "OpenAI audio translations only support 'whisper-1'; "
+                    f"model '{self._model_name}' cannot use translate=True."
+                ),
+            )
+
+        params = _to_stt_params(self._model_name, request)
         if translate:
             params.pop('language', None)
             params.pop('timestamp_granularities', None)
