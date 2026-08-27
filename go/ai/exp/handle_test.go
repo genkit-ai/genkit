@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -560,5 +562,167 @@ func TestWaitValidation(t *testing.T) {
 	}
 	if _, err := h.WaitForSnapshot(context.Background(), ""); !errors.Is(err, status.ErrInvalidArgument) {
 		t.Fatalf("WaitForSnapshot(\"\") error = %v, want INVALID_ARGUMENT", err)
+	}
+}
+
+// recordingTransport is an [agentTransport] that records what reached it and
+// answers from canned values. It is how the delegation tests see the seam: a
+// real transport would prove only that the call worked, not which arguments
+// the handle chose to send.
+type recordingTransport struct {
+	runInput  *AgentInput
+	runInit   *AgentInit[json.RawMessage]
+	runHasCB  bool
+	lookup    *GetSnapshotRequest
+	waitID    string
+	abortID   string
+	callCount int
+}
+
+func (t *recordingTransport) Run(ctx context.Context, input *AgentInput, init *AgentInit[json.RawMessage], cb func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error) {
+	t.callCount++
+	t.runInput, t.runInit, t.runHasCB = input, init, cb != nil
+	return &AgentOutput[json.RawMessage]{FinishReason: AgentFinishReasonStop}, nil
+}
+
+func (t *recordingTransport) GetSnapshot(ctx context.Context, lookup *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	t.callCount++
+	t.lookup = lookup
+	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
+}
+
+func (t *recordingTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+	t.callCount++
+	t.waitID = snapshotID
+	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
+}
+
+func (t *recordingTransport) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+	t.callCount++
+	t.abortID = snapshotID
+	return SnapshotStatusAborted, nil
+}
+
+// TestAgentHandle_DelegatesToTransport pins the division of labour the seam
+// exists to create. The handle resolves options and validates arguments; the
+// transport receives a request that is already well formed and decides nothing
+// about it. A remote transport can only be a drop-in if that line holds.
+func TestAgentHandle_DelegatesToTransport(t *testing.T) {
+	tr := &recordingTransport{}
+	h := &AgentHandle{name: "researcher", transport: tr}
+	ctx := context.Background()
+
+	// One transport read serves both lookups, which is why it takes the
+	// request rather than splitting into two methods.
+	if _, err := h.GetSnapshot(ctx, "snap-1"); err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if tr.lookup.SnapshotID != "snap-1" || tr.lookup.SessionID != "" {
+		t.Errorf("GetSnapshot sent %+v, want a snapshot-ID lookup", tr.lookup)
+	}
+	if _, err := h.GetLatestSnapshot(ctx, "sess-1"); err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if tr.lookup.SessionID != "sess-1" || tr.lookup.SnapshotID != "" {
+		t.Errorf("GetLatestSnapshot sent %+v, want a session-ID lookup", tr.lookup)
+	}
+
+	if _, err := h.WaitForSnapshot(ctx, "snap-2"); err != nil {
+		t.Fatalf("WaitForSnapshot: %v", err)
+	}
+	if tr.waitID != "snap-2" {
+		t.Errorf("WaitForSnapshot sent %q, want %q", tr.waitID, "snap-2")
+	}
+
+	if _, err := h.Abort(ctx, "snap-3"); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if tr.abortID != "snap-3" {
+		t.Errorf("Abort sent %q, want %q", tr.abortID, "snap-3")
+	}
+
+	// Options are the handle's to resolve: a transport sees a settled init,
+	// never the option values, so every transport agrees on what they mean.
+	if _, err := h.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("hi")},
+		WithSessionID[json.RawMessage]("sess-9")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if tr.runInit == nil || tr.runInit.SessionID != "sess-9" {
+		t.Errorf("Run sent init %+v, want the resolved session ID", tr.runInit)
+	}
+	if tr.runHasCB {
+		t.Error("Run passed a stream callback; the handle reports a turn by its final output")
+	}
+
+	// Validation is the handle's too, so a bad argument costs no dispatch and
+	// fails identically wherever the agent lives.
+	before := tr.callCount
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"nil input", func() error { _, err := h.Run(ctx, nil); return err }},
+		{"empty snapshot ID", func() error { _, err := h.GetSnapshot(ctx, ""); return err }},
+		{"empty wait ID", func() error { _, err := h.WaitForSnapshot(ctx, ""); return err }},
+		{"empty session ID", func() error { _, err := h.GetLatestSnapshot(ctx, ""); return err }},
+		{"empty abort ID", func() error { _, err := h.Abort(ctx, ""); return err }},
+	} {
+		if err := tc.call(); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("%s: error = %v, want INVALID_ARGUMENT", tc.name, err)
+		}
+	}
+	if tr.callCount != before {
+		t.Errorf("%d rejected calls reached the transport", tr.callCount-before)
+	}
+}
+
+// TestActionTransportForwardsStreamChunks covers the one transport argument
+// nothing above reaches: [AgentHandle] passes no stream callback today, so
+// only a direct dispatch shows the parameter is wired rather than decorative.
+// It is in the interface now because a turn streams at this level whatever
+// carries it, and adding it later would reshape the seam.
+func TestActionTransportForwardsStreamChunks(t *testing.T) {
+	reg := newTestRegistry(t)
+	agent := DefineCustomAgent(reg, "streamer",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[any]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				for _, word := range []string{"one", "two"} {
+					resp.SendModelChunk(&ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(word)}})
+				}
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			}); err != nil {
+				return nil, err
+			}
+			return sess.Result(), nil
+		})
+
+	var mu sync.Mutex
+	var streamed []string
+	transport := &actionTransport{name: "streamer", run: agent}
+	out, err := transport.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")}, nil,
+		func(ctx context.Context, raw json.RawMessage) error {
+			var chunk AgentStreamChunk
+			if err := json.Unmarshal(raw, &chunk); err != nil {
+				return err
+			}
+			if chunk.ModelChunk == nil {
+				return nil
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			streamed = append(streamed, chunk.ModelChunk.Text())
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.Message.Text() != "done" {
+		t.Errorf("Message.Text() = %q, want %q", out.Message.Text(), "done")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"one", "two"}; !slices.Equal(streamed, want) {
+		t.Errorf("streamed chunks = %q, want %q", streamed, want)
 	}
 }
