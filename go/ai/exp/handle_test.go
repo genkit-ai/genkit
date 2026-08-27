@@ -91,10 +91,7 @@ func TestLookupAgent(t *testing.T) {
 		store := newTestInMemStore[testState]()
 		defineGatedAgent(t, reg, "researcher", store)
 
-		h, err := LookupAgent(reg, "researcher")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(reg, "researcher")
 		if got := h.Name(); got != "researcher" {
 			t.Errorf("Name() = %q, want %q", got, "researcher")
 		}
@@ -110,22 +107,33 @@ func TestLookupAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("not found", func(t *testing.T) {
+	// Both misses answer nil, as every other Lookup in the framework does. The
+	// caller knows the name it asked for, so telling the two apart would add a
+	// distinction with one remedy.
+	t.Run("misses report nil", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		_, err := LookupAgent(reg, "ghost")
-		if !errors.Is(err, status.ErrNotFound) {
-			t.Fatalf("LookupAgent error = %v, want NOT_FOUND", err)
+		if h := LookupAgent(reg, "ghost"); h != nil {
+			t.Errorf("LookupAgent(unregistered) = %+v, want nil", h)
 		}
-	})
 
-	t.Run("registered under the agent key but not an agent", func(t *testing.T) {
-		reg := newTestRegistry(t)
 		core.NewActionOf(api.ActionTypeAgent, "impostor", nil,
 			func(ctx context.Context, in string) (string, error) { return in, nil },
 		).Register(reg)
-		_, err := LookupAgent(reg, "impostor")
-		if !errors.Is(err, status.ErrInvalidArgument) {
-			t.Fatalf("LookupAgent error = %v, want INVALID_ARGUMENT", err)
+		if h := LookupAgent(reg, "impostor"); h != nil {
+			t.Errorf("LookupAgent(non-agent action) = %+v, want nil", h)
+		}
+	})
+
+	// A nil handle names its own cause rather than panicking, which is what a
+	// caller that skipped the nil check actually needs to read.
+	t.Run("nil handle reports itself", func(t *testing.T) {
+		var h *AgentHandle
+		_, err := h.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("hi")})
+		if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "nil handle") {
+			t.Errorf("Run on a nil handle = %v, want INVALID_ARGUMENT naming the nil handle", err)
+		}
+		if _, err := h.Start(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("Start on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
 	})
 }
@@ -237,10 +245,7 @@ func TestAgentMetadataOf(t *testing.T) {
 func TestAgentHandle_Run(t *testing.T) {
 	reg := newTestRegistry(t)
 	defineEchoAgent(t, reg, "echo")
-	h, err := LookupAgent(reg, "echo")
-	if err != nil {
-		t.Fatalf("LookupAgent: %v", err)
-	}
+	h := LookupAgent(reg, "echo")
 
 	t.Run("plain turn", func(t *testing.T) {
 		out, err := h.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("hi")})
@@ -305,10 +310,7 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	_, entered, release := defineGatedAgent(t, reg, "worker", store)
 
-	h, err := LookupAgent(reg, "worker")
-	if err != nil {
-		t.Fatalf("LookupAgent: %v", err)
-	}
+	h := LookupAgent(reg, "worker")
 
 	task, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 	if err != nil {
@@ -336,10 +338,7 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 	}
 
 	// Rehydrate from the recorded ID alone, as a later process would.
-	h2, err := LookupAgent(reg, "worker")
-	if err != nil {
-		t.Fatalf("LookupAgent (rehydrate): %v", err)
-	}
+	h2 := LookupAgent(reg, "worker")
 	rehydrated := h2.Task(task.SnapshotID())
 
 	close(release)
@@ -369,11 +368,8 @@ func TestAgentHandle_StartRejected(t *testing.T) {
 	t.Run("client-managed agent cannot detach", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		defineEchoAgent(t, reg, "storeless")
-		h, err := LookupAgent(reg, "storeless")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
-		_, err = h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+		h := LookupAgent(reg, "storeless")
+		_, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 		if err == nil {
 			t.Fatal("Start succeeded on a storeless agent, want rejection")
 		}
@@ -394,14 +390,11 @@ func TestAgentHandle_StartRejected(t *testing.T) {
 			},
 			WithSessionStore[testState](minimalStore[testState]{}),
 		)
-		h, err := LookupAgent(reg, "unabortable")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(reg, "unabortable")
 		if meta := h.Metadata(); meta == nil || meta.Abortable {
 			t.Errorf("Metadata() = %+v, want non-abortable", meta)
 		}
-		_, err = h.Abort(context.Background(), "some-id")
+		_, err := h.Abort(context.Background(), "some-id")
 		if !errors.Is(err, status.ErrFailedPrecondition) || !strings.Contains(err.Error(), "SnapshotSubscriber") {
 			t.Fatalf("Abort error = %v, want FAILED_PRECONDITION naming SnapshotSubscriber", err)
 		}
@@ -463,10 +456,7 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 	t.Run("no session store", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		defineEchoAgent(t, reg, "bare")
-		h, err := LookupAgent(reg, "bare")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(reg, "bare")
 		if _, err := h.GetSnapshot(context.Background(), "any"); !errors.Is(err, ErrSessionStoreNotConfigured) {
 			t.Fatalf("GetSnapshot error = %v, want ErrSessionStoreNotConfigured", err)
 		}
@@ -482,10 +472,7 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 		reg := newTestRegistry(t)
 		store := newTestInMemStore[testState]()
 		defineGatedAgent(t, reg, "ids", store)
-		h, err := LookupAgent(reg, "ids")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(reg, "ids")
 		if _, err := h.GetSnapshot(context.Background(), ""); !errors.Is(err, status.ErrInvalidArgument) {
 			t.Fatalf("GetSnapshot(\"\") error = %v, want INVALID_ARGUMENT", err)
 		}
@@ -501,10 +488,7 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 		reg := newTestRegistry(t)
 		store := newTestInMemStore[testState]()
 		defineGatedAgent(t, reg, "misses", store)
-		h, err := LookupAgent(reg, "misses")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(reg, "misses")
 		if _, err := h.GetSnapshot(context.Background(), "nope"); !errors.Is(err, ErrSnapshotNotFound) {
 			t.Fatalf("GetSnapshot(missing) error = %v, want ErrSnapshotNotFound", err)
 		}
@@ -550,10 +534,7 @@ func TestWaitValidation(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 	defineGatedAgent(t, reg, "waiter", store)
-	h, err := LookupAgent(reg, "waiter")
-	if err != nil {
-		t.Fatalf("LookupAgent: %v", err)
-	}
+	h := LookupAgent(reg, "waiter")
 
 	// An unknown snapshot has nothing to wait on, so the wait fails the way
 	// the read does rather than blocking until ctx ends.

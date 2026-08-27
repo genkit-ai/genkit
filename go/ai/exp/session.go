@@ -54,6 +54,30 @@ func (s SnapshotStatus) Terminal() bool {
 	return s != SnapshotStatusPending
 }
 
+// CarriesResult reports whether a turn that ended for this reason produced an
+// answer its caller can use. True for the reasons that mean the agent spoke and
+// stopped: [AgentFinishReasonStop], the two catch-alls, and the empty reason a
+// turn may report when it names none. Every other reason ended the turn with
+// nothing to hand back.
+//
+// Callers use it to decide whether a turn's final message is the answer or an
+// account of why there is none. That question has one answer per reason, so it
+// belongs on the reason: an agent that reports a turn's outcome and one that
+// folds it into a tool result would otherwise each keep their own list, and a
+// reason added later would be an answer to one of them and not the other.
+//
+// It names the reasons that do carry a result rather than the ones that do
+// not, so a reason added later defaults to "no answer". That default is the
+// safe one: mistaking an explanation for an answer hands a caller partial work
+// as though it were final, while the reverse only asks it to look at the text.
+func (r AgentFinishReason) CarriesResult() bool {
+	switch r {
+	case AgentFinishReasonStop, AgentFinishReasonOther, AgentFinishReasonUnknown, "":
+		return true
+	}
+	return false
+}
+
 // --- Session store ---
 
 // SnapshotReader retrieves snapshots. The minimum any session store must
@@ -283,8 +307,9 @@ var (
 	// the store cannot push status changes.
 	snapshotWaitPollInterval = 2 * time.Second
 	// snapshotWaitLivenessInterval is how often a subscribed wait re-reads a
-	// pending row to notice a heartbeat that has gone stale. One missed beat is
-	// already the expiry threshold, so beat-rate checks are frequent enough.
+	// pending row to notice a heartbeat that has gone stale. Expiry needs two
+	// missed beats (defaultHeartbeatTimeout is twice the interval), so checking
+	// once per beat cannot miss a stale row by more than one beat.
 	snapshotWaitLivenessInterval = defaultHeartbeatInterval
 )
 
@@ -360,22 +385,35 @@ func waitSnapshot[State any](
 		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID)
 	}
 
+	// retryRead decides what a failed read inside a wait means: a dead end or
+	// exhausted retries surface the error, anything else is ridden out at the
+	// wait's own re-read cadence (the next tick retries). It owns the policy
+	// for the first read and every re-read alike, so a change to the budget or
+	// to what counts as a dead end lands in one place.
+	readFailures := 0
+	retryRead := func(err error) error {
+		if waitReadDeadEnd(err) || readFailures >= snapshotWaitReadRetries {
+			return err
+		}
+		readFailures++
+		logger.Debug(ctx, "snapshot read failed inside a wait; retrying",
+			"snapshotId", snapshotID, "failures", readFailures, "error", err)
+		return nil
+	}
+
 	// The first read prices the common already-terminal case at exactly one
 	// read. A dead end reaches the caller unchanged (e.g. NOT_FOUND for an
 	// unknown snapshot); a transient failure falls into the wait below and is
 	// retried there on the wait's own cadence, because a store blip at the
 	// moment a wait starts is no more fatal than one in the middle of it.
-	readFailures := 0
 	snap, err := read(snapshotID, sessionID)
-	switch {
-	case err == nil && snap.Status.Terminal():
+	if err == nil && snap.Status.Terminal() {
 		return snap, nil
-	case err != nil && waitReadDeadEnd(err):
-		return nil, err
-	case err != nil:
-		readFailures = 1
-		logger.Debug(ctx, "first snapshot read failed inside a wait; retrying",
-			"snapshotId", snapshotID, "error", err)
+	}
+	if err != nil {
+		if err := retryRead(err); err != nil {
+			return nil, err
+		}
 	}
 
 	var statusCh <-chan SnapshotStatus
@@ -393,18 +431,6 @@ func waitSnapshot[State any](
 
 	start := time.Now()
 	lastProgress := start
-	// retryRead decides what a failed in-wait re-read means: a dead end or
-	// exhausted retries surface the error, anything else is ridden out at the
-	// wait's own re-read cadence (the next tick retries).
-	retryRead := func(err error) error {
-		if waitReadDeadEnd(err) || readFailures >= snapshotWaitReadRetries {
-			return err
-		}
-		readFailures++
-		logger.Debug(ctx, "snapshot re-read failed inside a wait; retrying",
-			"snapshotId", snapshotID, "failures", readFailures, "error", err)
-		return nil
-	}
 	logger.Debug(ctx, "waiting for snapshot to settle",
 		"snapshotId", snapshotID, "subscribed", statusCh != nil)
 	for {
@@ -427,6 +453,13 @@ func waitSnapshot[State any](
 			if !snapStatus.Terminal() {
 				continue
 			}
+			// A terminal notification fires once and has now been consumed, so
+			// the re-read below is the only path left to the settled row. Drop
+			// to the poll cadence for the rest of the wait: a store that
+			// notifies ahead of read visibility would otherwise leave the
+			// settled row unseen until the next liveness beat.
+			interval = snapshotWaitPollInterval
+			ticker.Reset(interval)
 		case <-ticker.C:
 		}
 
@@ -444,7 +477,8 @@ func waitSnapshot[State any](
 			// wait's terminal notification fires once and has already been
 			// consumed, so after a failure the re-read is the only path left
 			// to the settled row and must not be 30s away.
-			ticker.Reset(snapshotWaitPollInterval)
+			interval = snapshotWaitPollInterval
+			ticker.Reset(interval)
 			continue
 		}
 		if readFailures > 0 {

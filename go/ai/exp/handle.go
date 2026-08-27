@@ -20,7 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
+	"sync"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
@@ -49,8 +49,13 @@ type AgentHandle struct {
 	name string
 	// meta is the agent's capability metadata, or nil when it is unknown. It
 	// is static, so the handle holds it rather than asking the transport for
-	// it on every call.
+	// it on every call, and it is resolved on first use rather than at
+	// construction: deriving it deep-copies the agent's state schema, which
+	// costs more than a lookup itself, and most callers only run the agent.
+	// metaSrc is the descriptor it comes from, released once resolved.
+	metaOnce  sync.Once
 	meta      *AgentMetadata
+	metaSrc   api.Action
 	transport agentTransport
 }
 
@@ -97,26 +102,25 @@ type agentTransport interface {
 }
 
 // LookupAgent resolves the agent registered under name and returns its
-// [AgentHandle]. It is the caller-side counterpart of [DefineAgent] and
-// friends: definition hands back the typed [Agent], and a later caller that
-// holds only the name recovers this untyped view, companion actions included.
-// Callers holding a genkit instance should use the genkit/exp package's
-// LookupAgent instead.
+// [AgentHandle], or nil when name resolves to no agent. It is the caller-side
+// counterpart of [DefineAgent] and friends: definition hands back the typed
+// [Agent], and a later caller that holds only the name recovers this untyped
+// view, companion actions included. Callers holding a genkit instance should
+// use the genkit/exp package's LookupAgent instead.
 //
-// It returns NOT_FOUND when nothing is registered under the agent key, and
-// INVALID_ARGUMENT when the registered action is not an agent.
-func LookupAgent(r api.Registry, name string) (*AgentHandle, error) {
-	action := r.LookupAction(api.KeyFromName(api.ActionTypeAgent, name))
-	if action == nil {
-		return nil, status.Errorf(status.ErrNotFound, "agent %q not found in registry", name)
-	}
-	run, ok := action.(api.BidiAction)
+// Nil covers both misses, matching every other Lookup in the framework: no
+// action under the agent key, and an action registered there that is not an
+// agent. Neither is worth distinguishing to a caller, because the answer to
+// both is the same and the caller knows the name it asked for. Guard the
+// result, or call [AgentHandle.Run] and let its nil check report it.
+func LookupAgent(r api.Registry, name string) *AgentHandle {
+	run, ok := r.LookupAction(api.KeyFromName(api.ActionTypeAgent, name)).(api.BidiAction)
 	if !ok {
-		return nil, status.Errorf(status.ErrInvalidArgument, "%q is registered but is not an agent", name)
+		return nil
 	}
 	return &AgentHandle{
-		name: name,
-		meta: AgentMetadataOf(run),
+		name:    name,
+		metaSrc: run,
 		transport: &actionTransport{
 			name:        name,
 			run:         run,
@@ -124,7 +128,7 @@ func LookupAgent(r api.Registry, name string) (*AgentHandle, error) {
 			wait:        r.LookupAction(api.KeyFromName(api.ActionTypeAgentWait, name)),
 			abort:       r.LookupAction(api.KeyFromName(api.ActionTypeAgentAbort, name)),
 		},
-	}, nil
+	}
 }
 
 // Handle returns the agent's untyped caller-side view: the same surface
@@ -134,8 +138,8 @@ func LookupAgent(r api.Registry, name string) (*AgentHandle, error) {
 // lookup, so it also works for an unregistered agent (see [NewCustomAgent]).
 func (a *Agent[State]) Handle() *AgentHandle {
 	return &AgentHandle{
-		name: a.Name(),
-		meta: AgentMetadataOf(a),
+		name:    a.Name(),
+		metaSrc: a,
 		transport: &actionTransport{
 			name:        a.Name(),
 			run:         a,
@@ -154,8 +158,7 @@ func (a *Agent[State]) Handle() *AgentHandle {
 // without knowing where the action came from.
 //
 // The returned value is a copy: mutating its fields, [AgentMetadata.StateSchema]
-// included, does not affect the descriptor. Values nested inside the schema are
-// shared, so treat what it points at as read-only.
+// and anything nested inside it included, does not affect the descriptor.
 //
 // A wire descriptor that does not decode reports as nil rather than partially.
 // Every field here is a capability a caller gates on, and a zero value reads as
@@ -169,14 +172,14 @@ func AgentMetadataOf(a api.Action) *AgentMetadata {
 	}
 	switch m := a.Desc().Metadata["agent"].(type) {
 	case AgentMetadata:
-		m.StateSchema = maps.Clone(m.StateSchema)
+		m.StateSchema = base.CloneSchema(m.StateSchema)
 		return &m
 	case *AgentMetadata:
 		if m == nil {
 			return nil
 		}
 		copied := *m
-		copied.StateSchema = maps.Clone(copied.StateSchema)
+		copied.StateSchema = base.CloneSchema(copied.StateSchema)
 		return &copied
 	case map[string]any:
 		meta, err := base.MapToStruct[AgentMetadata](m)
@@ -195,7 +198,15 @@ func (h *AgentHandle) Name() string { return h.name }
 // background work can be aborted), or nil when the agent's descriptor carries
 // none or did not decode. The handle holds one copy, detached from the
 // descriptor but shared across calls, so treat it as read-only.
-func (h *AgentHandle) Metadata() *AgentMetadata { return h.meta }
+func (h *AgentHandle) Metadata() *AgentMetadata {
+	if h == nil {
+		return nil
+	}
+	h.metaOnce.Do(func() {
+		h.meta, h.metaSrc = AgentMetadataOf(h.metaSrc), nil
+	})
+	return h.meta
+}
 
 // Run starts a single-turn invocation with the given input and returns the
 // final output, with custom state as raw JSON. It is [Agent.Run] for callers
@@ -207,6 +218,10 @@ func (h *AgentHandle) Metadata() *AgentMetadata { return h.meta }
 // invocation never started (a rejected init payload) or could not run to a
 // result.
 func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*AgentOutput[json.RawMessage], error) {
+	if h == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"AgentHandle.Run: called on a nil handle; check that LookupAgent found the agent")
+	}
 	if input == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
 	}
@@ -242,6 +257,10 @@ func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...Invoca
 // when nothing was recorded, Start fails with FAILED_PRECONDITION naming the
 // finish reason, since there is no durable record to track.
 func (h *AgentHandle) Start(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*DetachedTask, error) {
+	if h == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"AgentHandle.Start: called on a nil handle; check that LookupAgent found the agent")
+	}
 	if input == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
 	}

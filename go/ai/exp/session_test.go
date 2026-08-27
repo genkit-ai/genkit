@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -323,8 +324,8 @@ func TestWaitSnapshot_UnknownSnapshot(t *testing.T) {
 	if !errors.Is(err, ErrSnapshotNotFound) {
 		t.Fatalf("waitSnapshot error = %v, want ErrSnapshotNotFound", err)
 	}
-	if got, want := err.Error(), "waitForSnapshot: "; len(got) < len(want) || got[:len(want)] != want {
-		t.Errorf("error = %q, want it to name the operation that failed", got)
+	if want := "waitForSnapshot: "; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("error = %q, want it to name the operation that failed", err)
 	}
 }
 
@@ -469,30 +470,11 @@ func TestWaitSnapshot_FirstReadBlipIsRetried(t *testing.T) {
 
 // notifyAheadStore models a store whose status notification outruns the row's
 // read visibility, which the [SnapshotSubscriber] contract permits: it pushes
-// "completed" at subscribe time while reads keep reporting the pending row for
-// pendingReads more reads.
+// "completed" at subscribe time while the scripted reads still report pending.
+// Everything but the subscription is scriptedStore's, so the two agree on what
+// a read costs and on how the script runs out.
 type notifyAheadStore struct {
-	mu           sync.Mutex
-	reads        int
-	pendingReads int
-}
-
-func (s *notifyAheadStore) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reads++
-	if s.reads <= s.pendingReads {
-		return scriptedPending(), nil
-	}
-	return &SessionSnapshot[any]{SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusCompleted}, nil
-}
-
-func (s *notifyAheadStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
-	return nil, errors.New("notifyAheadStore: GetLatestSnapshot is not implemented")
-}
-
-func (s *notifyAheadStore) SaveSnapshot(ctx context.Context, snapshotID string, fn func(*SessionSnapshot[any]) (*SessionSnapshot[any], error)) (*SessionSnapshot[any], error) {
-	return nil, errors.New("notifyAheadStore: SaveSnapshot is not implemented")
+	*scriptedStore
 }
 
 func (s *notifyAheadStore) OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus {
@@ -501,24 +483,51 @@ func (s *notifyAheadStore) OnSnapshotStatusChange(ctx context.Context, snapshotI
 	return ch
 }
 
+// newNotifyAheadStore scripts pendingReads pending reads before the row
+// settles. scriptedStore repeats its last entry, so every later read is
+// completed.
+func newNotifyAheadStore(pendingReads int) *notifyAheadStore {
+	script := make([]scriptedRead, 0, pendingReads+1)
+	for range pendingReads {
+		script = append(script, scriptedRead{snap: scriptedPending()})
+	}
+	script = append(script, scriptedRead{snap: &SessionSnapshot[any]{
+		SnapshotID: "job", SessionID: "s1", Status: SnapshotStatusCompleted,
+	}})
+	return &notifyAheadStore{scriptedStore: &scriptedStore{script: script}}
+}
+
 func TestWaitSnapshot_NotificationAheadOfTheRowKeepsWaiting(t *testing.T) {
-	restore := snapshotWaitLivenessInterval
-	snapshotWaitLivenessInterval = 10 * time.Millisecond
-	t.Cleanup(func() { snapshotWaitLivenessInterval = restore })
+	// Only the poll interval is shortened. The liveness interval keeps its
+	// production value on purpose: a terminal notification is one-shot, so
+	// after the re-read below finds the row still pending, nothing will wake
+	// this wait again and the poll interval is the only thing standing between
+	// the caller and a liveness beat of dead time. Shortening it here would
+	// prove the wait ends correctly and hide how long it took to end.
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
 
 	// The notification says settled but the row does not yet agree. The row is
 	// what the caller gets back, so the wait must keep going rather than hand
 	// out a pending snapshot as terminal.
-	store := &notifyAheadStore{pendingReads: 2}
+	store := newNotifyAheadStore(2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	start := time.Now()
 	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
 	if got.Status != SnapshotStatusCompleted {
 		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
+	}
+	// Generous next to the 10ms poll interval, and far under the untouched
+	// liveness interval, so this fails if the wait falls back to a beat.
+	if elapsed := time.Since(start); elapsed > snapshotWaitLivenessInterval/2 {
+		t.Errorf("wait took %v after a notification the row had not caught up to; "+
+			"want the poll interval, not a liveness beat (%v)", elapsed, snapshotWaitLivenessInterval)
 	}
 }
 

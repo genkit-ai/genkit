@@ -421,13 +421,15 @@ conn.Detach() // server takes ownership of the remaining work
 out, _ := conn.Output() // returns immediately; FinishReason is "detached"
 snapshotID := out.SnapshotID
 
-// Later: poll the snapshot, then resume once it has finalized.
-snap, _ := chatAgent.GetSnapshot(ctx, snapshotID)
+// Later: read where it stands, or block until it settles.
+snap, _ := chatAgent.GetSnapshot(ctx, snapshotID)     // one read, no waiting
+snap, _ = chatAgent.WaitForSnapshot(ctx, snapshotID)  // blocks until terminal
 switch snap.Status {
-case aix.SnapshotStatusPending:   // still working
+case aix.SnapshotStatusPending:   // still working (GetSnapshot only)
 case aix.SnapshotStatusCompleted: // snap.State holds the final state; resume it
 case aix.SnapshotStatusFailed:    // snap.Error holds the failure; still resumable
 case aix.SnapshotStatusAborted:   // stopped early; resumable from the last finished turn
+case aix.SnapshotStatusExpired:   // the worker stopped heartbeating
 }
 
 // Or stop it early; the runtime observes the abort and cancels the work.

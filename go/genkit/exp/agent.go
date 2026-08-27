@@ -208,12 +208,11 @@ func DefineCustomAgent[State any](
 // ([aix.AgentHandle.Start], [aix.AgentHandle.Task]), and reads or aborts
 // snapshots, with custom state as raw JSON.
 //
-// It returns NOT_FOUND when no agent is registered under name, and
-// INVALID_ARGUMENT when the name resolves to an action that is not an agent.
-// Like [ListAgents] it does not require [genkit.WithExperimental]: it only
-// reads the registry, and an agent can only have been registered through the
-// gated constructors.
-func LookupAgent(g *genkit.Genkit, name string) (*aix.AgentHandle, error) {
+// It returns nil when name resolves to no agent, matching every other Lookup
+// in the framework. Like [ListAgents] it does not require
+// [genkit.WithExperimental]: it only reads the registry, and an agent can only
+// have been registered through the gated constructors.
+func LookupAgent(g *genkit.Genkit, name string) *aix.AgentHandle {
 	return aix.LookupAgent(genkitbridge.RegistryOf(g), name)
 }
 

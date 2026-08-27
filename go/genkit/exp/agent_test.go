@@ -18,12 +18,10 @@ package exp
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -41,10 +39,7 @@ func TestLookupAgent(t *testing.T) {
 				return sess.Result(), nil
 			})
 
-		h, err := LookupAgent(g, "echo")
-		if err != nil {
-			t.Fatalf("LookupAgent: %v", err)
-		}
+		h := LookupAgent(g, "echo")
 		if got := h.Name(); got != "echo" {
 			t.Errorf("Name() = %q, want %q", got, "echo")
 		}
@@ -57,20 +52,20 @@ func TestLookupAgent(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown agent is NOT_FOUND", func(t *testing.T) {
+	t.Run("unknown agent is nil", func(t *testing.T) {
 		g := genkit.Init(context.Background(), genkit.WithExperimental())
-		if _, err := LookupAgent(g, "ghost"); !errors.Is(err, status.ErrNotFound) {
-			t.Fatalf("LookupAgent error = %v, want NOT_FOUND", err)
+		if h := LookupAgent(g, "ghost"); h != nil {
+			t.Fatalf("LookupAgent(unregistered) = %+v, want nil", h)
 		}
 	})
 
 	t.Run("does not require the experimental gate", func(t *testing.T) {
 		// LookupAgent only reads the registry, so unlike the constructors it
 		// must not panic without genkit.WithExperimental; with no agents
-		// registered it simply reports NOT_FOUND.
+		// registered it simply reports nil.
 		g := genkit.Init(context.Background())
-		if _, err := LookupAgent(g, "anything"); !errors.Is(err, status.ErrNotFound) {
-			t.Fatalf("LookupAgent error = %v, want NOT_FOUND", err)
+		if h := LookupAgent(g, "anything"); h != nil {
+			t.Fatalf("LookupAgent(unregistered) = %+v, want nil", h)
 		}
 	})
 }
