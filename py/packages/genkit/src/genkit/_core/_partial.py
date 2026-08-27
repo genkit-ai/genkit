@@ -20,22 +20,26 @@
 required field has arrived. Streaming chunks get a sibling class
 (``RecipePartial``) where every field is ``T | None = None``. The final
 ``ModelResponse.output`` still validates into the original type.
+
+The values below are runtime type objects being assembled dynamically, so
+they are deliberately typed ``Any``: the type expressions this module
+builds (``X | None``, ``list[X]``) only exist at runtime.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 from types import UnionType
-from typing import Annotated, Union, get_args, get_origin
+from typing import Annotated, Any, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, create_model
 
 
-def _is_base_model(annotation: object) -> bool:
+def _is_base_model(annotation: Any) -> bool:  # noqa: ANN401
     return isinstance(annotation, type) and issubclass(annotation, BaseModel) and annotation is not BaseModel
 
 
-def _rewrite_annotation(annotation: object) -> object:
+def _rewrite_annotation(annotation: Any) -> Any:  # noqa: ANN401
     """Rewrite nested model types into their synthesized partials."""
     origin = get_origin(annotation)
     if origin is Annotated:
@@ -53,10 +57,10 @@ def _rewrite_annotation(annotation: object) -> object:
             return annotation
         inner = _rewrite_annotation(args[0])
         if origin is list:
-            return list[inner]  # type: ignore[valid-type]
+            return list[inner]
         if origin is set:
-            return set[inner]  # type: ignore[valid-type]
-        return frozenset[inner]  # type: ignore[valid-type]
+            return set[inner]
+        return frozenset[inner]
     if _is_base_model(annotation):
         return partial_model(annotation)
     return annotation
@@ -69,13 +73,13 @@ def partial_model(schema_type: type[BaseModel]) -> type[BaseModel]:
     The result is not a subclass of ``schema_type``. ``isinstance(chunk.output,
     Recipe)`` is false; ``type(chunk.output).__name__`` is ``RecipePartial``.
     """
-    fields: dict[str, tuple[object, None]] = {}
+    fields: dict[str, Any] = {}
     for name, info in schema_type.model_fields.items():
-        annotation = _rewrite_annotation(info.annotation) if info.annotation is not None else object
+        annotation: Any = _rewrite_annotation(info.annotation) if info.annotation is not None else object
         fields[name] = (annotation | None, None)
     return create_model(
         f'{schema_type.__name__}Partial',
         __module__=schema_type.__module__,
         __config__=ConfigDict(extra='ignore', populate_by_name=True),
-        **fields,  # type: ignore[arg-type]
+        **fields,
     )
