@@ -457,7 +457,7 @@ function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
  * rather than the model copying a real id and reusing the old surface.
  */
 function withPlaceholderSurfaceId(env: A2uiEnvelope): A2uiEnvelope {
-  const copy: A2uiEnvelope = { ...env };
+  const copy = { ...env } as any;
   for (const key of [
     'createSurface',
     'updateComponents',
@@ -468,10 +468,10 @@ function withPlaceholderSurfaceId(env: A2uiEnvelope): A2uiEnvelope {
     if (
       payload &&
       typeof payload === 'object' &&
-      typeof (payload as { surfaceId?: unknown }).surfaceId === 'string'
+      typeof payload.surfaceId === 'string'
     ) {
       copy[key] = {
-        ...(payload as Record<string, unknown>),
+        ...payload,
         surfaceId: SURFACE_ID_PLACEHOLDER,
       };
     }
