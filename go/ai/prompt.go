@@ -1140,6 +1140,20 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// A refusal is an error: when the response finished blocked, the output is the
+// zero value of Out and the error is [ErrGenerationBlocked], carrying the
+// provider's explanation. The response is still returned alongside it.
+//
+// The output is the zero value of Out with no error in two other cases:
+// generation ended aborted, interrupted, or other, or the response carried no
+// text to parse, which is what a turn holding tool requests, interrupts, or
+// media looks like. Check resp.FinishReason, resp.Interrupts(), and
+// resp.ToolRequests() to handle them.
+//
+// This holds for a string Out as well, whose text is on the response rather
+// than the returned value: text produced alongside an abnormal finish is a
+// block notice or a partial answer, not the completion the prompt asked for.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
 		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
@@ -1149,6 +1163,21 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 	resp, err := dp.prompt.Execute(ctx, allOpts...)
 	if err != nil {
 		return base.Zero[Out](), nil, err
+	}
+
+	// A refusal cannot produce the value this helper promises, so it is
+	// reported rather than handed back as a zero value that reads as success.
+	// [Generate] still returns the response unwrapped.
+	if resp.FinishReason == FinishReasonBlocked {
+		return base.Zero[Out](), resp, blockedError(resp)
+	}
+
+	// The remaining abnormal finishes, and a response with no text at all
+	// (what a turn holding tool requests, interrupts, or media looks like), have
+	// nothing to extract but are not failures. The response goes back unparsed
+	// rather than as a schema error naming the wrong cause.
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
+		return base.Zero[Out](), resp, nil
 	}
 
 	output, err := extractTypedOutput[Out](resp)
@@ -1174,6 +1203,14 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// Like [DataPrompt.Execute], a blocked response fails with
+// [ErrGenerationBlocked], while one that ends aborted, interrupted, or other,
+// or carries no text to parse, yields zero-value Output and no error; check
+// Response.FinishReason, Response.Interrupts(), and Response.ToolRequests().
+//
+// Chunks are provisional, for the reason given on [GenerateDataStream]: the
+// Done value is the authoritative one.
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
@@ -1216,6 +1253,23 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 		}
 		if err != nil {
 			yield(nil, err)
+			return
+		}
+
+		// A refusal cannot produce the value this helper promises, so it is
+		// reported rather than handed back as a zero value that reads as success.
+		// [Generate] still returns the response unwrapped.
+		if resp.FinishReason == FinishReasonBlocked {
+			yield(nil, blockedError(resp))
+			return
+		}
+
+		// The remaining abnormal finishes, and a response with no text at all
+		// (what a turn holding tool requests, interrupts, or media looks like), have
+		// nothing to extract but are not failures. The response goes back unparsed
+		// rather than as a schema error naming the wrong cause.
+		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
 		}
 

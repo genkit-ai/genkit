@@ -1934,6 +1934,301 @@ func TestDataPromptExecute(t *testing.T) {
 	})
 }
 
+// TestDataPromptAbnormalFinish verifies that DataPrompt.Execute and
+// DataPrompt.ExecuteStream apply the same abnormal-finish rule as Generate and
+// GenerateData: a response that ended blocked, aborted, interrupted, or other
+// is handed back unparsed so the caller reads the finish reason, instead of
+// being reported as a parse failure that names the wrong cause.
+func TestDataPromptAbnormalFinish(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(context.Background(), r)
+
+	type Query struct {
+		Topic string `json:"topic"`
+	}
+
+	type Report struct {
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+
+	tests := []struct {
+		name     string
+		response *ModelResponse
+		wantData *Report
+		wantErr  error
+		// wantParseErr marks a plain parse failure, which carries no sentinel.
+		wantParseErr bool
+	}{
+		{
+			// The common path: a provider reports a safety block and returns
+			// prose explaining it, with no middleware involved. A refusal
+			// cannot produce a Report, so it is an error rather than a zero
+			// value the caller would read as success.
+			name: "blocked with explanatory text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       NewModelTextMessage("Response was blocked for safety reasons."),
+			},
+			wantErr: ErrGenerationBlocked,
+		},
+		{
+			name: "blocked with no content",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			wantErr: ErrGenerationBlocked,
+		},
+		{
+			// What a soft-failing middleware produces when the provider is
+			// unreachable: an aborted response carrying the failure text.
+			name: "aborted with failure text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonAborted,
+				FinishMessage: "provider down",
+				Message:       NewModelTextMessage("Error: provider down"),
+			},
+		},
+		{
+			name: "other with filter details",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonOther,
+				FinishMessage: "malformed function call",
+				Message:       NewModelTextMessage("filter details, not JSON"),
+			},
+		},
+		{
+			// A normal completion still parses: the fix must not turn every
+			// parse failure into a silent zero value.
+			name: "stop with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			wantParseErr: true,
+		},
+		{
+			name: "stop with conforming text parses",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage(`{"title":"ok","score":7}`),
+			},
+			wantData: &Report{Title: "ok", Score: 7},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/promptAbnormalFinish%d", i), &ModelOptions{
+				Supports: &ModelSupports{Multiturn: true, Constrained: ConstrainedSupportAll},
+			}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				resp := *tt.response
+				resp.Request = req
+				return &resp, nil
+			})
+			structPrompt := DefineDataPrompt[Query, Report](r, fmt.Sprintf("abnormalFinishStruct%d", i),
+				WithModel(model), WithPrompt("Report on {{topic}}"))
+			input := Query{Topic: "widgets"}
+
+			want := Report{}
+			if tt.wantData != nil {
+				want = *tt.wantData
+			}
+
+			t.Run("Execute", func(t *testing.T) {
+				output, resp, err := structPrompt.Execute(context.Background(), input)
+				if tt.wantParseErr {
+					if err == nil {
+						t.Fatalf("Execute() err = nil, want a parse failure")
+					}
+					return
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("Execute() err = %v, want %v", err, tt.wantErr)
+					}
+					if !strings.Contains(err.Error(), tt.response.FinishMessage) {
+						t.Errorf("Execute() err = %v, want it to carry %q", err, tt.response.FinishMessage)
+					}
+					checkResponse(t, resp, tt.response)
+					return
+				}
+				if err != nil {
+					t.Fatalf("Execute() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				checkResponse(t, resp, tt.response)
+				if output != want {
+					t.Errorf("Execute() output = %+v, want %+v", output, want)
+				}
+			})
+
+			t.Run("ExecuteStream", func(t *testing.T) {
+				var (
+					final *StreamValue[Report, Report]
+					err   error
+				)
+				for v, streamErr := range structPrompt.ExecuteStream(context.Background(), input) {
+					if streamErr != nil {
+						err = streamErr
+						break
+					}
+					if v.Done {
+						final = v
+					}
+				}
+				if tt.wantParseErr {
+					if err == nil {
+						t.Fatalf("ExecuteStream() err = nil, want a parse failure")
+					}
+					return
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("ExecuteStream() err = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("ExecuteStream() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				if final == nil {
+					t.Fatal("ExecuteStream() never yielded a done value")
+				}
+				checkResponse(t, final.Response, tt.response)
+				if final.Output != want {
+					t.Errorf("ExecuteStream() output = %+v, want %+v", final.Output, want)
+				}
+			})
+		})
+	}
+
+	// A string Out has no schema to violate, so a refusal used to come back as
+	// the answer. It reports the same error as every other Out: a block notice
+	// is not the completion the prompt asked for, and the notice itself stays
+	// on the response.
+	t.Run("string output reports a refusal", func(t *testing.T) {
+		blocked := &ModelResponse{
+			FinishReason:  FinishReasonBlocked,
+			FinishMessage: "blocked by safety settings",
+			Message:       NewModelTextMessage("Response was blocked for safety reasons."),
+		}
+		model := defineModel(r, "test/promptAbnormalFinishString", &ModelOptions{
+			Supports: &ModelSupports{Multiturn: true},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp := *blocked
+			resp.Request = req
+			return &resp, nil
+		})
+		stringPrompt := DefineDataPrompt[Query, string](r, "abnormalFinishString",
+			WithModel(model), WithPrompt("Report on {{topic}}"))
+
+		output, resp, err := stringPrompt.Execute(context.Background(), Query{Topic: "widgets"})
+		if !errors.Is(err, ErrGenerationBlocked) {
+			t.Fatalf("Execute() err = %v, want %v", err, ErrGenerationBlocked)
+		}
+		checkResponse(t, resp, blocked)
+		if output != "" {
+			t.Errorf("Execute() output = %q, want empty", output)
+		}
+	})
+}
+
+// TestDataPromptNoTextOutput verifies that a normally-finished response with
+// no text to parse (a turn holding only tool requests, which is what
+// WithReturnToolRequests asks for) yields the zero value and no error, the same
+// answer GenerateData gives. Parsing it would report a schema failure for a
+// turn that succeeded.
+func TestDataPromptNoTextOutput(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(context.Background(), r)
+
+	type Query struct {
+		Topic string `json:"topic"`
+	}
+
+	type Report struct {
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+
+	tool := defineTool(r, "noTextTool", "returns a fact",
+		func(ctx *ToolContext, input struct{}) (string, error) { return "fact", nil })
+
+	model := defineModel(r, "test/promptNoText", &ModelOptions{
+		Supports: &ModelSupports{Multiturn: true, Tools: true, Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{
+			Request:      req,
+			FinishReason: FinishReasonStop,
+			Message: &Message{Role: RoleModel, Content: []*Part{
+				NewToolRequestPart(&ToolRequest{Name: "noTextTool", Input: map[string]any{}}),
+			}},
+		}, nil
+	})
+
+	dp := DefineDataPrompt[Query, Report](r, "noTextPrompt",
+		WithModel(model),
+		WithPrompt("Report on {{topic}}"),
+		WithTools(tool),
+		WithReturnToolRequests(true))
+	input := Query{Topic: "widgets"}
+
+	checkToolRequestOnly := func(t *testing.T, resp *ModelResponse) {
+		t.Helper()
+		if resp == nil {
+			t.Fatal("response = nil, want the model response")
+		}
+		if resp.Text() != "" {
+			t.Errorf("Text() = %q, want empty", resp.Text())
+		}
+		if len(resp.ToolRequests()) != 1 {
+			t.Errorf("ToolRequests() = %d, want 1", len(resp.ToolRequests()))
+		}
+	}
+
+	t.Run("Execute", func(t *testing.T) {
+		output, resp, err := dp.Execute(context.Background(), input)
+		if err != nil {
+			t.Fatalf("Execute() returned error: %v", err)
+		}
+		checkToolRequestOnly(t, resp)
+		if output != (Report{}) {
+			t.Errorf("Execute() output = %+v, want zero value", output)
+		}
+	})
+
+	t.Run("ExecuteStream", func(t *testing.T) {
+		var (
+			final *StreamValue[Report, Report]
+			err   error
+		)
+		for v, streamErr := range dp.ExecuteStream(context.Background(), input) {
+			if streamErr != nil {
+				err = streamErr
+				break
+			}
+			if v.Done {
+				final = v
+			}
+		}
+		if err != nil {
+			t.Fatalf("ExecuteStream() returned error: %v", err)
+		}
+		if final == nil {
+			t.Fatal("ExecuteStream() never yielded a done value")
+		}
+		checkToolRequestOnly(t, final.Response)
+		if final.Output != (Report{}) {
+			t.Errorf("ExecuteStream() output = %+v, want zero value", final.Output)
+		}
+	})
+}
+
 func TestDataPromptExecuteStream(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
