@@ -347,7 +347,7 @@ class ActionRunContext(Generic[ChunkT]):
     def __init__(
         self,
         context: dict[str, Any] | None = None,
-        streaming_callback: StreamingCallback | None = None,
+        streaming_callback: Callable[[ChunkT], None] | None = None,
         abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
@@ -360,23 +360,24 @@ class ActionRunContext(Generic[ChunkT]):
 
     @property
     def context(self) -> dict[str, Any]:
+        """The action context."""
         return self._context
 
     @property
     def init(self) -> object | None:
-        """Per-run initialization data (session identity for agents).
+        """The session initialization value passed on connection open, if any.
 
-        Separate from ``input``: ``input`` is the payload for one call, while
-        ``init`` says which longer-lived thing that call is part of. Plain
-        actions ignore it; bidi actions read it to pick up the right session.
+        For request-response actions this is None; for bidi streams (like live
+        agent chat) this carries whatever credentials/metadata the caller sent
+        in the handshake before any turns started.
         """
         return self._init
 
     @property
     def input_stream(self) -> AsyncIterator[object] | None:
-        """The live sequence of per-turn inputs for a bidi run, if any.
+        """The incoming input stream for bidi actions, if any.
 
-        A one-shot call has a single ``input`` and no stream; a bidi call (an
+        An action that receives inputs continuously across a session (e.g. live
         agent chat) instead gets its turns over time here. Plain actions never
         look at it — only bidi actions drain it turn by turn.
         """
@@ -388,7 +389,7 @@ class ActionRunContext(Generic[ChunkT]):
         return self._streaming_callback is not None
 
     @property
-    def streaming_callback(self) -> StreamingCallback | None:
+    def streaming_callback(self) -> Callable[[ChunkT], None] | None:
         """The streaming callback, if any.
 
         Use this when you need to pass the callback to another action.

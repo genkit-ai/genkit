@@ -12,7 +12,7 @@ Covers:
 - End-to-end generate_stream with output_schema producing partial chunks
 """
 
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, TypeVar, cast, overload
 
 import pytest
 from pydantic import BaseModel, Field, field_validator
@@ -23,6 +23,8 @@ from genkit._core._action import ActionRunContext
 from genkit._core._partial import partial_model
 from genkit._core._typing import Part, Role, TextPart
 
+OutputT = TypeVar('OutputT', bound=BaseModel)
+
 
 class Recipe(BaseModel):
     """Test output schema."""
@@ -31,7 +33,11 @@ class Recipe(BaseModel):
     steps: list[str]
 
 
-def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelResponseChunk:
+@overload
+def _chunk(text: str, schema_type: type[OutputT]) -> ModelResponseChunk[OutputT]: ...
+@overload
+def _chunk(text: str, schema_type: None = None) -> ModelResponseChunk[object]: ...
+def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelResponseChunk[Any]:
     """Build a chunk whose accumulated text is exactly ``text``."""
     return ModelResponseChunk(
         role='model',
@@ -87,7 +93,7 @@ class TestChunkPartialOutput:
 
     def test_partial_wraps_chunk_parser_result(self) -> None:
         # chunk_parser output (used by format definitions) is also wrapped
-        wrapper = ModelResponseChunk(
+        wrapper: ModelResponseChunk[Recipe] = ModelResponseChunk(
             role='model',
             content=[Part(root=TextPart(text='ignored'))],
             chunk_parser=lambda _c: {'title': 'Parsed', 'steps': ['a']},
