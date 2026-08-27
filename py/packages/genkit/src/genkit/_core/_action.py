@@ -127,7 +127,6 @@ class ActionKind(StrEnum):
     MODEL = 'model'
     PROMPT = 'prompt'
     RERANKER = 'reranker'
-    RESOURCE = 'resource'
     RETRIEVER = 'retriever'
     TOOL = 'tool'
     UTIL = 'util'
