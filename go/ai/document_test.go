@@ -165,6 +165,22 @@ func TestReasoningPartWithoutSignature(t *testing.T) {
 	}
 }
 
+func TestReasoningPartClonesSignature(t *testing.T) {
+	// A caller reusing a buffer across streamed chunks must not be able to
+	// rewrite a signature it has already handed off.
+	buf := []byte("sig123")
+	p := NewReasoningPart("thinking", buf)
+	copy(buf, "XXXXXX")
+
+	got, ok := p.Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature = %#v, want []byte", p.Metadata["signature"])
+	}
+	if string(got) != "sig123" {
+		t.Errorf("signature = %q, want %q: the caller's buffer is aliased", got, "sig123")
+	}
+}
+
 func TestEmptyReasoningPartRoundTrip(t *testing.T) {
 	// The reasoning key marks the kind, so it has to survive an empty text:
 	// dropping it turns the part into an empty text part on the way back, and

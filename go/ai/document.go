@@ -146,7 +146,10 @@ func NewReasoningPart(text string, signature []byte) *Part {
 		Text:        text,
 	}
 	if len(signature) > 0 {
-		p.Metadata = map[string]any{"signature": signature}
+		// Cloned because the part outlives the call: [Part.Clone] copies the
+		// metadata map but not the bytes under it, so a caller reusing a
+		// buffer across chunks would mutate signatures already handed off.
+		p.Metadata = map[string]any{"signature": slices.Clone(signature)}
 	}
 	return p
 }
