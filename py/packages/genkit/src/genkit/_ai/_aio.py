@@ -66,9 +66,9 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    assert_correct_config_class,
     define_model,
-    reject_wrong_config_class,
-    resolve_call_model,
+    resolve_for_generate,
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -1271,8 +1271,8 @@ class Genkit:
         child_registry = self.registry.new_child()
         await register_tools(child_registry, tools)
         refs = register_middleware(child_registry, use)
-        resolved = resolve_call_model(model=model, config=config, registry=child_registry)
-        await reject_wrong_config_class(config=config, model=model, registry=child_registry)
+        resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
+        assert_correct_config_class(config=config, schema=resolved.config_schema)
         prompt_config = PromptConfig(
             model=resolved.name,
             prompt=prompt,
@@ -1447,8 +1447,8 @@ class Genkit:
             child_registry = self.registry.new_child()
             await register_tools(child_registry, tools)
             refs = register_middleware(child_registry, use)
-            resolved = resolve_call_model(model=model, config=config, registry=child_registry)
-            await reject_wrong_config_class(config=config, model=model, registry=child_registry)
+            resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
+            assert_correct_config_class(config=config, schema=resolved.config_schema)
             prompt_config = PromptConfig(
                 model=resolved.name,
                 prompt=prompt,
@@ -1713,13 +1713,13 @@ class Genkit:
         docs: list[Document] | None = None,
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
-        resolved = resolve_call_model(
+        resolved = await resolve_for_generate(
             model=model,
             config=config,
             registry=self.registry,
             message='No model specified for generate_operation.',
         )
-        await reject_wrong_config_class(config=config, model=model, registry=self.registry)
+        assert_correct_config_class(config=config, schema=resolved.config_schema)
 
         model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:

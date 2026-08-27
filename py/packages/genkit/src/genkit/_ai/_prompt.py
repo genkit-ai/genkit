@@ -48,9 +48,10 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    assert_correct_config_class,
     normalize_config,
-    reject_wrong_config_class,
     resolve_call_model,
+    resolve_for_generate,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -373,11 +374,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
     async def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
-        await reject_wrong_config_class(
-            config=opts.get('config'),
-            model=opts.get('model') or self._model,
-            registry=self._registry,
-        )
         output_opts = opts.get('output') or {}
         merged_config: Mapping[str, Any] | BaseModel | None
         if opts.get('config') is not None:
@@ -390,11 +386,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
-        resolved = resolve_call_model(
+        resolved = await resolve_for_generate(
             model=opts.get('model') or self._model,
             config=merged_config,
             registry=self._registry,
         )
+        assert_correct_config_class(config=opts.get('config'), schema=resolved.config_schema)
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata

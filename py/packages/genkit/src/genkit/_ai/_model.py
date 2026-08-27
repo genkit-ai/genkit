@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
@@ -63,6 +63,12 @@ class ResolvedModel:
 
     name: str
     config: dict[str, Any]
+    # Config class this call accepts, if the model declared one.
+    config_schema: type[BaseModel] | None = None
+
+
+def python_config_schema(schema: object) -> type[BaseModel] | None:
+    return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
 
 
 def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
@@ -191,6 +197,26 @@ def resolve_call_model(
     )
 
 
+async def resolve_for_generate(
+    *,
+    model: object | None,
+    config: object = None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> ResolvedModel:
+    """Name, config bag, and the config class this generate will check against.
+
+    A ModelRef already has the class. A string name reads it off the
+    registered action.
+    """
+    resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
+    if resolved.config_schema is not None:
+        return resolved
+    action = await registry.resolve_model(resolved.name)
+    raw = getattr(action, '_config_schema', None) if action is not None else None
+    return replace(resolved, config_schema=python_config_schema(raw))
+
+
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
     """Dump layers, overlay, return name + bag.
 
@@ -206,6 +232,7 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
     return ResolvedModel(
         name=model.name,
         config=overlay_config(layers=layers, schema=model.config_schema),
+        config_schema=python_config_schema(model.config_schema),
     )
 
 
@@ -352,39 +379,19 @@ def define_model(
     return action
 
 
-async def expected_config_schema(*, model: object | None, registry: Registry) -> type[BaseModel] | None:
-    """Python config class for a name or ModelRef, if one exists."""
-    try:
-        resolved = resolve_model_arg(model=model, registry=registry)
-    except GenkitError:
-        return None
-    if isinstance(resolved, ModelRef):
-        schema = resolved.config_schema
-        return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
-    action = await registry.resolve_model(resolved)
-    raw = getattr(action, '_config_schema', None) if action is not None else None
-    return raw if isinstance(raw, type) and issubclass(raw, BaseModel) else None
+def assert_correct_config_class(*, config: object, schema: type[BaseModel] | None) -> None:
+    """A typed config object has to belong to the model this call hits.
 
-
-async def reject_wrong_config_class(
-    *,
-    config: object,
-    model: object | None,
-    registry: Registry,
-) -> None:
-    """A Pydantic config instance must match the resolved model's schema.
-
-    Dicts stay legal. Omit / ``None`` skip this. A model with no Python schema
+    Dicts stay legal. Omit / ``None`` skip this. A model with no Python
     class (JSON-only or unset) cannot be checked.
     """
     if not isinstance(config, BaseModel):
         return
-    expected = await expected_config_schema(model=model, registry=registry)
-    if expected is None or isinstance(config, expected):
+    if schema is None or isinstance(config, schema):
         return
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message=f'config must be {expected.__name__} or a mapping, got {type(config).__name__}',
+        message=f'config must be {schema.__name__} or a mapping, got {type(config).__name__}',
     )
 
 
