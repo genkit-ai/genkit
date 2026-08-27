@@ -18,6 +18,10 @@
 
 package ai
 
+import (
+	"github.com/firebase/genkit/go/core/status"
+)
+
 type ActionMetadata struct {
 	ActionType  string `json:"actionType,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -79,6 +83,7 @@ const (
 	FinishReasonLength      FinishReason = "length"
 	FinishReasonBlocked     FinishReason = "blocked"
 	FinishReasonAborted     FinishReason = "aborted"
+	FinishReasonFailed      FinishReason = "failed"
 	FinishReasonInterrupted FinishReason = "interrupted"
 	FinishReasonOther       FinishReason = "other"
 	FinishReasonUnknown     FinishReason = "unknown"
@@ -334,6 +339,13 @@ type ModelRequest struct {
 type ModelResponse struct {
 	// Custom contains model-specific extra information. Deprecated: use Raw instead.
 	Custom any `json:"custom,omitempty"`
+	// Error is the structured failure information for a response that
+	// accompanies an error, set whenever FinishReason is [FinishReasonFailed] or
+	// [FinishReasonAborted]. It is the classified form of FinishMessage, so a
+	// caller reading a response that travelled as data (a trace, a persisted
+	// turn) branches on the status rather than matching a string. Nil on a
+	// response that carries no failure.
+	Error *status.Error `json:"error,omitempty"`
 	// FinishMessage provides additional details about why generation finished.
 	FinishMessage string `json:"finishMessage,omitempty"`
 	// FinishReason indicates why generation stopped (e.g., stop, length, blocked).
