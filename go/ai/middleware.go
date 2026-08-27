@@ -19,7 +19,6 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"reflect"
 
 	"github.com/firebase/genkit/go/core"
@@ -302,13 +301,14 @@ type namedHooks struct {
 func wrapBuildError(name string, err error) error {
 	s, ok := status.Classified(err)
 	if !ok {
-		return status.Errorf(status.ErrInvalidArgument, "ai: failed to build middleware %q: %w", name, err)
+		// Unclassified build failures are overwhelmingly config validation.
+		s = status.InvalidArgument
 	}
-	return (&status.Error{
-		Status:   s,
-		Message:  fmt.Sprintf("ai: failed to build middleware %q: %v", name, err),
-		HTTPCode: s.HTTPCode(),
-	}).WithCause(err)
+	// status.Base is the sanctioned constructor for a status known only at
+	// runtime. Building the error by hand would leave it without a stack and
+	// without a sentinel to match on, and would drop any Details the cause
+	// carries, since Convert resolves to the outermost classified error.
+	return status.Errorf(status.Base(s), "ai: failed to build middleware %q: %w", name, err)
 }
 
 // resolveRefs resolves [MiddlewareRef] entries to named [Hooks] bundles. If

@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -703,10 +705,7 @@ func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
 	// Launch and settle the task outside the middleware. Collecting it through
 	// the tools first would cache its report, and the abort would then answer
 	// from that cache without ever dispatching the call under test.
-	h, err := genkitx.LookupAgent(g, "researcher")
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := genkitx.LookupAgent(g, "researcher")
 	task, err := h.Start(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("dig into X")})
 	if err != nil {
 		t.Fatal(err)
@@ -731,5 +730,104 @@ func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
 	if len(got.Artifacts) != 1 || got.Artifacts[0].Name != wantArtifact ||
 		!strings.Contains(got.Artifacts[0].Content, "the findings body") {
 		t.Errorf("unexpected artifacts (want %q with inline content): %+v", wantArtifact, got.Artifacts)
+	}
+}
+
+// TestFoldDelegationNonAnswerReasons pins what an orchestrator is told when a
+// turn ends without an answer. Every reason that carries no result has to read
+// as a failure and has to say what actually happened: reporting the agent's
+// last words as the response hands partial work over as if it were final, and
+// reporting a bare placeholder discards the only account of the outcome a
+// completed-but-failed row ever carries.
+func TestFoldDelegationNonAnswerReasons(t *testing.T) {
+	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}}
+	ref := aix.AgentRef{Name: "researcher"}
+	tip := ai.NewModelTextMessage("partial notes: found 3 of 5 sources")
+
+	for _, reason := range []aix.AgentFinishReason{
+		aix.AgentFinishReasonFailed,
+		aix.AgentFinishReasonBlocked,
+		aix.AgentFinishReasonLength,
+		aix.AgentFinishReasonAborted,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			got := a.foldDelegationOutput(t.Context(), ref,
+				&aix.AgentOutput[json.RawMessage]{FinishReason: reason, Message: tip}, "researcher_x")
+			if !strings.Contains(got.Response, "Error calling agent") {
+				t.Errorf("Response = %q, want it reported as a failure", got.Response)
+			}
+			if !strings.Contains(got.Response, string(reason)) {
+				t.Errorf("Response = %q, want it to name the finish reason %q", got.Response, reason)
+			}
+			// The agent's last words explain the outcome; losing them leaves
+			// the model with nothing it can act on.
+			if !strings.Contains(got.Response, "found 3 of 5 sources") {
+				t.Errorf("Response = %q, want the agent's last message kept", got.Response)
+			}
+		})
+	}
+
+	// A structured failure still wins: it is the better explanation.
+	got := a.foldDelegationOutput(t.Context(), ref, &aix.AgentOutput[json.RawMessage]{
+		FinishReason: aix.AgentFinishReasonFailed,
+		Message:      tip,
+		Error:        &status.Error{Status: status.Internal, Message: "upstream model refused"},
+	}, "researcher_x")
+	if !strings.Contains(got.Response, "upstream model refused") {
+		t.Errorf("Response = %q, want the structured failure preferred", got.Response)
+	}
+
+	// A reason that does carry a result is untouched.
+	got = a.foldDelegationOutput(t.Context(), ref,
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: tip}, "researcher_x")
+	if got.Response != "partial notes: found 3 of 5 sources" {
+		t.Errorf("Response = %q, want the message reported as the answer", got.Response)
+	}
+}
+
+// TestBackgroundTaskToolsAcceptNoArguments covers the call a model makes by
+// mistake. taskIds must be omissible: a required field fails decoding, and a
+// tool-input decode failure is not a turn the model can correct, it fails the
+// whole generate call.
+func TestBackgroundTaskToolsAcceptNoArguments(t *testing.T) {
+	g := newTestGenkit(t)
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}
+	hooks, err := mw.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := mw.backgroundToolNames().all()
+	byName := map[string]ai.Tool{}
+	for _, tool := range hooks.Tools {
+		byName[tool.Name()] = tool
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			tool, ok := byName[name]
+			if !ok {
+				t.Fatalf("tool %q not registered", name)
+			}
+			// The schema must not require taskIds. Asserting on that field
+			// rather than on an empty required list keeps this passing if a
+			// genuinely required field is added later.
+			if req, _ := tool.Definition().InputSchema["required"].([]any); slices.Contains(req, any("taskIds")) {
+				t.Errorf("input schema requires %v; an omitted taskIds must decode", req)
+			}
+			out, err := tool.RunRaw(ctx, map[string]any{})
+			if err != nil {
+				t.Fatalf("calling %q with no arguments returned an error, which fails the whole generate: %v", name, err)
+			}
+			res := decodeToolOutput[backgroundTasksResult](t, out)
+			if res.Note == "" {
+				t.Errorf("Note is empty; want the guidance that tells the model what to pass")
+			}
+		})
 	}
 }

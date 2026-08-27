@@ -262,9 +262,14 @@ func TestAgentsUnknownAgentReportsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The refusal names the agent and says it is not registered, which is the
+	// deployment mistake it actually is: the name was configured on this
+	// middleware, so an empty lookup means nothing defined it in this process.
 	got := delegationResponses(t, resp.History(), "delegate_to_ghost")
-	if len(got) != 1 || !strings.Contains(got[0].Response, "not found") {
-		t.Fatalf("expected a 'not found' delegation response, got %+v", got)
+	if len(got) != 1 ||
+		!strings.Contains(got[0].Response, `"ghost"`) ||
+		!strings.Contains(got[0].Response, "not registered") {
+		t.Fatalf("expected a refusal naming the unregistered agent, got %+v", got)
 	}
 }
 

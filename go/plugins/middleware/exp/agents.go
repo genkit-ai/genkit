@@ -64,6 +64,10 @@ const (
 // carries the agent's companion actions and capability metadata along with
 // the run surface. Both delegation and background-task reads resolve through
 // it.
+// The lookup answers a miss with nil, as every Lookup in the framework does,
+// so the message a miss deserves is written here: this middleware knows the
+// agent was configured on it, which makes an absent registration a deployment
+// mistake worth naming rather than a lookup that came up empty.
 func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) {
 	if g == nil {
 		// A failed precondition: a wiring gap in how the middleware runs, not
@@ -71,7 +75,12 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) 
 		return nil, status.Errorf(status.ErrFailedPrecondition,
 			"no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
 	}
-	return genkitx.LookupAgent(g, ref.Name)
+	agent := genkitx.LookupAgent(g, ref.Name)
+	if agent == nil {
+		return nil, status.Errorf(status.ErrNotFound,
+			"agent %q is configured on the agents middleware but is not registered in this process", ref.Name)
+	}
+	return agent, nil
 }
 
 // Agents is a middleware that enables sub-agent delegation.
@@ -274,6 +283,13 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		tools = append(tools, a.backgroundTaskTools(st)...)
 	}
 
+	// The <sub-agents> block depends only on the configuration and the
+	// registry, both fixed for this call, so it is built here rather than per
+	// tool-loop turn: New already runs exactly once per generate call, and
+	// re-rendering cost a registry lookup and a descriptor copy per agent per
+	// turn to produce a string the injector then dropped as identical.
+	instructions := a.buildInstructions(genkit.FromContext(ctx))
+
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		// Capture the latest messages for optional history forwarding. The
 		// delegation count is intentionally not reset here: this hook runs on
@@ -283,7 +299,6 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		st.conversation = params.Request.Messages
 		st.mu.Unlock()
 
-		instructions := a.buildInstructions(genkit.FromContext(ctx))
 		params.Request = injectSystemText(params.Request, agentsMarker, instructions)
 		return next(ctx, params)
 	}
@@ -438,14 +453,20 @@ func (a *Agents) releaseDelegation(st *agentsState) {
 // merged into the parent session under invocationID and surfaced per the
 // configured strategy.
 func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationID string) delegationResult {
-	switch out.FinishReason {
-	case aix.AgentFinishReasonInterrupted:
+	// Interrupted first: it is one of the reasons that carry no result, and it
+	// is the one with an explanation of its own worth giving.
+	if out.FinishReason == aix.AgentFinishReasonInterrupted {
 		// Reported as text, not propagated: there is no stateful sub-agent
 		// runtime to resume into, so the orchestrator could never satisfy it.
 		return delegationResult{Response: interruptedResponse(ref.Name)}
-	case aix.AgentFinishReasonFailed:
-		return delegationResult{Response: fmt.Sprintf(
-			"Error calling agent %q: %s", ref.Name, subAgentFailureMessage(out.Error))}
+	}
+	if !out.FinishReason.CarriesResult() {
+		// Blocked, truncated, aborted, or failed. The turn's last message is
+		// whatever the agent got out before it stopped, so it explains the
+		// outcome rather than answering the task, and reporting it as the
+		// answer would hand the orchestrator partial work as if it were final.
+		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %s",
+			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))}
 	}
 
 	result := delegationResult{Response: messageText(out.Message)}
@@ -472,13 +493,28 @@ func interruptedResponse(agentName string) string {
 			"delegating a more self-contained task.", agentName)
 }
 
-// subAgentFailureMessage extracts a human-readable message from a sub-agent's
-// structured failure.
-func subAgentFailureMessage(err *status.Error) string {
+// subAgentFailureMessage explains to the orchestrator why a sub-agent turn
+// produced no answer. It prefers the structured failure, falls back to whatever
+// the agent managed to say before it stopped, and names the finish reason when
+// it has neither. last may be nil.
+//
+// The fallbacks are not decoration. A snapshot the runtime finalizes as
+// completed carries no Error even when its finish reason says the turn failed,
+// so for a background task the agent's last message is often the only account
+// of what happened, and dropping it leaves the model holding a placeholder it
+// cannot act on.
+func subAgentFailureMessage(reason aix.AgentFinishReason, err *status.Error, last *ai.Message) string {
 	if err != nil && err.Message != "" {
 		return err.Message
 	}
-	return "Unknown sub-agent failure."
+	if reason == "" {
+		return "Unknown sub-agent failure."
+	}
+	msg := fmt.Sprintf("the turn ended as %q without completing the task", reason)
+	if text := messageText(last); text != "" {
+		msg += "; the agent's last message was: " + text
+	}
+	return msg + "."
 }
 
 // runSubAgent runs the agent one-shot with the task. With no history the
