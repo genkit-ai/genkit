@@ -643,7 +643,17 @@ response, _ := genkit.Generate(ctx, g,
 fmt.Println(response.Text())
 ```
 
-A tool error fails the whole generation rather than being reported to the model, so a miss the model could work around (no such city, no rows matched) belongs in the result rather than in an `error`.
+A tool error fails the whole generation with `ai.ErrToolFailed`. When the failure is something the model could work around (no such city, no rows matched), define the tool with `ai.WithSoftFailure()`: the error is reported to the model as the call's tool response, as `{"error": "<message>"}`, and generation continues.
+
+```go
+weatherTool := genkit.DefineTool(g, "getWeather",
+    "Gets the current weather for a location",
+    func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
+        return callWeatherAPI(input.Location) // An error here goes back to the model.
+    },
+    ai.WithSoftFailure(),
+)
+```
 
 `genkit.DefineMultipartTool` is for a result that is more than one value. It returns an `ai.MultipartToolResponse` instead: `Output` is what a plain tool would have returned, and `Content` carries parts that are not values, such as an image or a document. Those parts reach the model and the client both, and must be media or data parts.
 
