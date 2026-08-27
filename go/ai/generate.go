@@ -372,6 +372,16 @@ func responseError(cause error) *status.Error {
 	return e
 }
 
+// callerStopped are the statuses that say the caller ended the loop rather
+// than something breaking inside it: it cancelled the context, its deadline
+// expired, or it set a limit the loop reached ([ErrMaxTurnsExceeded] is an
+// ABORTED subtype). They report [FinishReasonAborted].
+var callerStopped = map[status.Name]bool{
+	status.Cancelled:        true,
+	status.DeadlineExceeded: true,
+	status.Aborted:          true,
+}
+
 // failurePartial builds the partial [ModelResponse] that accompanies the
 // error when the generate loop stops before it produced a final response.
 //
@@ -390,8 +400,9 @@ func responseError(cause error) *status.Error {
 // implementation and hooks may retain the original.
 //
 // The finish reason is [FinishReasonFailed] with the cause as the finish
-// message, or [FinishReasonAborted] when the cause is a cancellation: the
-// caller stopped the loop, nothing broke. Error carries the same cause
+// message, or [FinishReasonAborted] when the caller stopped the loop rather
+// than anything breaking: a cancelled context, an expired deadline, or a
+// limit the caller set such as [WithMaxTurns]. Error carries the same cause
 // classified, so a consumer reading the response as data branches on a status
 // rather than a string. Downstream consumers treat both finishes as abnormal:
 // output parsing is skipped and the typed helpers extract nothing from it.
@@ -402,7 +413,7 @@ func failurePartial(base *ModelResponse, req *ModelRequest, cause error) *ModelR
 	}
 	p.Message = nil
 	p.FinishReason = FinishReasonFailed
-	if s, ok := status.Classified(cause); ok && s == status.Cancelled {
+	if s, ok := status.Classified(cause); ok && callerStopped[s] {
 		p.FinishReason = FinishReasonAborted
 	}
 	p.FinishMessage = cause.Error()
@@ -1044,10 +1055,11 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // When generation fails after the request has resolved, the classified error
 // is returned together with a non-nil partial [ModelResponse].
 //
-// A loop that stopped early (a failed model call, a failed tool,
-// [WithMaxTurns] exceeded) reports FinishReason [FinishReasonFailed] with the
-// cause as the FinishMessage, or [FinishReasonAborted] when the cause is a
-// cancellation, and leaves Message nil. Error carries the same cause
+// A loop that stopped early leaves Message nil and reports FinishReason
+// [FinishReasonFailed] with the cause as the FinishMessage when something
+// broke (a failed model call, a failed tool), or [FinishReasonAborted] when
+// the caller stopped it instead: a cancelled context, an expired deadline, or
+// a limit it set such as [WithMaxTurns]. Error carries the same cause
 // classified, the structured form of the FinishMessage beside it.
 // [ModelResponse.History] is then a
 // conversation that can be sent again: it ends at a turn seam, meaning the

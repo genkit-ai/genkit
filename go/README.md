@@ -1224,7 +1224,7 @@ case errors.Is(err, status.ErrResourceExhausted):
 
 Models, tools, prompts, and provider APIs all report failures this way, so recovery logic reads as a switch rather than a string match.
 
-A generation failure keeps the progress the loop made: once the request has resolved, the classified error comes back alongside a partial `ai.ModelResponse`. When the loop stopped early (a failed model call, a failed tool, max turns), the response reports `ai.FinishReasonFailed` with the cause in `FinishMessage` (a cancellation reports `ai.FinishReasonAborted` instead), and `History()` carries the conversation up to the failure:
+A generation failure keeps the progress the loop made: once the request has resolved, the classified error comes back alongside a partial `ai.ModelResponse`. When the loop stopped early, the response reports `ai.FinishReasonFailed` with the cause in `FinishMessage` if something broke (a failed model call, a failed tool), or `ai.FinishReasonAborted` if the caller stopped it: a cancelled context, an expired deadline, or a limit it set such as max turns. `History()` carries the conversation up to that point:
 
 ```go
 resp, err := genkit.Generate(ctx, g /* ... */)

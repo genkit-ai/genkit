@@ -3605,8 +3605,10 @@ func TestGeneratePartialResponseOnFailure(t *testing.T) {
 		if resp == nil {
 			t.Fatal("response is nil, want the loop's partial response")
 		}
-		if resp.FinishReason != FinishReasonFailed {
-			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		// The caller set the limit, so reaching it stopped the loop rather
+		// than breaking it.
+		if resp.FinishReason != FinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonAborted)
 		}
 		if !strings.Contains(resp.FinishMessage, "exceeded maximum tool call iterations (2)") {
 			t.Errorf("FinishMessage = %q, want the max-turns cause", resp.FinishMessage)
@@ -3943,8 +3945,10 @@ func TestGeneratePartialResponseOnFailure(t *testing.T) {
 		if resp == nil {
 			t.Fatal("response is nil, want the loop's recorded partial restored")
 		}
-		if resp.FinishReason != FinishReasonFailed {
-			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonFailed)
+		// The caller set the limit, so reaching it stopped the loop rather
+		// than breaking it.
+		if resp.FinishReason != FinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonAborted)
 		}
 		// One completed round: the model message the limit refused goes with
 		// the round it opened, restored partial or not.
