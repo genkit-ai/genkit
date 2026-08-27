@@ -128,7 +128,8 @@ def embedder(
     """Build an embedder action without registering it.
 
     Plugin ``init`` / ``resolve`` return this. ``define_embedder`` registers it.
-    The config class stays on the action so a later isinstance check can see it.
+    The config class stays on the action so ``embed(embedder='name', options=)``
+    can isinstance-check a Pydantic instance against a string embedder name.
     """
     embedder_info: dict[str, object] = {}
 

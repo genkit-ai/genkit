@@ -32,6 +32,7 @@ from genkit._ai._embedding import (
     embedder_action_metadata,
 )
 from genkit._core._action import Action, ActionResponse
+from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, Embedding, EmbedRequest, EmbedResponse
 
@@ -120,6 +121,66 @@ async def test_embedder_factory_stashes_class_without_registering() -> None:
     resolved = await ai.registry.resolve_action(action.kind, action.name)
     assert resolved is action
     assert resolved._config_schema is EmbedderConfig
+
+
+@pytest.mark.asyncio
+async def test_embed_rejects_wrong_options_class() -> None:
+    """A typed options object has to belong to the embedder this call hits."""
+
+    class EmbedderConfig(BaseModel):
+        task_type: str | None = None
+
+    class OtherEmbedderConfig(BaseModel):
+        encoding_format: str | None = None
+
+    async def embed_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    ai = Genkit()
+    ai.registry.register_action_from_instance(embedder('text', embed_fn, config_schema=EmbedderConfig))
+
+    with pytest.raises(
+        GenkitError, match=r'config must be .+\.EmbedderConfig or a mapping, got .+\.OtherEmbedderConfig'
+    ):
+        await ai.embed(embedder='text', content='hi', options=OtherEmbedderConfig(encoding_format='float'))
+
+
+@pytest.mark.asyncio
+async def test_embed_accepts_matching_options_class() -> None:
+    """The matching class still dumps and reaches the embedder."""
+    captured: dict[str, object] = {}
+
+    class EmbedderConfig(BaseModel):
+        task_type: str | None = None
+
+    async def embed_fn(request: EmbedRequest) -> EmbedResponse:
+        captured['options'] = request.options
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    ai = Genkit()
+    ai.registry.register_action_from_instance(embedder('text', embed_fn, config_schema=EmbedderConfig))
+
+    await ai.embed(embedder='text', content='hi', options=EmbedderConfig(task_type='retrieval'))
+    assert captured['options'] == {'task_type': 'retrieval'}
+
+
+@pytest.mark.asyncio
+async def test_embed_wrong_family_dict_still_legal() -> None:
+    """A dict is never rejected by the class check."""
+    captured: dict[str, object] = {}
+
+    class EmbedderConfig(BaseModel):
+        task_type: str | None = None
+
+    async def embed_fn(request: EmbedRequest) -> EmbedResponse:
+        captured['options'] = request.options
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    ai = Genkit()
+    ai.registry.register_action_from_instance(embedder('text', embed_fn, config_schema=EmbedderConfig))
+
+    await ai.embed(embedder='text', content='hi', options={'encoding_format': 'float'})
+    assert captured['options'] == {'encoding_format': 'float'}
 
 
 def test_create_embedder_ref_basic() -> None:
