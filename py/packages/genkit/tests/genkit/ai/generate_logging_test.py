@@ -19,7 +19,7 @@ from genkit._ai._generate import (
 )
 from genkit._ai._testing import define_programmable_model
 from genkit._core._environment import GENKIT_ENV
-from genkit._core._logger import GENKIT_LOG
+from genkit._core._logger import GENKIT_LOG, get_logger
 from genkit._core._typing import CustomPart, GenerationUsage, Media, MediaPart, Role, TextPart
 
 BLOB = 'A' * 1_000_000
@@ -170,9 +170,13 @@ async def test_generate_logs_nothing_at_default_level() -> None:
 
     with capture_logs() as entries:
         await _generate_once()
+        # A quiet generate may legitimately log nothing at the default level,
+        # so emit one info event to prove capture is live before asserting on
+        # what's absent.
+        get_logger(__name__).info('capture sentinel')
 
     events = [entry['event'] for entry in entries]
-    assert events, 'capture_logs saw nothing, so the assertion below would be vacuous'
+    assert 'capture sentinel' in events, 'capture_logs saw nothing, so the assertion below would be vacuous'
     assert 'generate response' not in events
 
 

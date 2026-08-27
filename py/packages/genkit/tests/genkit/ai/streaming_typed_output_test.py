@@ -12,14 +12,15 @@ Covers:
 - End-to-end generate_stream with output_schema producing partial chunks
 """
 
-from typing import Any
+from typing import Annotated, Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionRunContext
+from genkit._core._partial import partial_model
 from genkit._core._typing import Part, Role, TextPart
 
 
@@ -101,6 +102,106 @@ class TestChunkPartialOutput:
         # A scalar/array payload can't be validated into an object schema;
         # it is returned as-is rather than silently dropped.
         assert _chunk('[1, 2, 3]', schema_type=Recipe).output == [1, 2, 3]
+
+    def test_wrong_typed_value_yields_none_instead_of_raising(self) -> None:
+        # A wrong-typed value (title as a number) can't fit even the partial.
+        # The chunk degrades to None instead of crashing the caller's loop;
+        # the final response is where the real ValidationError surfaces.
+        assert _chunk('{"title": 123}', schema_type=Recipe).output is None
+
+
+class TestPartialModelSynthesis:
+    """partial_model rewrites nested annotations and drops constraints."""
+
+    def test_constraints_and_validators_are_dropped(self) -> None:
+        # A half-streamed value legitimately violates constraints (a streamed
+        # int passes through 0, a capitalized string starts mid-word), so the
+        # partial keeps only the types. The real model still enforces
+        # everything on the final response.
+        class Strict(BaseModel):
+            servings: int = Field(gt=0)
+            rating: Annotated[int, Field(ge=1, le=5)]
+            title: str
+
+            @field_validator('title')
+            @classmethod
+            def _capitalized(cls, v: str) -> str:
+                if not v[0].isupper():
+                    raise ValueError('must be capitalized')
+                return v
+
+        out = cast('Any', partial_model(Strict).model_validate({'servings': -5, 'rating': 99, 'title': 'lowercase'}))
+        assert out.servings == -5
+        assert out.rating == 99
+        assert out.title == 'lowercase'
+
+    def test_union_members_become_partials(self) -> None:
+        # A mid-stream nested object under a multi-member union must validate
+        # against partial members, not the real models (which require fields).
+        class Cat(BaseModel):
+            meow: str
+
+        class Dog(BaseModel):
+            bark: str
+            volume: int
+
+        class Pet(BaseModel):
+            animal: Cat | Dog
+
+        out = cast('Any', partial_model(Pet).model_validate({'animal': {'bark': 'woof'}}))
+        assert out.animal is not None
+        assert out.animal.bark == 'woof'
+        assert out.animal.volume is None
+
+    def test_dict_and_tuple_values_become_partials(self) -> None:
+        class Item(BaseModel):
+            name: str
+            qty: int
+
+        class Inventory(BaseModel):
+            by_id: dict[str, Item]
+            featured: tuple[Item, ...]
+
+        out = cast(
+            'Any',
+            partial_model(Inventory).model_validate({
+                'by_id': {'a': {'name': 'axe'}},
+                'featured': [{'qty': 2}],
+            }),
+        )
+        assert out.by_id['a'].name == 'axe'
+        assert out.by_id['a'].qty is None
+        assert out.featured[0].qty == 2
+        assert out.featured[0].name is None
+
+    def test_self_referential_model(self) -> None:
+        class Node(BaseModel):
+            name: str
+            child: 'Node | None' = None
+
+        partial = partial_model(Node)
+        out = cast('Any', partial.model_validate({'name': 'root', 'child': {'child': {'name': 'leaf'}}}))
+        assert out.name == 'root'
+        assert out.child.name is None
+        assert out.child.child.name == 'leaf'
+        assert type(out.child).__name__ == 'NodePartial'
+
+    def test_mutually_recursive_models(self) -> None:
+        class Author(BaseModel):
+            name: str
+            posts: list['Post'] = []
+
+        class Post(BaseModel):
+            title: str
+            author: Author | None = None
+
+        Author.model_rebuild()
+        out = cast('Any', partial_model(Author).model_validate({'name': 'a', 'posts': [{'author': {'posts': []}}]}))
+        assert out.posts[0].title is None
+        assert out.posts[0].author.name is None
+
+    def test_partial_is_cached_per_class(self) -> None:
+        assert partial_model(Recipe) is partial_model(Recipe)
 
 
 class TestActionRunContextGenerics:

@@ -27,7 +27,7 @@ from copy import deepcopy
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -487,6 +487,10 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         original model: ``isinstance(chunk.output, Recipe)`` is false, and a
         type checker still sees ``Recipe | None``. The final
         ``ModelResponse.output`` validates into the real type.
+
+        A chunk whose accumulated JSON does not fit the schema even loosely
+        (e.g. the model emitted a wrong-typed value) yields ``None`` rather
+        than raising, so one bad intermediate state cannot crash the stream.
         """
         parsed = (
             self.chunk_parser(self)
@@ -494,7 +498,12 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
             else extract_json(self.accumulated_text, throw_on_bad_json=False)
         )
         if self.schema_type is not None and isinstance(parsed, dict):
-            return cast('OutputT | None', partial_model(self.schema_type).model_validate(parsed))
+            try:
+                return cast('OutputT | None', partial_model(self.schema_type).model_validate(parsed))
+            except ValidationError:
+                # Chunks are provisional; the final response validates against
+                # the real model and surfaces the actual error to the caller.
+                return None
         return cast('OutputT | None', parsed)
 
 
