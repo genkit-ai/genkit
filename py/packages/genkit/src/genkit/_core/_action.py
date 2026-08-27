@@ -144,7 +144,6 @@ class ActionKind(StrEnum):
     MODEL = 'model'
     PROMPT = 'prompt'
     RERANKER = 'reranker'
-    RESOURCE = 'resource'
     RETRIEVER = 'retriever'
     # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
     TOOL = 'tool.v2'
