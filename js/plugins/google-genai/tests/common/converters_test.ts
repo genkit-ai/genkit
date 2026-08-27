@@ -1457,6 +1457,37 @@ describe('Part conversions back and forth', () => {
 });
 
 describe('toGeminiTool', () => {
+  it('should resolve $ref items in array properties', () => {
+    const got = toGeminiTool({
+      name: 'createDraft',
+      description: 'Create a draft',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          attachments: {
+            type: 'array',
+            items: { $ref: '#/$defs/Attachment' },
+          },
+        },
+        $defs: {
+          Attachment: {
+            type: 'object',
+            properties: { filename: { type: 'string' } },
+          },
+        },
+      } as any,
+    });
+
+    assert.deepStrictEqual(got.parameters?.properties?.attachments, {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: { filename: { type: SchemaType.STRING } },
+        required: undefined,
+      },
+    });
+  });
+
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
     const got = toGeminiTool({
       name: 'foo',

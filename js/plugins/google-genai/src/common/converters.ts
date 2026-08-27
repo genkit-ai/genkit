@@ -43,12 +43,22 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: toGeminiSchemaProperty(tool.inputSchema, tool.inputSchema),
   };
   return declaration;
 }
 
-function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
+function toGeminiSchemaProperty(
+  property?: ToolDefinition['inputSchema'],
+  rootSchema?: ToolDefinition['inputSchema']
+) {
+  if (property?.$ref?.startsWith('#/$defs/')) {
+    const definitionName = property.$ref.substring('#/$defs/'.length);
+    const definition = rootSchema?.$defs?.[definitionName];
+    if (definition) {
+      return toGeminiSchemaProperty(definition, rootSchema);
+    }
+  }
   if (!property || !property.type) {
     return undefined;
   }
@@ -79,7 +89,8 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     if (property.properties) {
       Object.keys(property.properties).forEach((key) => {
         nestedProperties[key] = toGeminiSchemaProperty(
-          property.properties[key]
+          property.properties[key],
+          rootSchema
         );
       });
     }
@@ -93,7 +104,7 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     return {
       ...baseSchema,
       type: SchemaType.ARRAY,
-      items: toGeminiSchemaProperty(property.items),
+      items: toGeminiSchemaProperty(property.items, rootSchema),
     };
   } else {
     const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;
