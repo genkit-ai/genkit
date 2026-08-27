@@ -424,6 +424,11 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 // this write to commit or suspends before it starts. Persistence is
 // best-effort: a store failure must not kill the in-flight turn, so it is
 // logged and "" is returned.
+//
+// The write is decoupled from ctx. A turn that ends because the invocation's
+// context was cancelled is exactly the turn whose snapshot a client needs, so
+// the row must land even though the context it ran under is gone. ctx is
+// still what the write is traced and logged under.
 func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason AgentFinishReason, cause error) string {
 	if s.store == nil {
 		return ""
@@ -448,7 +453,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	if cause != nil {
 		snapStatus = SnapshotStatusFailed
 	}
-	saved, err := s.store.SaveSnapshot(ctx, s.turnSnapshotID,
+	saved, err := s.store.SaveSnapshot(context.WithoutCancel(ctx), s.turnSnapshotID,
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
 				SessionID:    sessionID,

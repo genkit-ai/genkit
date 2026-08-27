@@ -4002,6 +4002,68 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	}
 }
 
+func TestAgent_TurnSnapshotSurvivesCancelledContext(t *testing.T) {
+	// A turn that ends because the invocation's context was cancelled is
+	// exactly the turn whose snapshot the client needs, so the write must not
+	// ride the context that just died. Both in-memory stores ignore their
+	// context, so the wrapper is what makes the defect visible.
+	reg := newTestRegistry(t)
+	store := &ctxHonoringStore[testState]{SessionStore: newTestInMemStore[testState]()}
+
+	entered := make(chan struct{})
+	snapshotIDs := make(chan string, 1)
+
+	af := DefineCustomAgent(reg, "cancelCommits",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				snapshotIDs <- TurnContextFromContext(ctx).SnapshotID
+				close(entered)
+				<-ctx.Done()
+				// Commit: the turn has state worth continuing from, which is
+				// what makes it snapshot. See [SessionRunner.Run].
+				return &TurnResult{FinishReason: AgentFinishReasonFailed}, ctx.Err()
+			})
+			return nil, err
+		},
+		WithSessionStore(store),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	drainInBackground(conn)
+
+	sendText(t, conn, "go")
+	<-entered
+	cancel()
+
+	turnID := <-snapshotIDs
+	// The write is asynchronous with respect to this goroutine only in that fn
+	// is still unwinding; poll briefly rather than sleeping a fixed time.
+	var snap *SessionSnapshot[testState]
+	for range 100 {
+		snap, err = store.GetSnapshot(context.Background(), turnID)
+		if err == nil && snap != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap == nil {
+		t.Fatalf("turn snapshot %q was never written (%d writes rejected on a dead context)", turnID, store.rejected.Load())
+	}
+	// The subject is that the row landed at all. Which terminal status a
+	// cancelled turn writes is a separate question, asserted where it is
+	// decided.
+	if snap.Status == SnapshotStatusPending {
+		t.Errorf("status = %q, want a terminal status", snap.Status)
+	}
+}
+
 func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	// Without detach, a client cancel still cancels the work — this is
 	// the regression guard for "until detach=true is called, this is a
