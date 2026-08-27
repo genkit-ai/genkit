@@ -36,7 +36,15 @@ import sys
 
 MIN_PYTHON = (3, 10)
 
-if sys.version_info < MIN_PYTHON:
+# Fail at the build/install phase, not the metadata phase: old pip (e.g. the
+# 21.2.4 bundled with macOS system Python) treats a metadata-build failure as
+# a discardable candidate and backtracks to the pre-transfer 0.2.0 — the
+# exact silent wrong-install this shim exists to prevent. An install-phase
+# failure is fatal on every pip generation, so the user actually sees the
+# message and nothing gets installed.
+_METADATA_ONLY_COMMANDS = {'egg_info', 'dist_info', 'sdist'}
+
+if sys.version_info < MIN_PYTHON and not _METADATA_ONLY_COMMANDS.intersection(sys.argv[1:]):
     sys.exit(
         '\n'
         '========================================================================\n'
@@ -46,8 +54,8 @@ if sys.version_info < MIN_PYTHON:
         'install a current Python first. Any one of these works:\n'
         '\n'
         '  # Homebrew\n'
-        '  brew install python@3.13\n'
-        '  python3.13 -m venv .venv && source .venv/bin/activate\n'
+        '  brew install python\n'
+        '  python3 -m venv .venv && source .venv/bin/activate\n'
         '  pip install genkit\n'
         '\n'
         '  # uv (recommended - manages Python for you)\n'
