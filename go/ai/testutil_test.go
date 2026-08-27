@@ -90,6 +90,22 @@ func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) Model {
 	return defineModel(r, cfg.name, &ModelOptions{Supports: cfg.supports}, cfg.handler)
 }
 
+// loopingToolModel returns a handler that answers its first turns calls with a
+// tool request and the rest with text.
+func loopingToolModel(toolName string, turns int) func(context.Context, *ModelRequest, ModelStreamCallback) (*ModelResponse, error) {
+	call := 0
+	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		call++
+		if call > turns {
+			return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+		}
+		return &ModelResponse{Request: req, Message: &Message{
+			Role:    RoleModel,
+			Content: []*Part{NewToolRequestPart(&ToolRequest{Name: toolName, Input: map[string]any{"n": call}})},
+		}}, nil
+	}
+}
+
 // echoModelHandler creates a handler that echoes back information about the request.
 // Useful for verifying that options are properly passed through.
 func echoModelHandler() func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {

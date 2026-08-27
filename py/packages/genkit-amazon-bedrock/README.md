@@ -7,7 +7,8 @@ embeddings, image generation, and reranking through InvokeModel.
 
 > Status: text generation (streaming and non-streaming), embedders, image
 > generation, and reranking are available. A runnable sample app covers all of
-> it, so the work left is docsite coverage, not plugin surfaces.
+> it, and the plugin is documented on the Genkit docsite at
+> [genkit.dev/docs/python/integrations/aws-bedrock](https://genkit.dev/docs/python/integrations/aws-bedrock/).
 
 ## Installation
 

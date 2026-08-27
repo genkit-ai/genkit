@@ -277,13 +277,13 @@ func TestBackgroundActionRegister(t *testing.T) {
 		}
 
 		// Check check action
-		checkKey := api.KeyFromName(api.ActionTypeCheckOperation, "test/register")
+		checkKey := api.KeyFromName(api.ActionTypeCheckOperation, "test/register/check")
 		if r.LookupAction(checkKey) == nil {
 			t.Error("check action not registered")
 		}
 
 		// Check cancel action
-		cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, "test/register")
+		cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, "test/register/cancel")
 		if r.LookupAction(cancelKey) == nil {
 			t.Error("cancel action not registered")
 		}
@@ -302,7 +302,7 @@ func TestBackgroundActionRegister(t *testing.T) {
 		ba.Register(r)
 
 		// Cancel action should not be registered
-		cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, "test/register-nocancel")
+		cancelKey := api.KeyFromName(api.ActionTypeCancelOperation, "test/register-nocancel/cancel")
 		if r.LookupAction(cancelKey) != nil {
 			t.Error("cancel action should not be registered")
 		}

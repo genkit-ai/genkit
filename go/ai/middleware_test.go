@@ -1284,3 +1284,48 @@ func TestMiddlewareHookLoggingDisabled(t *testing.T) {
 		t.Errorf("got %d log records with debug disabled, want 0", len(rec.records))
 	}
 }
+
+// TestWrapGenerateOptionsAreIsolatedPerIteration checks that a WrapGenerate
+// hook writing to its Options disturbs neither later turns nor their spans.
+func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/toolModel",
+		handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+	})
+	var toolCalls int32
+	tool := defineCountingTool(t, r, "myTool", &toolCalls)
+	spans := collectSpans(t)
+
+	var seen []int
+	clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				seen = append(seen, len(p.Options.Messages))
+				p.Options.Messages = nil
+				p.Options.StepName = "clobbered"
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/toolModel"),
+		WithPrompt("use it"),
+		WithTools(tool),
+		WithUse(clobber),
+	)
+	assertNoError(t, err)
+
+	// One tool call and a final answer; each turn sees the call's own message.
+	want := []int{1, 1}
+	if !slices.Equal(seen, want) {
+		t.Errorf("hook saw %v messages per iteration, want %v", seen, want)
+	}
+	if got := len(spans.allByName("clobbered")); got != 0 {
+		t.Errorf("got %d spans named %q, want 0: a hook's step name must not rename the loop's spans", got, "clobbered")
+	}
+	if got := len(spans.allByName("generate")); got != len(want) {
+		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
+	}
+}
