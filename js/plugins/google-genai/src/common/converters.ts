@@ -50,13 +50,29 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
 
 function toGeminiSchemaProperty(
   property?: ToolDefinition['inputSchema'],
-  rootSchema?: ToolDefinition['inputSchema']
+  rootSchema?: ToolDefinition['inputSchema'],
+  seen: Set<string> = new Set()
 ) {
-  if (property?.$ref?.startsWith('#/$defs/')) {
-    const definitionName = property.$ref.substring('#/$defs/'.length);
-    const definition = rootSchema?.$defs?.[definitionName];
+  if (property?.$ref) {
+    if (seen.has(property.$ref)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Circular reference detected in schema: ${property.$ref}`,
+      });
+    }
+    let definitionName: string | undefined;
+    let definitions: ToolDefinition['inputSchema'] | undefined;
+    if (property.$ref.startsWith('#/$defs/')) {
+      definitionName = property.$ref.substring('#/$defs/'.length);
+      definitions = rootSchema?.$defs;
+    } else if (property.$ref.startsWith('#/definitions/')) {
+      definitionName = property.$ref.substring('#/definitions/'.length);
+      definitions = (rootSchema as any)?.definitions;
+    }
+    const definition = definitionName ? definitions?.[definitionName] : undefined;
     if (definition) {
-      return toGeminiSchemaProperty(definition, rootSchema);
+      const nextSeen = new Set(seen).add(property.$ref);
+      return toGeminiSchemaProperty(definition, rootSchema, nextSeen);
     }
   }
   if (!property || !property.type) {
@@ -90,7 +106,8 @@ function toGeminiSchemaProperty(
       Object.keys(property.properties).forEach((key) => {
         nestedProperties[key] = toGeminiSchemaProperty(
           property.properties[key],
-          rootSchema
+          rootSchema,
+          seen
         );
       });
     }
@@ -104,7 +121,7 @@ function toGeminiSchemaProperty(
     return {
       ...baseSchema,
       type: SchemaType.ARRAY,
-      items: toGeminiSchemaProperty(property.items, rootSchema),
+      items: toGeminiSchemaProperty(property.items, rootSchema, seen),
     };
   } else {
     const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;

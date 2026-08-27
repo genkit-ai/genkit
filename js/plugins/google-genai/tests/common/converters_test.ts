@@ -1457,35 +1457,36 @@ describe('Part conversions back and forth', () => {
 });
 
 describe('toGeminiTool', () => {
-  it('should resolve $ref items in array properties', () => {
-    const got = toGeminiTool({
-      name: 'createDraft',
-      description: 'Create a draft',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          attachments: {
-            type: 'array',
-            items: { $ref: '#/$defs/Attachment' },
-          },
-        },
-        $defs: {
-          Attachment: {
-            type: 'object',
-            properties: { filename: { type: 'string' } },
-          },
-        },
-      } as any,
-    });
+  it('should resolve legacy definitions and reject circular references', () => {
+    assert.deepStrictEqual(
+      toGeminiTool({
+        name: 'legacy',
+        inputSchema: {
+          type: 'object',
+          properties: { item: { $ref: '#/definitions/Item' } },
+          definitions: { Item: { type: 'string' } },
+        } as any,
+      }).parameters?.properties?.item,
+      { type: SchemaType.STRING }
+    );
 
-    assert.deepStrictEqual(got.parameters?.properties?.attachments, {
-      type: SchemaType.ARRAY,
-      items: {
-        type: SchemaType.OBJECT,
-        properties: { filename: { type: SchemaType.STRING } },
-        required: undefined,
-      },
-    });
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'recursive',
+          inputSchema: {
+            type: 'object',
+            properties: { child: { $ref: '#/$defs/Node' } },
+            $defs: {
+              Node: {
+                type: 'object',
+                properties: { child: { $ref: '#/$defs/Node' } },
+              },
+            },
+          } as any,
+        }),
+      /Circular reference detected in schema: #\/\$defs\/Node/
+    );
   });
 
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
