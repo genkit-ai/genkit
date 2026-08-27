@@ -789,6 +789,7 @@
         "length",
         "blocked",
         "aborted",
+        "failed",
         "interrupted",
         "other",
         "unknown"
@@ -979,6 +980,9 @@
         },
         "finishMessage": {
           "type": "string"
+        },
+        "error": {
+          "$ref": "#/$defs/RuntimeError"
         },
         "latencyMs": {
           "type": "number"
@@ -1301,6 +1305,9 @@
         },
         "finishMessage": {
           "$ref": "#/$defs/GenerateResponse/properties/finishMessage"
+        },
+        "error": {
+          "$ref": "#/$defs/GenerateResponse/properties/error"
         },
         "latencyMs": {
           "$ref": "#/$defs/GenerateResponse/properties/latencyMs"

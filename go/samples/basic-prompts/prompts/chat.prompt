@@ -1,5 +1,8 @@
 ---
 model: googleai/gemini-flash-latest
+config:
+  thinkingConfig:
+    thinkingLevel: MEDIUM
 input:
   schema: ChatRequest
 ---

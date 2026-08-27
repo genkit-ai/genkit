@@ -40,6 +40,7 @@ import {
   VeoPredictRequest,
 } from './types.js';
 import {
+  applyContextOverrides,
   calculateApiKey,
   checkModelName,
   extractText,
@@ -54,10 +55,6 @@ import {
  */
 export const VeoConfigSchema = z
   .object({
-    apiKey: z
-      .string()
-      .describe('Override the API key provided at plugin initialization.')
-      .optional(),
     negativePrompt: z.string().optional(),
     aspectRatio: z
       .enum(['9:16', '16:9'])
@@ -200,15 +197,19 @@ export function defineModel(
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
-    async start(request) {
-      const apiKey = calculateApiKey(
-        pluginOptions?.apiKey,
-        request.config?.apiKey
+    async start(request, options) {
+      // apiKey in config is deprecated in favor of options.context.secrets.apiKey
+      const newClientOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(
+            pluginOptions?.apiKey,
+            request.config?.apiKey as string | undefined
+          ),
+        },
+        options?.context
       );
-      const newClientOptions: ClientOptions = {
-        ...clientOptions,
-        apiKey,
-      };
+      const apiKey = newClientOptions.apiKey;
 
       const veoPredictRequest: VeoPredictRequest = {
         instances: [
@@ -228,27 +229,23 @@ export function defineModel(
         newClientOptions
       );
 
-      return fromVeoOperation(response, newClientOptions);
+      return fromVeoOperation(response);
     },
-    async check(operation) {
-      const storedOptions = operation.metadata?.clientOptions as
-        | ClientOptions
-        | undefined;
-      const apiKey =
-        storedOptions?.apiKey ||
-        calculateApiKey(pluginOptions?.apiKey, undefined);
-
-      const checkOptions: ClientOptions = {
-        ...clientOptions,
-        ...storedOptions,
-      };
+    async check(operation, options) {
+      const checkOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, undefined),
+        },
+        options?.context
+      );
 
       const response = await veoCheckOperation(
-        apiKey,
+        checkOptions.apiKey,
         operation.id,
         checkOptions
       );
-      return fromVeoOperation(response, checkOptions);
+      return fromVeoOperation(response);
     },
   });
 }
@@ -278,15 +275,11 @@ function toVeoParameters(
 }
 
 function fromVeoOperation(
-  apiOp: VeoOperation,
-  clientOpt?: ClientOptions
+  apiOp: VeoOperation
 ): Operation<GenerateResponseData> {
   const res = { id: apiOp.name } as Operation<GenerateResponseData>;
   if (apiOp.done !== undefined) {
     res.done = apiOp.done;
-  }
-  if (clientOpt) {
-    res.metadata = { clientOptions: clientOpt };
   }
 
   if (apiOp.error) {

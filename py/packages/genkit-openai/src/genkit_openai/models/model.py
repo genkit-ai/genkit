@@ -26,7 +26,6 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -36,8 +35,8 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit.plugin_api import ActionRunContext
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
+from genkit.plugin_api import ActionRunContext, ModelConfig
+from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -47,6 +46,36 @@ from genkit_openai.models.utils import (
 from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
 
 logger = structlog.get_logger(__name__)
+
+# Genkit common fields that are not chat.completions.create() kwargs.
+# version becomes the wire model id; stop_sequences becomes stop.
+_GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences'})
+
+
+def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
+    """Kwargs for chat.completions.create().
+
+    Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
+    was not set. ``version`` is peeled here and applied as ``model`` by the
+    caller when ``OpenAIConfig.model`` is unset. Everything else, including
+    extras, goes out under the Python field name. ``max_output_tokens`` is
+    not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
+    """
+    body: dict[str, Any] = {}
+    for name in type(config).model_fields:
+        if name in _GENKIT_ONLY:
+            continue
+        value = getattr(config, name)
+        if value is not None:
+            body[name] = value
+    extras = config.model_extra
+    if extras:
+        for name, value in extras.items():
+            if value is not None:
+                body[name] = value
+    if 'stop' not in body and config.stop_sequences is not None:
+        body['stop'] = config.stop_sequences
+    return body
 
 
 class OpenAIModel:
@@ -147,7 +176,9 @@ class OpenAIModel:
         Returns:
             A dictionary representing the response format, which may include:
             - 'type': 'json_schema' and a validated JSON Schema if a schema is provided.
-            - 'type': 'json_object' if the model supports JSON mode and no schema is provided.
+            - 'type': 'json_object' if the model supports JSON mode, or the id
+              is not in the catalog (fine-tune, dated snapshot), and no schema
+              is provided.
             - 'type': 'text' as the default fallback.
         """
         if request.output_format == 'json':
@@ -167,7 +198,11 @@ class OpenAIModel:
                     },
                 }
 
-            model = SUPPORTED_OPENAI_MODELS[self._model]
+            model = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, self._model))
+            # Unlisted chat ids still asked for JSON; send json_object and let
+            # the provider reject it if that model cannot do it.
+            if model is None:
+                return {'type': 'json_object'}
             if model.supports and model.supports.output and SupportedOutputFormat.JSON_MODE in model.supports.output:
                 return {'type': 'json_object'}
 
@@ -273,7 +308,12 @@ class OpenAIModel:
                 # pyrefly: ignore[bad-typed-dict-key] - response_format dict is valid for OpenAI API
                 openai_config['response_format'] = response_format
         if request.config:
-            openai_config.update(**request.config.model_dump(exclude_none=True))
+            config = (
+                request.config if isinstance(request.config, OpenAIConfig) else self.normalize_config(request.config)
+            )
+            if config.version:
+                openai_config['model'] = config.version
+            openai_config.update(_openai_create_kwargs(config=config))
         return openai_config
 
     async def _generate(self, request: ModelRequest) -> ModelResponse:
@@ -403,6 +443,7 @@ class OpenAIModel:
 
         if isinstance(config, (ModelConfig, ModelConfig)):
             return OpenAIConfig(
+                version=config.version,
                 temperature=config.temperature,
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,

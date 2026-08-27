@@ -341,7 +341,7 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 	}
 
 	if len(p.Middleware) > 0 {
-		logger.FromContext(ctx).Warn(fmt.Sprintf("middleware set on prompt %q will be ignored during Prompt.Render", p.Name()))
+		logger.Warn(ctx, "middleware set on prompt is ignored during Prompt.Render, use Prompt.Execute to apply it", "prompt", p.Name())
 	}
 
 	// TODO: This is hacky; we should have a helper that fetches the metadata.
@@ -405,7 +405,7 @@ func buildVariables(variables any) (map[string]any, error) {
 		return resultVariables, nil
 	}
 	if v.Kind() != reflect.Struct {
-		return nil, errors.New("prompt.buildVariables: fields not a struct or pointer to a struct or a map")
+		return nil, status.Errorf(status.ErrInvalidArgument, "prompt input must be a struct, a pointer to one, or a map")
 	}
 	vt := v.Type()
 
@@ -820,7 +820,7 @@ func convertToPartPointers(parts []dotprompt.Part) ([]*Part, error) {
 // The dir parameter specifies the directory within the filesystem where prompts are located.
 func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 	if fsys == nil {
-		panic(errors.New("no prompt filesystem provided"))
+		panic("ai.LoadPrompt: no prompt filesystem provided")
 	}
 
 	if _, err := fs.Stat(fsys, dir); err != nil {
@@ -842,11 +842,11 @@ func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 				partialName := strings.TrimSuffix(filename[1:], ".prompt")
 				source, err := fs.ReadFile(fsys, filePath)
 				if err != nil {
-					slog.Error("Failed to read partial file", "error", err)
+					slog.Error("failed to read prompt partial file, skipping it", "file", filePath, "error", err)
 					continue
 				}
 				r.RegisterPartial(partialName, string(source))
-				slog.Debug("Registered Dotprompt partial", "name", partialName, "file", filePath)
+				slog.Debug("registered dotprompt partial", "partial", partialName, "file", filePath)
 			} else {
 				LoadPromptFromFS(r, fsys, dir, filename, namespace)
 			}
@@ -863,17 +863,17 @@ func LoadPromptFromFS(r api.Registry, fsys fs.FS, dir, filename, namespace strin
 	sourceFile := path.Join(dir, filename)
 	source, err := fs.ReadFile(fsys, sourceFile)
 	if err != nil {
-		slog.Error("Failed to read prompt file", "file", sourceFile, "error", err)
+		slog.Error("failed to read prompt file, skipping it", "file", sourceFile, "error", err)
 		return nil
 	}
 
 	p, err := LoadPromptFromSource(r, string(source), name, namespace)
 	if err != nil {
-		slog.Error("Failed to load prompt", "file", sourceFile, "error", err)
+		slog.Error("failed to load prompt file, skipping it", "file", sourceFile, "error", err)
 		return nil
 	}
 
-	slog.Debug("Registered Dotprompt", "name", p.Name(), "file", sourceFile)
+	slog.Debug("registered dotprompt", "prompt", p.Name(), "file", sourceFile)
 	return p
 }
 
@@ -1011,24 +1011,24 @@ func parseDotpromptUse(raw any) ([]Middleware, error) {
 	}
 	entries, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("`use` must be a list, got %T", raw)
+		return nil, status.Errorf(status.ErrInvalidArgument, "`use` must be a list, got %T", raw)
 	}
 	uses := make([]Middleware, 0, len(entries))
 	for i, entry := range entries {
 		switch v := entry.(type) {
 		case string:
 			if v == "" {
-				return nil, fmt.Errorf("`use[%d]` is an empty string", i)
+				return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` is an empty string", i)
 			}
 			uses = append(uses, middlewareRefArg{name: v})
 		case map[string]any:
 			name, _ := v["name"].(string)
 			if name == "" {
-				return nil, fmt.Errorf("`use[%d]` is missing required `name` field", i)
+				return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` is missing required `name` field", i)
 			}
 			uses = append(uses, middlewareRefArg{name: name, config: v["config"]})
 		default:
-			return nil, fmt.Errorf("`use[%d]` must be a string or map, got %T", i, entry)
+			return nil, status.Errorf(status.ErrInvalidArgument, "`use[%d]` must be a string or map, got %T", i, entry)
 		}
 	}
 	return uses, nil
@@ -1063,7 +1063,7 @@ func variantKey(variant string) string {
 // contentType determines the MIME content type of the given data URI
 func contentType(ct, uri string) (string, []byte, error) {
 	if uri == "" {
-		return "", nil, errors.New("found empty URI in part")
+		return "", nil, status.Errorf(ErrInvalidPart, "found empty URI in part")
 	}
 
 	if strings.HasPrefix(uri, "gs://") || strings.HasPrefix(uri, "http") {
@@ -1078,7 +1078,7 @@ func contentType(ct, uri string) (string, []byte, error) {
 	if contents, isData := strings.CutPrefix(uri, "data:"); isData {
 		prefix, _, found := strings.Cut(contents, ",")
 		if !found {
-			return "", nil, errors.New("failed to parse data URI: missing comma")
+			return "", nil, status.Errorf(ErrInvalidPart, "failed to parse data URI: missing comma")
 		}
 
 		if p, isBase64 := strings.CutSuffix(prefix, ";base64"); isBase64 {
@@ -1089,7 +1089,7 @@ func contentType(ct, uri string) (string, []byte, error) {
 		}
 	}
 
-	return "", nil, errors.New("uri content type not found")
+	return "", nil, status.Errorf(ErrInvalidPart, "uri content type not found")
 }
 
 // DefineDataPrompt creates a new data prompt and registers it.
@@ -1140,6 +1140,20 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// A refusal is an error: when the response finished blocked, the output is the
+// zero value of Out and the error is [ErrGenerationBlocked], carrying the
+// provider's explanation. The response is still returned alongside it.
+//
+// The output is the zero value of Out with no error in two other cases:
+// generation ended aborted, interrupted, or other, or the response carried no
+// text to parse, which is what a turn holding tool requests, interrupts, or
+// media looks like. Check resp.FinishReason, resp.Interrupts(), and
+// resp.ToolRequests() to handle them.
+//
+// This holds for a string Out as well, whose text is on the response rather
+// than the returned value: text produced alongside an abnormal finish is a
+// block notice or a partial answer, not the completion the prompt asked for.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
 		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
@@ -1149,6 +1163,21 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 	resp, err := dp.prompt.Execute(ctx, allOpts...)
 	if err != nil {
 		return base.Zero[Out](), nil, err
+	}
+
+	// A refusal cannot produce the value this helper promises, so it is
+	// reported rather than handed back as a zero value that reads as success.
+	// [Generate] still returns the response unwrapped.
+	if resp.FinishReason == FinishReasonBlocked {
+		return base.Zero[Out](), resp, blockedError(resp)
+	}
+
+	// The remaining abnormal finishes, and a response with no text at all
+	// (what a turn holding tool requests, interrupts, or media looks like), have
+	// nothing to extract but are not failures. The response goes back unparsed
+	// rather than as a schema error naming the wrong cause.
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
+		return base.Zero[Out](), resp, nil
 	}
 
 	output, err := extractTypedOutput[Out](resp)
@@ -1174,6 +1203,14 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 // The typed input argument fills the input slot last, so it wins over any
 // [WithInput] passed in opts.
+//
+// Like [DataPrompt.Execute], a blocked response fails with
+// [ErrGenerationBlocked], while one that ends aborted, interrupted, or other,
+// or carries no text to parse, yields zero-value Output and no error; check
+// Response.FinishReason, Response.Interrupts(), and Response.ToolRequests().
+//
+// Chunks are provisional, for the reason given on [GenerateDataStream]: the
+// Done value is the authoritative one.
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
@@ -1219,6 +1256,23 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return
 		}
 
+		// A refusal cannot produce the value this helper promises, so it is
+		// reported rather than handed back as a zero value that reads as success.
+		// [Generate] still returns the response unwrapped.
+		if resp.FinishReason == FinishReasonBlocked {
+			yield(nil, blockedError(resp))
+			return
+		}
+
+		// The remaining abnormal finishes, and a response with no text at all
+		// (what a turn holding tool requests, interrupts, or media looks like), have
+		// nothing to extract but are not failures. The response goes back unparsed
+		// rather than as a schema error naming the wrong cause.
+		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
+			return
+		}
+
 		output, err := extractTypedOutput[Out](resp)
 		if err != nil {
 			yield(nil, err)
@@ -1232,7 +1286,7 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 // Render renders the typed prompt template with the given input.
 func (dp *DataPrompt[In, Out]) Render(ctx context.Context, input In) (*GenerateActionOptions, error) {
 	if dp == nil {
-		return nil, errors.New("DataPrompt.Render: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Render: prompt is nil")
 	}
 
 	return dp.prompt.Render(ctx, input)

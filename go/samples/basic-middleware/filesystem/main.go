@@ -13,45 +13,43 @@
 // limitations under the License.
 
 // This sample demonstrates the Filesystem middleware, which grants the model
-// scoped file access via list_files, read_file, write_file, and
-// search_and_replace tools. All operations are confined to the configured
-// RootDir — os.Root (Go 1.25+) rejects any path that resolves outside it,
-// including via "..", absolute paths, or symbolic links.
+// scoped file access through list_files, read_file, write_file, and
+// search_and_replace tools. Everything is confined to RootDir by os.Root, which
+// rejects any path resolving outside it, including via "..", absolute paths, or
+// symlinks. A mock project in workspace/ gives the tools something to work on.
 //
-// A ready-to-demo workspace/ directory ships alongside this sample with a
-// mock project (README, docs, config, data, TODO list) so the tools have
-// something interesting to read and edit.
+//   - exploreFlow answers a question by listing and reading files.
+//   - editFlow applies a SEARCH/REPLACE edit, writing to workspace/ on disk.
 //
-// The sample defines two flows:
-//
-//   - exploreFlow (read-only): the model lists and reads files under
-//     workspace/ to answer a question about the project.
-//   - editFlow (write-enabled): the model reads a file and applies a
-//     SEARCH/REPLACE edit to satisfy a change request.
-//
-// To run:
+// Run it:
 //
 //	go run .
 //
-// In another terminal, ask a question about the workspace:
+// Or with the Dev UI, to watch the tool calls in a trace of every run at
+// http://localhost:4000/traces:
 //
-//	curl -N -X POST http://localhost:8080/exploreFlow \
+//	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
+//	genkit start -- go run .
+//
+// Or over HTTP:
+//
+//	curl -N -X POST 'http://localhost:8080/exploreFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
-//	  -d '{"data": "Summarise what this project does and what is still pending."}'
+//	  -d '{"data": {"question": "Summarise what this project does and what is still pending."}}'
 //
-// Apply an edit (writes are visible in workspace/todo.txt afterwards):
-//
-//	curl -N -X POST http://localhost:8080/editFlow \
+//	curl -N -X POST 'http://localhost:8080/editFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
-//	  -d '{"data": "Mark the in-memory response cache TODO as done."}'
+//	  -d '{"data": {"instruction": "Mark the in-memory response cache TODO as done."}}'
 package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/middleware"
@@ -63,10 +61,31 @@ import (
 // tool calls are rooted here; anything outside is unreachable by construction.
 const workspaceDir = "./workspace"
 
+// A struct rather than a bare string lets each field carry a description and a
+// default, which the Dev UI pre-fills its form from.
+type (
+	// ExploreRequest asks a question about the workspace.
+	ExploreRequest struct {
+		Question string `json:"question" jsonschema:"default=Summarise what this project does and what is still pending." jsonschema_description:"A question about the project in workspace/"`
+	}
+
+	// EditRequest asks for a change to a file in the workspace.
+	EditRequest struct {
+		Instruction string `json:"instruction" jsonschema:"default=Mark the in-memory response cache TODO as done." jsonschema_description:"A change to make to a file in workspace/"`
+	}
+)
+
+// model is shared by every flow below, so switching models or thinking levels
+// for the whole sample is a one-line change.
+var model = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	ThinkingConfig: &genai.ThinkingConfig{
+		ThinkingLevel: genai.ThinkingLevelMedium,
+	},
+})
+
 func main() {
 	ctx := context.Background()
 
-	// Initialize Genkit with the Google AI plugin and the Middleware plugin.
 	// Registering the Middleware plugin exposes the built-in middleware
 	// (Filesystem, Retry, Fallback, ...) to the Dev UI.
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
@@ -81,60 +100,64 @@ func main() {
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 }
 
-// DefineExploreFlow defines a read-only flow: the model answers questions
-// about the workspace by listing and reading files. AllowWriteAccess is not
-// set, so write_file and search_and_replace are not registered — the model
-// literally cannot modify anything.
+// DefineExploreFlow is read-only. AllowWriteAccess is unset, so write_file and
+// search_and_replace are never registered and the model cannot modify anything.
 func DefineExploreFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "exploreFlow", func(ctx context.Context, question string) (string, error) {
-		if question == "" {
-			question = "Summarise what this project does based on the files available."
-		}
-
-		return genkit.GenerateText(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingLevel: genai.ThinkingLevelMinimal,
-				},
-			})),
-			ai.WithSystem("You are a helpful project analyst. Use the filesystem tools to explore the workspace before answering."),
-			ai.WithPrompt(question),
-			ai.WithMaxTurns(20),
-			ai.WithUse(&middleware.Filesystem{RootDir: workspaceDir}),
-		)
-	})
+	genkit.DefineStreamingFlow(g, "exploreFlow",
+		func(ctx context.Context, input ExploreRequest, sendChunk core.StreamCallback[string]) (string, error) {
+			text, err := genkit.GenerateText(ctx, g,
+				ai.WithModel(model),
+				ai.WithSystem("You are a helpful project analyst. Use the filesystem tools to explore the workspace before answering."),
+				ai.WithPrompt(input.Question),
+				ai.WithMaxTurns(20),
+				ai.WithUse(&middleware.Filesystem{RootDir: workspaceDir}),
+				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+					// Every tool turn streams as well, and those chunks carry no
+					// text, so the answer looks like it starts late rather than
+					// arriving blank.
+					if text := chunk.Text(); text != "" {
+						return sendChunk(ctx, text)
+					}
+					return nil
+				}),
+			)
+			if err != nil {
+				return "", fmt.Errorf("could not explore the workspace: %w", err)
+			}
+			return text, nil
+		})
 }
 
-// DefineEditFlow defines a write-enabled flow: the model reads a file,
-// identifies the right spot, and applies a SEARCH/REPLACE edit. Enabling
-// AllowWriteAccess adds write_file and search_and_replace to the tool set.
+// DefineEditFlow is write-enabled: AllowWriteAccess adds write_file and
+// search_and_replace to the tool set.
 //
-// Changes are written to workspace/ on disk. Re-running this sample against
-// a fresh checkout will re-apply the edit; re-running against an already
-// edited workspace may report "search content not found" if the instruction
-// has already been satisfied.
+// Edits land in workspace/ on disk, so a second run against an already edited
+// workspace may report "search content not found".
 func DefineEditFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "editFlow", func(ctx context.Context, instruction string) (string, error) {
-		if instruction == "" {
-			instruction = "In todo.txt, mark the in-memory response cache item as done."
-		}
-
-		return genkit.GenerateText(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingLevel: genai.ThinkingLevelMinimal,
-				},
-			})),
-			ai.WithSystem(
-				"You are a careful project editor. Use the tools available to you to interact with the workspace. "+
-					"Keep unrelated content unchanged.",
-			),
-			ai.WithPrompt("Apply the following change to the workspace and report what you did:\n\n%s", instruction),
-			ai.WithMaxTurns(20),
-			ai.WithUse(&middleware.Filesystem{
-				RootDir:          workspaceDir,
-				AllowWriteAccess: true,
-			}),
-		)
-	})
+	genkit.DefineStreamingFlow(g, "editFlow",
+		func(ctx context.Context, input EditRequest, sendChunk core.StreamCallback[string]) (string, error) {
+			text, err := genkit.GenerateText(ctx, g,
+				ai.WithModel(model),
+				ai.WithSystem(
+					"You are a careful project editor. Use the tools available to you to interact with the workspace. "+
+						"Keep unrelated content unchanged.",
+				),
+				ai.WithPrompt("Apply the following change to the workspace and report what you did:\n\n%s", input.Instruction),
+				ai.WithMaxTurns(20),
+				ai.WithUse(&middleware.Filesystem{
+					RootDir:          workspaceDir,
+					AllowWriteAccess: true,
+				}),
+				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+					if text := chunk.Text(); text != "" {
+						return sendChunk(ctx, text)
+					}
+					return nil
+				}),
+			)
+			if err != nil {
+				return "", fmt.Errorf("could not edit the workspace: %w", err)
+			}
+			return text, nil
+		})
 }

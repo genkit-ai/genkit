@@ -217,8 +217,9 @@ functions instead of mocking types.
 
 ### Logging
 
-* **Library**: Use `log/slog` (available in Go 1.21+) or the internal logger.
-* **Format**: Use structured logging keys and values.
+* **Library**: Use the `core/logger` package-level functions (`logger.Debug(ctx, ...)`, `logger.Info`, `logger.Warn`, `logger.Error`) whenever a `context.Context` is available; they use the context's logger and let handlers correlate records with the active trace span (Dev UI, Cloud Logging). Fall back to `log/slog` only where there is no context (package init, load-time code).
+* **Format**: Use structured logging keys and values. Messages are lowercase, stable phrases with no trailing punctuation; put variable data in attributes, never `fmt.Sprintf` into the message. Use `"error"` (not `"err"`) as the key for errors.
+* **Levels**: `Debug` for per-request detail (spans, model turns, tool runs, middleware hooks); `Info` sparingly for one-time lifecycle events (init complete, server listening); `Warn` for misconfiguration, fallbacks, and skipped work; `Error` only where the error is not also returned to the caller (background goroutines, server handlers writing 500s). Never log-and-return the same error.
 
 ### Licensing
 

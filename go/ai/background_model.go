@@ -203,22 +203,21 @@ func NewBackgroundModelAction[Config any](
 		panic("ai.NewBackgroundModelAction: checkFn is required")
 	}
 
-	if opts == nil {
-		opts = &BackgroundModelOptions{}
+	o := BackgroundModelOptions{}
+	if opts != nil {
+		o = *opts
 	}
-	labelExplicit := opts.Label != ""
+	labelExplicit := o.Label != ""
 	if !labelExplicit {
-		opts.Label = name
+		o.Label = name
 	}
-	if opts.Supports == nil {
-		opts.Supports = &ModelSupports{}
-	}
+	o.Supports = cloneModelSupports(o.Supports)
 
-	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
+	configSchema, inputSchema := modelConfigSchemas[Config](o.ConfigSchema, o.Versions)
 
 	// The top-level Metadata wins over the embedded ModelOptions.Metadata on
 	// key conflicts.
-	metadata := modelActionMetadata(api.ActionTypeBackgroundModel, &opts.ModelOptions, configSchema, opts.ModelOptions.Metadata, opts.Metadata)
+	metadata := modelActionMetadata(api.ActionTypeBackgroundModel, &o.ModelOptions, configSchema, o.ModelOptions.Metadata, o.Metadata)
 
 	typedStartFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
 		// req.Config was normalized to the exact Config type by
@@ -230,12 +229,12 @@ func NewBackgroundModelAction[Config any](
 		return startFn(ctx, req, cfg)
 	}
 
-	mopts := &opts.ModelOptions
+	mopts := &o.ModelOptions
 
 	// normalizeConfig runs outermost so that the built-in wrappers and the
 	// start function all see the typed, converted config on the request.
 	fn := core.ChainMiddleware(
-		normalizeConfig[Config](name, opts.Versions),
+		normalizeConfig[Config](name, o.Versions),
 		simulateSystemPrompt(mopts, nil),
 		augmentWithContext(mopts, nil),
 		validateSupport(name, mopts),
@@ -255,7 +254,7 @@ func NewBackgroundModelAction[Config any](
 	// defaulted from the name yields to an explicit caller
 	// Metadata["description"]: leaving Description empty lets core's
 	// metadata fallback apply it.
-	description := opts.Label
+	description := o.Label
 	if !labelExplicit {
 		if _, ok := metadata["description"].(string); ok {
 			description = ""
@@ -266,7 +265,7 @@ func NewBackgroundModelAction[Config any](
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 		Check:       checkFn,
-		Cancel:      opts.Cancel,
+		Cancel:      o.Cancel,
 	}, wrappedFn)}
 }
 

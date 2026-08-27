@@ -32,8 +32,6 @@ from uuid import uuid4
 import uvicorn
 from pydantic import BaseModel
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -43,6 +41,7 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
+from genkit._core._model import ModelRef
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInit, AgentInput
 
@@ -250,6 +249,10 @@ def create_reflection_asgi_app(
                     )
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
+            elif type_param == 'defaultModel':
+                # Dev UI lists a model name. A stored ModelRef is an object;
+                # only the name is JSON-serializable here.
+                raw_values = {key: val.name if isinstance(val, ModelRef) else val for key, val in raw_values.items()}
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:
             logger.exception('Reflection /api/values failed')
@@ -308,15 +311,6 @@ def create_reflection_asgi_app(
             Route('/api/notify', notify, methods=['POST']),
             Route('/api/runAction', run, methods=['POST']),
             Route('/api/cancelAction', cancel, methods=['POST']),
-        ],
-        middleware=[
-            Middleware(
-                CORSMiddleware,  # type: ignore[arg-type]
-                allow_origins=['*'],
-                allow_methods=['*'],
-                allow_headers=['*'],
-                expose_headers=['X-Genkit-Trace-Id', 'X-Genkit-Span-Id', 'x-genkit-version'],
-            )
         ],
         lifespan=lifespan,
     )

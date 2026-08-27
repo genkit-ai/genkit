@@ -16,6 +16,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -434,7 +435,7 @@ func TestJSONLFormatter(t *testing.T) {
 
 		items2, ok := got2.([]any)
 		if !ok || len(items2) != 1 {
-			t.Fatalf("second ParseChunk() should return 1 new item (partial), got %v", got2)
+			t.Fatalf("second ParseChunk() should return 1 new item, got %v", got2)
 		}
 	})
 
@@ -468,14 +469,18 @@ func TestJSONLFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("ParseChunk still re-parses a genuinely partial trailing line", func(t *testing.T) {
+	t.Run("ParseChunk holds a partial trailing line back until it parses", func(t *testing.T) {
 		handler, _ := jsonlFormatter{}.Handler(schema)
 		sfh := handler.(StreamingFormatHandler)
 
-		sfh.ParseChunk(&ModelResponseChunk{
+		got1, _ := sfh.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(`{"id": 1}` + "\n" + `{"id":`)},
 			Index:   0,
 		})
+		items1, ok := got1.([]any)
+		if !ok || len(items1) != 1 {
+			t.Fatalf("first ParseChunk() should return only the finished line, got %v", got1)
+		}
 
 		got, _ := sfh.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(" 2}")},
@@ -489,6 +494,91 @@ func TestJSONLFormatter(t *testing.T) {
 			t.Errorf("ParseChunk() id = %v, want 2", id)
 		}
 	})
+
+	// Models emit the closing brace on its own often enough that this is the
+	// common shape of a stream, and the object it closes must arrive once.
+	t.Run("ParseChunk hands over an item once when its closing brace arrives alone", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		got := streamItems(t, sfh, 0, `{"name":"Pip"`, `}`, "\n"+`{"name":"Silas"`, `}`)
+		want := []string{`{"name":"Pip"}`, `{"name":"Silas"}`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("streamed items mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	// Same, but the brace arrives with the start of the next line, so the
+	// finished line is no longer the trailing one.
+	t.Run("ParseChunk hands over an item once when it finishes alongside the next line", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		got := streamItems(t, sfh, 0, `{"name":"Pip"`, "}\n"+`{"name":"Silas"}`)
+		want := []string{`{"name":"Pip"}`, `{"name":"Silas"}`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("streamed items mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	// Nothing partial reaches the caller, so a line arriving a few characters at
+	// a time is handed over once, whole, and never as the fragments it grew from.
+	t.Run("ParseChunk hands over nothing while a line is still being written", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		got := streamItems(t, sfh, 0, `{"name":"Pi`, `p the Pu`, `ffin"}`)
+		want := []string{`{"name":"Pip the Puffin"}`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("streamed items mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	// A tool loop starts a fresh message, so the line the old turn never
+	// finished is dropped rather than joined to the new turn's first line.
+	t.Run("ParseChunk starts a new turn from a clean cursor", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		if got := streamItems(t, sfh, 0, `{"name":"Pi`); len(got) != 0 {
+			t.Fatalf("unfinished line should hand over nothing, got %v", got)
+		}
+		got := streamItems(t, sfh, 1, `{"name":"Silas"}`)
+		want := []string{`{"name":"Silas"}`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("streamed items mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
+
+// streamItems feeds text to a handler one chunk at a time and returns the JSON
+// of every item handed over, in order, so a test can assert on what a consumer
+// of the stream would actually see.
+func streamItems(t *testing.T, sfh StreamingFormatHandler, index int, chunks ...string) []string {
+	t.Helper()
+
+	var got []string
+	for _, text := range chunks {
+		out, err := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(text)},
+			Index:   index,
+		})
+		if err != nil {
+			t.Fatalf("ParseChunk(%q) error = %v", text, err)
+		}
+		items, ok := out.([]any)
+		if !ok {
+			t.Fatalf("ParseChunk(%q) returned %T, want []any", text, out)
+		}
+		for _, item := range items {
+			b, err := json.Marshal(item)
+			if err != nil {
+				t.Fatalf("marshalling streamed item: %v", err)
+			}
+			got = append(got, string(b))
+		}
+	}
+	return got
 }
 
 func TestArrayFormatter(t *testing.T) {
@@ -580,6 +670,19 @@ func TestArrayFormatter(t *testing.T) {
 		}
 		if len(items) != 1 {
 			t.Errorf("ParseChunk() returned %d new items, want 1", len(items))
+		}
+	})
+
+	// Same contract as JSONL: an element under construction is held back until
+	// it parses, so nothing is handed over incomplete or handed over twice.
+	t.Run("ParseChunk hands over each element once and never partially", func(t *testing.T) {
+		handler, _ := arrayFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		got := streamItems(t, sfh, 0, `[{"id"`, `: 1`, `}`, `,`, `{"id": 2}`, `]`)
+		want := []string{`{"id":1}`, `{"id":2}`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("streamed items mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

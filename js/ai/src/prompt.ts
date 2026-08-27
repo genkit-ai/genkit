@@ -266,6 +266,9 @@ function definePromptAsync<
         metadata: {
           name: 'render',
           input,
+          metadata: {
+            promptName: name,
+          },
         },
         labels: {
           [SPAN_TYPE_ATTR]: 'promptTemplate',

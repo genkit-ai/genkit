@@ -211,13 +211,15 @@ func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
 	if len(spans) != 1 {
 		t.Fatalf("got %d spans named %q, want exactly 1", len(spans), "dangerous")
 	}
+	// An approval interrupt resolves the call without running the tool, and
+	// must still look exactly like a tool call in the trace.
 	const subtypeKey = "genkit:metadata:subtype"
 	subtype, ok := spanAttr(spans[0], subtypeKey)
 	if !ok {
 		t.Fatalf("span %q: missing attribute %q", "dangerous", subtypeKey)
 	}
-	if subtype != "tool" {
-		t.Errorf("span %q: %s = %q, want %q", "dangerous", subtypeKey, subtype, "tool")
+	if want := string(api.ActionTypeToolV2); subtype != want {
+		t.Errorf("span %q: %s = %q, want %q", "dangerous", subtypeKey, subtype, want)
 	}
 }
 

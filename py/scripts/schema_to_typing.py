@@ -85,7 +85,6 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel
@@ -93,8 +92,6 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
-
-warnings.filterwarnings('ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning)
 
 '''
 
@@ -137,23 +134,29 @@ def _models_allowing_extra(schema: dict) -> set[str]:
 
 
 def _typed_map_aliases(defs: dict) -> dict[str, str]:
-    """Inline object schemas with typed scalar ``additionalProperties`` -> Python dict alias.
+    """Object schemas that are only a string-keyed map become a dict alias.
 
-    e.g. ``ReflectionRunActionParams.telemetryLabels``:
-      ``{type: object, additionalProperties: {type: string}}`` -> ``dict[str, str]``.
-
-    Emitting these as type aliases (mirroring ``Metadata`` / ``Custom``) keeps the
-    symbol exported and importable while letting callers pass plain Python dicts —
-    a class with no fields and ``extra='forbid'`` would reject every key on the
-    Dev UI's ``{'genkitx:ignore-trace': 'true'}`` payload.
+    The collector document stores attributes and the spans table as records; a
+    class with no fields and extra='forbid' would drop every key (Dev UI
+    labels, span ids). Scalar maps stay ``dict[str, str]``, open maps become
+    ``dict[str, Any]``, and a ``$ref`` value type becomes ``dict[str, ThatType]``.
     """
 
     result: dict[str, str] = {}
     for name, defn in defs.items():
         if not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
+        if defn.get('properties'):
+            continue
         ap = defn.get('additionalProperties')
+        if ap is True or ap == {}:
+            result[name] = 'dict[str, Any]'
+            continue
         if not isinstance(ap, dict):
+            continue
+        ref = (ap.get('$ref') or '').split('/')[-1]
+        if ref:
+            result[name] = f'dict[str, {_output_name(ref)}]'
             continue
         ap_type = ap.get('type')
         if isinstance(ap_type, str) and ap_type in PRIM:
@@ -284,15 +287,18 @@ def _emit_model(
         f'    model_config: ClassVar[ConfigDict] = {cfg}',
     ]
     for k, v in props.items():
-        # Use schema_ for OutputConfig.schema to avoid shadowing GenkitModel.schema
+        # OutputConfig.schema would shadow BaseModel.schema, so the Python
+        # name is json_schema. alias pins the wire key; to_camel would emit
+        # jsonSchema.
         snake = _camel_to_snake(k)
         force_field = False
         if name == 'OutputConfig' and snake == 'schema':
-            field_name = 'schema_'
-            alias_extra = ", alias='schema'"
+            field_name = 'json_schema'
+            alias_extra = ", validation_alias='schema', serialization_alias='schema'"
+            force_field = True
         elif snake in ('schema_', 'schema'):
-            field_name = 'schema' if name != 'OutputConfig' else 'schema_'
-            alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
+            field_name = 'schema'
+            alias_extra = ''
         elif keyword.iskeyword(snake):
             # Field name is a Python reserved word (e.g. JSON Patch's `from`),
             # which is a keyword only in Python. Suffix the Python attribute
@@ -308,14 +314,11 @@ def _emit_model(
             field_name = snake
             alias_extra = ''
         py_type_str = _py_type(v, schema, defs, name, k)
-        # OutputConfig.schema is free-form JSON schema object; use dict for direct use
+        # Free-form JSON schema object, not the Schema model type.
         if name == 'OutputConfig' and snake == 'schema':
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
-        # OutputConfig.schema is free-form JSON schema dict (not Schema model)
-        if name == 'OutputConfig' and snake == 'schema':
-            py_type_str = 'dict[str, Any]'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:

@@ -425,9 +425,9 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 			}, nil
 		})
 	if err != nil {
-		logger.FromContext(ctx).Error("agent: failed to save snapshot",
+		logger.Error(ctx, "agent failed to save snapshot",
 			"parentId", parentID,
-			"err", err)
+			"error", err)
 		return ""
 	}
 
@@ -1016,7 +1016,7 @@ func (rt *agentRuntime[State]) takeFatal() error {
 // stream transform, both of which contain a panic in user code rather than let
 // it crash the process.
 func panicError(ctx context.Context, what string, rec any) error {
-	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
+	logger.Error(ctx, what+" panicked", "panic", rec, "stack", string(debug.Stack()))
 	return status.Errorf(status.ErrPanic, "%s panicked: %v", what, rec)
 }
 
@@ -1456,7 +1456,7 @@ func convertKeepText(cause error) *status.Error {
 		if cause == nil {
 			return nil
 		}
-		return status.Errorf(status.ErrInternal, "%s", cause)
+		return status.Errorf(status.ErrInternal, "%w", cause)
 	}
 	if !e.Public && e.Message != cause.Error() {
 		ne := *e
@@ -1488,7 +1488,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 		// omit state (fail closed, no leak) rather than recurse. The original
 		// cause is what the caller needs and is preserved on Error above.
 		if state, err := rt.outboundState(ctx, rt.sess.lastGoodState); err != nil {
-			logger.FromContext(ctx).Error(
+			logger.Error(ctx,
 				"agent state transform failed shaping failed-output state; omitting state",
 				"error", err)
 		} else {
@@ -1625,8 +1625,8 @@ func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID stri
 			return
 		case <-ticker.C:
 			if err := beatHeartbeat(ctx, rt.cfg.store, snapshotID); err != nil {
-				logger.FromContext(ctx).Debug("agent: heartbeat refresh failed",
-					"snapshotId", snapshotID, "err", err)
+				logger.Debug(ctx, "agent: heartbeat refresh failed",
+					"snapshotId", snapshotID, "error", err)
 			}
 		}
 	}
@@ -1762,8 +1762,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 			}, nil
 		})
 	if err != nil {
-		logger.FromContext(ctx).Error("agent: failed to finalize pending snapshot",
-			"snapshotId", pending.SnapshotID, "err", err)
+		logger.Error(ctx, "agent: failed to finalize pending snapshot",
+			"snapshotId", pending.SnapshotID, "error", err)
 	}
 }
 

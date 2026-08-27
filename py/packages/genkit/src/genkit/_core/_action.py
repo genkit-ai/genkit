@@ -33,6 +33,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
+from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -472,6 +473,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         return self._input_type
 
     @property
+    def input_class(self) -> type | None:
+        """The action's input annotation as a concrete class, when it is one."""
+        return getattr(self, '_input_class', None)
+
+    @property
     def input_schema(self) -> dict[str, object]:
         return self._input_schema
 
@@ -626,10 +632,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             type_adapter = TypeAdapter(arg_types[0])
             self._input_schema: dict[str, object] = type_adapter.json_schema()
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
+            self._input_class: type | None = arg_types[0] if isinstance(arg_types[0], type) else None
             self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
         else:
             self._input_schema = TypeAdapter(object).json_schema()
             self._input_type = None
+            self._input_class = None
             self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
@@ -695,22 +703,37 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # signal that "no input" is a legitimate way to invoke this action.
         if input is None and self._first_arg_optional:
             return input
+        payload: object = input
+        # A differently-typed ModelRequest with a mapping config is dumped and
+        # re-parsed into the plugin class. A Pydantic config instance of the
+        # wrong class is a caller mistake — dump would silently coerce it.
+        if isinstance(input, BaseModel):
+            try:
+                return self._input_type.validate_python(input)
+            except ValidationError:
+                config = getattr(input, 'config', None)
+                if isinstance(config, BaseModel):
+                    expected = declared_config_type(self._input_class) if self._input_class is not None else None
+                    want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
+                    raise GenkitError(
+                        message=(
+                            f"Invalid input for action '{self.name}': "
+                            f'config must be {want} or a mapping, '
+                            f'got {config_type_path(type(config))}'
+                        ),
+                        status='INVALID_ARGUMENT',
+                    ) from None
+                payload = input.model_dump(mode='python')
+
         try:
-            return self._input_type.validate_python(input)
+            return self._input_type.validate_python(payload)
         except ValidationError as e:
-            if input is None:
-                raise GenkitError(
-                    message=(
-                        f"Action '{self.name}' requires input but none was provided. "
-                        'Please supply a valid input payload.'
-                    ),
-                    status='INVALID_ARGUMENT',
-                ) from e
-            raise GenkitError(
-                message=f"Invalid input for action '{self.name}': {e}",
-                status='INVALID_ARGUMENT',
-                cause=e,
-            ) from e
+            msg = (
+                f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
+                if input is None
+                else f"Invalid input for action '{self.name}': {e}"
+            )
+            raise GenkitError(message=msg, status='INVALID_ARGUMENT', cause=e) from e
 
     async def _run_with_telemetry(
         self,

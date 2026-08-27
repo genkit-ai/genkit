@@ -35,7 +35,6 @@ from genkit import (
     MediaPart,
     Message,
     Metadata,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponseChunk,
@@ -47,6 +46,8 @@ from genkit import (
     ToolDefinition,
     ToolRequestPart,
 )
+from genkit._core._model import OutputConfig
+from genkit.plugin_api import ModelConfig
 
 
 def _create_sample_request() -> ModelRequest:
@@ -442,8 +443,7 @@ class TestMaybeStripFences:
         """Strips markdown fences when JSON output is requested."""
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='json',
-            output_schema={'type': 'object'},
+            output=OutputConfig(format='json', json_schema={'type': 'object'}),
         )
         parts = [Part(root=TextPart(text='```json\n{"a": 1}\n```'))]
         result = maybe_strip_fences(request, parts)
@@ -453,7 +453,7 @@ class TestMaybeStripFences:
         """Does not modify responses when output format is not json."""
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='text',
+            output=OutputConfig(format='text'),
         )
         fenced = '```json\n{"a": 1}\n```'
         parts = [Part(root=TextPart(text=fenced))]
@@ -474,8 +474,7 @@ class TestMaybeStripFences:
         """Does not modify clean JSON responses."""
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
-            output_format='json',
-            output_schema={'type': 'object'},
+            output=OutputConfig(format='json', json_schema={'type': 'object'}),
         )
         text = '{"name": "John"}'
         parts = [Part(root=TextPart(text=text))]
@@ -699,9 +698,11 @@ def test_structured_output_uses_native_output_config(model_name: str) -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-        output_constrained=True,
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
     )
 
     params = model._build_params(request)
@@ -718,9 +719,7 @@ def test_structured_output_uses_native_output_config_for_empty_schema() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
-        output_format='json',
-        output_schema={},
-        output_constrained=True,
+        output=OutputConfig(format='json', json_schema={}, constrained=True),
     )
 
     params = model._build_params(request)
@@ -735,8 +734,7 @@ def test_structured_output_falls_back_to_system_prompt() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
-        output_format='json',
-        output_constrained=True,
+        output=OutputConfig(format='json', constrained=True),
     )
 
     params = model._build_params(request)
@@ -754,9 +752,11 @@ def test_structured_output_falls_back_when_unconstrained(output_constrained: boo
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-        output_constrained=output_constrained,
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=output_constrained,
+        ),
     )
 
     params = model._build_params(request)
@@ -776,9 +776,11 @@ def test_structured_output_falls_back_for_unsupported_models() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-        output_constrained=True,
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
     )
 
     params = model._build_params(request)
@@ -798,9 +800,11 @@ def test_structured_output_falls_back_when_model_disallows_constraints() -> None
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-        output_constrained=True,
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
     )
 
     params = model._build_params(request)
@@ -817,9 +821,11 @@ def test_structured_output_with_no_tools_capability() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-        output_constrained=True,
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
     )
     params_without_tools = model._build_params(request)
 
@@ -1317,10 +1323,12 @@ def test_structured_output_merges_existing_output_config() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
-        output_format='json',
-        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
         config=config,
-        output_constrained=True,
     )
 
     params = model._build_params(request)

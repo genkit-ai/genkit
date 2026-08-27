@@ -2,7 +2,7 @@
 model: googleai/gemini-flash-latest
 config:
   thinkingConfig:
-    thinkingLevel: MINIMAL
+    thinkingLevel: MEDIUM
 input:
   schema: RecipeRequest
 output:
@@ -10,7 +10,7 @@ output:
   schema: Recipe
 ---
 {{role "system"}}
-You are an experienced chef. Come up with easy, creative recipes.
+{{> chefPersona}}
 
 {{role "user"}}
 Create a {{cuisine}} {{dish}} recipe for {{servingSize}} people that takes under {{maxPrepMinutes}} minutes to prepare.

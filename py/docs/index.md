@@ -91,7 +91,7 @@
 
 ::: genkit.ModelResponseChunk
 
-::: genkit.ModelConfig
+::: genkit.ModelConfigDict
 
 ::: genkit.ModelInfo
 
@@ -147,7 +147,7 @@
 
 ::: genkit.model.ModelRef
 
-::: genkit.model.ModelConfig
+::: genkit.model.ModelConfigDict
 
 ::: genkit.model.Message
 
@@ -216,6 +216,8 @@
 ::: genkit.plugin_api.model_action_metadata
 
 ::: genkit.plugin_api.model_ref
+
+::: genkit.plugin_api.ModelConfig
 
 ::: genkit.plugin_api.ModelRef
 

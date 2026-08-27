@@ -19,9 +19,13 @@ package core
 import (
 	"context"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestRunInFlow(t *testing.T) {
@@ -256,4 +260,104 @@ func TestFlowNameFromContextOutsideFlow(t *testing.T) {
 			t.Errorf("FlowNameFromContext outside flow = %q, want empty string", got)
 		}
 	})
+}
+
+// stepSpanCollector records finished spans so a test can assert on how they
+// nest. It is the same shape as the collector in ai/testutil_test.go, kept here
+// because tests live beside the file they cover.
+type stepSpanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *stepSpanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *stepSpanCollector) Shutdown(context.Context) error { return nil }
+
+func (c *stepSpanCollector) byName(name string) sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.spans {
+		if s.Name() == name {
+			return s
+		}
+	}
+	return nil
+}
+
+func collectStepSpans(t *testing.T) *stepSpanCollector {
+	t.Helper()
+	c := &stepSpanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// TestRunWithContextNesting is the reason RunWithContext exists: work started
+// with the context it hands over belongs to the step, while work started with
+// the enclosing context escapes to the flow.
+func TestRunWithContextNesting(t *testing.T) {
+	r := registry.New()
+	c := collectStepSpans(t)
+
+	flow := defineFlow(r, "nesting", func(ctx context.Context, _ any) (int, error) {
+		// The step's own context reaches the callee, so its span nests.
+		if _, err := RunWithContext(ctx, "with-context", func(stepCtx context.Context) (int, error) {
+			return tracing.RunInNewSpan(stepCtx, &tracing.SpanMetadata{Name: "inner-nested"}, nil,
+				func(context.Context, any) (int, error) { return 1, nil })
+		}); err != nil {
+			return 0, err
+		}
+
+		// Run cannot pass the step context on, so a callee handed the flow's
+		// context reports against the flow instead.
+		if _, err := Run(ctx, "without-context", func() (int, error) {
+			return tracing.RunInNewSpan(ctx, &tracing.SpanMetadata{Name: "inner-escaped"}, nil,
+				func(context.Context, any) (int, error) { return 2, nil })
+		}); err != nil {
+			return 0, err
+		}
+		return 3, nil
+	})
+
+	if _, err := flow.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	step := c.byName("with-context")
+	nested := c.byName("inner-nested")
+	escaped := c.byName("inner-escaped")
+	for name, s := range map[string]sdktrace.ReadOnlySpan{
+		"with-context": step, "inner-nested": nested, "inner-escaped": escaped,
+	} {
+		if s == nil {
+			t.Fatalf("span %q was not recorded", name)
+		}
+	}
+
+	if got, want := nested.Parent().SpanID(), step.SpanContext().SpanID(); got != want {
+		t.Errorf("inner-nested parent = %s, want the with-context step %s", got, want)
+	}
+	if got := escaped.Parent().SpanID(); got == c.byName("without-context").SpanContext().SpanID() {
+		t.Errorf("inner-escaped nested under its step, so Run now propagates context and this test is stale")
+	}
+}
+
+func TestRunWithContextOutsideFlow(t *testing.T) {
+	_, err := RunWithContext(context.Background(), "step", func(context.Context) (int, error) {
+		return 42, nil
+	})
+	if err == nil {
+		t.Fatal("expected an error when called outside a flow")
+	}
+	if !strings.Contains(err.Error(), "flow.RunWithContext") {
+		t.Errorf("error %q should name the function that was called", err)
+	}
 }

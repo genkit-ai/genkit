@@ -56,10 +56,6 @@ class Logger {
     explicitBody?: string,
     explicitAttributes?: Record<string, any>
   ) {
-    if (process.env.GENKIT_OTEL_ENABLE_LOGS !== 'true') {
-      return;
-    }
-
     try {
       const currentLevel = getLogger().level;
       if (

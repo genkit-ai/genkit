@@ -26,11 +26,11 @@ else:
 
 import json
 from functools import cached_property
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import (
     Media,
@@ -45,6 +45,12 @@ from genkit import (
     TextPart,
 )
 from genkit.plugin_api import ActionRunContext, tracer
+from genkit_google_genai.models._sdk_config import (
+    attach_leftovers,
+    dump_family_config,
+    sdk_config_error,
+    split_sdk_fields,
+)
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -57,7 +63,14 @@ class ImagenVersion(StrEnum):
 
     IMAGEN3 = 'imagen-3.0-generate-002'
     IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
-    IMAGEN2 = 'imagegeneration@006'
+
+
+# Quote autocomplete needs a Literal. The enum above is the catalog; a test
+# requires these members and the enum values to be the same set.
+KnownImagen: TypeAlias = Literal[
+    'imagen-3.0-generate-002',
+    'imagen-3.0-fast-generate-001',
+]
 
 
 SUPPORTED_MODELS = {
@@ -81,16 +94,6 @@ SUPPORTED_MODELS = {
             output=['media'],
         ),
     ),
-    ImagenVersion.IMAGEN2: ModelInfo(
-        label='Vertex AI - Imagen2',
-        supports=Supports(
-            media=False,
-            multiturn=False,
-            tools=False,
-            system_role=True,
-            output=['media'],
-        ),
-    ),
 }
 
 DEFAULT_IMAGE_SUPPORT = Supports(
@@ -100,6 +103,29 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     system_role=True,
     output=['media'],
 )
+
+
+def is_imagen_model_name(name: str) -> bool:
+    """Return True if ``name`` is an Imagen model.
+
+    Imagen ids start with ``imagen-`` on the local name after stripping the
+    plugin / ``models/`` prefix. Gemini native image (``gemini-…-image``) is
+    not Imagen.
+    """
+    return name.split('/')[-1].lower().startswith('imagen-')
+
+
+def is_unsupported_image_model_name(name: str) -> bool:
+    """Return True for image ids that must not route anywhere.
+
+    ``imagegeneration@*`` and ``imagetext@*`` were shut down by Google in
+    June 2026, and ``virtual-try-on-*`` needs a person+product image request
+    shape this plugin does not implement. Letting any of those fall through
+    to the Gemini default would answer with the wrong model, so callers
+    treat these ids as not-a-model instead.
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith('imagegeneration@') or local.startswith('imagetext@') or local.startswith('virtual-try-on-')
 
 
 def vertexai_image_model_info(
@@ -195,20 +221,21 @@ class ImagenModel:
             )
         )
 
-    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
-        cfg = None
+    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfig | None:
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=ImagenConfigSchema,
+            action_name=self._version,
+        )
+        if not dumped:
+            return None
 
-        if request.config:
-            request_config = request.config
-            ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
-            try:
-                cfg = ta.validate_python(request_config)
-            except ValidationError as e:
-                raise ValueError(
-                    'The configuration dictionary is invalid. Refer the documentation for available fields'
-                ) from e
-
-        return cfg
+        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateImagesConfig)
+        try:
+            cfg = genai_types.GenerateImagesConfig(**known) if known else genai_types.GenerateImagesConfig()
+        except ValidationError as e:
+            raise sdk_config_error(action_name=self._version, error=e) from e
+        return attach_leftovers(cfg, leftovers, nest='parameters')
 
     def _contents_from_response(self, response: genai_types.GenerateImagesResponse) -> list:
         """Retrieve contents from google-genai response.

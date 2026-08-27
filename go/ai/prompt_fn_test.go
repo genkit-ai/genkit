@@ -337,11 +337,25 @@ func TestHistoryStaysOutOfGenerationContext(t *testing.T) {
 	}
 }
 
+// TestCallerMessagesAreNotMutated collects every angle on one invariant: a
+// message the caller owns is never written to by the framework. Messages reach
+// generation from four places and each has its own way of going wrong, so they
+// are one test rather than four unrelated ones with near-identical names.
+//
+// Callers reuse message slices across turns, so an in-place append would leak
+// output instructions or a metadata stamp into stored history.
+func TestCallerMessagesAreNotMutated(t *testing.T) {
+	t.Run("from a content function", messagesFromFnAreNotMutated)
+	t.Run("declared with WithMessages, stamped by the model", declaredMessagesSurviveMetadataStamping)
+	t.Run("declared with WithMessages, appended downstream", declaredMessagesAreCopiedPerExecution)
+	t.Run("passed straight to GenerateWithRequest", callerMessagesSurviveInstructionInjection)
+}
+
 // TestFnMessagesNotMutatedByInstructionInjection guards the uniform cloning in
 // renderMessages: messages returned by WithMessagesFn typically alias a
 // session or the caller's own slice, and a later stage that appends to its
 // target message in place would corrupt that caller-owned history.
-func TestFnMessagesNotMutatedByInstructionInjection(t *testing.T) {
+func messagesFromFnAreNotMutated(t *testing.T) {
 	r := newTestRegistry(t)
 	m := defineFakeModel(t, r, fakeModelConfig{
 		name: "test/fnMutModel",
@@ -703,7 +717,7 @@ func TestLiteralPercentSurvivesWithPrompt(t *testing.T) {
 // and are reused by every execution, so handing out the originals to a stage
 // that appends to a message in place would let one execution alter the prompt
 // for the next.
-func TestStaticMessagesNotSharedAcrossExecutions(t *testing.T) {
+func declaredMessagesSurviveMetadataStamping(t *testing.T) {
 	shared := NewUserTextMessage("stored on the prompt")
 	shared.Metadata = map[string]any{"origin": "config"}
 
@@ -1175,7 +1189,7 @@ func TestStaticMessagesAreVerbatim(t *testing.T) {
 // rather than forwarded by reference: a prompt's declared messages are shared
 // by every execution of it, so one execution's downstream mutation would
 // otherwise be visible to the next.
-func TestStaticMessagesCopiedPerExecution(t *testing.T) {
+func declaredMessagesAreCopiedPerExecution(t *testing.T) {
 	shared := NewUserTextMessage("history")
 	_, p, get := capturePrompt(t, "staticIsolation",
 		WithMessages(shared),
@@ -1293,7 +1307,7 @@ func TestStaticPartsConflictWithText(t *testing.T) {
 // tested in format_test.go; this runs it through the public entry point,
 // GenerateWithRequest, which takes the caller's own message slice and is what
 // made an in-place append reach a conversation the caller keeps.
-func TestInstructionInjectionDoesNotMutateCallerMessages(t *testing.T) {
+func callerMessagesSurviveInstructionInjection(t *testing.T) {
 	r := newTestRegistry(t)
 	var captured *ModelRequest
 	defineFakeModel(t, r, fakeModelConfig{

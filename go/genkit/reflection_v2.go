@@ -187,7 +187,7 @@ func (s *reflectionServerV2) connect(ctx context.Context) error {
 	s.writeMu.Lock()
 	s.conn = conn
 	s.writeMu.Unlock()
-	slog.Debug("reflection V2: connected", "url", s.opts.URL)
+	slog.Info("reflection V2: connected to reflection server", "url", s.opts.URL)
 	return nil
 }
 
@@ -224,7 +224,7 @@ func (s *reflectionServerV2) session(ctx context.Context) {
 		}
 
 		if err := s.connect(ctx); err != nil {
-			slog.Debug("reflection V2: reconnect failed", "err", err)
+			slog.Debug("reflection V2: reconnect failed", "error", err)
 			attempt++
 			continue
 		}
@@ -251,13 +251,13 @@ func (s *reflectionServerV2) register(ctx context.Context) {
 
 	result, err := s.sendRequest(ctx, "register", params)
 	if err != nil {
-		slog.Error("reflection V2: register failed", "err", err)
+		slog.Error("reflection V2: register failed", "error", err)
 		return
 	}
 	var resp reflectionRegisterResponse
 	if len(result) > 0 {
 		if err := json.Unmarshal(result, &resp); err != nil {
-			slog.Error("reflection V2: invalid register response", "err", err)
+			slog.Error("reflection V2: invalid register response", "error", err)
 			return
 		}
 	}
@@ -277,7 +277,7 @@ func (s *reflectionServerV2) readLoop(ctx context.Context) {
 		var msg jsonRPCMessage
 		if err := wsjson.Read(ctx, s.conn, &msg); err != nil {
 			if ctx.Err() == nil && websocket.CloseStatus(err) == -1 {
-				slog.Debug("reflection V2: read error", "err", err)
+				slog.Debug("reflection V2: read error", "error", err)
 			}
 			return
 		}
@@ -584,7 +584,7 @@ func (s *reflectionServerV2) handleRunActionBidi(ctx context.Context, req *jsonR
 				continue
 			}
 			if err := s.sendStreamChunk(req.ID, chunk); err != nil {
-				slog.Debug("reflection V2: streamChunk send failed", "err", err)
+				slog.Debug("reflection V2: streamChunk send failed", "error", err)
 				forward = false
 			}
 		}
@@ -616,7 +616,7 @@ func (s *reflectionServerV2) handleRunActionBidi(ctx context.Context, req *jsonR
 func (s *reflectionServerV2) handleSendInputStreamChunk(req *jsonRPCMessage) {
 	var params ReflectionSendInputStreamChunkParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		slog.Debug("reflection V2: invalid sendInputStreamChunk params", "err", err)
+		slog.Debug("reflection V2: invalid sendInputStreamChunk params", "error", err)
 		return
 	}
 	session := s.lookupBidiSession(params.RequestID)
@@ -633,7 +633,7 @@ func (s *reflectionServerV2) handleSendInputStreamChunk(req *jsonRPCMessage) {
 func (s *reflectionServerV2) handleEndInputStream(req *jsonRPCMessage) {
 	var params ReflectionEndInputStreamParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		slog.Debug("reflection V2: invalid endInputStream params", "err", err)
+		slog.Debug("reflection V2: invalid endInputStream params", "error", err)
 		return
 	}
 	session := s.lookupBidiSession(params.RequestID)
@@ -736,7 +736,7 @@ func (s *bidiSession) run(conn api.BidiJSONConnection) {
 			return
 		}
 		if err := conn.Send(ev.chunk); err != nil {
-			slog.Debug("reflection V2: bidi Send failed", "err", err)
+			slog.Debug("reflection V2: bidi Send failed", "error", err)
 		}
 	}
 }
@@ -842,7 +842,7 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 func (s *reflectionServerV2) handleConfigure(req *jsonRPCMessage) {
 	var params ReflectionConfigureParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		slog.Error("reflection V2: invalid configure params", "err", err)
+		slog.Error("reflection V2: invalid configure params", "error", err)
 		return
 	}
 	configureTelemetry(params.TelemetryServerURL)
@@ -878,7 +878,7 @@ func (s *reflectionServerV2) handleCancelAction(req *jsonRPCMessage) {
 // the read loop will detect a broken connection on its next read.
 func (s *reflectionServerV2) sendResponse(id string, result any) {
 	if err := s.send(&jsonRPCResponse{JSONRPC: "2.0", Result: result, ID: id}); err != nil {
-		slog.Error("reflection V2: failed to send response", "err", err, "id", id)
+		slog.Error("reflection V2: failed to send response", "error", err, "id", id)
 	}
 }
 
@@ -889,7 +889,7 @@ func (s *reflectionServerV2) sendErrorResponse(id string, code int, message stri
 		Error:   &jsonRPCError{Code: code, Message: message, Data: data},
 		ID:      id,
 	}); err != nil {
-		slog.Error("reflection V2: failed to send error response", "err", err, "id", id)
+		slog.Error("reflection V2: failed to send error response", "error", err, "id", id)
 	}
 }
 

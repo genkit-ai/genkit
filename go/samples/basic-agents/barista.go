@@ -76,7 +76,7 @@ func defineBaristaAgent(g *genkit.Genkit) *aix.Agent[BaristaOrder] {
 	addToOrder := genkitx.DefineTool(g, "addToOrder",
 		"Records one drink the customer ordered. Call it every time they ask for a drink.",
 		func(ctx context.Context, in struct {
-			Drink string `json:"drink" jsonschema:"description=The drink to add e.g. flat white"`
+			Drink string `json:"drink" jsonschema_description:"The drink to add e.g. flat white"`
 		}) (string, error) {
 			sess := aix.SessionFromContext[BaristaOrder](ctx)
 			if sess == nil {
@@ -95,7 +95,7 @@ func defineBaristaAgent(g *genkit.Genkit) *aix.Agent[BaristaOrder] {
 
 	return genkitx.DefineAgent(g, name,
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithTools(addToOrder),
 			// The read side. WithSystemFn runs once per turn, so the
 			// instruction is rebuilt from whatever the earlier turns left

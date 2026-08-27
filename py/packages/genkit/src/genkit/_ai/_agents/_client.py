@@ -527,11 +527,18 @@ class AgentAPI(Protocol, Generic[StateT]):
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
-        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
+        """Starts a new session, or resumes one.
 
-        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
-        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
-        passing a state blob raises :class:`AgentInitError`.
+        Store-backed agents take ``snapshot_id`` and/or ``session_id``.
+        ``snapshot_id`` resumes that exact row (it must be completed).
+        ``session_id`` continues the conversation: skip a failed / aborted /
+        pending leaf, or start fresh if there isn't a completed turn yet.
+        Passing both is fine: the snapshot picks the row, the session id
+        checks it belongs to that session.
+
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed
+        agents (no store). Mixing those with a resume id, or sending a state
+        blob to a store-backed agent, raises :class:`AgentInitError`.
         """
         ...
 
@@ -541,7 +548,13 @@ class AgentAPI(Protocol, Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> AgentChat[StateT]:
-        """Loads a server snapshot and returns a session with history restored."""
+        """Loads a stored snapshot onto a new chat.
+
+        Pass exactly one of ``snapshot_id`` or ``session_id``. The chat is
+        pointed at that row as stored — including a failed, aborted, or
+        still-pending turn. ``send()`` resumes that row, so a non-completed
+        leaf is rejected. To continue the conversation, use ``chat(session_id=)``.
+        """
         ...
 
     async def get_snapshot(
@@ -550,11 +563,25 @@ class AgentAPI(Protocol, Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshotSchema | None:
-        """Reads a snapshot without starting a session."""
+        """Reads a stored snapshot without starting a session.
+
+        Pass exactly one of ``snapshot_id`` or ``session_id``. A session
+        lookup returns the newest row even when that turn failed or was
+        aborted. ``chat(session_id=)`` is how you continue from the last
+        good turn.
+        """
         ...
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot."""
+        """Aborts a running snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+        """
         ...
 
 
@@ -563,8 +590,8 @@ class AgentClient(Generic[StateT]):
 
     This is the one ergonomic surface (``chat``/``load_chat``/``get_snapshot``/
     ``abort``) for talking to an agent, whether it's remote (HTTP transport) or
-    in-process (the local agent action). Point it at a transport and you get the
-    same client either way.
+    in-process (the local agent action). ``get_snapshot`` and ``load_chat``
+    read the store; ``chat()`` is how you start or continue a conversation.
 
     ``state_schema`` types the custom session state so the resulting chat hands
     back a validated model instead of a bare dict; leave it None for untyped state.
@@ -588,11 +615,18 @@ class AgentClient(Generic[StateT]):
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
-        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
+        """Starts a new session, or resumes one.
 
-        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
-        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
-        passing a state blob raises :class:`AgentInitError`.
+        Store-backed agents take ``snapshot_id`` and/or ``session_id``.
+        ``snapshot_id`` resumes that exact row (it must be completed).
+        ``session_id`` continues the conversation: skip a failed / aborted /
+        pending leaf, or start fresh if there isn't a completed turn yet.
+        Passing both is fine: the snapshot picks the row, the session id
+        checks it belongs to that session.
+
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed
+        agents (no store). Mixing those with a resume id, or sending a state
+        blob to a store-backed agent, raises :class:`AgentInitError`.
         """
         session_transport = copy.copy(self._transport)
         return AgentChat(
@@ -613,7 +647,13 @@ class AgentClient(Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> AgentChat[StateT]:
-        """Loads a server snapshot and returns a chat with history restored."""
+        """Loads a stored snapshot onto a new chat.
+
+        Pass exactly one of ``snapshot_id`` or ``session_id``. The chat is
+        pointed at that row as stored — including a failed, aborted, or
+        still-pending turn. ``send()`` resumes that row, so a non-completed
+        leaf is rejected. To continue the conversation, use ``chat(session_id=)``.
+        """
         snapshot = await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot is None:
             raise ValueError(f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.')
@@ -629,11 +669,25 @@ class AgentClient(Generic[StateT]):
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshotSchema | None:
-        """Reads a snapshot without starting a session."""
+        """Reads a stored snapshot without starting a session.
+
+        Pass exactly one of ``snapshot_id`` or ``session_id``. A session
+        lookup returns the newest row even when that turn failed or was
+        aborted. ``chat(session_id=)`` is how you continue from the last
+        good turn.
+        """
         return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot on the server."""
+        """Aborts a running snapshot on the server.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status (``completed``,
+        ``failed``, ``aborted``) means the turn had already finished — this
+        call did not rewrite it. ``None`` means nothing was observed (no row,
+        or the store never ran the abort write).
+        """
         return await self._transport.abort_snapshot(snapshot_id)
 
 
@@ -665,19 +719,23 @@ def init_from(
 
 
 def validate_init(init: AgentInit) -> None:
-    """Ensures init specifies at most one resume handle."""
-    provided = [
-        name
-        for name, present in (
-            ('state', init.state is not None),
-            ('snapshot_id', bool(init.snapshot_id)),
-            ('session_id', bool(init.session_id)),
-        )
-        if present
-    ]
-    if len(provided) > 1:
-        raise ValueError(
-            f'AgentInit may specify at most one of state, snapshot_id, or session_id; got {", ".join(provided)}.'
+    """Rejects mixing a state blob with a resume id.
+
+    Passing both ``snapshot_id`` and ``session_id`` is fine: the snapshot id
+    picks the row, and the session id checks that the row belongs to that
+    session. What is not allowed is sending ``messages`` / ``artifacts`` /
+    custom state alongside either id — resume from the store, or seed a new
+    conversation, not both.
+    """
+    has_resume = bool(init.snapshot_id) or bool(init.session_id)
+    if init.state is not None and has_resume:
+        fields = seeded_init_fields(init.state)
+        raise AgentInitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f'Cannot send {fields} together with snapshot_id/session_id. '
+                'Resume with snapshot_id and/or session_id, or send a state blob, not both.'
+            ),
         )
 
 
@@ -973,10 +1031,10 @@ class AgentChat(Generic[StateT]):
                 )
             if init.state is not None:
                 self._set_state(init.state)
-            elif init.snapshot_id:
+            if init.snapshot_id:
                 self._snapshot_id = init.snapshot_id
                 self._resume_snapshot_id = init.snapshot_id
-            elif init.session_id:
+            if init.session_id:
                 self._session_id = init.session_id
 
     @property
@@ -1016,7 +1074,7 @@ class AgentChat(Generic[StateT]):
         metadata a resume needs). The chunks are identical whether state is server-
         or client-managed, so there's one path here. For server-managed sessions
         the durable snapshot in the store stays the source of truth — use
-        ``get_snapshot()`` / ``load_chat`` when you need it (e.g. after a detached
+        ``get_snapshot()`` / ``load_chat`` to read it (e.g. after a detached
         turn, whose chunks this session never saw).
         """
         return self._messages
@@ -1150,10 +1208,11 @@ class AgentChat(Generic[StateT]):
         # reads the stream. For detach we only care about the resulting handle.
         _stream, output_awaitable = await self._transport.run_turn(agent_input=inp, init=init)
         raw_output = await output_awaitable
-        # Point the chat at the pending detached snapshot (same as JS applyOutput).
-        # A send() while it is still pending is rejected; after it completes, send
-        # continues from that snapshot. Abort rolls back the optimistic prompt —
-        # reload via load_chat(session_id=...) to resume from the last completed turn.
+        # Point the chat at the pending detached snapshot. A send() while it is
+        # still pending is rejected; after it completes, send continues from
+        # that snapshot. Abort stops the server turn but keeps the prompt —
+        # it was still asked. Use chat(session_id=...) to resume from the last
+        # completed turn.
         self._update_from_output(raw=raw_output, message_count_before=message_count_before)
 
         if not raw_output.snapshot_id:
@@ -1162,11 +1221,20 @@ class AgentChat(Generic[StateT]):
             snapshot_id=raw_output.snapshot_id,
             transport=self._transport,
             state_schema=self._state_schema,
-            on_abort_rollback=lambda: self._rollback_optimistic(message_count_before),
         )
 
     async def abort(self) -> SnapshotStatus | None:
         """Stops the session's server-side work by aborting its current snapshot.
+
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means the turn was still running and this call cancelled it
+        (the row is now ``aborted``). A terminal status means the turn had
+        already finished. ``None`` means nothing was observed.
+
+        Against this SDK the return is always the previous status. After abort
+        the chat still points at the aborted leaf — ``chat(session_id=…)``
+        before the next ``send()``. The local transcript keeps the prompt;
+        it was still asked.
 
         Raises:
             ValueError: if there's no snapshot to abort — the agent is
@@ -1220,8 +1288,10 @@ class AgentChat(Generic[StateT]):
             # full live state every turn.
             return AgentInit(state=self._session_state())
 
-        # Server store owns the state; point it at what to load. Prefer the
-        # current resume snapshot, fall back to the session id, else start fresh.
+        # A snapshot id already names the row. Sending session_id too would
+        # re-check ownership every turn, and a mismatched id on the snapshot
+        # vs its state would reject a row the caller already chose. Session
+        # id is only the resume handle when there isn't a snapshot yet.
         if self._resume_snapshot_id:
             return AgentInit(snapshot_id=self._resume_snapshot_id)
         if self._session_id:
@@ -1350,6 +1420,9 @@ class AgentChat(Generic[StateT]):
             self._merge_artifacts(raw.artifacts)
 
 
+# Settled statuses for client poll/wait loops. Includes ``expired`` because
+# resolve/get overlays a stale pending heartbeat as expired even though stores
+# never persist that status.
 TERMINAL_SNAPSHOT_STATUSES = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
@@ -1367,12 +1440,10 @@ class DetachedTask(Generic[StateT]):
         snapshot_id: str,
         transport: AgentTransport[StateT],
         state_schema: type[StateT] | None = None,
-        on_abort_rollback: Callable[[], None] | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self._transport = transport
         self._state_schema = state_schema
-        self._on_abort_rollback = on_abort_rollback
 
     def _parse_snapshot(self, raw: SessionSnapshotSchema | None) -> SessionSnapshot[StateT] | None:
         if raw is None:
@@ -1415,14 +1486,16 @@ class DetachedTask(Generic[StateT]):
     async def abort(self) -> SnapshotStatus | None:
         """Aborts the detached task on the server.
 
-        If the turn was actually aborted (and not already finished by the time the
-        abort lands), the originating chat drops the prompt it optimistically held
-        for this turn, so its view doesn't strand an unanswered message.
+        The return is the snapshot's status from *before* this call, not after.
+        ``pending`` means this call cancelled a still-running turn (the row is
+        now ``aborted``). A terminal status means the turn had already
+        finished. ``None`` means nothing was observed.
+
+        This does not edit the originating chat's transcript. The prompt was
+        still asked; reload via ``chat(session_id=...)`` before the next send
+        so you are not still pointed at the aborted leaf.
         """
-        status = await self._transport.abort_snapshot(self.snapshot_id)
-        if status == SnapshotStatus.ABORTED and self._on_abort_rollback is not None:
-            self._on_abort_rollback()
-        return status
+        return await self._transport.abort_snapshot(self.snapshot_id)
 
 
 # ===========================================================================

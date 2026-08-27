@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -59,7 +60,7 @@ func handleCache(
 	}
 	// index out of bounds
 	if cs.endIndex < 0 || cs.endIndex >= len(request.Messages) {
-		return nil, fmt.Errorf("end of cached contents, index %d is invalid", cs.endIndex)
+		return nil, status.Errorf(status.ErrInvalidArgument, "end of cached contents, index %d is invalid", cs.endIndex)
 	}
 
 	// since context caching is only available for specific model versions, we
@@ -80,11 +81,11 @@ func handleCache(
 		cache, err = lookupCache(ctx, client, cs.name)
 		if err != nil {
 			// TODO: if cache expired or not found, create a fresh one
-			return nil, fmt.Errorf("cache lookup error, got %v", err)
+			return nil, fmt.Errorf("cache lookup error: %w", wrapAPIError(err))
 		}
 		// make sure the cache contents matches the request messages hash
 		if cache.DisplayName != hash {
-			return nil, fmt.Errorf("invalid cache name: hash mismatch between cached content and request messages")
+			return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache name: hash mismatch between cached content and request messages")
 		}
 
 		return cache, nil
@@ -97,7 +98,7 @@ func handleCache(
 			Contents:    messages,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("cache creation error, got %v", err)
+			return nil, fmt.Errorf("cache creation error: %w", wrapAPIError(err))
 		}
 	}
 
@@ -128,11 +129,11 @@ func messagesToCache(m []*ai.Message, cacheEndIdx int) ([]*genai.Content, error)
 // are being provided in the request
 func validateContextCacheRequest(request *ai.ModelRequest, modelVersion string) error {
 	if len(request.Tools) > 0 {
-		return fmt.Errorf("%s", invalidArgMessages.tools)
+		return status.Errorf(status.ErrInvalidArgument, "%s", invalidArgMessages.tools)
 	}
 	for _, m := range request.Messages {
 		if m.Role == ai.RoleSystem {
-			return fmt.Errorf("%s", invalidArgMessages.systemPrompt)
+			return status.Errorf(status.ErrInvalidArgument, "%s", invalidArgMessages.systemPrompt)
 		}
 	}
 
@@ -163,7 +164,7 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 
 		c, ok := cacheVal.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("cache metadata should be map but got: %T", cacheVal)
+			return nil, status.Errorf(status.ErrInvalidArgument, "cache metadata should be map but got: %T", cacheVal)
 		}
 
 		// cache name should be only used to indicate the request already
@@ -173,18 +174,33 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 			continue
 		}
 
-		if t, ok := c["ttlSeconds"].(int); ok {
-			if m.Text() == "" {
-				return nil, fmt.Errorf("no content to cache, message is empty")
+		// ttlSeconds arrives as an int when set in Go code and as a float64 or
+		// json.Number after a JSON round-trip (dev UI, reflection server), so
+		// accept any numeric form. A non-positive TTL (including a fractional
+		// value that truncates to zero) would silently skip cache creation in
+		// handleCache, so reject it here instead.
+		if tv, ok := c["ttlSeconds"]; ok {
+			t, isNum := castToInt64(tv)
+			if !isNum {
+				return nil, status.Errorf(status.ErrInvalidArgument, "invalid type for cache ttlSeconds, expected a number, got %T", tv)
+			}
+			if t <= 0 {
+				return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache ttlSeconds, expected a positive number of whole seconds, got %v", tv)
+			}
+			// Any content is cacheable, not just text: a long video or PDF is
+			// what caching pays off for most, and [ai.Message.Text] reports a
+			// message holding only media as empty.
+			if len(m.Content) == 0 {
+				return nil, status.Errorf(status.ErrInvalidArgument, "no content to cache, message is empty")
 			}
 			return &cacheSettings{
-				ttl:      t,
+				ttl:      int(t),
 				name:     cacheName,
 				endIndex: i,
 			}, nil
 		}
 
-		return nil, fmt.Errorf("invalid type for cache ttlSeconds, expected int, got %T", c["ttlSeconds"])
+		return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache metadata, expected ttlSeconds or name, got: %v", c)
 	}
 	return nil, nil
 }
@@ -192,7 +208,7 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 // lookupCache retrieves a *genai.CachedContent from a given cache name
 func lookupCache(ctx context.Context, client *genai.Client, name string) (*genai.CachedContent, error) {
 	if name == "" {
-		return nil, fmt.Errorf("empty cache name detected")
+		return nil, status.Errorf(status.ErrInvalidArgument, "empty cache name detected")
 	}
 
 	return client.Caches.Get(ctx, name, nil)

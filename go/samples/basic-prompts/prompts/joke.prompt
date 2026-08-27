@@ -2,7 +2,7 @@
 model: googleai/gemini-flash-latest
 config:
   thinkingConfig:
-    thinkingLevel: MINIMAL
+    thinkingLevel: MEDIUM
 input:
   schema:
     topic?: string

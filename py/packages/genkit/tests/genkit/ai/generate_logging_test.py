@@ -169,14 +169,11 @@ async def test_generate_logs_nothing_at_default_level() -> None:
     structlog.reset_defaults()
 
     with capture_logs() as entries:
+        get_logger('genkit.test').info('capture probe')
         await _generate_once()
-        # A quiet generate may legitimately log nothing at the default level,
-        # so emit one info event to prove capture is live before asserting on
-        # what's absent.
-        get_logger(__name__).info('capture sentinel')
 
     events = [entry['event'] for entry in entries]
-    assert 'capture sentinel' in events, 'capture_logs saw nothing, so the assertion below would be vacuous'
+    assert 'capture probe' in events
     assert 'generate response' not in events
 
 

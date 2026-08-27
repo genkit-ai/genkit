@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel
@@ -28,10 +27,6 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
-
-warnings.filterwarnings(
-    'ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning
-)
 
 
 class AgentFinishReason(StrEnum):
@@ -91,6 +86,7 @@ class FinishReason(StrEnum):
     LENGTH = 'length'
     BLOCKED = 'blocked'
     ABORTED = 'aborted'
+    FAILED = 'failed'
     INTERRUPTED = 'interrupted'
     OTHER = 'other'
     UNKNOWN = 'unknown'
@@ -105,17 +101,9 @@ class Role(StrEnum):
     TOOL = 'tool'
 
 
-class Schema(GenkitModel):
-    """Model for schema data."""
+Schema = dict[str, Any]  # type alias for schema (typed string map)
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-
-
-class ConfigSchema(GenkitModel):
-    """Model for configschema data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-
+ConfigSchema = dict[str, Any]  # type alias for configschema (typed string map)
 
 Metadata = dict[str, Any]  # type alias for flexible metadata
 
@@ -588,7 +576,7 @@ class OutputConfig(GenkitModel):
         alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
     )
     format: str | None = None
-    schema_: dict[str, Any] | None = None
+    json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
     constrained: bool | None = None
     content_type: str | None = None
 
@@ -964,10 +952,7 @@ class Resume(GenkitModel):
     metadata: Metadata | None = None
 
 
-class StateSchema(GenkitModel):
-    """Model for stateschema data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+StateSchema = dict[str, Any]  # type alias for stateschema (typed string map)
 
 
 class Details(GenkitModel):
@@ -1023,17 +1008,9 @@ class Resource(GenkitModel):
     uri: str = Field(...)
 
 
-class Actions(GenkitModel):
-    """Model for actions data."""
+Actions = dict[str, ActionMetadata]  # type alias for actions (typed string map)
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-
-
-class Values(GenkitModel):
-    """Model for values data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-
+Values = dict[str, Any]  # type alias for values (typed string map)
 
 TelemetryLabels = dict[str, str]  # type alias for telemetrylabels (typed string map)
 
@@ -1045,10 +1022,7 @@ class State(GenkitModel):
     trace_id: str | None = None
 
 
-class Attributes(GenkitModel):
-    """Model for attributes data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+Attributes = dict[str, Any]  # type alias for attributes (typed string map)
 
 
 class SameProcessAsParentSpan(GenkitModel):
@@ -1073,10 +1047,7 @@ class Annotation(GenkitModel):
     description: str = Field(...)
 
 
-class Spans(GenkitModel):
-    """Model for spans data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+Spans = dict[str, SpanData]  # type alias for spans (typed string map)
 
 
 class DocumentPart(RootModel[TextPart | MediaPart]):

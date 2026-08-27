@@ -713,3 +713,21 @@ func TestAugmentWithContext(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateVersion pins the version-validation contract: a declared list
+// enforces membership, and a model that declares no versions is unconstrained
+// so pinning an arbitrary version is not rejected.
+func TestValidateVersion(t *testing.T) {
+	declared := []string{"m-1", "m-2"}
+	if err := validateVersion("m", declared, map[string]any{"version": "m-2"}); err != nil {
+		t.Errorf("declared version rejected: %v", err)
+	}
+	if err := validateVersion("m", declared, map[string]any{"version": "m-9"}); err == nil {
+		t.Error("undeclared version accepted against a declared list")
+	}
+	for _, versions := range [][]string{nil, {}} {
+		if err := validateVersion("m", versions, map[string]any{"version": "m-anything"}); err != nil {
+			t.Errorf("version rejected on an unconstrained model (versions=%v): %v", versions, err)
+		}
+	}
+}

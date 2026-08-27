@@ -16,7 +16,10 @@
 
 package status
 
-import "net/http"
+import (
+	"net/http"
+	"slices"
+)
 
 // Name is a canonical status name, drawn from the gRPC status codes. It is the
 // value Genkit puts on the wire, shared by the Go, JS, and Python runtimes.
@@ -85,10 +88,58 @@ var httpCodeToName = map[int]Name{
 	http.StatusServiceUnavailable:  Unavailable,
 }
 
+// codeToName is the reverse of the gRPC code column above. Unlike the HTTP
+// column it is one-to-one, so it is derived from the canonical table rather
+// than restated, and cannot drift from it.
+var codeToName = func() map[int]Name {
+	m := make(map[int]Name, len(statuses))
+	for name, s := range statuses {
+		m[s.code] = name
+	}
+	return m
+}()
+
+// names lists the canonical status names in gRPC code order. It is derived
+// from [statuses] rather than restated, so a name added there cannot go
+// missing here.
+var names = func() []Name {
+	ns := make([]Name, 0, len(statuses))
+	for n := range statuses {
+		ns = append(ns, n)
+	}
+	slices.SortFunc(ns, func(a, b Name) int { return statuses[a].code - statuses[b].code })
+	return ns
+}()
+
+// Names returns the canonical status names, in gRPC code order.
+//
+// It is the Go counterpart of the JS StatusNameSchema, and is intended for
+// consumers that enumerate the statuses rather than test one: a config schema
+// offering them as an enum, say, or a plugin mapping a provider's error space
+// onto them. Use [Name.IsValid] to test a single name.
+//
+// The result is a fresh slice the caller may retain and modify.
+func Names() []Name {
+	return slices.Clone(names)
+}
+
 // IsValid reports whether n is one of the canonical status names.
 func (n Name) IsValid() bool {
 	_, ok := statuses[n]
 	return ok
+}
+
+// FromCode returns the canonical status name for a gRPC integer code, or
+// Unknown if the code is not canonical. It is the reverse of [Name.Code].
+//
+// Like [FromHTTPCode], it is intended for plugins translating a provider's
+// error into a status middleware can reason about. Google APIs report a failed
+// long-running operation as a google.rpc.Status, whose code is numeric.
+func FromCode(code int) Name {
+	if n, ok := codeToName[code]; ok {
+		return n
+	}
+	return Unknown
 }
 
 // Code returns the gRPC integer code for n, or 2 (Unknown) if n is not

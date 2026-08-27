@@ -5,10 +5,14 @@
 
 """Tests for the action module."""
 
+import warnings
+
 import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
 from genkit._ai._model import text_from_content
+from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
     DocumentPart,
@@ -20,6 +24,14 @@ from genkit._core._typing import (
     ToolRequestPart,
 )
 from genkit.model import get_basic_usage_stats, model_action_metadata
+
+
+class PluginConfig(BaseModel):
+    """Stand-in for a plugin-specific config schema (e.g. LyriaConfig)."""
+
+    model_config = ConfigDict(extra='allow')
+    api_key: str | None = None
+    response_modalities: list[str] | None = None
 
 
 def test_message_wrapper_text() -> None:
@@ -376,3 +388,75 @@ def test_text_from_content_with_none_text() -> None:
         Part(root=TextPart(text=' world')),
     ]
     assert text_from_content(content) == 'hello world'
+
+
+def test_bare_model_request_accepts_plugin_config_instance() -> None:
+    """Bare ModelRequest(config=PluginConfig) keeps the plugin schema instance."""
+    plugin_config = PluginConfig(api_key='k', response_modalities=['audio'])
+    request = ModelRequest(
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config=plugin_config,
+    )
+    assert request.config is plugin_config
+    assert isinstance(request.config, PluginConfig)
+
+
+def test_bare_model_request_keeps_dict_config() -> None:
+    """Dict configs stay dicts on bare ModelRequest; Action coerces to the plugin schema."""
+    request = ModelRequest(
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'temperature': 0.5, 'api_key': 'k'},
+    )
+    assert request.config == {'temperature': 0.5, 'api_key': 'k'}
+
+
+def test_parameterized_model_request_coerces_dict_to_plugin_config() -> None:
+    """ModelRequest[PluginConfig](config={'api_key': 'k'}) builds a PluginConfig."""
+    request = ModelRequest[PluginConfig](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'api_key': 'k'},
+    )
+    assert isinstance(request.config, PluginConfig)
+    assert request.config.api_key == 'k'
+
+
+def test_parameterized_model_request_rejects_mismatched_config_instance() -> None:
+    """ModelRequest[PluginConfig](config=OtherConfig()) is a ValidationError."""
+
+    class OtherConfig(BaseModel):
+        top_k: int | None = None
+
+    with pytest.raises(ValidationError):
+        ModelRequest[PluginConfig](
+            messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+            config=OtherConfig(top_k=3),  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_model_request_rejects_non_model_non_dict_config() -> None:
+    """ModelRequest(config='not-a-config') is a ValidationError."""
+    with pytest.raises(ValidationError, match='config must be a BaseModel or mapping'):
+        ModelRequest(
+            messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+            config='not-a-config',  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_parameterized_model_request_config_json_schema_refs_plugin_schema() -> None:
+    """Verify JSON schema for ModelRequest[PluginConfig] includes a $ref to PluginConfig for Reflection API / Dev UI."""
+    schema = to_json_schema(ModelRequest[PluginConfig])
+    config_prop = schema['properties']['config']
+    assert any('$ref' in arm for arm in config_prop.get('anyOf', [])), config_prop
+
+
+def test_model_request_dump_emits_no_serializer_warnings() -> None:
+    """Verify model_dump() and model_dump_json() execute without triggering Pydantic serialization warnings."""
+    request = ModelRequest[PluginConfig](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'api_key': 'k'},
+    )
+    # Convert all Python/Pydantic warnings into hard errors so silent serialization warnings fail the test.
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        request.model_dump(mode='python')
+        request.model_dump_json()

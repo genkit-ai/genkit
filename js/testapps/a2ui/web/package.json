@@ -1,0 +1,24 @@
+{
+  "name": "a2ui-testapp-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@a2ui/lit": "^0.10.2",
+    "@a2ui/markdown-it": "^0.1.0",
+    "@a2ui/web_core": "^0.10.5",
+    "@genkit-ai/a2ui": "workspace:*",
+    "@lit/context": "^1.1.6",
+    "genkit": "workspace:*",
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3",
+    "vite": "^6.3.3"
+  }
+}

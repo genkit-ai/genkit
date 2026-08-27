@@ -62,6 +62,8 @@ bump_version js/plugins/middleware @genkit-ai/middleware middleware-v
 bump_version js/plugins/fetch @genkit-ai/fetch fetch-v
 bump_version js/plugins/fastify @genkit-ai/fastify fastify-v
 bump_version js/plugins/vercel-ai @genkit-ai/vercel-ai vercel-ai-v
+bump_version js/plugins/anthropic @genkit-ai/anthropic anthropic-v
+bump_version js/plugins/a2ui @genkit-ai/a2ui a2ui-v
 
 echo TAGS "${TAGS[*]}"
 

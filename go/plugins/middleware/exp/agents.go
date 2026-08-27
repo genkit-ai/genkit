@@ -125,25 +125,25 @@ type Agents struct {
 	// Agents lists the sub-agents available for delegation: by name
 	// (aix.AgentRef{Name: ...}) or as a captured instance (agentValue.Ref()).
 	// At least one is required.
-	Agents []aix.AgentRef `json:"agents,omitempty"`
+	Agents []aix.AgentRef `json:"agents,omitempty" jsonschema_description:"Sub-agents available for delegation. At least one is required."`
 	// ToolPrefix is the prefix for generated delegation tool names. A nil value
 	// defaults to "delegate_to" (tools become delegate_to_<agent>); a pointer to
 	// the empty string uses bare agent names.
-	ToolPrefix *string `json:"toolPrefix,omitempty"`
+	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
-	MaxDelegations int `json:"maxDelegations,omitempty"`
+	MaxDelegations int `json:"maxDelegations,omitempty" jsonschema_description:"Caps the number of sub-agent delegations per generate call, preventing runaway delegation loops. Defaults to 0, which means unlimited."`
 	// HistoryLength is the number of recent user/model messages forwarded to a
 	// sub-agent as context. 0 means only the task description is sent. History is
 	// forwarded only to client-managed sub-agents (those without a session
 	// store); server-managed sub-agents receive only the task.
-	HistoryLength int `json:"historyLength,omitempty"`
+	HistoryLength int `json:"historyLength,omitempty" jsonschema_description:"Number of recent user/model messages forwarded to a sub-agent as context. Defaults to 0, which sends only the task description. History reaches client-managed sub-agents only."`
 	// ArtifactStrategy controls how sub-agent artifacts are surfaced. Defaults to
 	// ArtifactStrategyInline.
-	ArtifactStrategy ArtifactStrategy `json:"artifactStrategy,omitempty"`
+	ArtifactStrategy ArtifactStrategy `json:"artifactStrategy,omitempty" jsonschema_description:"How sub-agent artifacts are surfaced. \"inline\" adds artifact content to the delegation tool result and merges it into the parent session. \"session\" merges into the session only. Defaults to \"inline\"."`
 }
 
-func (a *Agents) Name() string { return provider + "/agents" }
+func (a Agents) Name() string { return provider + "/agents" }
 
 // agentsState is the per-generate mutable state shared by the delegation tools
 // and the generate hook. New allocates a fresh one per call, and a mutex guards
@@ -161,7 +161,7 @@ type agentsState struct {
 // New validates the configuration and returns the hooks: a delegation tool per
 // agent plus a generate hook that injects the <sub-agents> system prompt and
 // captures conversation history.
-func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
+func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	if len(a.Agents) == 0 {
 		return nil, fmt.Errorf("agents middleware requires at least one agent in the \"agents\" option")
 	}
@@ -205,7 +205,7 @@ func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
 
 // delegateInput is the input schema for a delegation tool.
 type delegateInput struct {
-	Task string `json:"task" jsonschema:"description=A clear, self-contained description of the task to delegate."`
+	Task string `json:"task" jsonschema_description:"A clear, self-contained description of the task to delegate."`
 }
 
 // delegationResult is the output of a delegation tool.

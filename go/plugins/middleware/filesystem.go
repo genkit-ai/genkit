@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -153,21 +154,22 @@ func (p *pathLocks) lock(path string) func() {
 //	)
 type Filesystem struct {
 	// RootDir is the directory that all operations are confined to.
-	RootDir string `json:"rootDirectory,omitempty"`
+	RootDir string `json:"rootDirectory,omitempty" jsonschema_description:"Directory that all file operations are confined to. Required."`
 	// AllowWriteAccess adds write_file and edit_file.
-	AllowWriteAccess bool `json:"allowWriteAccess,omitempty"`
+	AllowWriteAccess bool `json:"allowWriteAccess,omitempty" jsonschema_description:"Adds the write_file and edit_file tools. Defaults to false."`
 	// ToolNamePrefix is prepended to each tool name. Use distinct prefixes
 	// when attaching multiple Filesystem middlewares to one call so their
 	// tool names don't collide.
-	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty" jsonschema_description:"Prepended to each tool name. Use distinct prefixes when attaching multiple filesystem middlewares to one call, so their tool names do not collide."`
 }
 
-func (f *Filesystem) Name() string { return provider + "/filesystem" }
+// Name implements [ai.Middleware].
+func (f Filesystem) Name() string { return provider + "/filesystem" }
 
 // New initializes a per-call instance: opens the [os.Root], builds the tool
 // set, and allocates the message queue used to bridge tool output back to the
 // model on the next turn.
-func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
+func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	if strings.TrimSpace(f.RootDir) == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: RootDir is required")
 	}
@@ -209,6 +211,7 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 		mu.Unlock()
 
 		if len(queued) > 0 {
+			logger.Debug(ctx, "filesystem middleware injecting queued messages", "messages", len(queued))
 			if params.Callback != nil {
 				for _, msg := range queued {
 					if err := params.Callback(ctx, &ai.ModelResponseChunk{
@@ -240,6 +243,10 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			return nil, err
 		}
 
+		// The error is deliberately not propagated: the model sees the failure
+		// as a user message on the next turn and can self-correct, so this log
+		// is the only direct record of the original error.
+		logger.Debug(ctx, "filesystem tool failed, converting to user message", "tool", params.Tool.Name(), "error", err)
 		enqueueParts(ai.NewTextPart(fmt.Sprintf("Tool %q failed: %v", params.Tool.Name(), err)))
 		return &ai.MultipartToolResponse{
 			Output: "Tool call failed; see user message below for details.",
@@ -304,8 +311,8 @@ func requireFilePath(s string) error {
 }
 
 type listFilesInput struct {
-	DirPath   string `json:"dirPath,omitempty" jsonschema:"description=Directory path relative to root. Defaults to the root directory."`
-	Recursive bool   `json:"recursive,omitempty" jsonschema:"description=If true, descend into subdirectories."`
+	DirPath   string `json:"dirPath,omitempty" jsonschema_description:"Directory path relative to root. Defaults to the root directory."`
+	Recursive bool   `json:"recursive,omitempty" jsonschema_description:"If true, descend into subdirectories."`
 }
 
 type fileEntry struct {
@@ -373,9 +380,9 @@ func (f *Filesystem) newListFilesTool(root *os.Root) ai.Tool {
 }
 
 type readFileInput struct {
-	FilePath string `json:"filePath" jsonschema:"description=File path relative to root."`
-	Offset   int    `json:"offset,omitempty" jsonschema:"description=1-indexed line to start reading from. 0 or 1 means start at the beginning."`
-	Limit    int    `json:"limit,omitempty" jsonschema:"description=Maximum number of lines to read. 0 means read to end of file."`
+	FilePath string `json:"filePath" jsonschema_description:"File path relative to root."`
+	Offset   int    `json:"offset,omitempty" jsonschema_description:"1-indexed line to start reading from. 0 or 1 means start at the beginning."`
+	Limit    int    `json:"limit,omitempty" jsonschema_description:"Maximum number of lines to read. 0 means read to end of file."`
 }
 
 func (f *Filesystem) newReadFileTool(
@@ -547,8 +554,8 @@ func sliceLines(data []byte, offset, limit int) []byte {
 }
 
 type writeFileInput struct {
-	FilePath string `json:"filePath" jsonschema:"description=File path relative to root."`
-	Content  string `json:"content" jsonschema:"description=Content to write to the file."`
+	FilePath string `json:"filePath" jsonschema_description:"File path relative to root."`
+	Content  string `json:"content" jsonschema_description:"Content to write to the file."`
 }
 
 func (f *Filesystem) newWriteFileTool(
@@ -603,14 +610,14 @@ func (f *Filesystem) newWriteFileTool(
 }
 
 type editSpec struct {
-	OldString  string `json:"oldString" jsonschema:"description=The exact text to find. Match is byte-for-byte including whitespace and indentation."`
-	NewString  string `json:"newString" jsonschema:"description=The replacement text. Use an empty string to delete oldString."`
-	ReplaceAll bool   `json:"replaceAll,omitempty" jsonschema:"description=If true, replace every occurrence of oldString. If false (default), oldString must match exactly once in the file."`
+	OldString  string `json:"oldString" jsonschema_description:"The exact text to find. Match is byte-for-byte including whitespace and indentation."`
+	NewString  string `json:"newString" jsonschema_description:"The replacement text. Use an empty string to delete oldString."`
+	ReplaceAll bool   `json:"replaceAll,omitempty" jsonschema_description:"If true, replace every occurrence of oldString. If false (default), oldString must match exactly once in the file."`
 }
 
 type editFileInput struct {
-	FilePath string     `json:"filePath" jsonschema:"description=File path relative to root."`
-	Edits    []editSpec `json:"edits" jsonschema:"description=One or more edits to apply in order. Each edit is applied to the result of the previous edit."`
+	FilePath string     `json:"filePath" jsonschema_description:"File path relative to root."`
+	Edits    []editSpec `json:"edits" jsonschema_description:"One or more edits to apply in order. Each edit is applied to the result of the previous edit."`
 }
 
 func (f *Filesystem) newEditFileTool(

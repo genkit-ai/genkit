@@ -25,12 +25,218 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
+
+// TestSendPrefersCompletionOverTeardownCancellation pins Send's precedence
+// against the connection's own teardown. run closes doneCh and then releases
+// the connection context, so a context that reads as done is usually the
+// action finishing rather than an abort. Send tests the two in separate
+// selects, and a teardown landing between them used to surface as
+// context.Canceled: callers tolerate ErrActionCompleted and go to Output for
+// the outcome, but take a cancellation as the outcome, so the action's real
+// error was discarded.
+//
+// The window is a few instructions wide. This drives it under contention
+// rather than forcing it, with the gate piling the workers up so they are
+// descheduled around the call. A run that reproduces nothing still cannot
+// fail, and the fix makes the misreport impossible rather than rare.
+func TestSendPrefersCompletionOverTeardownCancellation(t *testing.T) {
+	const (
+		iterations = 500_000
+		workers    = 32
+	)
+
+	ctx := context.Background()
+	want := errors.New("action failed before reading input")
+	action := NewBidiActionOf(api.ActionTypeCustom, "failfast", nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			return "", want
+		})
+
+	var (
+		gate       sync.Mutex
+		cancelled  atomic.Int64
+		lostResult atomic.Int64
+		wg         sync.WaitGroup
+	)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations / workers {
+				conn, err := action.Connect(ctx, struct{}{})
+				if err != nil {
+					t.Errorf("Connect() error = %v", err)
+					return
+				}
+				gate.Lock()
+				err = conn.Send("hi")
+				gate.Unlock()
+				if errors.Is(err, context.Canceled) {
+					cancelled.Add(1)
+				}
+				if _, err := conn.Output(); !errors.Is(err, want) {
+					lostResult.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := cancelled.Load(); n != 0 {
+		t.Errorf("Send reported cancellation on %d of %d completed invocations, want the action's completion", n, iterations)
+	}
+	if n := lostResult.Load(); n != 0 {
+		t.Errorf("Output lost the action's error on %d of %d invocations", n, iterations)
+	}
+}
+
+// TestSendReportsAbortWhileActionRuns is the other half of that precedence:
+// completion wins only when the action has actually completed. An abort on a
+// session still running has no result to prefer, so Send must report the
+// cancellation. Without this, a helper that always answered
+// ErrActionCompleted would pass: callers like Agent.Run tolerate that error
+// and go to Output, so an abort would be swallowed and the invocation would
+// look like it finished.
+//
+// The action outlives the cancellation deliberately, keeping doneCh open so
+// there is no completion to race.
+func TestSendReportsAbortWhileActionRuns(t *testing.T) {
+	newSession := func(t *testing.T) (*BidiConnection[string, string, string], func()) {
+		t.Helper()
+		started, release := make(chan struct{}), make(chan struct{})
+		action := NewBidiActionOf(api.ActionTypeCustom, "blocks", nil,
+			func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+				close(started)
+				<-release
+				return "finished", nil
+			})
+		conn, err := action.Connect(context.Background(), struct{}{})
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		<-started
+		return conn, func() { close(release) }
+	}
+
+	check := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Send() error = %v, want the abort", err)
+		}
+		if errors.Is(err, ErrActionCompleted) {
+			t.Errorf("Send() error = %v, want an abort rather than completion: the action is still running", err)
+		}
+	}
+
+	t.Run("sent after the abort", func(t *testing.T) {
+		conn, finish := newSession(t)
+		defer finish()
+		conn.Cancel()
+		check(t, conn.Send("hi"))
+	})
+
+	t.Run("already blocked at the abort", func(t *testing.T) {
+		conn, finish := newSession(t)
+		defer finish()
+		// The action never reads, so the first input takes the only buffer
+		// slot and the second blocks in Send's select.
+		if err := conn.Send("first"); err != nil {
+			t.Fatalf("Send() error = %v, want the free buffer slot to take it", err)
+		}
+		sent := make(chan error, 1)
+		go func() { sent <- conn.Send("second") }()
+		conn.Cancel()
+		check(t, <-sent)
+	})
+}
+
+// TestBidiCompletionSurvivesParentCancelCause extends completion over
+// cancellation to the result itself. When the function reports no error of
+// its own, run adopts a cause recorded against the connection: that is how an
+// invalid inbound chunk or a failed stream callback becomes the session's
+// error even though the function ignored the cancellation and returned
+// cleanly. The override used to read the cause off the connection context,
+// which also carries whatever cancelled the caller's context, so a deadline
+// or a custom cause that fired while the function was committing its result
+// replaced a success with a cancellation error. A plain Canceled cause was
+// already excluded; a deadline and a custom cause now behave the same way.
+//
+// The lost result is not always work the caller can repeat. A detached agent
+// invocation persists its pending snapshot on a context.WithoutCancel and
+// returns the snapshot ID while background goroutines carry the work; drop
+// that output and the work keeps running with no handle to track or abort it.
+func TestBidiCompletionSurvivesParentCancelCause(t *testing.T) {
+	// Commits only once the caller's context is done, which is the window
+	// the override used to corrupt.
+	commitAfterDone := func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+		<-ctx.Done()
+		return "committed", nil
+	}
+	connect := func(t *testing.T, ctx context.Context, fn BidiFunc[string, string, string, struct{}]) *BidiConnection[string, string, string] {
+		t.Helper()
+		conn, err := NewBidiActionOf(api.ActionTypeCustom, "commits", nil, fn).Connect(ctx, struct{}{})
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		return conn
+	}
+	wantCommitted := func(t *testing.T, conn *BidiConnection[string, string, string]) {
+		t.Helper()
+		<-conn.Done()
+		out, err := conn.Output()
+		if err != nil {
+			t.Errorf("Output() error = %v, want the committed result", err)
+		}
+		if out != "committed" {
+			t.Errorf("Output() = %q, want %q", out, "committed")
+		}
+	}
+
+	t.Run("parent deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		wantCommitted(t, connect(t, ctx, commitAfterDone))
+	})
+
+	t.Run("parent cancel cause", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		conn := connect(t, ctx, commitAfterDone)
+		cancel(errors.New("caller gave up"))
+		wantCommitted(t, conn)
+	})
+
+	// The contrast: a cause the framework recorded against this connection
+	// still becomes the session's error, and still does so when the caller's
+	// context was cancelled first. The context keeps only the first cause, so
+	// reading the abort off the context would have surfaced the caller's.
+	t.Run("recorded abort still wins", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		conn := connect(t, ctx,
+			func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+				for range inCh {
+				}
+				return "committed", nil
+			})
+		abort := errors.New("stream callback failed")
+		cancel(errors.New("caller gave up"))
+		conn.cancel(abort)
+		if err := conn.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		<-conn.Done()
+		if _, err := conn.Output(); !errors.Is(err, abort) {
+			t.Errorf("Output() error = %v, want the recorded abort %v", err, abort)
+		}
+	})
+}
 
 func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()

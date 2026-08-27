@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import Never
 
 from genkit._ai._agents._session import get_current_session
@@ -36,6 +36,7 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    resolve_model_name,
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
@@ -62,6 +63,7 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
+    OutputConfig,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -1115,13 +1117,7 @@ async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
 ) -> tuple[Action, list[Action], FormatDef | None]:
     """Resolve model, tools, and format from registry for a generation request."""
-    model = (
-        request.model
-        if request.model is not None
-        else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
-    )
-    if not model:
-        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
+    model = resolve_model_name(model=request.model, registry=registry)
 
     model_action = await registry.resolve_model(model)
     if model_action is None:
@@ -1148,7 +1144,7 @@ async def resolve_parameters(
 
 
 async def action_to_generate_request(
-    options: GenerateActionOptions, resolved_tools: list[Action], _model: Action
+    options: GenerateActionOptions, resolved_tools: list[Action], model: Action
 ) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to a ModelRequest with tool definitions."""
     # TODO(#4340): add warning when tools are not supported in ModelInfo
@@ -1159,18 +1155,34 @@ async def action_to_generate_request(
     out_schema = output.json_schema if output else None
     if out_schema is not None and hasattr(out_schema, 'model_dump'):
         out_schema = out_schema.model_dump()
-    return ModelRequest(
+    request_kwargs: dict[str, Any] = dict(
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-        messages=options.messages,  # type: ignore[arg-type]
-        config=options.config if options.config is not None else {},  # type: ignore[arg-type]
-        docs=options.docs if options.docs else None,  # type: ignore[arg-type]
+        messages=options.messages,
+        config=options.config if options.config is not None else {},
+        docs=options.docs if options.docs else None,
         tools=tool_defs,
         tool_choice=options.tool_choice,
-        output_format=output.format if output else None,
-        output_schema=out_schema,
-        output_constrained=output.constrained if output else None,
-        output_content_type=output.content_type if output else None,
+        output=OutputConfig(
+            format=output.format if output else None,
+            # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
+            json_schema=out_schema,
+            constrained=output.constrained if output else None,
+            content_type=output.content_type if output else None,
+        ),
     )
+    input_class = model.input_class
+    if input_class is not None and issubclass(input_class, ModelRequest) and input_class is not ModelRequest:
+        try:
+            # Fast path: construct the action's exact input class so validation
+            # happens once, here; _validate_input then passes it through as-is.
+            return input_class(**request_kwargs)
+        except ValidationError:
+            # Invalid input for the typed class. Fall through to the bare
+            # carrier so Action._validate_input re-discovers the failure and
+            # raises the proper GenkitError(INVALID_ARGUMENT) with the action
+            # name — the pre-fast-path error contract, preserved exactly.
+            pass
+    return ModelRequest(**request_kwargs)
 
 
 def to_tool_definition(tool: Action) -> ToolDefinition:

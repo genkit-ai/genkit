@@ -27,10 +27,12 @@ store, which is the source of truth:
      prompt. The client view drifts ahead of (really, behind) the store.
 
   2. task.abort() — a *server-side* cancel of a detached turn. The snapshot
-     settles ABORTED and never becomes the session's resume point. Your chat is
-     left holding the optimistic prompt (drift again), so you reload from the
-     store to resync — which skips the dead aborted leaf back to the last
-     completed turn.
+     settles ABORTED and never becomes the session's resume point. abort()
+     returns the snapshot's status from *before* this call (``pending`` when
+     it cancelled in-flight work). The in-memory chat keeps the prompt (it
+     was still asked) and still points at that aborted leaf, so send() is
+     rejected. chat(session_id=) continues from the last completed turn.
+     load_chat(session_id=) would show the aborted row.
 
   3. a real server error (e.g. the model is exhausted) — the chat client raises
      AgentError, the optimistic prompt is rolled back, and the resume handle stays
@@ -127,20 +129,25 @@ async def server_side_task_abort() -> None:
     assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
-    # Aborting drops the optimistic 'slow a2' prompt the chat was holding for the
-    # killed turn, so the local view rolls back to the last completed turn.
-    assert turns(chat) == ['a1/user', 'reply/model']
+    # abort() returns the *previous* status: pending, because the turn was still running.
+    assert status == SnapshotStatus.PENDING
+    # The prompt stays — it was still asked. The chat still points at the
+    # aborted leaf, so send() is rejected until you reload.
+    assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
-    # Still reload from the store before continuing — it's the authoritative
-    # state, and a detached turn's work never streams back to this chat object,
-    # so load_chat is the way to pick up whatever actually landed server-side.
-    chat = await agent.load_chat(session_id=session_id)
-    assert turns(chat) == ['a1/user', 'reply/model']
+    # The live chat still points at the aborted leaf, so send() is rejected.
+    # The store's session leaf is that aborted row; chat(session_id=) is how
+    # you continue from the last completed turn.
+    leaf = await agent.get_snapshot(session_id=session_id)
+    assert leaf is not None
+    assert leaf.status == SnapshotStatus.ABORTED
 
+    chat = agent.chat(session_id=session_id)
     out = await chat.send('a3')
     assert out.finish_reason == AgentFinishReason.STOP
-    assert turns(chat) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
+    # This chat only saw the new turn. Read the store for the full history.
+    synced = await agent.load_chat(session_id=session_id)
+    assert turns(synced) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
 
 
 async def server_side_failure() -> None:
@@ -180,9 +187,9 @@ async def detached_turn_reload_to_resync() -> None:
     # optimistic prompt — it never saw the model's answer.
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user']
 
-    # Reload from the store to pick up the authoritative history (reply included)
-    # before continuing; sending on the stale chat would build on a view missing
-    # the detached turn's reply.
+    # The detached turn completed, so load_chat(session_id=) hydrates that
+    # leaf — reply included — and send() can continue from it. Sending on
+    # the stale in-memory chat would build on a view missing the reply.
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model']
 

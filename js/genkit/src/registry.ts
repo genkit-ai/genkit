@@ -31,5 +31,6 @@ export {
   Registry,
   type ActionType,
   type AsyncProvider,
+  type HasRegistry,
   type Schema,
 } from '@genkit-ai/core/registry';

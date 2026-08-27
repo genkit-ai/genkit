@@ -63,4 +63,14 @@ var (
 	// ErrUnresolvedToolRequest means a resumed generation left an interrupted
 	// tool request without a Respond or Restart directive.
 	ErrUnresolvedToolRequest = status.ErrInvalidArgument.Subtype("unresolved tool request")
+
+	// ErrGenerationBlocked means the provider refused to generate, which is
+	// usually a safety filter firing. Only the typed helpers report it
+	// ([GenerateData], [GenerateDataStream], [DataPrompt.Execute],
+	// [DataPrompt.ExecuteStream]): a refusal cannot produce the value they
+	// promise, so returning a zero value with no error would read as success.
+	// [Generate] still hands the response back unwrapped, so read
+	// FinishReason there. The status is FAILED_PRECONDITION, matching the
+	// GenerationBlockedError that JS and Python raise on the same event.
+	ErrGenerationBlocked = status.ErrFailedPrecondition.Subtype("generation blocked")
 )

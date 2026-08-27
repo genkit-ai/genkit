@@ -18,6 +18,7 @@
 """OpenAI Compatible Models for Genkit."""
 
 import sys
+from typing import Literal, TypeAlias
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -92,8 +93,52 @@ GPT_OSS_MODEL_SUPPORTS = Supports(
 LLAMA_3_1 = 'meta/llama-3.1-405b-instruct-maas'
 LLAMA_3_2 = 'meta/llama-3.2-90b-vision-instruct-maas'
 
+# Quote autocomplete needs a Literal. The catalog below is what you edit when
+# a chat model ships; a test requires these members and the dict keys to be the
+# same set, and the dict is typed so a new key that is not in the Literal
+# does not type-check. Image, TTS, STT, and embedding ids live in other
+# catalogs — they do not take OpenAIConfig.
+KnownGpt: TypeAlias = Literal[
+    'gpt-4o',
+    'gpt-4o-2024-05-13',
+    'gpt-4o-mini',
+    'gpt-4o-mini-2024-07-18',
+    'gpt-4.5-preview',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4-turbo',
+    'gpt-4-turbo-2024-04-09',
+    'gpt-4-turbo-preview',
+    'gpt-4-0125-preview',
+    'gpt-4-1106-preview',
+    'gpt-4',
+    'gpt-4-0613',
+    'gpt-3.5-turbo',
+    'gpt-3.5-turbo-0125',
+    'gpt-3.5-turbo-1106',
+    'o1',
+    'o3',
+    'o3-mini',
+    'o3-pro',
+    'o4-mini',
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-5-chat-latest',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-max',
+    'gpt-5.2',
+    'gpt-5.2-chat',
+    'gpt-5.2-pro',
+    'gpt-5.3-codex',
+    'gpt-oss-120b',
+    'gpt-oss-20b',
+]
+
+
 # Source: https://platform.openai.com/docs/models
-SUPPORTED_OPENAI_MODELS: dict[str, ModelInfo] = {
+SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
     # --- GPT-4o series ---
     'gpt-4o': ModelInfo(label='OpenAI - gpt-4o', supports=MULTIMODAL_MODEL_SUPPORTS),
     'gpt-4o-2024-05-13': ModelInfo(label='OpenAI - gpt-4o-2024-05-13', supports=MULTIMODAL_MODEL_SUPPORTS),

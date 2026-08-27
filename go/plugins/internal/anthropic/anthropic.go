@@ -23,12 +23,14 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
@@ -44,6 +46,11 @@ const (
 	// DEFAULT_MAX_OUTPUT_TOKENS and is low enough for every Claude model.
 	DefaultMaxOutputTokens = 4096
 )
+
+// defaultConfigSchema is the schema every Claude model advertises for its
+// config. Reflecting the SDK params struct is expensive and the result is
+// read-only, so it is built once and shared by every model of both plugins.
+var defaultConfigSchema = reflectConfigSchema(anthropic.MessageNewParams{})
 
 // metadataSignature extracts a reasoning signature from part metadata. It
 // handles both []byte (the value [ai.NewReasoningPart] stores) and string
@@ -86,36 +93,45 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	}
 }
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
-	label := "Anthropic"
-
-	if provider == "vertexai" {
-		label = "Vertex AI"
+// NewModel creates a Claude model action without registering it. name is both
+// the Genkit action name and the model ID requests are sent to: Anthropic
+// resolves an alias like claude-opus-4-5 to its current dated release itself.
+//
+// opts is used as given, except that a nil ConfigSchema defaults to the
+// reflected [anthropic.MessageNewParams] schema and an empty Label is derived
+// from the provider and the name. The framework validates the request's config
+// against that schema and deserializes it into [anthropic.MessageNewParams]
+// before the model function runs.
+func NewModel(client anthropic.Client, provider, name string, opts ai.ModelOptions) *ai.ModelAction {
+	if opts.ConfigSchema == nil {
+		opts.ConfigSchema = defaultConfigSchema
+	}
+	if opts.Label == "" {
+		opts.Label = internal.ProviderLabel(DisplayName(provider), name)
 	}
 
-	configSchema := info.ConfigSchema
-	if configSchema == nil {
-		configSchema = ConfigSchema(anthropic.MessageNewParams{})
-	}
-
-	meta := &ai.ModelOptions{
-		Label:        label + "-" + name,
-		Supports:     info.Supports,
-		Versions:     info.Versions,
-		ConfigSchema: configSchema,
-	}
-
-	return ai.NewModel(api.NewName(provider, name), meta, func(
+	return ai.NewModelAction(api.NewName(provider, name), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
+		config anthropic.MessageNewParams,
+		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, name, input, cb)
+		return Generate(ctx, client, provider, name, input, config, cb)
 	})
 }
 
-// ConfigSchema converts a config struct to a map[string]any.
-func ConfigSchema(config any) map[string]any {
+// DisplayName is how a provider is spelled in a model's dev UI label. Plugins
+// that curate their own labels join it with [internal.ProviderLabel], so every Claude
+// model names its provider the same way whichever plugin serves it.
+func DisplayName(provider string) string {
+	if provider == "vertexai" {
+		return "Vertex AI"
+	}
+	return "Anthropic"
+}
+
+// reflectConfigSchema converts a config struct to a map[string]any.
+func reflectConfigSchema(config any) map[string]any {
 	r := jsonschema.Reflector{
 		DoNotReference:             true, // Prevent $ref usage
 		AllowAdditionalProperties:  false,
@@ -148,22 +164,62 @@ func ConfigSchema(config any) map[string]any {
 		}
 		return nil
 	}
-	schema := r.Reflect(config)
-	result := base.SchemaAsMap(schema)
-
-	return result
+	schema := base.SchemaAsMap(r.Reflect(config))
+	stripParamObjArtifact(schema)
+	internal.ApplySchemaOverrides(schema, mncOverrides)
+	return schema
 }
 
-// Generate function defines how a generate request is done in Anthropic models
+// rejectManagedConfig reports a config field that a Genkit primitive owns.
+//
+// Each one is overwritten while the request is built, so accepting it would
+// drop the caller's value on the floor: messages and the model unconditionally,
+// the system prompt whenever the request carries system messages, and the
+// output format whenever constrained generation is on. Failing with the option
+// to use instead beats a request that silently ignores half of what it was
+// given.
+//
+// These are hidden from the advertised schema (see mncOverrides), so this is
+// what a caller setting one in code sees. They are hidden by being replaced
+// with a permissive schema rather than deleted, so the value reaches here
+// rather than failing validation as an unknown property.
+//
+// Classified ErrInvalidArgument: the request is the caller's to fix, so this
+// reaches the dev UI and any HTTP transport as a 400 rather than a 500. Not
+// ErrInvalidInput, which means a value failed the action's input schema; these
+// pass the schema and are refused on what they mean.
+func rejectManagedConfig(config *anthropic.MessageNewParams) error {
+	switch {
+	case len(config.Messages) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
+	case len(config.System) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "system prompt must be set using Genkit feature: ai.WithSystem()")
+	case config.Model != "":
+		return status.Errorf(status.ErrInvalidArgument, "the model is chosen by the action; set it using Genkit feature: ai.WithModel() or ai.WithModelName()")
+	case config.OutputConfig.Format.Schema != nil || config.OutputConfig.Format.Type != "":
+		return status.Errorf(status.ErrInvalidArgument, "output format must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema(); the config-level output_config.effort field is unaffected")
+	}
+	for _, t := range config.Tools {
+		if t.OfTool != nil {
+			return status.Errorf(status.ErrInvalidArgument, "custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for server-side tools (web search, code execution, etc.)")
+		}
+	}
+	return nil
+}
+
+// Generate function defines how a generate request is done in Anthropic models.
+// config is the request's config, already deserialized by the framework, and is
+// the base the request is built on.
 func Generate(
 	ctx context.Context,
 	client anthropic.Client,
 	provider string,
 	model string,
 	input *ai.ModelRequest,
+	config anthropic.MessageNewParams,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
-	req, err := toAnthropicRequest(provider, input)
+	req, err := toAnthropicRequest(provider, input, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
@@ -174,7 +230,7 @@ func Generate(
 	if cb == nil {
 		msg, err := client.Messages.New(ctx, *req)
 		if err != nil {
-			return nil, err
+			return nil, WrapAPIError(err)
 		}
 
 		r, err := toGenkitResponse(msg)
@@ -234,12 +290,18 @@ func Generate(
 				return r, nil
 			}
 		}
-		if stream.Err() != nil {
-			return nil, stream.Err()
+		if err := stream.Err(); err != nil {
+			return nil, WrapAPIError(err)
 		}
+		// The loop only returns from the message_stop case. Falling out of it
+		// means the stream ended early without one, and the SDK reports no
+		// error for a body that simply stops, so say so rather than returning
+		// a nil response the caller would dereference.
+		// Internal, not InvalidArgument: a body that stops early is usually a
+		// truncated response rather than a bad request, so this stays in the
+		// set the retry middleware reissues.
+		return nil, status.Errorf(status.ErrInternal, "anthropic stream ended without a message_stop event")
 	}
-
-	return nil, nil
 }
 
 func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
@@ -251,16 +313,19 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 	case ai.RoleTool:
 		return anthropic.MessageParamRoleAssistant, nil
 	default:
-		return "", fmt.Errorf("unknown role given: %q", role)
+		return "", status.Errorf(status.ErrInvalidArgument, "unknown role given: %q", role)
 	}
 }
 
-// toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request
-func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
+// toAnthropicRequest folds an [ai.ModelRequest] into the config the framework
+// deserialized for the request, and returns the result to send to the API.
+// config is taken by value: the request's own copy is what gets amended, never
+// the caller's.
+func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.MessageNewParams) (*anthropic.MessageNewParams, error) {
 	messages := make([]anthropic.MessageParam, 0)
 
-	req, err := configFromRequest(i)
-	if err != nil {
+	req := &config
+	if err := rejectManagedConfig(req); err != nil {
 		return nil, err
 	}
 
@@ -307,8 +372,8 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 		})
 	}
 
-	// Only overwrite the config-provided system prompt when the request
-	// actually carries system messages, and never send an empty array.
+	// The config cannot carry a system prompt (rejectManagedConfig refuses
+	// one), so this only guards against sending an empty array.
 	if len(sysBlocks) > 0 {
 		req.System = sysBlocks
 	}
@@ -321,7 +386,14 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 	// Append rather than assign: server-side tools (web search, code execution,
 	// ...) can only be expressed through the config, and assigning here would
 	// silently drop them.
-	req.Tools = append(req.Tools, tools...)
+	//
+	// Clip first so the append always allocates. config is only a shallow copy,
+	// so its slice header still points at the caller's backing array, and a
+	// config hoisted into a package-level var or a ModelRef is shared by every
+	// request made with it. Appending in place would write into that array's
+	// spare capacity, which two concurrent requests then race over, and one
+	// request's tools would surface in another's.
+	req.Tools = append(slices.Clip(req.Tools), tools...)
 
 	if toolChoice, ok := toAnthropicToolChoice(i.ToolChoice); ok {
 		req.ToolChoice = toolChoice
@@ -355,29 +427,6 @@ func toAnthropicToolChoice(choice ai.ToolChoice) (anthropic.ToolChoiceUnionParam
 	}
 }
 
-// configFromRequest converts any supported config type to [anthropic.MessageNewParams]
-func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
-	var result anthropic.MessageNewParams
-
-	switch config := input.Config.(type) {
-	case anthropic.MessageNewParams:
-		result = config
-	case *anthropic.MessageNewParams:
-		result = *config
-	case map[string]any:
-		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
-		if err != nil {
-			return nil, err
-		}
-	case nil:
-		// Empty configuration is considered valid
-	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
-	}
-	return &result, nil
-}
-
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
 func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
 	if len(tools) == 0 {
@@ -388,10 +437,10 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 	for _, t := range tools {
 		if t.Name == "" {
-			return nil, fmt.Errorf("tool name is required")
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name is required")
 		}
 		if !regex.MatchString(t.Name) {
-			return nil, fmt.Errorf("tool name must match regex: %s", ToolNameRegex)
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name %q must match regex: %s", t.Name, ToolNameRegex)
 		}
 
 		inputSchema := t.InputSchema
@@ -414,7 +463,7 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
-			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "unable to parse input schema for tool %q: %w", t.Name, err)
 		}
 
 		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
@@ -506,7 +555,7 @@ func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlo
 	if toolResp.Output != nil || len(toolResp.Content) == 0 {
 		output, err := json.Marshal(toolResp.Output)
 		if err != nil {
-			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse tool response, err: %w", err)
+			return anthropic.ContentBlockParamUnion{}, status.Errorf(status.ErrInvalidArgument, "unable to marshal response of tool %q: %w", toolResp.Name, err)
 		}
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
 			OfText: &anthropic.TextBlockParam{Text: string(output)},

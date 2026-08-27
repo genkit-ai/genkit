@@ -14,35 +14,38 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Storage-agnostic helpers shared by the flat, full-snapshot session stores.
+"""Shared utilities for building and extending Genkit agent session stores.
 
-Each turn is persisted whole, keyed by its snapshot id, and the ``parent_id``
-links between snapshots form the conversation tree. That single shape covers a
-linear chat, a "just give me the latest turn" lookup, and a forked/branching
-history without any diffing — so it's the right default for local dev, tests,
-and single-process apps. For a multi-instance production deployment, back the
-same ``SessionStore`` protocol with a real database (where it's worth trading
-this simplicity for incremental, diff-based persistence).
-
-``InMemorySessionStore`` and ``FileSessionStore`` are standalone — they share
-the bits here as plain functions rather than a common base class, so each store
-is a self-contained read of how its backend works.
+Provides common helpers for state persistence, invariant enforcement, and
+real-time status streaming across both built-in (in-memory, file) and custom
+durable backends (such as Firestore).
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timezone
 
-from genkit._ai._agents._session import select_leaf_snapshot
+from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]
+OnClose = Callable[[], Awaitable[None]]
+
+# Persisted statuses that end a snapshot's store lifecycle. apply_save treats
+# these as absorbing; status streams end after one. ``expired`` is a read-time
+# overlay and is never written, so it is not included here.
+TERMINAL_STATUSES = frozenset({
+    SnapshotStatus.COMPLETED,
+    SnapshotStatus.FAILED,
+    SnapshotStatus.ABORTED,
+})
 
 
 def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
@@ -133,19 +136,118 @@ def apply_save(*, existing: SessionSnapshot | None, snapshot_id: str, fn: SaveFn
 
     When ``existing`` is None this creates under the reserved id. Mutators that
     only update (abort, heartbeat) return None when ``existing`` is missing.
+
+    Terminal statuses are absorbing: once a snapshot is completed, failed, or
+    aborted, a mutation may still rewrite its state or metadata, but changing
+    its status raises ``FAILED_PRECONDITION`` — an aborted run must never be
+    rewritten into a completed one.
     """
     next_snapshot = fn(existing.model_copy(deep=True) if existing is not None else None)
+    if inspect.iscoroutine(next_snapshot):
+        next_snapshot.close()
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=("save mutator must be a synchronous function; got a coroutine — remove 'async' from the mutator"),
+        )
     if next_snapshot is None:
         return None
+    if (
+        existing is not None
+        and existing.session_id
+        and next_snapshot.session_id
+        and existing.session_id != next_snapshot.session_id
+    ):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Snapshot '{snapshot_id}' belongs to session '{existing.session_id}' "
+                f"and cannot be rewritten by session '{next_snapshot.session_id}'. "
+                'Snapshot ids share one namespace per store prefix; use ids that are '
+                'unique across sessions.'
+            ),
+        )
+    if existing is not None and existing.status in TERMINAL_STATUSES and next_snapshot.status != existing.status:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Snapshot '{snapshot_id}' already has terminal status "
+                f"'{existing.status and existing.status.value}' and cannot transition to "
+                f"'{next_snapshot.status and next_snapshot.status.value}'."
+            ),
+        )
     stamp_store_fields(snapshot=next_snapshot, snapshot_id=snapshot_id)
     return next_snapshot
 
 
 def notify(*, subs: Subs, snapshot_id: str, status: SnapshotStatus | None) -> None:
-    """Push a status change to everyone subscribed to a snapshot."""
+    """Push a status change to everyone subscribed to a snapshot.
+
+    A persisted terminal status is followed by the end-of-stream sentinel so
+    consumers can finish their ``async for`` instead of waiting forever.
+    """
     # Subscriber queues are unbounded, so put_nowait can't fail here.
     for q in subs.get(snapshot_id, []):
         q.put_nowait(status)
+        if status in TERMINAL_STATUSES:
+            q.put_nowait(None)
+
+
+async def _status_queue_values(q: asyncio.Queue[SnapshotStatus | None]) -> AsyncGenerator[SnapshotStatus, None]:
+    """Yield statuses until the end-of-stream sentinel."""
+    while True:
+        status = await q.get()
+        if status is None:
+            return
+        yield status
+
+
+class _StatusStream:
+    """Closable async iterator over a status queue.
+
+    Follow-until-done (like a channel range / callback subscription): consume
+    with ``async for``, and call ``aclose()`` (or use ``contextlib.aclosing``)
+    to unsubscribe. Python does not tear down async generators on ``break``,
+    so teardown is explicit — same idea as an unsubscribe handle.
+    """
+
+    def __init__(
+        self,
+        q: asyncio.Queue[SnapshotStatus | None],
+        *,
+        on_close: OnClose | None = None,
+    ) -> None:
+        self._agen: AsyncGenerator[SnapshotStatus, None] = _status_queue_values(q)
+        self._on_close = on_close
+        self._closed = False
+
+    def __aiter__(self) -> SnapshotStatusStream:
+        return self
+
+    async def __anext__(self) -> SnapshotStatus:
+        if self._closed:
+            raise StopAsyncIteration
+        try:
+            return await self._agen.__anext__()
+        except StopAsyncIteration:
+            await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._agen.aclose()
+        if self._on_close is not None:
+            await self._on_close()
+
+
+def iterate_statuses(
+    q: asyncio.Queue[SnapshotStatus | None],
+    *,
+    on_close: OnClose | None = None,
+) -> SnapshotStatusStream:
+    """Expose a status queue as a closable async stream."""
+    return _StatusStream(q, on_close=on_close)
 
 
 async def subscribe(
@@ -154,11 +256,18 @@ async def subscribe(
     snapshot_id: str,
     current: SessionSnapshot | None,
 ) -> asyncio.Queue[SnapshotStatus | None]:
-    """Register a status-change queue, seeding it with the current status."""
+    """Register a status-change queue, seeding it with the current status.
+
+    A missing snapshot stays subscribed with an empty queue so a later create
+    (or realtime watch) can deliver the first status. ``None`` is reserved as
+    the end-of-stream sentinel after a terminal status, not as "not found".
+    If the current status is already terminal, seed that status and then
+    ``None`` so the subscriber does not block waiting for a future event.
+    """
     q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-    if current is None:
-        await q.put(None)
-        return q
-    await q.put(current.status)
+    if current is not None:
+        await q.put(current.status)
+        if current.status in TERMINAL_STATUSES:
+            await q.put(None)
     subs.setdefault(snapshot_id, []).append(q)
     return q

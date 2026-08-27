@@ -12,74 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates Genkit's agent APIs by defining six agents in
-// different styles and exposing all of them through a single CLI. Each agent
-// lives in its own file so the styles can be compared side by side:
+// This sample demonstrates the agent APIs by defining six agents in different
+// styles, one per file, behind a single CLI:
 //
-//   - "pirate" (pirate.go) uses DefineAgent + aix.InlinePrompt. The prompt
-//     is declared inline next to the agent.
-//   - "chef" (chef.go) uses DefinePromptAgent. With no source option it
-//     defaults to the prompt registered under the agent's name, loaded from
-//     ./prompts/chef.prompt.
-//   - "coder" (coder.go) uses DefineCustomAgent. The per-turn loop (model
-//     selection, history management, streaming) is wired by hand.
-//   - "banker" (banker.go) uses DefinePromptAgent (prompt loaded from
-//     ./prompts/banker.prompt) with an interruptible tool. It pauses
-//     mid-turn to ask the user for approval before moving money, then
-//     resumes the tool with their answer. This exercises the tool
-//     interrupt / resume flow through the same CLI.
-//   - "barista" (barista.go) is the typed-session-state agent: an
-//     Agent[BaristaOrder] whose system instruction is a function rather than
-//     a fixed string. A tool writes the running order into session state and
-//     the prompt reads it back, so each turn is told what the earlier ones
-//     established. It is also why the CLI's agent list is type-erased (see
-//     agentEntry): the agents in it no longer share one state type.
-//   - "orchestrator" (orchestrator.go) uses the experimental Agents
-//     middleware to delegate to specialized sub-agents (researcher,
-//     engineer) through per-agent tools, merging their artifacts into its
-//     own session.
+//   - pirate (pirate.go): DefineAgent with the prompt declared inline.
+//   - chef (chef.go): DefinePromptAgent, which defaults to the prompt
+//     registered under the agent's name, ./prompts/chef.prompt.
+//   - coder (coder.go): DefineCustomAgent, with the per-turn loop wired by
+//     hand.
+//   - banker (banker.go): a prompt agent with an interruptible tool, so a turn
+//     pauses for approval before moving money and resumes with the answer.
+//   - barista (barista.go): an Agent[BaristaOrder] whose system instruction is
+//     a function. A tool writes the order into session state and the prompt
+//     reads it back, so each turn knows what earlier ones established.
+//   - orchestrator (orchestrator.go): delegates to sub-agents through
+//     per-agent tools, merging their artifacts into its own session.
 //
-// The interactive CLI lives in cli.go: it lists the agents, streams each
-// turn, renders tool calls inline as the agent makes them, and routes tool
-// interrupts to the right handler.
+// cli.go holds the CLI: it lists the agents, streams each turn, renders tool
+// calls as they happen, and routes interrupts. Conversation state persists to a
+// per-agent FileSessionStore under ./.genkit/snapshots/<agent>/, except for the
+// orchestrator's sub-agents, which run statelessly per delegation.
 //
-// The first five agents persist their conversation state to a per-agent
-// FileSessionStore under ./.genkit/snapshots/<agent>/; the orchestrator does
-// too, while its sub-agents run statelessly per delegation.
-//
-// To run:
+// Run it:
 //
 //	go run .
 //
-// The CLI prints a numbered list of agents. Pick one, choose to resume
-// from the last snapshot or start fresh, and chat. Inside a chat:
+// Or with the Dev UI, which keeps the CLI on the terminal and adds a trace of
+// every turn at http://localhost:4000/traces:
+//
+//	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
+//	genkit start -- go run .
+//
+// Pick an agent, resume from its last snapshot or start fresh, then chat.
+// Inside a chat:
 //
 //	(text)             send a message and stream the reply
-//	/detach (text...)  send the text (optional) as the final input, then
-//	                   detach. The server keeps processing in the
-//	                   background; you get a pending snapshot ID and
-//	                   return to the agent list. Re-pick the agent later
-//	                   to wait for the snapshot to finalize and resume
-//	                   from the cumulative final state.
-//	/back              return to the agent list (snapshot is still
-//	                   written by the agent's normal turn-end hook)
-//	/quit              exit the program
+//	/detach (text...)  send the text, then leave it running in the background
+//	                   and return to the agent list. Re-pick the agent to wait
+//	                   for the snapshot and resume from the final state.
+//	/back              return to the agent list
+//	/quit              exit
 //
-// Tip: try "/detach write me a long pirate story" to see the detach loop
-// end-to-end. After the CLI returns to the agent list, pick "pirate"
-// again; if the snapshot is still pending, you'll get a three-way menu
-// (wait, start new, back). Picking wait blocks on the in-process
-// status subscription and resumes from the cumulative final state.
-//
-// Tip: pick "banker" and try "send $200 to alice" (more than the $150
-// balance) or "send $120 to bob" (a large transfer) to see the tool
-// interrupt flow: the turn pauses, the CLI asks you to approve or adjust,
-// and the tool resumes with your answer.
-//
-// Tip: pick "barista", order a drink, then ask "what have I ordered?" on a
-// later turn. The answer comes from session state written by a tool and read
-// back into the system instruction, not from the model re-reading the
-// transcript. /back and re-pick the agent to see it survive a resume.
+// Three worth trying: "/detach write me a long pirate story", then re-pick
+// pirate to wait on it; banker with "send $200 to alice" (over the $150
+// balance) or "send $120 to bob" (large enough to need approval); and barista,
+// where ordering a drink and later asking "what have I ordered?" is answered
+// from session state rather than from the transcript.
 package main
 
 import (
@@ -95,12 +73,11 @@ import (
 	"google.golang.org/genai"
 )
 
-// flashModel is the default model shared by every agent in this sample:
-// gemini-flash-latest with thinking disabled for snappy, low-cost turns. The
-// pirate, coder, and orchestrator agents reference it directly; the chef and
-// banker agents set the same model in their .prompt frontmatter.
-var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-	ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMinimal},
+// model is the default model shared by every agent in this sample. The pirate,
+// coder, and orchestrator agents reference it directly; the chef and banker
+// agents set the same model in their .prompt frontmatter.
+var model = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMedium},
 })
 
 func main() {

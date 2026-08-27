@@ -20,11 +20,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
+
+// shutdownTimeout bounds the graceful drain of in-flight requests after an
+// interrupt, matching the reflection server's shutdown timeout.
+const shutdownTimeout = 5 * time.Second
 
 // Start starts a new HTTP server and manages its lifecycle.
 // This is a convenience function since Go does not manage interrupt signals directly.
@@ -40,6 +46,7 @@ func Start(ctx context.Context, addr string, mux *http.ServeMux) error {
 	errChan := make(chan error, 1)
 
 	go func() {
+		slog.Info("server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- fmt.Errorf("server error: %w", err)
 		}
@@ -50,7 +57,15 @@ func Start(ctx context.Context, addr string, mux *http.ServeMux) error {
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
-		if err := srv.Shutdown(ctx); err != nil {
+		slog.Info("server shutting down", "addr", addr)
+		// Stop intercepting signals so a second interrupt kills the process
+		// immediately instead of being swallowed while requests drain.
+		cancel()
+		// ctx is already canceled here; Shutdown needs a fresh context or it
+		// returns immediately without draining in-flight requests.
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancelShutdown()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("failed to shutdown server: %w", err)
 		}
 	}

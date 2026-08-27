@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, z } from 'genkit';
+import { GenkitError, z, type ActionContext } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
 import {
   isMultiRegionalLocation,
@@ -366,6 +366,49 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
     newOptions.apiKey = reqConfig.apiKey;
   }
   return newOptions;
+}
+
+/**
+ * Applies connection-related overrides carried in the action run context
+ * (e.g. `options.context` on `start`/`check`/`cancel` for background models)
+ * on top of the given client options. This is the mechanism by which callers
+ * can supply per-call overrides for calls (like
+ * `checkOperation`/`cancelOperation`) that don't have access to the original
+ * request's `config`.
+ *
+ * The API key is read from `context.secrets.apiKey` (scrubbed from traces).
+ * All other overrides (e.g. `location`, `apiVersion`) are read from
+ * `context.config`, which is where `checkOperation`/`cancelOperation` fold
+ * their top-level `config` option. This lets callers write
+ * `ai.checkOperation(op, { config: { location } })`.
+ *
+ * All context-derived values take precedence over whatever is already in
+ * `clientOptions`.
+ *
+ * @param clientOptions The base client options to apply overrides on top of.
+ * @param context The action run context (`options.context`), if any.
+ */
+export function applyContextOverrides(
+  clientOptions: ClientOptions,
+  context?: ActionContext
+): ClientOptions {
+  if (!context) {
+    return clientOptions;
+  }
+  let newOptions = { ...clientOptions };
+  const contextApiKey = context.secrets?.apiKey;
+  if (typeof contextApiKey === 'string') {
+    if (newOptions.kind == 'express') {
+      newOptions.apiKey = calculateApiKey(newOptions.apiKey, contextApiKey);
+    } else {
+      // Regional or Global can still use APIKey for billing (not auth)
+      newOptions.apiKey = contextApiKey;
+    }
+  }
+  // All non-secret overrides (e.g. location, apiVersion) are carried in
+  // `context.config` (from checkOperation/cancelOperation's top-level
+  // `config`).
+  return calculateRequestOptions(newOptions, context.config);
 }
 
 /**

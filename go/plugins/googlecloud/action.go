@@ -49,7 +49,7 @@ func (a *ActionTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, 
 
 	subtype := extractStringAttribute(attributes, "genkit:metadata:subtype")
 
-	if subtype != "tool" && actionName != "generate" {
+	if subtype != "tool" && subtype != "tool.v2" && actionName != "generate" {
 		return
 	}
 

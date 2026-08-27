@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
@@ -60,16 +61,18 @@ type Fallback struct {
 	// These are tried in order after the primary model fails. Each ref's
 	// Config is used verbatim for that model -- the original request's
 	// Config is not inherited. Use [ai.NewModelRef] to attach config.
-	Models []ai.ModelRef `json:"models,omitempty"`
+	Models []ai.ModelRef `json:"models,omitempty" jsonschema_description:"Ordered list of fallback models to try after the primary model fails. Each ref's config is used verbatim for that model, and the original request's config is not inherited."`
 	// Statuses is the set of status codes that trigger a fallback for
 	// classified errors; unclassified errors propagate immediately and never
 	// trigger one. Defaults to [defaultFallbackStatuses].
-	Statuses []status.Name `json:"statuses,omitempty"`
+	Statuses []status.Name `json:"statuses,omitempty" jsonschema_description:"Status codes that trigger a fallback for classified errors. Unclassified errors propagate immediately and never trigger one. Defaults to UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, INTERNAL, NOT_FOUND and UNIMPLEMENTED." jsonschema:"enum=OK,enum=CANCELLED,enum=UNKNOWN,enum=INVALID_ARGUMENT,enum=DEADLINE_EXCEEDED,enum=NOT_FOUND,enum=ALREADY_EXISTS,enum=PERMISSION_DENIED,enum=UNAUTHENTICATED,enum=RESOURCE_EXHAUSTED,enum=FAILED_PRECONDITION,enum=ABORTED,enum=OUT_OF_RANGE,enum=UNIMPLEMENTED,enum=INTERNAL,enum=UNAVAILABLE,enum=DATA_LOSS"`
 }
 
-func (f *Fallback) Name() string { return provider + "/fallback" }
+// Name implements [ai.Middleware].
+func (f Fallback) Name() string { return provider + "/fallback" }
 
-func (f *Fallback) New(ctx context.Context) (*ai.Hooks, error) {
+// New implements [ai.Middleware], hooking the model stage.
+func (f Fallback) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{
 		WrapModel: f.wrapModel,
 	}, nil
@@ -95,6 +98,9 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	lastErr := err
 	for _, ref := range f.Models {
 		name := ref.Name()
+		// A fallback reroutes the request to a different (billed) model, so it
+		// warrants more than debug visibility.
+		logger.Warn(ctx, "model call failed, falling back", "model", name, "error", lastErr)
 		m := genkit.LookupModel(genkit.FromContext(ctx), name)
 		if m == nil {
 			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)
@@ -120,7 +126,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 // requires an explicit classification; without this, a deterministic bug in a
 // model plugin would silently reroute every request to the fallback.
 func isFallbackRetryable(err error, statuses []status.Name) bool {
-	if s, ok := classifiedStatus(err); ok {
+	if s, ok := status.Classified(err); ok {
 		return slices.Contains(statuses, s)
 	}
 	return false
