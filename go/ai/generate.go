@@ -496,7 +496,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: max turns must be greater than 0, got %d", maxTurns)
 	}
 	if maxTurns == 0 {
-		maxTurns = 5 // Default max turns.
+		maxTurns = 50 // Default max turns.
 	}
 
 	var outputCfg ModelOutputConfig
