@@ -49,9 +49,17 @@ type Hooks struct {
 
 // GenerateParams holds params for the WrapGenerate hook.
 type GenerateParams struct {
-	// Options is the original options passed to [Generate].
+	// Options is a per-turn copy of the options [Generate] was called with,
+	// for the settings Request does not carry: model name, turn limit, resume
+	// directives. Its Messages are the call's original ones; read
+	// Request.Messages for the conversation as of this turn. Treat it as
+	// read-only: the loop keeps its own copy, so writes here reach nothing.
+	// The copy is shallow, so values it points at are still shared.
 	Options *GenerateActionOptions
-	// Request is the current model request for this iteration, with accumulated messages.
+	// Request is the model request for this turn, with the messages
+	// accumulated so far. Replace it, or edit it in place, to change what the
+	// model receives. Each turn gets its own value, so an edit stays with this
+	// turn unless it lands on a message shared with the next.
 	Request *ModelRequest
 	// Iteration is the current tool-loop iteration (0-indexed).
 	Iteration int

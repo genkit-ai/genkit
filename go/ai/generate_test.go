@@ -18,14 +18,17 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
@@ -2865,6 +2868,275 @@ func TestGenerateAbnormalFinishSkipsOutputParsing(t *testing.T) {
 	}
 }
 
+// TestGenerateDataAbnormalFinish verifies that GenerateData and
+// GenerateDataStream apply the same abnormal-finish rule as Generate: a
+// response that ended blocked, aborted, interrupted, or other is handed back
+// unparsed so the caller reads the finish reason, instead of being reported as
+// a schema mismatch that names the wrong cause.
+func TestGenerateDataAbnormalFinish(t *testing.T) {
+	r := childRegistry(t)
+
+	type Report struct {
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+
+	tests := []struct {
+		name     string
+		response *ModelResponse
+		wantData *Report
+		wantErr  error
+	}{
+		{
+			// The common path: a provider reports a safety block and returns
+			// prose explaining it, with no middleware involved. A refusal
+			// cannot produce a Report, so it is an error rather than a nil
+			// value the caller would read as success.
+			name: "blocked with explanatory text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       NewModelTextMessage("Response was blocked for safety reasons."),
+			},
+			wantErr: ErrGenerationBlocked,
+		},
+		{
+			name: "blocked with no content",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonBlocked,
+				FinishMessage: "blocked by safety settings",
+				Message:       &Message{Role: RoleModel},
+			},
+			wantErr: ErrGenerationBlocked,
+		},
+		{
+			// What a soft-failing middleware produces when the provider is
+			// unreachable: an aborted response carrying the failure text.
+			name: "aborted with failure text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonAborted,
+				FinishMessage: "provider down",
+				Message:       NewModelTextMessage("Error: provider down"),
+			},
+		},
+		{
+			name: "other with filter details",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonOther,
+				FinishMessage: "malformed function call",
+				Message:       NewModelTextMessage("filter details, not JSON"),
+			},
+		},
+		{
+			// A normal completion still validates: the fix must not turn every
+			// schema mismatch into a silent nil.
+			name: "stop with non-conforming text still fails parsing",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage("not json at all"),
+			},
+			wantErr: status.ErrInvalidOutput,
+		},
+		{
+			name: "stop with conforming text parses",
+			response: &ModelResponse{
+				FinishReason: FinishReasonStop,
+				Message:      NewModelTextMessage(`{"title":"ok","score":7}`),
+			},
+			wantData: &Report{Title: "ok", Score: 7},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/data-abnormal-finish-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					resp := *tt.response
+					resp.Request = req
+					return &resp, nil
+				})
+			opts := []GenerateOption{WithModel(model), WithPrompt("please respond")}
+
+			t.Run("GenerateData", func(t *testing.T) {
+				data, resp, err := GenerateData[Report](context.Background(), r, opts...)
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("GenerateData() err = %v, want %v", err, tt.wantErr)
+					}
+					if errors.Is(err, ErrGenerationBlocked) {
+						if !strings.Contains(err.Error(), tt.response.FinishMessage) {
+							t.Errorf("GenerateData() err = %v, want it to carry %q", err, tt.response.FinishMessage)
+						}
+						// The response rides along so the caller can still
+						// inspect the turn that was refused.
+						checkResponse(t, resp, tt.response)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("GenerateData() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				checkResponse(t, resp, tt.response)
+				if tt.wantData == nil {
+					if data != nil {
+						t.Errorf("GenerateData() data = %+v, want nil", *data)
+					}
+					return
+				}
+				if data == nil {
+					t.Fatalf("GenerateData() data = nil, want %+v", *tt.wantData)
+				}
+				if *data != *tt.wantData {
+					t.Errorf("GenerateData() data = %+v, want %+v", *data, *tt.wantData)
+				}
+			})
+
+			t.Run("GenerateDataStream", func(t *testing.T) {
+				var (
+					final *StreamValue[Report, Report]
+					err   error
+				)
+				for v, streamErr := range GenerateDataStream[Report](context.Background(), r, opts...) {
+					if streamErr != nil {
+						err = streamErr
+						break
+					}
+					if v.Done {
+						final = v
+					}
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("GenerateDataStream() err = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("GenerateDataStream() returned error for %q response: %v", tt.response.FinishReason, err)
+				}
+				if final == nil {
+					t.Fatal("GenerateDataStream() never yielded a done value")
+				}
+				checkResponse(t, final.Response, tt.response)
+				want := Report{}
+				if tt.wantData != nil {
+					want = *tt.wantData
+				}
+				if final.Output != want {
+					t.Errorf("GenerateDataStream() output = %+v, want %+v", final.Output, want)
+				}
+			})
+		})
+	}
+}
+
+// TestGenerateDataStreamBlockedAfterChunks covers the path the one-shot tests
+// miss: a model that streams output and only then reports a block. Chunks are
+// parsed as they arrive, before any finish reason exists, so the caller can see
+// a populated chunk for a generation that is ultimately refused. The contract
+// is that the terminal value settles it, and here that means the refusal
+// surfaces as an error rather than as a zeroed Output the caller reads as an
+// empty answer.
+func TestGenerateDataStreamBlockedAfterChunks(t *testing.T) {
+	r := childRegistry(t)
+
+	type Report struct {
+		Title string `json:"title"`
+	}
+
+	tests := []struct {
+		name      string
+		streamed  string
+		wantChunk *Report
+	}{
+		{
+			// Partial structured output arrives, then the block lands.
+			name:      "partial json then blocked",
+			streamed:  `{"title":"partial`,
+			wantChunk: &Report{Title: "partial"},
+		},
+		{
+			// A refusal streamed as prose parses to nothing useful, which must
+			// not be mistaken for a stream failure: the finish reason still has
+			// to reach the caller.
+			name:     "prose then blocked",
+			streamed: "I cannot help with that request.",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := defineModel(r, fmt.Sprintf("test/streamBlocked-%d", i), &ModelOptions{Supports: defaultModelSupports()},
+				func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if cb != nil {
+						if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(tt.streamed)}}); err != nil {
+							return nil, err
+						}
+					}
+					return &ModelResponse{
+						Request:       req,
+						FinishReason:  FinishReasonBlocked,
+						FinishMessage: "blocked by safety settings",
+						Message:       NewModelTextMessage(tt.streamed),
+					}, nil
+				})
+
+			var (
+				chunks []Report
+				gotErr error
+				done   bool
+			)
+			for v, err := range GenerateDataStream[Report](context.Background(), r,
+				WithModel(model), WithPrompt("please respond")) {
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if v.Done {
+					done = true
+					continue
+				}
+				chunks = append(chunks, v.Chunk)
+			}
+
+			if !errors.Is(gotErr, ErrGenerationBlocked) {
+				t.Fatalf("stream err = %v, want %v", gotErr, ErrGenerationBlocked)
+			}
+			if !strings.Contains(gotErr.Error(), "blocked by safety settings") {
+				t.Errorf("stream err = %v, want it to carry the finish message", gotErr)
+			}
+			if done {
+				t.Error("stream yielded a done value for a refused generation")
+			}
+			if tt.wantChunk != nil {
+				// Documenting the provisional chunk rather than asserting it
+				// away: it is why the terminal value has to be authoritative.
+				if len(chunks) == 0 || chunks[len(chunks)-1] != *tt.wantChunk {
+					t.Errorf("chunks = %+v, want the last to be %+v", chunks, *tt.wantChunk)
+				}
+			}
+		})
+	}
+}
+
+// checkResponse asserts that the caller was handed the model's own finish
+// reason, message, and text rather than a rewritten or parsed stand-in.
+func checkResponse(t *testing.T, got, want *ModelResponse) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("response = nil, want the model response")
+	}
+	if got.FinishReason != want.FinishReason {
+		t.Errorf("FinishReason = %q, want %q", got.FinishReason, want.FinishReason)
+	}
+	if got.FinishMessage != want.FinishMessage {
+		t.Errorf("FinishMessage = %q, want %q", got.FinishMessage, want.FinishMessage)
+	}
+	if got.Text() != want.Text() {
+		t.Errorf("Text() = %q, want %q", got.Text(), want.Text())
+	}
+}
+
 func TestGenerateNoGoroutineLeak(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
@@ -3053,6 +3325,218 @@ func TestMediaParts(t *testing.T) {
 		var msg *Message
 		if parts := msg.MediaParts(); parts != nil {
 			t.Errorf("MediaParts() on nil message = %v, want nil", parts)
+		}
+	})
+}
+
+// generateSpanMessageCounts returns, sorted, the number of messages each
+// collected span named "generate" recorded as its input.
+func generateSpanMessageCounts(t *testing.T, c *spanCollector) []int {
+	t.Helper()
+	var counts []int
+	for _, s := range c.allByName("generate") {
+		input, ok := spanAttr(s, "genkit:input")
+		if !ok {
+			t.Errorf("generate span recorded no input")
+			continue
+		}
+		var decoded struct {
+			Messages []*Message `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(input), &decoded); err != nil {
+			t.Errorf("generate span input is not a request: %v", err)
+			continue
+		}
+		counts = append(counts, len(decoded.Messages))
+	}
+	slices.Sort(counts)
+	return counts
+}
+
+// TestGenerateSpanRecordsAccumulatedMessages checks that every tool-loop turn
+// opens a generate span recording the conversation as of that turn, not the
+// messages the call started with.
+func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
+	// Two tool calls and a final answer: three model calls in all, whose
+	// requests hold 1, 3, and 5 messages as each turn appends a model and a
+	// tool message. Through the action the counts are the same, since the
+	// action's own span stands in for the first turn's: a fourth count here
+	// would mean the two are duplicating each other.
+	const turns = 3
+	want := []int{1, 3, 5}
+
+	setup := func(t *testing.T) (api.Registry, *spanCollector) {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/loopModel",
+			handler: loopingToolModel("myTool", turns-1),
+		})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+		return r, collectSpans(t)
+	}
+
+	t.Run("through Generate", func(t *testing.T) {
+		r, spans := setup(t)
+
+		_, err := Generate(testCtx, r,
+			WithModelName("test/loopModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+		)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+		// The loop's spans are annotated by type alone. A subtype would show
+		// up in their trace paths, and in every path built under them.
+		for _, s := range spans.allByName("generate") {
+			assertSpanAttr(t, s, "genkit:type", "util")
+			if got, ok := spanAttr(s, "genkit:metadata:subtype"); ok {
+				t.Errorf("generate span carries subtype %q, want none", got)
+			}
+		}
+	})
+
+	t.Run("through the generate action", func(t *testing.T) {
+		r, spans := setup(t)
+		action := DefineGenerateAction(testCtx, r)
+
+		_, err := action.Run(testCtx, &GenerateActionOptions{
+			Model:    "test/loopModel",
+			Messages: []*Message{NewUserTextMessage("start")},
+			Tools:    []string{"myTool"},
+		}, nil)
+		assertNoError(t, err)
+
+		if got := generateSpanMessageCounts(t, spans); !slices.Equal(got, want) {
+			t.Errorf("generate spans recorded %v messages, want %v", got, want)
+		}
+	})
+}
+
+// TestToolLoopLeavesEarlierRequestsAlone checks that each turn of the tool loop
+// works from its own request: middleware holds these, so reusing one would
+// retroactively add the next turn's messages to a request a hook read.
+func TestToolLoopLeavesEarlierRequestsAlone(t *testing.T) {
+	r := newTestRegistry(t)
+	var seen []*ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/loopModel",
+		handler: loopingToolModel("myTool", 2),
+	})
+	defineTool(r, "myTool", "A test tool",
+		func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+
+	recorder := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+				seen = append(seen, p.Request)
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/loopModel"),
+		WithPrompt("start"),
+		WithTools(LookupTool(r, "myTool")),
+		WithUse(recorder),
+	)
+	assertNoError(t, err)
+
+	// One request per turn, each holding what the turn before it appended,
+	// still true once the whole loop has run.
+	want := []int{1, 3, 5}
+	if len(seen) != len(want) {
+		t.Fatalf("middleware saw %d requests, want %d", len(seen), len(want))
+	}
+	for i, n := range want {
+		if got := len(seen[i].Messages); got != n {
+			t.Errorf("request %d holds %d messages after the loop finished, want %d", i, got, n)
+		}
+	}
+}
+
+// interruptedForResume runs a generate that stops on a tool interrupt and
+// returns the registry, the tool, and the interrupted response, ready for a
+// resuming call.
+func interruptedForResume(t *testing.T) (api.Registry, Tool, *ModelResponse) {
+	t.Helper()
+	r := childRegistry(t)
+	tool := defineTool(r, "conditional", "A tool that interrupts on request",
+		func(ctx *ToolContext, in conditionalToolInput) (string, error) {
+			if in.Interrupt {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "test"}})
+			}
+			return "processed: " + in.Value, nil
+		})
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/resumeModel",
+		handler: toolCallingModelHandler("conditional", map[string]any{"Value": "v", "Interrupt": true}, "done"),
+	})
+
+	res, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithPrompt("go"), WithTools(tool))
+	assertNoError(t, err)
+	if res.FinishReason != "interrupted" {
+		t.Fatalf("setup: finish reason = %q, want %q", res.FinishReason, "interrupted")
+	}
+	return r, tool, res
+}
+
+// TestResumeCarriesOptionsForward checks the options the loop switches to once
+// a resumed call has replayed its tools. It reads them for the rest of the
+// call, so whatever the revised copy drops is lost from that point on.
+func TestResumeCarriesOptionsForward(t *testing.T) {
+	t.Run("keeps the caller's step name", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+		spans := collectSpans(t)
+
+		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithStepName("myStep"))
+		assertNoError(t, err)
+
+		// Both turns are the caller's step, so neither may fall back to the default.
+		if got := len(spans.allByName("generate")); got != 0 {
+			t.Errorf("got %d spans named %q, want 0: every iteration is the named step", got, "generate")
+		}
+		if got := len(spans.allByName("myStep")); got != 2 {
+			t.Errorf("got %d spans named %q, want 2 (one per iteration)", got, "myStep")
+		}
+	})
+
+	t.Run("resume survives a hook writing to its options", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+
+		clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Options.Resume != nil {
+						p.Options.Resume.Respond = nil
+						p.Options.Resume.Restart = nil
+					}
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		out, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithToolResponses(respond), WithUse(clobber))
+		assertNoError(t, err)
+
+		// The hook's writes land on its own copy, so the call resumes as usual.
+		if out.FinishReason == "interrupted" {
+			t.Error("call stayed interrupted: a hook's write to Options reached the loop")
+		}
+		if got := out.Text(); got != "done" {
+			t.Errorf("resumed response = %q, want %q", got, "done")
 		}
 	})
 }

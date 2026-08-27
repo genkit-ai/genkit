@@ -244,11 +244,11 @@ func RunInNewSpan[I, O any](
 		parentPath = parentSM.Path
 	}
 
-	// Build path with type annotations to maintain compatibility with TypeScript telemetry format
+	// Build path with type annotations to maintain compatibility with the
+	// TypeScript telemetry format: a flow is annotated by its subtype, every
+	// other span by its type, then its subtype when it has one.
 	if metadata.Subtype == "flow" {
 		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, "flow")
-	} else if metadata.Subtype == "util" {
-		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, "util")
 	} else {
 		sm.Path = buildAnnotatedPath(metadata.Name, parentPath, metadata.Type)
 		if metadata.Subtype != "" {
