@@ -64,6 +64,7 @@ const specPath = "../../../tests/specs/agent.yaml"
 // typo instead, and fails.
 var supportedRequires = map[string]bool{
 	"resumable-failures": true,
+	"resumable-aborts":   true,
 }
 
 // customState is the single session-state type used by every conformance
@@ -255,6 +256,28 @@ func setupHarness(t *testing.T) *harness {
 			}
 			return &exp.AgentResult{Message: ai.NewModelTextMessage("unblocked")}, nil
 		}, newStore("customAgentBlocking"))
+
+	// customAgentAbortable: server-managed, records the turn and blocks until
+	// its context is cancelled on the turn whose message is "block". Used for
+	// the resumable-abort cases, where the abort has to land with a committed
+	// turn behind it and an unfinished one in front of it.
+	h.agents["customAgentAbortable"] = exp.DefineCustomAgent(reg, "customAgentAbortable",
+		func(ctx context.Context, _ exp.Responder, sess *exp.SessionRunner[customState]) (*exp.AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, in *exp.AgentInput) (*exp.TurnResult, error) {
+				sess.AddMessages(in.Message)
+				if in.Message != nil && in.Message.Text() == "block" {
+					<-ctx.Done()
+					// No TurnResult: the turn commits nothing, so the message
+					// it just added rolls back with it.
+					return nil, ctx.Err()
+				}
+				sess.AddMessages(ai.NewModelTextMessage("ack"))
+				return nil, nil
+			}); err != nil {
+				return nil, err
+			}
+			return &exp.AgentResult{Message: ai.NewModelTextMessage("done")}, nil
+		}, newStore("customAgentAbortable"))
 
 	// customAgentFailing: server-managed, fails during processing. Used for
 	// detach + background failure tests.
@@ -920,6 +943,16 @@ func executeWaitUntilCompleted(t *testing.T, label string, store *localstore.InM
 		exp.SnapshotStatusFailed:    true,
 		exp.SnapshotStatusAborted:   true,
 	}
+	// An aborted row reaches its status in two writes: the abort flips it, and
+	// the finalize that follows stamps the reason and the state. The reason is
+	// the marker that the second one has landed, so a wait that stopped at the
+	// status alone would read a row still being written.
+	settled := func(snap *exp.SessionSnapshot[customState]) bool {
+		if normalizeStatus(snap.Status) != exp.SnapshotStatusAborted {
+			return true
+		}
+		return snap.FinishReason != ""
+	}
 
 	ctx := context.Background()
 	deadline := time.Now().Add(timeout)
@@ -929,7 +962,7 @@ func executeWaitUntilCompleted(t *testing.T, label string, store *localstore.InM
 		if err != nil {
 			t.Fatalf("%s: getSnapshot while polling: %v", label, err)
 		}
-		if s != nil && terminal[normalizeStatus(s.Status)] {
+		if s != nil && terminal[normalizeStatus(s.Status)] && settled(s) {
 			snap = s
 			break
 		}

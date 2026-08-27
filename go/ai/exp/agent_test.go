@@ -3961,6 +3961,266 @@ func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 	}
 }
 
+// abortTestAgent commits a message on its first turn, then blocks on its
+// second so a stop always lands mid-turn with exactly one turn behind it.
+// commit says whether the blocked turn returns a TurnResult beside its error,
+// which is what a prompt-backed agent does whenever the generate call produced
+// a partial response.
+func abortTestAgent(t *testing.T, store SessionStore[testState], name string, commit bool, entered chan<- struct{}) *Agent[testState] {
+	t.Helper()
+	return abortTestAgentGated(t, store, name, commit, entered, nil)
+}
+
+// abortTestAgentGated is abortTestAgent with a signal on the first turn's
+// completion, for a test that has to land a detach between the two turns.
+func abortTestAgentGated(t *testing.T, store SessionStore[testState], name string, commit bool, entered, firstDone chan<- struct{}) *Agent[testState] {
+	t.Helper()
+	turns := 0
+	return DefineCustomAgent(newTestRegistry(t), name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				turns++
+				if turns == 1 {
+					sess.AddMessages(ai.NewModelTextMessage("first turn"))
+					return nil, nil
+				}
+				if firstDone != nil {
+					// The first turn has snapshotted by now: this runs after
+					// its turn-end tail.
+					close(firstDone)
+				}
+				sess.AddMessages(ai.NewModelTextMessage("second turn"))
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-ctx.Done()
+				if commit {
+					return &TurnResult{}, ctx.Err()
+				}
+				return nil, ctx.Err()
+			})
+		},
+		WithSessionStore(store),
+	)
+}
+
+// TestAgent_AbortedRunsResume covers the roads to a stopped run. An attached
+// caller cancels the context under it and a detached one calls abort; both
+// land the same aborted snapshot, holding the work through the last turn that
+// finished and resumable like any other.
+func TestAgent_AbortedRunsResume(t *testing.T) {
+	t.Run("an attached cancel returns the resume point with the error", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "attachedAbort", true, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+
+		out, err := conn.Output()
+		// Both, as ai.Generate hands back a partial response beside the error
+		// that ended it. The error alone left nothing to resume from.
+		if err == nil {
+			t.Fatal("Output err is nil, want the cancellation")
+		}
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point alongside the error")
+		}
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
+		}
+		if out.SnapshotID == "" {
+			t.Fatal("SnapshotID is empty, want the snapshot the run stopped at")
+		}
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status != SnapshotStatusPending
+		})
+		// The same status a detached run's abort writes: the row does not
+		// record which way the invocation was running when it was stopped.
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusAborted)
+		}
+	})
+
+	t.Run("an uncommitted turn rolls back to its predecessor", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "attachedNoCommit", false, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+
+		out, err := conn.Output()
+		if err == nil {
+			t.Fatal("Output err is nil, want the cancellation")
+		}
+		// The stopped turn committed nothing, so it wrote no snapshot and the
+		// resume point stays the turn before it.
+		snap, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusCompleted {
+			t.Errorf("snapshot status = %q, want the completed turn before the stop", snap.Status)
+		}
+		for _, m := range snap.State.Messages {
+			if m.Text() == "second turn" {
+				t.Error("resume point holds the turn that did not finish")
+			}
+		}
+	})
+
+	t.Run("a detached abort keeps the work it had done", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "detachedAbort", false, entered)
+
+		conn, err := af.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		// Both inputs are queued before the detach, which the intake reads
+		// while the second turn is still blocked; detach then suspends
+		// per-turn snapshots for the rest of the invocation.
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if _, err := af.Abort(context.Background(), out.SnapshotID); err != nil {
+			t.Fatalf("Abort: %v", err)
+		}
+
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted && s.FinishReason == AgentFinishReasonAborted
+		})
+		// The row used to carry no state at all: abort only flipped the
+		// pending row's status, and the finalize kept that row verbatim.
+		if snap.State == nil {
+			t.Fatal("aborted snapshot carries no state, so there is nothing to resume from")
+		}
+		var texts []string
+		for _, m := range snap.State.Messages {
+			texts = append(texts, m.Text())
+		}
+		if !slices.Contains(texts, "first turn") {
+			t.Errorf("messages = %q, want the committed turn's reply", texts)
+		}
+		// Detach suspends per-turn snapshots, so the rollback comes off the
+		// pending row's parent rather than a snapshot of its own.
+		if slices.Contains(texts, "second turn") {
+			t.Errorf("messages = %q, want the turn that did not finish rolled back", texts)
+		}
+	})
+
+	t.Run("an aborted snapshot resumes", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "resumeAborted", true, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+		out, _ := conn.Output()
+		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted
+		})
+
+		// A fresh agent over the same store, so nothing in memory carries
+		// over: the snapshot is the whole resume point.
+		resumed := DefineCustomAgent(newTestRegistry(t), "resumeAbortedContinuation",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("continued"))
+					return nil, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+		cont, err := resumed.RunText(context.Background(), "carry on",
+			WithSnapshotID[testState](out.SnapshotID))
+		if err != nil {
+			t.Fatalf("resuming the aborted snapshot: %v", err)
+		}
+		contSnap, err := store.GetSnapshot(context.Background(), cont.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if contSnap.State.Messages[len(contSnap.State.Messages)-1].Text() != "continued" {
+			t.Error("the resumed turn's reply is not the conversation's last message")
+		}
+	})
+
+	t.Run("a deadline aborts too, and the error says which", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "deadlineAborts", true, entered)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+
+		out, _ := conn.Output()
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point")
+		}
+		// The caller set the deadline, so it stopped the run as deliberately
+		// as a cancel does, only in advance.
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
+		}
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status != SnapshotStatusPending
+		})
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusAborted)
+		}
+		// The row does not say which stop it was. The work context is
+		// decoupled from the client's, so the turn only ever sees
+		// context.Canceled and the deadline does not reach the error either.
+		if snap.Error == nil || snap.Error.Status != status.Cancelled {
+			t.Errorf("Error = %+v, want a CANCELLED classification", snap.Error)
+		}
+	})
+}
+
 func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	// Sanity: a non-detached invocation against a store-backed flow still
 	// behaves like a synchronous flow (turn-end snapshots, no pending row).

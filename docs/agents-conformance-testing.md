@@ -47,6 +47,7 @@ capability means adding it there and to the table below. Known capabilities:
 | Capability | Meaning |
 |------------|---------|
 | `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go. |
+| `resumable-aborts` | An aborted invocation persists the state through the last turn that committed, rolling back the one that did not finish, and resume accepts that snapshot. Gates an `aborted` snapshot carrying state, one as a resume target, and the `customAgentAbortable` fixture. Implemented by: Go. |
 
 ### Step Types
 
@@ -98,6 +99,11 @@ Aborts an agent by snapshot ID.
 
 Polls a snapshot until it reaches a terminal status (`completed`, `failed`, or
 `aborted`).
+
+An aborted snapshot reaches its status in two writes: the abort flips it, and
+the finalize that follows stamps the finish reason and the state. This step
+waits for the second one, so `expectSnapshot` never reads a row that is still
+being written.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -212,6 +218,7 @@ is not needed for tests targeting these agents.
 
 | Agent Name | Description |
 |------------|-------------|
+| `customAgentAbortable` | Server-managed. Records each turn's input, replies `ack`, and commits. On the turn whose message is `block` it blocks until its context is cancelled and commits nothing. Used for `resumable-aborts` tests; only required by harnesses declaring that capability. |
 | `customAgentBlocking` | Server-managed. Blocks indefinitely until its abort signal fires. Used for abort-while-pending tests. |
 | `customAgentFailing` | Server-managed. Throws `Error('intentional failure')` during processing. Used for detach + background failure tests. |
 | `customAgentWithArtifacts` | Client-managed. Adds artifact `doc1` (v1), updates it to `doc1` (v2), then adds `doc2`. Returns all artifacts. |

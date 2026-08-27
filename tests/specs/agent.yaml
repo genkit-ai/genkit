@@ -15,6 +15,7 @@
 # fails every harness instead of silently skipping in all of them.
 capabilities:
   - resumable-failures
+  - resumable-aborts
 
 tests:
   # ---------------------------------------------------------------------------
@@ -1741,3 +1742,98 @@ tests:
                   - toolResponse:
                       { name: testTool, ref: r1, output: tool called }
               - { role: model, content: [{ text: all done }] }
+
+  # ---------------------------------------------------------------------------
+  # Resumable aborts (requires: resumable-aborts)
+  # ---------------------------------------------------------------------------
+  # An aborted invocation keeps the turns that finished and resume accepts its
+  # snapshot, the way it accepts a failed one. The snapshot used to carry no
+  # state at all: the pending row was written without any, abort only flipped
+  # its status, and the finalize kept that row verbatim. These cases use
+  # vocabulary gated behind the `resumable-aborts` capability: an `aborted`
+  # snapshot carrying state, and one as a resume target. Their fixture,
+  # customAgentAbortable, records each turn and blocks until its context is
+  # cancelled on the turn whose message is "block".
+
+  - name: an aborted snapshot keeps the finished turns and drops the one in flight
+    requires: [resumable-aborts]
+    description: >
+      A first turn commits, a second blocks, and the client detaches and
+      aborts. The finalize writes the state through the committed turn onto
+      the aborted row: the blocked turn's message is rolled back, because it
+      returned no result to commit and detach had suspended the per-turn
+      snapshot that would otherwise hold it.
+    agent: customAgentAbortable
+    steps:
+      - type: send
+        init: { sessionId: 44444444-4444-4444-8444-444444444444 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+          - message: { role: user, content: [{ text: block }] }
+            detach: true
+        expectOutput:
+          finishReason: detached
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      # The abort flips the status; the finalize that follows writes the
+      # reason and the state.
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+          finishReason: aborted
+          stateContains:
+            sessionId: 44444444-4444-4444-8444-444444444444
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: ack }] }
+
+  - name: an aborted snapshot is a resume point
+    requires: [resumable-aborts]
+    description: >
+      Resume accepts an aborted snapshot rather than rejecting it as a dead
+      end. The continued turn runs on the conversation the abort left, so the
+      committed turn is still in front of it and the blocked one is not.
+    agent: customAgentAbortable
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+          - message: { role: user, content: [{ text: block }] }
+            detach: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: carry on }] }
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: ack }] }
+              - { role: user, content: [{ text: carry on }] }
+              - { role: model, content: [{ text: ack }] }

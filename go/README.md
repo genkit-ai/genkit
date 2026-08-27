@@ -109,6 +109,7 @@ Multi-turn conversations that own their own loop and state.
 [Custom Turn Loops](#custom-turn-loops) &middot;
 [Persist and Resume](#persist-and-resume) &middot;
 [Re-attempt Failed Turns](#re-attempt-failed-turns) &middot;
+[Stop a Run and Continue It](#stop-a-run-and-continue-it) &middot;
 [Redact on the Way Out](#redact-on-the-way-out) &middot;
 [Background Agents](#background-agents) &middot;
 [Delegate to Sub-Agents](#delegate-to-sub-agents) &middot;
@@ -375,6 +376,23 @@ Whether a failure is worth another attempt is yours to decide; the framework rec
 
 Without a store, the failed output's `State` carries the same resume point inline; initialize the next invocation with it. A turn rejected before it reached the model (an invalid input, for example) commits nothing, and the resume point stays the turn before it. Custom agents opt in by returning a `TurnResult` alongside the turn's error; a bare error keeps the discard-the-turn behavior.
 
+### Stop a Run and Continue It
+
+A run the caller stopped is `aborted`; a run that broke is `failed`. Stopping covers every way the caller ends it: cancelling the context on a live connection, closing the transport, letting a deadline expire, hitting a limit it set such as `ai.WithMaxTurns`, or calling `Abort` on a detached one. All of them land an `aborted` snapshot holding the turns that finished, and all of them resume like a `failed` one:
+
+```go
+ctx, cancel := context.WithCancel(ctx)
+out, err := chatAgent.Run(ctx, &aix.AgentInput{Message: msg})  // cancel() elsewhere
+
+// Both come back: err is what stopped the run, out names where it stopped.
+if out.FinishReason == aix.AgentFinishReasonAborted {
+    resumed, _ := chatAgent.Run(context.Background(), &aix.AgentInput{},
+        aix.WithSnapshotID[any](out.SnapshotID))
+}
+```
+
+The turn that was in flight is discarded whole, so the conversation ends at a turn seam. A tool that had already run inside it loses its response along with the rest of the round, and re-sending the conversation calls it again.
+
 ### Redact on the Way Out
 
 `WithStateTransform` rewrites session state as it leaves the server, on `GetSnapshot` reads, on a client-managed `out.State`, and on the streamed `CustomPatch` diffs, while the persisted snapshot and the state your agent function sees stay raw:
@@ -409,9 +427,11 @@ switch snap.Status {
 case aix.SnapshotStatusPending:   // still working
 case aix.SnapshotStatusCompleted: // snap.State holds the final state; resume it
 case aix.SnapshotStatusFailed:    // snap.Error holds the failure; still resumable
+case aix.SnapshotStatusAborted:   // stopped early; resumable from the last finished turn
 }
 
 // Or stop it early; the runtime observes the abort and cancels the work.
+// The snapshot keeps the turns that finished, so it can be resumed later.
 chatAgent.Abort(ctx, snapshotID)
 ```
 

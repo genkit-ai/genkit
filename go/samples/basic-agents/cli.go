@@ -378,9 +378,9 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 			}
 			fmt.Println(style(fmt.Sprintf("Done (%s).", final.Status), ansiGreen))
 			if !resumableStatus(final.Status) {
-				// aborted / pending snapshots are dead ends; the agent
-				// runtime would reject WithSnapshotID on them. Fall
-				// through to a fresh chat instead.
+				// A pending snapshot is still being written to; the agent
+				// runtime would reject WithSnapshotID on it. Fall through
+				// to a fresh chat instead.
 				fmt.Println(style("Cannot resume this snapshot. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
@@ -399,9 +399,14 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 
 // resumableStatus reports whether a settled snapshot can be continued from.
 // A failed row qualifies: it holds what its turn committed before the
-// failure, so resuming it picks up there and re-attempts that turn.
+// failure, so resuming it picks up there and re-attempts that turn. So does
+// an aborted one, which holds the turns that finished before the stop.
 func resumableStatus(s aix.SnapshotStatus) bool {
-	return s == aix.SnapshotStatusCompleted || s == aix.SnapshotStatusFailed
+	switch s {
+	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
+		return true
+	}
+	return false
 }
 
 // pickSession decides which snapshot (if any) to resume from. It only
@@ -421,12 +426,15 @@ func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.A
 	fmt.Printf("\nLast %s session: %s\n",
 		style(a.Name(), ansiBold),
 		style(fmt.Sprintf("%s (%s, %d msgs)", shortID(latest.SnapshotID), latest.UpdatedAt.Format(time.RFC822), msgs), ansiDim))
-	if latest.Status == aix.SnapshotStatusFailed {
+	switch latest.Status {
+	case aix.SnapshotStatusFailed:
 		why := "its last turn failed"
 		if latest.Error != nil && latest.Error.Message != "" {
 			why = latest.Error.Message
 		}
 		fmt.Println(style("Resuming re-attempts the failed turn: "+why, ansiYellow))
+	case aix.SnapshotStatusAborted:
+		fmt.Println(style("This session was stopped. Resuming picks up from the last turn that finished.", ansiYellow))
 	}
 	fmt.Println("Resume from it? " + style("[Y/n] (n = start a new conversation)", ansiDim))
 
