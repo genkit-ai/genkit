@@ -1333,6 +1333,19 @@ func clone[T any](obj *T) *T {
 	return &newObj
 }
 
+// resolveFailedToolCall classifies a failed tool call; interrupts are the
+// caller's to detect first. A [WithSoftFailure] tool's failure becomes the
+// error tool response reported to the model, unless the context is done: a
+// cancellation must stop the loop, not feed it. Everything else wraps as
+// [ErrToolFailed].
+func resolveFailedToolCall(ctx context.Context, tool Tool, name string, err error) (*MultipartToolResponse, error) {
+	if ctx.Err() == nil && toolSoftFailure(tool) {
+		logger.Debug(ctx, "tool failed softly, reporting the error to the model", "tool", name, "error", err)
+		return softFailureResponse(err), nil
+	}
+	return nil, status.Errorf(ErrToolFailed, "tool %q failed: %w", name, err)
+}
+
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
 type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
@@ -1435,8 +1448,12 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					return
 				}
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolFailed, "tool %q failed: %w", toolReq.Name, err)}
-				return
+				softResp, toolErr := resolveFailedToolCall(ctx, tool, toolReq.Name, err)
+				if toolErr != nil {
+					resultChan <- result[*MultipartToolResponse]{index: idx, err: toolErr}
+					return
+				}
+				multipartResp = softResp
 			}
 
 			newPart := clone(p)
@@ -1947,7 +1964,10 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				}
 
 				toolDefinition := tool.Definition()
-				if len(toolDefinition.OutputSchema) > 0 {
+				// The framework's own failure shape (see [WithSoftFailure])
+				// is not tool output: a caller replaying a persisted failure
+				// must not be rejected by the tool's output schema.
+				if !isSoftFailureMeta(respondPart.Metadata) && len(toolDefinition.OutputSchema) > 0 {
 					outputBytes, err := json.Marshal(respondPart.ToolResponse.Output)
 					if err != nil {
 						return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: failed to marshal tool output for validation: %w", err)
@@ -2020,7 +2040,11 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 						}, nil
 					}
 
-					return nil, status.Errorf(ErrToolFailed, "tool %q failed: %w", restartPart.ToolRequest.Name, err)
+					softResp, toolErr := resolveFailedToolCall(resumedCtx, tool, restartPart.ToolRequest.Name, err)
+					if toolErr != nil {
+						return nil, toolErr
+					}
+					multipartResp = softResp
 				}
 
 				newToolReq := clone(p)

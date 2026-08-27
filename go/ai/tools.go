@@ -310,12 +310,64 @@ func applyStrictMetadata(metadata map[string]any, strict *bool) {
 	if strict == nil {
 		return
 	}
+	toolMetaOf(metadata)[toolStrictKey] = *strict
+}
+
+// toolSoftFailureKey is the metadata key under metadata["tool"] that carries
+// the [WithSoftFailure] flag through the action metadata and onto
+// [ToolDefinition.Metadata]. The loop re-resolves tools with [LookupTool],
+// which rebuilds definitions from registered action metadata, so a custom
+// [Tool] opts in through that metadata, not through its own Definition.
+const toolSoftFailureKey = "softFailure"
+
+// applySoftFailureMetadata sets metadata["tool"][toolSoftFailureKey] when the
+// tool was defined with [WithSoftFailure]. False leaves the metadata
+// untouched.
+func applySoftFailureMetadata(metadata map[string]any, softFailure bool) {
+	if !softFailure {
+		return
+	}
+	toolMetaOf(metadata)[toolSoftFailureKey] = true
+}
+
+// toolMetaOf returns metadata's "tool" submap, creating it when absent.
+func toolMetaOf(metadata map[string]any) map[string]any {
 	toolMeta, _ := metadata["tool"].(map[string]any)
 	if toolMeta == nil {
 		toolMeta = map[string]any{}
 		metadata["tool"] = toolMeta
 	}
-	toolMeta[toolStrictKey] = *strict
+	return toolMeta
+}
+
+// toolSoftFailure reports whether the tool opted into [WithSoftFailure],
+// reading the flag off the definition of the registry-resolved tool (see
+// [toolSoftFailureKey] for what that means for custom implementations).
+func toolSoftFailure(t Tool) bool {
+	def := t.Definition()
+	if def == nil || def.Metadata == nil {
+		return false
+	}
+	soft, _ := def.Metadata[toolSoftFailureKey].(bool)
+	return soft
+}
+
+// softFailureResponse builds the tool response reported to the model when a
+// [WithSoftFailure] tool fails: the error text as {"error": "<message>"}
+// output, with {"error": true} carried onto the tool response part's
+// metadata so consumers can detect the failure without parsing the output.
+func softFailureResponse(err error) *MultipartToolResponse {
+	return &MultipartToolResponse{
+		Output:   map[string]any{"error": err.Error()},
+		Metadata: map[string]any{"error": true},
+	}
+}
+
+// isSoftFailureMeta reports whether tool response part metadata carries the
+// [softFailureResponse] error marker.
+func isSoftFailureMeta(meta map[string]any) bool {
+	marked, _ := meta["error"].(bool)
+	return marked
 }
 
 // applyToolOutputSchema records a custom output schema as the tool's
@@ -360,6 +412,7 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 	metadata["dynamic"] = true
 	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
+	applySoftFailureMetadata(metadata, toolOpts.SoftFailure)
 	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolAction[In, Out]{action: action, multipart: false}
 }
@@ -394,6 +447,7 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 	metadata["dynamic"] = true
 	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
+	applySoftFailureMetadata(metadata, toolOpts.SoftFailure)
 	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolAction[In, *MultipartToolResponse]{action: action, multipart: true}
 }
@@ -487,8 +541,10 @@ func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 		"multipart": t.multipart,
 	}
 	if toolMeta, ok := desc.Metadata["tool"].(map[string]any); ok {
-		if s, ok := toolMeta[toolStrictKey].(bool); ok {
-			metadata[toolStrictKey] = s
+		for _, key := range []string{toolStrictKey, toolSoftFailureKey} {
+			if s, ok := toolMeta[key].(bool); ok {
+				metadata[key] = s
+			}
 		}
 	}
 

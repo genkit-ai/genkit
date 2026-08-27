@@ -3540,3 +3540,313 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 		}
 	})
 }
+
+// TestGenerateSoftFailureTools covers WithSoftFailure: a failing tool's error
+// returns to the model as an error tool response and generation continues,
+// while tools without the option keep failing the whole request.
+func TestGenerateSoftFailureTools(t *testing.T) {
+	t.Parallel()
+
+	// errorOutput asserts that part is a tool response carrying the soft
+	// failure encoding and returns the error text.
+	errorOutput := func(t *testing.T, part *Part) string {
+		t.Helper()
+		if !part.IsToolResponse() {
+			t.Fatalf("part is %q, want a tool response", part.Kind)
+		}
+		if marked, _ := part.Metadata["error"].(bool); !marked {
+			t.Errorf("part metadata = %v, want error: true", part.Metadata)
+		}
+		out, ok := part.ToolResponse.Output.(map[string]any)
+		if !ok {
+			t.Fatalf("output = %T (%v), want map with error key", part.ToolResponse.Output, part.ToolResponse.Output)
+		}
+		text, ok := out["error"].(string)
+		if !ok {
+			t.Fatalf("output = %v, want an error string", out)
+		}
+		return text
+	}
+
+	// toolMessages returns the tool-role messages of a history.
+	toolMessages := func(msgs []*Message) []*Message {
+		var out []*Message
+		for _, m := range msgs {
+			if m.Role == RoleTool {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+
+	t.Run("failure returns to the model and generation continues", func(t *testing.T) {
+		r := newTestRegistry(t)
+		flaky := defineTool(r, "flaky", "always fails",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", errors.New("backend is down")
+			}, WithSoftFailure())
+
+		var seenByModel *Part
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/recovers",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				for _, m := range req.Messages {
+					if m.Role == RoleTool {
+						seenByModel = m.Content[0]
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("recovered")}, nil
+					}
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "flaky", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/recovers"),
+			WithPrompt("start"),
+			WithTools(flaky),
+		)
+		assertNoError(t, err)
+		if got := resp.Text(); got != "recovered" {
+			t.Errorf("Text() = %q, want %q", got, "recovered")
+		}
+		if seenByModel == nil {
+			t.Fatal("the model never saw a tool response")
+		}
+		if text := errorOutput(t, seenByModel); !strings.Contains(text, "backend is down") {
+			t.Errorf("error output = %q, want the tool's error text", text)
+		}
+	})
+
+	t.Run("invalid model input is recoverable", func(t *testing.T) {
+		r := newTestRegistry(t)
+		square := defineTool(r, "square", "squares a number",
+			func(ctx *ToolContext, in struct {
+				N float64 `json:"n"`
+			}) (float64, error) {
+				return in.N * in.N, nil
+			}, WithSoftFailure())
+
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/fixesInput",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				switch len(toolMessages(req.Messages)) {
+				case 0:
+					return &ModelResponse{Request: req, Message: &Message{
+						Role:    RoleModel,
+						Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "square", Input: map[string]any{"n": "banana"}})},
+					}}, nil
+				case 1:
+					return &ModelResponse{Request: req, Message: &Message{
+						Role:    RoleModel,
+						Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "square", Input: map[string]any{"n": 3}})},
+					}}, nil
+				default:
+					return &ModelResponse{Request: req, Message: NewModelTextMessage("the answer is 9")}, nil
+				}
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/fixesInput"),
+			WithPrompt("start"),
+			WithTools(square),
+		)
+		assertNoError(t, err)
+		if got := resp.Text(); got != "the answer is 9" {
+			t.Errorf("Text() = %q, want %q", got, "the answer is 9")
+		}
+		tms := toolMessages(resp.History())
+		if len(tms) != 2 {
+			t.Fatalf("history has %d tool messages, want 2 (rejected input, then success)", len(tms))
+		}
+		errorOutput(t, tms[0].Content[0])
+		if marked, _ := tms[1].Content[0].Metadata["error"].(bool); marked {
+			t.Error("the successful retry must not be marked as an error")
+		}
+	})
+
+	t.Run("a hard sibling fails the request and takes the soft outcome with it", func(t *testing.T) {
+		r := newTestRegistry(t)
+		softDone := make(chan struct{})
+		soft := defineTool(r, "softTool", "fails fast and softly",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				defer close(softDone)
+				return "", errors.New("soft boom")
+			}, WithSoftFailure())
+		defineTool(r, "hardTool", "fails after the soft one",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				<-softDone
+				return "", errors.New("hard boom")
+			})
+
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/softHard",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "softTool", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "hardTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/softHard"),
+			WithPrompt("start"),
+			WithTools(soft, LookupTool(r, "hardTool")),
+		)
+		if !errors.Is(err, ErrToolFailed) || !strings.Contains(err.Error(), `"hardTool"`) {
+			t.Fatalf("err = %v, want ErrToolFailed from hardTool", err)
+		}
+		// A soft failure only reaches the model as part of a finished round,
+		// and the hard sibling means there is no finished round.
+		if resp != nil {
+			t.Errorf("response = %v, want nil", resp)
+		}
+	})
+
+	t.Run("interrupt wins over a soft sibling failure", func(t *testing.T) {
+		r := newTestRegistry(t)
+		soft := defineTool(r, "softTool", "fails softly",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", errors.New("soft boom")
+			}, WithSoftFailure())
+		pauser := defineTool(r, "pauser", "interrupts",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "approval"}})
+			})
+
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/softInterrupt",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "pauser", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "softTool", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/softInterrupt"),
+			WithPrompt("start"),
+			WithTools(pauser, soft),
+		)
+		assertNoError(t, err)
+		if resp.FinishReason != FinishReasonInterrupted {
+			t.Fatalf("FinishReason = %q, want interrupted", resp.FinishReason)
+		}
+		var softPart *Part
+		for _, p := range resp.Message.Content {
+			if p.IsToolRequest() && p.ToolRequest.Name == "softTool" {
+				softPart = p
+			}
+		}
+		if softPart == nil {
+			t.Fatal("softTool request part missing from the interrupted message")
+		}
+		pending, ok := softPart.Metadata["pendingOutput"].(map[string]any)
+		if !ok || !strings.Contains(fmt.Sprint(pending["error"]), "soft boom") {
+			t.Errorf("softTool pendingOutput = %v, want the soft error encoding", softPart.Metadata["pendingOutput"])
+		}
+	})
+
+	t.Run("a restarted soft tool reports its failure to the model", func(t *testing.T) {
+		r := newTestRegistry(t)
+		calls := 0
+		fragile := defineTool(r, "fragile", "interrupts, then fails on restart",
+			func(ctx *ToolContext, in map[string]any) (string, error) {
+				calls++
+				if calls == 1 {
+					return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"reason": "approval"}})
+				}
+				return "", errors.New("still broken")
+			}, WithSoftFailure())
+
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/restartSoft",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				for _, m := range req.Messages {
+					if m.Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("recovered after restart")}, nil
+					}
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "fragile", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r,
+			WithModelName("test/restartSoft"),
+			WithPrompt("start"),
+			WithTools(fragile),
+		)
+		assertNoError(t, err)
+		if res.FinishReason != FinishReasonInterrupted {
+			t.Fatalf("FinishReason = %q, want interrupted", res.FinishReason)
+		}
+
+		restartPart := fragile.Restart(res.Interrupts()[0], nil)
+		resumed, err := Generate(testCtx, r,
+			WithModelName("test/restartSoft"),
+			WithMessages(res.History()...),
+			WithTools(fragile),
+			WithToolRestarts(restartPart),
+		)
+		assertNoError(t, err)
+		if got := resumed.Text(); got != "recovered after restart" {
+			t.Errorf("Text() = %q, want %q", got, "recovered after restart")
+		}
+		tms := toolMessages(resumed.History())
+		if len(tms) != 1 {
+			t.Fatalf("history has %d tool messages, want 1", len(tms))
+		}
+		if text := errorOutput(t, tms[0].Content[0]); !strings.Contains(text, "still broken") {
+			t.Errorf("error output = %q, want the restart failure text", text)
+		}
+	})
+
+	t.Run("cancellation is never soft-failed", func(t *testing.T) {
+		r := newTestRegistry(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		modelCalls := 0
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/cancelSoft",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				modelCalls++
+				return &ModelResponse{Request: req, Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{Name: "cancelTool", Input: map[string]any{}})},
+				}}, nil
+			},
+		})
+		soft := defineTool(r, "cancelTool", "cancels the request, then fails",
+			func(tc *ToolContext, in map[string]any) (string, error) {
+				cancel()
+				return "", context.Canceled
+			}, WithSoftFailure())
+
+		_, err := Generate(ctx, r,
+			WithModelName("test/cancelSoft"),
+			WithPrompt("start"),
+			WithTools(soft),
+		)
+		if !errors.Is(err, ErrToolFailed) {
+			t.Fatalf("err = %v, want ErrToolFailed: cancellation must not become model-visible tool output", err)
+		}
+		if modelCalls != 1 {
+			t.Errorf("model called %d times, want 1: the loop must stop on cancellation", modelCalls)
+		}
+	})
+}

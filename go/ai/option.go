@@ -1068,6 +1068,7 @@ type toolOptions struct {
 	inputOptions
 	OutputSchema map[string]any // JSON schema of the tool's output.
 	StrictSchema *bool
+	SoftFailure  bool // Whether the tool's errors return to the model instead of failing generation.
 }
 
 // ToolOption is an option for defining a tool.
@@ -1082,6 +1083,9 @@ func (o *toolOptions) applyTool(opts *toolOptions) {
 	if o.StrictSchema != nil {
 		opts.StrictSchema = o.StrictSchema
 	}
+	if o.SoftFailure {
+		opts.SoftFailure = true
+	}
 	o.inputOptions.applyTool(opts)
 }
 
@@ -1094,6 +1098,25 @@ func (o *toolOptions) applyTool(opts *toolOptions) {
 // support ignore this option.
 func WithStrictSchema(strict bool) ToolOption {
 	return &toolOptions{StrictSchema: &strict}
+}
+
+// WithSoftFailure makes the tool's failures recoverable by the model: when
+// the tool call fails (the tool returns an error, or the call is rejected
+// before the tool runs, such as model-provided input that does not match the
+// input schema), the generate loop reports the failure to the model as this
+// call's tool response, with output {"error": "<message>"} and
+// {"error": true} on the part's metadata, and generation continues. Without
+// this option a tool failure ends generation with [ErrToolFailed], and a
+// failure on a context that is already done always does: a cancellation must
+// stop the loop, not feed it.
+//
+// Use it on tools whose errors carry meaning the model can act on (a lookup
+// that found nothing, a service that is temporarily down). Leave it off when
+// continuing without the tool's result would be unsafe. Interrupts are
+// control flow, not failures, and are never affected; a request for a tool
+// that is not registered still fails generation with [ErrToolNotFound].
+func WithSoftFailure() ToolOption {
+	return &toolOptions{SoftFailure: true}
 }
 
 // promptExecutionOptions are options for generating a model response by executing a prompt.

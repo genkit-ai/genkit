@@ -1538,3 +1538,62 @@ func TestInterruptMetadata(t *testing.T) {
 		}
 	})
 }
+
+// TestWithSoftFailure verifies the soft-failure flag round-trips through
+// Definition().Metadata["softFailure"] and LookupTool, for regular and
+// multipart tools. The loop behavior lives in TestGenerateSoftFailureTools.
+func TestWithSoftFailure(t *testing.T) {
+	check := func(t *testing.T, tl Tool, want bool) {
+		t.Helper()
+		def := tl.Definition()
+		got, ok := def.Metadata["softFailure"]
+		if want && (!ok || got != true) {
+			t.Errorf("softFailure metadata = %v (present %t), want true", got, ok)
+		}
+		if !want && ok {
+			t.Errorf("softFailure metadata = %v, want absent", got)
+		}
+		if toolSoftFailure(tl) != want {
+			t.Errorf("toolSoftFailure() = %t, want %t", toolSoftFailure(tl), want)
+		}
+	}
+
+	t.Run("absent by default", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := defineTool(r, "soft/default", "no option",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil })
+		check(t, tl, false)
+	})
+
+	t.Run("surfaced on Definition", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := defineTool(r, "soft/on", "soft",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithSoftFailure(),
+		)
+		check(t, tl, true)
+	})
+
+	t.Run("LookupTool round-trips the flag", func(t *testing.T) {
+		r := newTestRegistry(t)
+		defineTool(r, "soft/lookup", "soft",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithSoftFailure(),
+		)
+		found := LookupTool(r, "soft/lookup")
+		if found == nil {
+			t.Fatal("LookupTool returned nil")
+		}
+		check(t, found, true)
+	})
+
+	t.Run("multipart tools carry the flag", func(t *testing.T) {
+		tl := NewMultipartTool("soft/multipart", "soft multipart",
+			func(ctx *ToolContext, input struct{}) (*MultipartToolResponse, error) {
+				return &MultipartToolResponse{Output: "ok"}, nil
+			},
+			WithSoftFailure(),
+		)
+		check(t, tl, true)
+	})
+}
