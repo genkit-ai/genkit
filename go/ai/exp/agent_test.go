@@ -3968,13 +3968,6 @@ func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 // a partial response.
 func abortTestAgent(t *testing.T, store SessionStore[testState], name string, commit bool, entered chan<- struct{}) *Agent[testState] {
 	t.Helper()
-	return abortTestAgentGated(t, store, name, commit, entered, nil)
-}
-
-// abortTestAgentGated is abortTestAgent with a signal on the first turn's
-// completion, for a test that has to land a detach between the two turns.
-func abortTestAgentGated(t *testing.T, store SessionStore[testState], name string, commit bool, entered, firstDone chan<- struct{}) *Agent[testState] {
-	t.Helper()
 	turns := 0
 	return DefineCustomAgent(newTestRegistry(t), name,
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -3983,11 +3976,6 @@ func abortTestAgentGated(t *testing.T, store SessionStore[testState], name strin
 				if turns == 1 {
 					sess.AddMessages(ai.NewModelTextMessage("first turn"))
 					return nil, nil
-				}
-				if firstDone != nil {
-					// The first turn has snapshotted by now: this runs after
-					// its turn-end tail.
-					close(firstDone)
 				}
 				sess.AddMessages(ai.NewModelTextMessage("second turn"))
 				select {
@@ -4026,7 +4014,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		<-entered
 		cancel()
 
-		out, err := conn.Output()
+		out, err := outputWithin(t, conn, 10*time.Second)
 		// Both, as ai.Generate hands back a partial response beside the error
 		// that ended it. The error alone left nothing to resume from.
 		if err == nil {
@@ -4067,7 +4055,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		<-entered
 		cancel()
 
-		out, err := conn.Output()
+		out, err := outputWithin(t, conn, 10*time.Second)
 		if err == nil {
 			t.Fatal("Output err is nil, want the cancellation")
 		}
@@ -4106,7 +4094,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		if err := conn.Detach(); err != nil {
 			t.Fatalf("Detach: %v", err)
 		}
-		out, err := conn.Output()
+		out, err := outputWithin(t, conn, 10*time.Second)
 		if err != nil {
 			t.Fatalf("Output: %v", err)
 		}
@@ -4207,7 +4195,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		sendText(t, conn, "two")
 		<-entered
 		cancel()
-		out, _ := conn.Output()
+		out, _ := outputWithin(t, conn, 10*time.Second)
 		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
 			return s.Status == SnapshotStatusAborted
 		})
@@ -4253,7 +4241,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		sendText(t, conn, "two")
 		<-entered
 
-		out, _ := conn.Output()
+		out, _ := outputWithin(t, conn, 10*time.Second)
 		if out == nil {
 			t.Fatal("Output is nil, want the resume point")
 		}

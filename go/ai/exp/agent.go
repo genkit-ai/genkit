@@ -557,10 +557,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	now := time.Now()
 	snapStatus := SnapshotStatusCompleted
 	if cause != nil {
-		snapStatus = SnapshotStatusFailed
-		if finishReason == AgentFinishReasonAborted {
-			snapStatus = SnapshotStatusAborted
-		}
+		snapStatus = terminalStatus(finishReason)
 	}
 	saved, err := s.store.SaveSnapshot(context.WithoutCancel(ctx), s.turnSnapshotID,
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
@@ -1442,12 +1439,19 @@ func (rt *agentRuntime[State]) handleTransformFailure(
 	cause error,
 ) (*AgentOutput[State], error) {
 	rt.drainAndWait(cancelWork)
-	// A disconnect that raced the failure keeps error semantics, with the
-	// resume point alongside it (mirrors handleFnDone).
+	return rt.failedOutput(clientCtx, cause), disconnectErr(clientCtx, cause)
+}
+
+// disconnectErr is the error a terminal path returns beside its failed
+// output: the cause when the client is already gone, and nil when it is still
+// there to be handed a graceful failure. Both carry the resume point on the
+// output either way; the error is what tells an in-process caller that the
+// run did not finish on its own terms.
+func disconnectErr(clientCtx context.Context, cause error) error {
 	if clientCtx.Err() != nil {
-		return rt.failedOutput(clientCtx, cause), cause
+		return cause
 	}
-	return rt.failedOutput(clientCtx, cause), nil
+	return nil
 }
 
 // checkDetachCapabilities reports whether the configured store is capable
@@ -1528,21 +1532,14 @@ func (rt *agentRuntime[State]) handleFnDone(
 	// failed regardless of what fn returned, so no completed output leaks the
 	// data it refused to shape.
 	if fatal != nil {
-		if ctx.Err() != nil {
-			return rt.failedOutput(ctx, fatal), fatal
-		}
-		return rt.failedOutput(ctx, fatal), nil
+		return rt.failedOutput(ctx, fatal), disconnectErr(ctx, fatal)
 	}
 
 	if res.err != nil {
-		// A disconnect-driven failure keeps its error semantics, and carries
-		// the resume point alongside it. The clientCtx.Done arm of the run
-		// select handles the common ordering; this guards the race where fn
-		// observes the cancellation first and its result wins the select.
-		if ctx.Err() != nil {
-			return rt.failedOutput(ctx, res.err), res.err
-		}
-		return rt.failedOutput(ctx, res.err), nil
+		// The clientCtx.Done arm of the run select handles the common
+		// disconnect ordering; disconnectErr guards the race where fn observes
+		// the cancellation first and its result wins the select.
+		return rt.failedOutput(ctx, res.err), disconnectErr(ctx, res.err)
 	}
 
 	// The resume point is the last turn-end snapshot (lastSnapshotID), or ""
@@ -1649,11 +1646,21 @@ func terminalReason(ctx context.Context, cause error) AgentFinishReason {
 	return AgentFinishReasonFailed
 }
 
+// terminalStatus is the snapshot status that goes with the reason a turn or
+// invocation ended on, for the rows that ended with an error. Deriving it
+// keeps the two from disagreeing: a row is aborted exactly when it says the
+// caller stopped the run.
+func terminalStatus(reason AgentFinishReason) SnapshotStatus {
+	if reason == AgentFinishReasonAborted {
+		return SnapshotStatusAborted
+	}
+	return SnapshotStatusFailed
+}
+
 // failedOutput assembles the output for an invocation that did not run to
 // completion: [AgentFinishReasonFailed], or [AgentFinishReasonAborted] when
 // the caller stopped it (see callerStopped), the error with its original
-// status,
-// and the resume point: the last turn snapshot's ID when server-managed, or
+// status, and the resume point: the last turn snapshot's ID when server-managed, or
 // the last-good state inline when client-managed. Both hold the state
 // through the last committed turn, which is the failed turn itself when it
 // committed and its predecessor when it did not, since only a committed turn
@@ -1936,10 +1943,7 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				// this reads the error: a background run that reached a
 				// caller-set limit was stopped, not broken.
 				finishReason = terminalReason(ctx, fnErr)
-				snapStatus = SnapshotStatusFailed
-				if finishReason == AgentFinishReasonAborted {
-					snapStatus = SnapshotStatusAborted
-				}
+				snapStatus = terminalStatus(finishReason)
 				snapErr = convertKeepText(fnErr)
 			}
 
@@ -3270,8 +3274,15 @@ func (c *AgentConnection[State]) Custom() (State, error) {
 // and the last-good state on [AgentOutput.State] (client-managed) or behind
 // [AgentOutput.SnapshotID] (server-managed), so a failure costs only the failed
 // turn, not the session. A detached invocation resolves with the pending
-// snapshot ID. A non-nil error means the invocation never started (a rejected
-// init payload) or could not run to a result (e.g. its context was cancelled).
+// snapshot ID.
+//
+// A run the caller stopped returns both: the error that stopped it, and an
+// [AgentOutput] with [AgentFinishReasonAborted] naming the same resume point,
+// the way [ai.Generate] hands back a partial response beside its error. Check
+// the output even when the error is non-nil, or the work up to the stop is
+// stranded. It is nil when the invocation never started (a rejected init
+// payload), and when an agent function that ignores its context has not
+// settled within settleGrace, since there is nothing yet to report.
 //
 // Do not call Output concurrently with a goroutine iterating Receive; both
 // consume the stream and would split chunks between them. Finish Receive first.
@@ -3295,10 +3306,7 @@ func (c *AgentConnection[State]) Output() (*AgentOutput[State], error) {
 	// returning the bare cancellation would strand that snapshot with no
 	// handle on it.
 	//
-	// The wait is bounded, because an agent function that ignores its context
-	// never settles and the caller needs its escape hatch back. Such a
-	// function has produced no snapshot either, so the grace costs only the
-	// delay: there was never a result to wait for.
+	// Bounded by settleGrace, whose doc carries why.
 	timer := time.NewTimer(settleGrace)
 	defer timer.Stop()
 	select {

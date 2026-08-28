@@ -101,9 +101,10 @@ type AgentInit[State any] struct {
 	// SessionID identifies the session (conversation) to resume or start. Only
 	// valid when the agent is server-managed (a session store is configured);
 	// mutually exclusive with State. Alone, it resumes the session's latest
-	// snapshot, rejected if that snapshot is an aborted or pending dead end; a
-	// [SnapshotStatusFailed] snapshot resumes with what the failed turn
-	// committed. If the session has no snapshots yet, a fresh conversation
+	// snapshot, rejected only if that snapshot is [SnapshotStatusPending] and so
+	// still being written to. A [SnapshotStatusFailed] or [SnapshotStatusAborted]
+	// snapshot resumes with what the last turn to finish committed. If the session
+	// has no snapshots yet, a fresh conversation
 	// starts under this caller-chosen ID. Combined with SnapshotID, it asserts
 	// the snapshot belongs to that session.
 	SessionID string `json:"sessionId,omitempty"`

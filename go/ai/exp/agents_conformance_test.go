@@ -943,16 +943,6 @@ func executeWaitUntilCompleted(t *testing.T, label string, store *localstore.InM
 		exp.SnapshotStatusFailed:    true,
 		exp.SnapshotStatusAborted:   true,
 	}
-	// An aborted row reaches its status in two writes: the abort flips it, and
-	// the finalize that follows stamps the reason and the state. The reason is
-	// the marker that the second one has landed, so a wait that stopped at the
-	// status alone would read a row still being written.
-	settled := func(snap *exp.SessionSnapshot[customState]) bool {
-		if normalizeStatus(snap.Status) != exp.SnapshotStatusAborted {
-			return true
-		}
-		return snap.FinishReason != ""
-	}
 
 	ctx := context.Background()
 	deadline := time.Now().Add(timeout)
@@ -962,9 +952,16 @@ func executeWaitUntilCompleted(t *testing.T, label string, store *localstore.InM
 		if err != nil {
 			t.Fatalf("%s: getSnapshot while polling: %v", label, err)
 		}
-		if s != nil && terminal[normalizeStatus(s.Status)] && settled(s) {
-			snap = s
-			break
+		// An aborted row reaches its status in two writes: the abort flips it,
+		// and the finalize that follows stamps the reason and the state. The
+		// reason is the marker that the second write landed, so a wait that
+		// stopped at the status alone would read a row still being written.
+		if s != nil {
+			st := normalizeStatus(s.Status)
+			if terminal[st] && (st != exp.SnapshotStatusAborted || s.FinishReason != "") {
+				snap = s
+				break
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
