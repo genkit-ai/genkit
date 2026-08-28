@@ -304,12 +304,107 @@ describe('a2ui() middleware', () => {
     assert.strictEqual(decoded.length, 2);
     assert.ok(decoded[0].createSurface);
 
-    // The concrete surface id is rewritten back to the placeholder, so the
-    // model can't copy a real id into a fresh render and reuse (overwrite) the
-    // prior surface. The parser mints a fresh id per turn instead.
-    assert.doesNotMatch(joined, /s1/);
-    assert.strictEqual(decoded[0].createSurface.surfaceId, 'SURFACE_ID');
-    assert.strictEqual(decoded[1].updateComponents.surfaceId, 'SURFACE_ID');
+    // The real surface id is kept verbatim (NOT scrubbed to a placeholder), so
+    // a replayed action `[UI action ... on surface s1]` can still be correlated
+    // with this surface. Reuse is prevented at the parser instead: every
+    // `createSurface` mints a fresh id (see the distinct-id test).
+    assert.strictEqual(decoded[0].createSurface.surfaceId, 's1');
+    assert.strictEqual(decoded[1].updateComponents.surfaceId, 's1');
+  });
+
+  it('a new render never reuses a surface id copied from history', async () => {
+    // Regression for the "new answer overwrites the prior surface in place"
+    // bug: history keeps real ids (for action correlation), so the model can
+    // copy an old id into a fresh `createSurface`. The parser must still mint a
+    // distinct id for that new render.
+    const mw = modelHook({ surfaceId: 'sfc-new' });
+    let seen: any;
+    const res = await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'old' },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [{ action: { name: 'refresh', surfaceId: 's1' } }],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        // The model copies the prior surface's real id (`s1`) into a brand-new
+        // createSurface - exactly what it does after seeing `s1` in history.
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                text: `Here you go:
+\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "s1", "catalogId": "${basicCatalog.id}" } },
+  { "updateComponents": { "surfaceId": "s1", "components": [
+    { "id": "root", "component": "Text", "text": "new" }
+  ] } }
+]
+\`\`\`
+`,
+              },
+            ],
+          },
+        };
+      }
+    );
+
+    // The new render is minted onto the fixed id `sfc-new`, NOT the copied `s1`,
+    // so it can't overwrite the prior surface.
+    const envelopes = a2uiEnvelopesFromParts((res as any).message.content);
+    const create = envelopes.find((e: any) => e.createSurface) as any;
+    const update = envelopes.find((e: any) => e.updateComponents) as any;
+    assert.strictEqual(create.createSurface.surfaceId, 'sfc-new');
+    assert.strictEqual(update.updateComponents.surfaceId, 'sfc-new');
+
+    // Meanwhile, the sanitized history the model saw kept the real id on both
+    // the reconstructed surface block and the action line (correlation).
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    const modelText = modelMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(modelText, /"surfaceId"\s*:\s*"s1"/);
+
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const userText = userMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(userText, /on surface s1/);
   });
 
   it('groups consecutive surface envelopes into one block but splits around an action', async () => {

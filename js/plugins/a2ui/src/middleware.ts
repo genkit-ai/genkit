@@ -46,7 +46,6 @@ import type {
 } from 'genkit/model';
 import {
   DEFAULT_CATALOG_ID,
-  SURFACE_ID_PLACEHOLDER,
   renderCatalogInstructions,
   type A2uiCatalog,
 } from './catalog.js';
@@ -413,15 +412,23 @@ function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
 
   const flushSurface = () => {
     if (pendingSurface.length === 0) return;
-    // Rewrite concrete surface ids back to the placeholder the model originally
-    // wrote (the middleware swapped in a real id on the way out). Replaying the
-    // real id would let the model copy it into a fresh `createSurface`, and the
-    // parser passes an explicit pre-existing id through unchanged — so a brand
-    // new answer would reuse (and overwrite, in place) the prior surface instead
-    // of rendering a new one. Using the placeholder makes the parser mint a
-    // fresh id per turn, so each turn is a distinct surface.
-    const placeheld = pendingSurface.map(withPlaceholderSurfaceId);
-    out.push('```a2ui\n' + JSON.stringify(placeheld) + '\n```');
+    // Keep the real surface ids verbatim. The model may not reuse them for a
+    // NEW surface: the parser forces a fresh id onto every `createSurface`
+    // block (see `finalizeBlock`), so a copied id can't overwrite a prior
+    // surface. Keeping the real ids lets the model correlate a replayed action
+    // (`[UI action ... on surface <id>]`) with the surface it targeted — which
+    // matters when several surfaces are on screen at once.
+    //
+    // Encode compactly (not pretty-printed): fewer tokens, and it collapses the
+    // payload to a single line so the block is exactly three lines (open fence,
+    // JSON, close fence). Because JSON escapes any newline inside a string as
+    // `\n`, an A2UI `Text` value containing a fenced code sample can't put a
+    // literal ``` at the start of a line, so it can never prematurely close this
+    // block (the parser's close fence is line-anchored). The block text can
+    // still contain ``` characters mid-line; a fully robust emitter would use a
+    // variable-length fence, but that also requires the parser's fixed
+    // three-backtick open fence to become count-aware, so it is deferred.
+    out.push('```a2ui\n' + JSON.stringify(pendingSurface) + '\n```');
     pendingSurface = [];
   };
 
@@ -447,34 +454,4 @@ function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
   }
   flushSurface();
   return out.join('\n');
-}
-
-/**
- * Returns a copy of `env` with any concrete `surfaceId` replaced by the
- * {@link SURFACE_ID_PLACEHOLDER}. Used when reconstructing prior surfaces for
- * history so a replayed surface reads exactly as the model first wrote it (with
- * the placeholder), and the parser mints a fresh id for it on the next turn
- * rather than the model copying a real id and reusing the old surface.
- */
-function withPlaceholderSurfaceId(env: A2uiEnvelope): A2uiEnvelope {
-  const copy = { ...env } as any;
-  for (const key of [
-    'createSurface',
-    'updateComponents',
-    'updateDataModel',
-    'deleteSurface',
-  ] as const) {
-    const payload = copy[key];
-    if (
-      payload &&
-      typeof payload === 'object' &&
-      typeof payload.surfaceId === 'string'
-    ) {
-      copy[key] = {
-        ...payload,
-        surfaceId: SURFACE_ID_PLACEHOLDER,
-      };
-    }
-  }
-  return copy;
 }
