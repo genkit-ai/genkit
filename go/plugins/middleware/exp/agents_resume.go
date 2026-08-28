@@ -213,25 +213,17 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 		}
 		return delegationResult{Response: fmt.Sprintf("Task %q is still running; only a settled task can be resumed.%s", in.TaskID, hint)}, nil
 
-	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed:
+	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
+		// The three settled seams resume the row directly. The read shaping
+		// guarantees an aborted row seen here carries state: one caught
+		// between the abort flip and the finalize reads as pending, and a
+		// dead worker's flipped row reads as expired, so neither reaches
+		// this arm.
 		if snap.Status == aix.SnapshotStatusCompleted && snap.FinishReason.CarriesResult() {
 			if refusal := a.requireFollowUpInstructions(st, string(aix.SnapshotStatusCompleted), in); refusal != nil {
 				return *refusal, nil
 			}
 		}
-		return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
-
-	case aix.SnapshotStatusAborted:
-		if snap.State != nil {
-			return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
-		}
-		// Aborted with no state: the row is caught between the abort flip and
-		// the finalize, and only the runtime's heartbeat heuristic can say
-		// whether that finalize is still coming. Resume the row itself and
-		// let the runtime adjudicate: a live worker's rejection says to retry
-		// this same ID shortly, a dead one's names the parent snapshot to
-		// resume instead, and either message reaches the model through the
-		// error text.
 		return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 
 	case aix.SnapshotStatusExpired:
