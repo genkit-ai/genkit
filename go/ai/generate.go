@@ -372,14 +372,22 @@ func responseError(cause error) *status.Error {
 	return e
 }
 
-// callerStopped are the statuses that say the caller ended the loop rather
-// than something breaking inside it: it cancelled the context, its deadline
-// expired, or it set a limit the loop reached ([ErrMaxTurnsExceeded] is an
-// ABORTED subtype). They report [FinishReasonAborted].
-var callerStopped = map[status.Name]bool{
-	status.Cancelled:        true,
-	status.DeadlineExceeded: true,
-	status.Aborted:          true,
+// callerStopped reports whether the loop ended because the caller stopped it
+// rather than because something inside it broke: it cancelled the context, its
+// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded]).
+// Those report [FinishReasonAborted]; everything else reports
+// [FinishReasonFailed].
+//
+// It tests the context and the sentinels, never the classified status. A
+// service that answers 409 or 504 lands on ABORTED or DEADLINE_EXCEEDED
+// through the HTTP mapping in [status], and a provider stopping the request is
+// not the caller stopping the run: reporting it aborted tells a retry client
+// the one thing that is not true of it.
+func callerStopped(ctx context.Context, cause error) bool {
+	return ctx.Err() != nil ||
+		errors.Is(cause, context.Canceled) ||
+		errors.Is(cause, context.DeadlineExceeded) ||
+		errors.Is(cause, ErrMaxTurnsExceeded)
 }
 
 // failurePartial builds the partial [ModelResponse] that accompanies the
@@ -406,14 +414,14 @@ var callerStopped = map[status.Name]bool{
 // classified, so a consumer reading the response as data branches on a status
 // rather than a string. Downstream consumers treat both finishes as abnormal:
 // output parsing is skipped and the typed helpers extract nothing from it.
-func failurePartial(base *ModelResponse, req *ModelRequest, cause error) *ModelResponse {
+func failurePartial(ctx context.Context, base *ModelResponse, req *ModelRequest, cause error) *ModelResponse {
 	p := ModelResponse{}
 	if base != nil {
 		p = *base
 	}
 	p.Message = nil
 	p.FinishReason = FinishReasonFailed
-	if s, ok := status.Classified(cause); ok && callerStopped[s] {
+	if callerStopped(ctx, cause) {
 		p.FinishReason = FinishReasonAborted
 	}
 	p.FinishMessage = cause.Error()
@@ -667,7 +675,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 					Role:    RoleTool,
 				}); err != nil {
 					err = fmt.Errorf("streaming callback failed for resumed tool message: %w", err)
-					return failurePartial(nil, &resumeReq, err), err
+					return failurePartial(ctx, nil, &resumeReq, err), err
 				}
 			}
 
@@ -680,7 +688,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			// The model's own output is dropped, complete or not: only the
 			// conversation entering this turn survives. Chunks already
 			// streamed reached the callback, so nothing observable is lost.
-			return failurePartial(resp, req, err), err
+			return failurePartial(ctx, resp, req, err), err
 		}
 
 		// ToolRequests allocates a scan of the message, so only build the
@@ -737,7 +745,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 		if currentTurn+1 > maxTurns {
 			err := status.Errorf(ErrMaxTurnsExceeded, "exceeded maximum tool call iterations (%d)", maxTurns)
-			return failurePartial(resp, req, err), err
+			return failurePartial(ctx, resp, req, err), err
 		}
 
 		newReq, revisedMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
@@ -746,7 +754,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			// included: a failed tool leaves its request unanswered, and
 			// [failurePartial] hands back a conversation that can be
 			// re-sent.
-			return failurePartial(resp, req, err), err
+			return failurePartial(ctx, resp, req, err), err
 		}
 		if revisedMsg != nil {
 			logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
@@ -844,7 +852,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		if lastPartial != nil {
 			resp = lastPartial
 		} else {
-			resp = failurePartial(nil, lastReq, err)
+			resp = failurePartial(ctx, nil, lastReq, err)
 		}
 	}
 	return resp, err

@@ -1625,16 +1625,23 @@ func convertKeepText(cause error) *status.Error {
 // detached caller calls the abort companion action, which cancels the work
 // context on the status flip.
 //
-// Or the run reached a limit the caller set, which [ai] reports with an
-// ABORTED status ([ai.ErrMaxTurnsExceeded]). A turn that propagates such an
-// error unchanged is stopped, not broken, and reports so without having to
-// say it in a [TurnResult].
+// Or the run reached a limit the caller set ([ai.ErrMaxTurnsExceeded]). A turn
+// that propagates such an error unchanged is stopped, not broken, and reports
+// so without having to say it in a [TurnResult].
+//
+// Both roads are read from the context and the sentinels, never from the
+// classified status, which is a wider set than the caller's own doing: a
+// service answering 409 or 504 lands on ABORTED or DEADLINE_EXCEEDED through
+// the HTTP mapping in [status]. Persisting that as an aborted row would tell a
+// client the run stopped on request when a provider dropped it, which is the
+// class a retry loop is most likely to leave alone. Same rule as
+// [ai.Generate]'s, so the snapshot status and the partial's finish reason
+// agree on who ended the run.
 func callerStopped(ctx context.Context, cause error) bool {
-	if ctx.Err() != nil {
-		return true
-	}
-	s, ok := status.Classified(cause)
-	return ok && (s == status.Cancelled || s == status.DeadlineExceeded || s == status.Aborted)
+	return ctx.Err() != nil ||
+		errors.Is(cause, context.Canceled) ||
+		errors.Is(cause, context.DeadlineExceeded) ||
+		errors.Is(cause, ai.ErrMaxTurnsExceeded)
 }
 
 // terminalReason is how an invocation or turn that ended with cause reports

@@ -3711,6 +3711,40 @@ func TestGeneratePartialResponseOnFailure(t *testing.T) {
 		}
 	})
 
+	t.Run("a service that answers ABORTED reports failed", func(t *testing.T) {
+		// The status map turns HTTP 409 into ABORTED and 504 into
+		// DEADLINE_EXCEEDED, so a provider stamping the service's own status
+		// reaches the same names a stopped caller does. Only the context and
+		// the limits the caller set say aborted: a service dropping the
+		// request broke the run, which is what a retry client reads.
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/serviceAborted",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				return nil, status.Errorf(status.ErrAborted, "409 from the service")
+			},
+		})
+
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/serviceAborted"),
+			WithPrompt("start"),
+		)
+		if err == nil {
+			t.Fatal("expected the service's error")
+		}
+		if resp == nil {
+			t.Fatal("response is nil, want the loop's partial response")
+		}
+		if resp.FinishReason != FinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q: the service stopped the request, not the caller", resp.FinishReason, FinishReasonFailed)
+		}
+		// The classification is untouched; only who ended the run is decided
+		// here.
+		if resp.Error == nil || resp.Error.Status != status.Aborted {
+			t.Errorf("Error = %+v, want the service's ABORTED preserved", resp.Error)
+		}
+	})
+
 	t.Run("cancellation inside a tool reports aborted", func(t *testing.T) {
 		r := newTestRegistry(t)
 		defineFakeModel(t, r, fakeModelConfig{

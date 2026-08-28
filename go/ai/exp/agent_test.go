@@ -4225,6 +4225,46 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		}
 	})
 
+	t.Run("a service that answers ABORTED is a failure, not an abort", func(t *testing.T) {
+		// The status map turns HTTP 409 into ABORTED and 504 into
+		// DEADLINE_EXCEEDED, so a provider stamping the service's own status
+		// reaches the same names a stopped caller does. Only the caller's
+		// context and the limits it set decide aborted: persisting a dropped
+		// request as aborted would tell a client the run stopped on request,
+		// which is the class a retry loop is most likely to leave alone.
+		ctx := context.Background()
+		store := newTestInMemStore[testState]()
+		af := DefineCustomAgent(newTestRegistry(t), "serviceAborted",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("as far as it got"))
+					return &TurnResult{}, status.Errorf(status.ErrAborted, "409 from the service")
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		out, err := af.RunText(ctx, "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+		}
+		snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusFailed {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusFailed)
+		}
+		// The classification itself is untouched: only who ended the run is
+		// this layer's call.
+		if snap.Error == nil || snap.Error.Status != core.ABORTED {
+			t.Errorf("snapshot error = %+v, want the service's ABORTED preserved", snap.Error)
+		}
+	})
+
 	t.Run("a deadline aborts too, and the error says which", func(t *testing.T) {
 		store := newTestInMemStore[testState]()
 		entered := make(chan struct{})
