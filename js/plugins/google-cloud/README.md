@@ -6,6 +6,7 @@ The Google Cloud plugin provides integrations with Google Cloud Platform service
 
 *   **Google Cloud Observability**: Exports telemetry (traces, metrics) and logs to Google Cloud's operations suite.
 *   **Model Armor**: Middleware for sanitizing user prompts and model responses using Google Cloud Model Armor.
+*   **Sensitive Data Protection (Beta)**: Middleware for discovering and de-identifying sensitive data using Google Cloud Sensitive Data Protection.
 *   **Firestore Session Store (Beta)**: Persists agent session snapshots in Firestore, sharded and scalable to arbitrarily long sessions.
 
 ## Installation
@@ -74,6 +75,51 @@ const response = await ai.generate({
 *   `strictSdpEnforcement` (Optional): If `true`, blocks execution if Sensitive Data Protection (SDP) detects sensitive info, even if it was successfully de-identified. Defaults to `false`.
 *   `protectionTarget` (Optional): specificies what to sanitize. Options: `'all'` (default), `'userPrompt'`, `'modelResponse'`.
 *   `clientOptions` (Optional): Additional options for the underlying Model Armor client.
+
+## Sensitive Data Protection (Beta)
+
+[Google Cloud Sensitive Data Protection](https://cloud.google.com/security/products/sensitive-data-protection) discovers and de-identifies sensitive data (such as credit card numbers, email addresses, and phone numbers) in outgoing prompts before they reach the model.
+
+**Prerequisite:** The `@google-cloud/dlp` library is an optional peer dependency. Install it in your project:
+```bash
+npm install @google-cloud/dlp
+```
+### Usage
+
+Import `sensitiveDataProtection` from `@genkit-ai/google-cloud/beta` and include it in the `use` array of `ai.generate()`:
+
+```typescript
+import { sensitiveDataProtection } from '@genkit-ai/google-cloud/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+import { genkit } from 'genkit';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  prompt: 'My email is test@example.com',
+  use: [
+    sensitiveDataProtection({
+      inline: {
+        transformation: 'CUSTOM_STRING', // 'INFOTYPE', 'MASK', or 'CUSTOM_STRING'
+        customConfig: '[REDACTED]',
+        infoTypes: ['EMAIL_ADDRESS', 'CREDIT_CARD_NUMBER'],
+      },
+    }),
+  ],
+});
+```
+
+### Configuration Options
+
+The middleware accepts the following options:
+
+*   `inline` (Optional): Inline redaction config (`infoTypes`, `transformation`: `'INFOTYPE'` | `'MASK'` | `'CUSTOM_STRING'`, `maskConfig`, `customConfig`).
+*   `templates` (Optional): Pre-configured Google Cloud inspection or de-identification template names (`inspectTemplateName`, `deidentifyTemplateName`).
+*   `projectId` (Optional): Explicit Google Cloud project ID.
+*   `credentials` (Optional): Explicit Google Cloud credentials.
 
 ## Firestore Session Store (Beta)
 
