@@ -218,7 +218,10 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // the documented defaults are applied (empty status means completed, zero
 // UpdatedAt means CreatedAt), a pending row whose heartbeat has gone stale is
 // surfaced as [SnapshotStatusExpired] (computed on read, never written back),
-// and transform shapes the outbound state. It backs the getSnapshot and
+// an aborted row not yet finalized reads as pending while its worker winds
+// down and as expired once the worker is presumed dead (so a visible aborted
+// row always carries resumable state), and transform shapes the outbound
+// state. It backs the getSnapshot and
 // waitForSnapshot companion actions and the typed [Agent.GetSnapshot] /
 // [Agent.GetLatestSnapshot], so Go callers, the Dev UI, and non-Go clients all
 // observe identically shaped snapshots. At least one of snapshotID / sessionID
@@ -274,6 +277,25 @@ func readSnapshot[State any](
 	// default below, which applies only to a row carrying no status at all.
 	if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
 		resp.Status = SnapshotStatusExpired
+	}
+	// An aborted row with no state is caught between the abort protocol's two
+	// writes: the flip that stopped the work and the finalize that stamps the
+	// state on. Callers never observe that window, so every status they can
+	// see on an aborted row is a resumable seam: while the heartbeat says the
+	// finalize is coming the row reads as pending (the invocation really is
+	// still winding down, and a wait keeps waiting for the finalized row
+	// instead of returning a stateless one), and once the beat is stale the
+	// finalize is never coming and the row reads as expired, the same
+	// dead-worker story as a stale pending row, whose resume point is the
+	// parent snapshot. Computed on read only, like the expiry above; the raw
+	// row stays aborted, which is what the worker's abort subscription and
+	// the resume path's own window logic (resumeSessionFrom) key on.
+	if snap.Status == SnapshotStatusAborted && snap.State == nil {
+		if finalizeInFlight(snap, defaultHeartbeatTimeout) {
+			resp.Status = SnapshotStatusPending
+		} else {
+			resp.Status = SnapshotStatusExpired
+		}
 	}
 	if resp.Status == "" {
 		resp.Status = SnapshotStatusCompleted

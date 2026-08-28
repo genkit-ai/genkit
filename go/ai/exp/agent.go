@@ -758,7 +758,9 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // GetSnapshot fetches a session snapshot by ID through the agent, applying the
 // configured [WithStateTransform] and the same read-time shaping the getSnapshot
 // companion action performs (a stale-heartbeat pending row is surfaced as
-// [SnapshotStatusExpired]; an empty status or zero UpdatedAt is defaulted).
+// [SnapshotStatusExpired]; an aborted row not yet finalized reads as pending
+// while its worker winds down, or expired once the worker is presumed dead;
+// an empty status or zero UpdatedAt is defaulted).
 // Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
 // state.
 //

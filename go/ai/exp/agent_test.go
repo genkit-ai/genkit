@@ -7548,6 +7548,132 @@ func TestAgent_ResumeFromSnapshotID_StalePendingReportsDeadWorker(t *testing.T) 
 	}
 }
 
+func TestAgent_GetSnapshot_AbortedWindowShaping(t *testing.T) {
+	// The abort protocol writes aborted twice: the flip (no state) and the
+	// finalize (state stamped on). Reads never expose the window between
+	// them, so every aborted row a caller can observe is a resumable seam:
+	// with a live heartbeat the row reads as pending (the finalize is
+	// coming), with a stale one as expired (dead worker; the parent is the
+	// resume point), and only a finalized row reads as aborted.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "abortWindowShaping", WithSessionStore(store))
+
+	save := func(state *SessionState[testState], beat time.Time) string {
+		t.Helper()
+		snap, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID:   "sess-window",
+				Status:      SnapshotStatusAborted,
+				State:       state,
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+				HeartbeatAt: &beat,
+			}, nil
+		})
+		if err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		return snap.SnapshotID
+	}
+	read := func(id string) SnapshotStatus {
+		t.Helper()
+		snap, err := af.GetSnapshot(ctx, id)
+		if err != nil {
+			t.Fatalf("GetSnapshot(%q): %v", id, err)
+		}
+		return snap.Status
+	}
+
+	if got := read(save(nil, time.Now())); got != SnapshotStatusPending {
+		t.Errorf("stateless aborted row with a live beat reads as %q, want %q", got, SnapshotStatusPending)
+	}
+	if got := read(save(nil, time.Now().Add(-2*defaultHeartbeatTimeout))); got != SnapshotStatusExpired {
+		t.Errorf("stateless aborted row with a stale beat reads as %q, want %q", got, SnapshotStatusExpired)
+	}
+	finalized := &SessionState[testState]{Messages: []*ai.Message{ai.NewUserTextMessage("kept")}}
+	if got := read(save(finalized, time.Now().Add(-2*defaultHeartbeatTimeout))); got != SnapshotStatusAborted {
+		t.Errorf("finalized aborted row reads as %q, want %q", got, SnapshotStatusAborted)
+	}
+}
+
+func TestAgent_WaitForSnapshot_RidesAbortFinalizeWindow(t *testing.T) {
+	// The abort flip notifies a subscribed wait, but the row it finds then is
+	// stateless and reads as pending, so the wait keeps waiting and settles
+	// on the finalized, resumable row rather than the mid-window one.
+	ctx := context.Background()
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "abortWindowWait", WithSessionStore(store))
+
+	now := time.Now()
+	pending, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID:   "sess-wait",
+			Status:      SnapshotStatusPending,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			HeartbeatAt: &now,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending row: %v", err)
+	}
+
+	type result struct {
+		snap *SessionSnapshot[testState]
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snap, err := af.WaitForSnapshot(ctx, pending.SnapshotID)
+		done <- result{snap, err}
+	}()
+
+	// The flip: aborted, no state, heartbeat still live (the worker is
+	// between the two writes).
+	beat := time.Now()
+	if _, err := store.SaveSnapshot(ctx, pending.SnapshotID, func(snap *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		snap.Status = SnapshotStatusAborted
+		snap.HeartbeatAt = &beat
+		return snap, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot flip: %v", err)
+	}
+
+	select {
+	case res := <-done:
+		t.Fatalf("wait settled on the stateless mid-window row: snap=%+v err=%v", res.snap, res.err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The finalize: state stamped on, heartbeat cleared.
+	if _, err := store.SaveSnapshot(ctx, pending.SnapshotID, func(snap *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		snap.State = &SessionState[testState]{Messages: []*ai.Message{ai.NewUserTextMessage("kept")}}
+		snap.HeartbeatAt = nil
+		return snap, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot finalize: %v", err)
+	}
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("WaitForSnapshot: %v", res.err)
+		}
+		if res.snap.Status != SnapshotStatusAborted || res.snap.State == nil {
+			t.Fatalf("wait returned status=%q state=%v, want the finalized aborted row", res.snap.Status, res.snap.State)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not settle after the finalize landed")
+	}
+}
+
 func TestAgent_ClientManagedState_MintsSessionID(t *testing.T) {
 	// With no store configured and a state object that carries no session
 	// ID, the framework mints one and stamps it inside the output state,
