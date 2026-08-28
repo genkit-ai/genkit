@@ -26,6 +26,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
@@ -424,6 +425,106 @@ func TestAgentsSubAgentFailureReported(t *testing.T) {
 // TestAgentsArtifactStrategies verifies that, run inside an orchestrator agent
 // (so a session exists), sub-agent artifacts are merged into the parent session
 // under both strategies and that inline includes content while session does not.
+func TestAgentsSyncDelegationCarriesTaskHandle(t *testing.T) {
+	// A synchronous delegation to a server-managed sub-agent settles with the
+	// run's last committed snapshot on the output, and the result stamps it as
+	// the same "<agent>:<snapshotId>" handle background delegations mint, plus
+	// the outcome. The handle is what lets the orchestrator address the run
+	// after the fact (check it, resume it) instead of only reading its text.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/keeper", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "kept"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_keeper", "keep X")
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_keeper")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	}
+	if got[0].Response != "kept" {
+		t.Errorf("Response = %q, want %q", got[0].Response, "kept")
+	}
+	if !strings.HasPrefix(got[0].TaskID, "keeper:") || len(got[0].TaskID) <= len("keeper:") {
+		t.Errorf("TaskID = %q, want \"keeper:<snapshotId>\"", got[0].TaskID)
+	}
+	if got[0].Status != string(aix.SnapshotStatusCompleted) {
+		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusCompleted)
+	}
+}
+
+func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
+	// A server-managed sub-agent that fails still committed what it could, and
+	// the failed run's last snapshot is its resume point. The failure result
+	// carries that handle and the "failed" outcome next to the explanatory
+	// text, so the orchestrator holds something actionable, not only prose.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "flaky",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/flaky", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return nil, errors.New("model melted")
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_flaky", "try X")
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "flaky"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_flaky")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	}
+	if !strings.Contains(got[0].Response, "model melted") {
+		t.Errorf("Response = %q, want the failure text", got[0].Response)
+	}
+	if !strings.HasPrefix(got[0].TaskID, "flaky:") || len(got[0].TaskID) <= len("flaky:") {
+		t.Errorf("TaskID = %q, want \"flaky:<snapshotId>\"", got[0].TaskID)
+	}
+	if got[0].Status != string(aix.SnapshotStatusFailed) {
+		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusFailed)
+	}
+}
+
+func TestAgentsClientManagedSyncResultHasNoTaskHandle(t *testing.T) {
+	// A client-managed sub-agent persists nothing, so there is no snapshot to
+	// address later and the result carries no handle.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "ephemeral",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/ephemeral", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "done here"), nil
+		}))},
+	)
+
+	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_ephemeral", "do X")
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "ephemeral"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_ephemeral")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	}
+	if got[0].TaskID != "" || got[0].Status != "" {
+		t.Errorf("expected no handle on a client-managed result, got TaskID=%q Status=%q", got[0].TaskID, got[0].Status)
+	}
+}
+
 func TestAgentsArtifactStrategies(t *testing.T) {
 	for _, strategy := range []ArtifactStrategy{ArtifactStrategyInline, ArtifactStrategySession} {
 		t.Run(string(strategy), func(t *testing.T) {

@@ -323,12 +323,18 @@ type delegationResult struct {
 	// Artifacts are the sub-agent's artifacts. Content is populated only under
 	// ArtifactStrategyInline.
 	Artifacts []delegatedArtifact `json:"artifacts,omitempty"`
-	// TaskID is the background task handle ("<agent>:<snapshotId>") when the
-	// delegation was started with background=true; empty otherwise. It is the
-	// input to the background-task tools (check, wait, abort).
+	// TaskID is the delegation's handle ("<agent>:<snapshotId>"). For a
+	// background delegation it names the pending task; for a synchronous
+	// delegation to a server-managed sub-agent it names the run's last
+	// committed snapshot, whatever the outcome. It is the input to the
+	// background-task tools (check, wait, abort). Empty when there is nothing
+	// addressable behind the result: a client-managed sub-agent, a run that
+	// committed no turn, or an interrupt.
 	TaskID string `json:"taskId,omitempty"`
-	// Status is "pending" when a background delegation was started; empty for
-	// synchronous delegations.
+	// Status is the outcome behind TaskID: "pending" when a background
+	// delegation was started, and the settled outcome ("completed", "failed",
+	// "aborted", or the finish reason for the rest) for a synchronous
+	// delegation that carries a handle. Empty whenever TaskID is.
 	Status string `json:"status,omitempty"`
 }
 
@@ -452,25 +458,39 @@ func (a *Agents) releaseDelegation(st *agentsState) {
 // result: interrupts and failures become explanatory text, and artifacts are
 // merged into the parent session under invocationID and surfaced per the
 // configured strategy.
+// A server-managed output names the run's last committed snapshot, so every
+// settled result but an interrupt is stamped with the same
+// "<agent>:<snapshotId>" handle background delegations mint, plus the outcome
+// it settled in. The handle is what makes a delegation addressable after the
+// fact: the background-task tools accept it, and it is the currency a resume
+// spends.
 func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationID string) delegationResult {
 	// Interrupted first: it is one of the reasons that carry no result, and it
-	// is the one with an explanation of its own worth giving.
+	// is the one with an explanation of its own worth giving. It is also the
+	// one settled outcome that carries no handle: continuing past it means
+	// answering the interrupt, which the orchestrator cannot do.
 	if out.FinishReason == aix.AgentFinishReasonInterrupted {
 		// Reported as text, not propagated: there is no stateful sub-agent
 		// runtime to resume into, so the orchestrator could never satisfy it.
 		return delegationResult{Response: interruptedResponse(ref.Name)}
+	}
+	var result delegationResult
+	if out.SnapshotID != "" && out.FinishReason != aix.AgentFinishReasonDetached {
+		result.TaskID = formatTaskID(ref.Name, out.SnapshotID)
+		result.Status = settledStatus(out.FinishReason)
 	}
 	if !out.FinishReason.CarriesResult() {
 		// Blocked, truncated, aborted, or failed. The turn's last message is
 		// whatever the agent got out before it stopped, so it explains the
 		// outcome rather than answering the task, and reporting it as the
 		// answer would hand the orchestrator partial work as if it were final.
-		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %s",
-			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))}
+		result.Response = fmt.Sprintf("Error calling agent %q: %s",
+			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))
+		return result
 	}
 
 	subArtifacts := namedArtifacts(out.Artifacts)
-	result := delegationResult{Response: messageText(out.Message)}
+	result.Response = messageText(out.Message)
 	if result.Response == "" {
 		result.Response = noFinalMessageResponse(len(subArtifacts))
 	}
@@ -498,6 +518,18 @@ func noFinalMessageResponse(artifacts int) string {
 	default:
 		return fmt.Sprintf("The task completed, but the agent gave no final message; its result is in the %d artifacts it produced.", artifacts)
 	}
+}
+
+// settledStatus maps a settled finish reason onto the status vocabulary the
+// background-task reports use: "completed" for every reason that carries a
+// result, and the reason itself for the rest, which matches the snapshot
+// status for failed and aborted runs and stays honest (e.g. "blocked",
+// "length") for reasons that have no snapshot-status counterpart.
+func settledStatus(reason aix.AgentFinishReason) string {
+	if reason.CarriesResult() {
+		return string(aix.SnapshotStatusCompleted)
+	}
+	return string(reason)
 }
 
 // interruptedResponse is the tool text reported when a sub-agent interrupted
