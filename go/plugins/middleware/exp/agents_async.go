@@ -652,14 +652,18 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 			// model that sees "completed" moves on and never reads the error.
 			// Which reason it was, and what the agent last said, is in Error.
 			report.Status = string(aix.SnapshotStatusFailed)
-			report.Error = folded.Response
+			report.Error = folded.Response +
+				" The task's session is saved; resume it with " + a.resumeToolName() + " using this taskId."
 		}
 	case aix.SnapshotStatusFailed:
-		report.Error = subAgentFailureMessage(snap.FinishReason, snap.Error, lastModelMessage(snap))
+		report.Error = subAgentFailureMessage(snap.FinishReason, snap.Error, lastModelMessage(snap)) +
+			" The task's progress up to the failure is saved; resume it with " + a.resumeToolName() + " using this taskId."
 	case aix.SnapshotStatusAborted:
-		report.Error = "The task was aborted before it finished."
+		report.Error = "The task was aborted before it finished. Resume it with " + a.resumeToolName() +
+			" using this taskId to continue from its last saved progress."
 	case aix.SnapshotStatusExpired:
-		report.Error = "The background worker stopped reporting progress and is presumed dead. Delegate the task again if the result is still needed."
+		report.Error = "The background worker stopped reporting progress and is presumed dead. Attempt " + a.resumeToolName() +
+			" with this taskId to recover saved progress, or delegate the task again."
 	}
 
 	// Expired is the one terminal read that can still change its mind: the

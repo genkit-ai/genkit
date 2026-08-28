@@ -498,9 +498,10 @@ func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
 	}
 }
 
-func TestAgentsClientManagedSyncResultHasNoTaskHandle(t *testing.T) {
-	// A client-managed sub-agent persists nothing, so there is no snapshot to
-	// address later and the result carries no handle.
+func TestAgentsClientManagedSyncResultCarriesMemHandle(t *testing.T) {
+	// A client-managed sub-agent persists nothing, so its settled state is
+	// held in the middleware's per-call stash and the result carries the
+	// minted in-memory handle instead of a snapshot-backed one.
 	g := newTestGenkit(t)
 
 	genkitx.DefineAgent[any](g, "ephemeral",
@@ -520,8 +521,11 @@ func TestAgentsClientManagedSyncResultHasNoTaskHandle(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 delegation response, got %d", len(got))
 	}
-	if got[0].TaskID != "" || got[0].Status != "" {
-		t.Errorf("expected no handle on a client-managed result, got TaskID=%q Status=%q", got[0].TaskID, got[0].Status)
+	if !strings.HasPrefix(got[0].TaskID, "ephemeral:"+memHandlePrefix) {
+		t.Errorf("TaskID = %q, want an \"ephemeral:%s<n>\" in-memory handle", got[0].TaskID, memHandlePrefix)
+	}
+	if got[0].Status != string(aix.SnapshotStatusCompleted) {
+		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusCompleted)
 	}
 }
 

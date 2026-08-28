@@ -192,6 +192,10 @@ type Agents struct {
 	// Background delegation requires server-managed sub-agents whose stores
 	// implement [aix.SnapshotSubscriber].
 	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks / abort_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
+
+	// TODO: add a knob to disable or scope the resume tool (per agent, or
+	// retries vs follow-ups) once real-world usage shows which control
+	// matters; today it is always registered.
 }
 
 func (a Agents) Name() string { return provider + "/agents" }
@@ -214,6 +218,14 @@ type agentsState struct {
 	// conversation is the latest request message list, captured each turn for
 	// optional history forwarding.
 	conversation []*ai.Message
+	// stashes holds the final state of settled synchronous delegations to
+	// client-managed sub-agents, keyed by minted in-memory handle
+	// ("<agent>:mem-<n>"), so the resume tool can replay them for the rest
+	// of this generate call. Client-managed state is durable nowhere, so the
+	// stash (and every handle into it) dies with the call by construction.
+	stashes map[string]*memStash
+	// memSeq allocates in-memory handle numbers.
+	memSeq int
 	// settledReports caches terminal background-task reports by task ID for
 	// the rest of the generate call: completed, failed, and aborted rows
 	// never change, so later re-checks skip the snapshot fetch and artifact
@@ -239,7 +251,10 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	}
 
 	prefix := a.prefix()
-	st := &agentsState{settledReports: make(map[string]backgroundTaskReport)}
+	st := &agentsState{
+		settledReports: make(map[string]backgroundTaskReport),
+		stashes:        make(map[string]*memStash),
+	}
 
 	// Every generated tool name is validated against the set as it is built:
 	// a collision (two agents mapping to one delegation tool name, or a
@@ -281,6 +296,19 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 			}
 		}
 		tools = append(tools, a.backgroundTaskTools(st)...)
+	}
+	// The resume tool is always registered: server-managed tasks resume from
+	// their snapshots across turns, and client-managed ones from the per-call
+	// stash within this turn. Like the delegation tools, its input schema
+	// depends on whether background execution exists.
+	resumeName := a.resumeToolName()
+	if err := claimName(resumeName, "the resume tool"); err != nil {
+		return nil, err
+	}
+	if a.Async {
+		tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resumeAsync(st)))
+	} else {
+		tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resume(st)))
 	}
 
 	// The <sub-agents> block depends only on the configuration and the
@@ -411,6 +439,11 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 	}
 
 	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+	if isClientManaged(agent) {
+		// A client-managed run's final state came back inline; hold it so the
+		// result's handle has something to resume for the rest of this call.
+		a.stashClientState(st, ref, out, &result)
+	}
 	logger.Debug(ctx, "sub-agent delegation finished",
 		"agent", ref.Name, "finishReason", string(out.FinishReason),
 		"durationMs", time.Since(start).Milliseconds(), "artifacts", len(result.Artifacts))
@@ -486,6 +519,10 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 		// answer would hand the orchestrator partial work as if it were final.
 		result.Response = fmt.Sprintf("Error calling agent %q: %s",
 			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))
+		if result.TaskID != "" {
+			result.Response += fmt.Sprintf(
+				" The run's progress up to that point is saved; call %s with this taskId to resume it, optionally with instructions.", a.resumeToolName())
+		}
 		return result
 	}
 
@@ -718,6 +755,15 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 		b.WriteString("running across turns, and task IDs from earlier tool results stay ")
 		b.WriteString("valid: check them before delegating the same work again.\n")
 	}
+	b.WriteString("\n")
+	b.WriteString("Delegation results carry a taskId where the sub-agent's progress is ")
+	b.WriteString("addressable. If a delegation fails or is aborted, its saved progress is ")
+	b.WriteString("not lost: call " + a.resumeToolName() + " with the taskId to resume it ")
+	b.WriteString("from where it stopped, either as-is or steered with instructions. A ")
+	b.WriteString("completed task accepts follow-up instructions in its own session the ")
+	b.WriteString("same way, without repeating the finished work. Handles of the form ")
+	b.WriteString("\"<agent>:" + memHandlePrefix + "<n>\" are in-memory and valid only ")
+	b.WriteString("until this turn ends.\n")
 	b.WriteString("</sub-agents>")
 	return b.String()
 }
