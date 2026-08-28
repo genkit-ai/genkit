@@ -4136,6 +4136,62 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		}
 	})
 
+	t.Run("a detached abort with nothing committed rolls all the way back", func(t *testing.T) {
+		// The rollback floor. This run detaches on its first input and that
+		// turn never commits, so there is no last-good copy in memory and no
+		// earlier snapshot to read one from: without the invocation's own
+		// initial state as a source, the row keeps the mutations of a turn
+		// that did not finish, on a row this PR makes resumable.
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := DefineCustomAgent(newTestRegistry(t), "detachedAbortNothingCommitted",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("uncommitted turn"))
+					select {
+					case entered <- struct{}{}:
+					case <-ctx.Done():
+					}
+					<-ctx.Done()
+					return nil, ctx.Err()
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "go")
+		<-entered
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		out, err := outputWithin(t, conn, 10*time.Second)
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if _, err := af.Abort(context.Background(), out.SnapshotID); err != nil {
+			t.Fatalf("Abort: %v", err)
+		}
+
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted && s.FinishReason == AgentFinishReasonAborted
+		})
+		if snap.State == nil {
+			t.Fatal("aborted snapshot carries no state")
+		}
+		var texts []string
+		for _, m := range snap.State.Messages {
+			texts = append(texts, m.Text())
+		}
+		if len(texts) != 0 {
+			t.Errorf("messages = %q, want none: no turn committed, so there is nothing to keep", texts)
+		}
+	})
+
 	t.Run("an aborted snapshot resumes", func(t *testing.T) {
 		store := newTestInMemStore[testState]()
 		entered := make(chan struct{})
@@ -7962,5 +8018,95 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Output did not return after cancellation; no context escape")
+	}
+}
+
+// TestPromptAgent_FailedTurnReasonIsNotTheModelReason pins the one place the
+// generate loop's finish reason must not be forwarded verbatim. A response
+// the loop completed and post-processing then rejected keeps the model's own
+// reason ("stop") beside its ErrInvalidOutput, so a turn that failed would
+// otherwise report a success on its TurnEnd chunk and on its snapshot row.
+func TestPromptAgent_FailedTurnReasonIsNotTheModelReason(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	ai.ConfigureFormats(reg)
+	defineTestModel(reg, "test/badjson", nil,
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			// Not the JSON the output type asks for, and the model itself
+			// finished cleanly: exactly the shape that carries "stop" out of
+			// a failed generate.
+			return &ai.ModelResponse{
+				Request:      req,
+				Message:      ai.NewModelTextMessage("not json"),
+				FinishReason: ai.FinishReasonStop,
+			}, nil
+		})
+	ai.DefineGenerateAction(ctx, reg)
+
+	store := newTestInMemStore[testState]()
+	af := DefineAgent[testState](reg, "invalidOutputAgent", InlinePrompt{
+		ai.WithModelName("test/badjson"),
+		ai.WithOutputType(struct {
+			Name string `json:"name"`
+		}{}),
+	}, WithSessionStore(store))
+
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("no snapshot: the turn committed the partial, so it must have one")
+	}
+	snap, err := af.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusFailed {
+		t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
+	}
+	if snap.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
+			snap.FinishReason, AgentFinishReasonFailed)
+	}
+}
+
+// TestAgent_ResumeRejectsAbortedRowWithNoState covers the window between the
+// two writes an aborted detached row takes: abort flips the status, and the
+// finalize that follows stamps the state. A row still between them holds no
+// conversation, so resuming it must fail rather than hand back an empty
+// session in place of the one the caller asked to continue.
+func TestAgent_ResumeRejectsAbortedRowWithNoState(t *testing.T) {
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	af := DefineCustomAgent(newTestRegistry(t), "abortedNoState",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store))
+
+	// The shape abortPendingSnapshot leaves behind before finalizePendingSnapshot
+	// stamps the state: aborted, and carrying nothing.
+	snap, err := store.SaveSnapshot(ctx, "",
+		func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID: "sess-no-state",
+				Status:    SnapshotStatusAborted,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	if _, err := af.RunText(ctx, "continue", WithSnapshotID[testState](snap.SnapshotID)); err == nil {
+		t.Fatal("resume from a stateless aborted snapshot succeeded, want FAILED_PRECONDITION")
+	} else if !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Errorf("resume error = %v, want FAILED_PRECONDITION", err)
 	}
 }

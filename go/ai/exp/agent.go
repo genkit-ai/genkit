@@ -156,6 +156,13 @@ type SessionRunner[State any] struct {
 	// for an attached server-managed agent, whose failure path returns the
 	// last turn snapshot instead. See captureLastGood.
 	lastGoodState *SessionState[State]
+
+	// initialState is a deep copy of the state the invocation began with:
+	// fresh, client-provided, or loaded from the snapshot it resumed. It is
+	// the floor committedState falls to when no turn has committed and there
+	// is no snapshot to read one from. Written once by captureInitial and
+	// never mutated after.
+	initialState *SessionState[State]
 }
 
 // suspendSnapshots stops all further turn-end snapshot writes for this
@@ -378,11 +385,77 @@ func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishRe
 	s.turnIndex++
 }
 
+// committedState resolves the session state as of the last turn that
+// committed. It is what a run stopping mid-turn must land: the live state
+// holds the unfinished turn's mutations, and an attached turn sheds them by
+// not snapshotting at all.
+//
+// It always resolves, taking the first source that holds an answer:
+//
+//   - the live state, when the last turn committed and there is nothing to
+//     shed;
+//   - the copy captureLastGood took at the last committed turn, which a
+//     client-managed agent always has and a detached one has for every turn
+//     since the detach;
+//   - the last turn-end snapshot, which is where a detached run's turns
+//     before the detach went, since suspending them froze lastSnapshotID
+//     there;
+//   - the state the invocation began with, the answer when nothing has
+//     committed at all.
+//
+// The returned state is the caller's to keep: every branch is a copy or a
+// value nothing mutates afterwards.
+func (s *SessionRunner[State]) committedState(ctx context.Context) *SessionState[State] {
+	if s.lastTurnCommitted {
+		return s.State()
+	}
+	if s.lastGoodState != nil {
+		return s.lastGoodState
+	}
+	if snapped := s.snapshotState(ctx, s.lastSnapshotID); snapped != nil {
+		return snapped
+	}
+	return s.initialState
+}
+
+// snapshotState reads the state off a snapshot this session already wrote.
+// Returns nil when there is no such snapshot, or when it cannot be read or
+// carries no state, which costs committedState this source but never an
+// answer.
+func (s *SessionRunner[State]) snapshotState(ctx context.Context, snapshotID string) *SessionState[State] {
+	if s.store == nil || snapshotID == "" {
+		return nil
+	}
+	snap, err := s.store.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		logger.Error(ctx, "agent: failed to read snapshot for committed state",
+			"snapshotId", snapshotID, "error", err)
+		return nil
+	}
+	if snap == nil || snap.State == nil {
+		return nil
+	}
+	return jsonClone(snap.State)
+}
+
+// captureInitial deep-copies the state the invocation began with. It is the
+// floor committedState falls to when nothing has committed and no snapshot
+// holds an earlier turn, and, for a client-managed agent, the failure
+// fallback until the first turn commits. One copy serves both: neither is
+// mutated afterwards, only replaced.
+func (s *SessionRunner[State]) captureInitial() {
+	s.mu.RLock()
+	state := s.copyStateLocked()
+	s.mu.RUnlock()
+	s.initialState = &state
+	if s.store == nil {
+		s.lastGoodState = &state
+	}
+}
+
 // captureLastGood deep-copies the committed session state as the failure
 // fallback, excluding the partial mutations of a later turn that failed
-// before committing. Called once at session start (the initial state is the
-// fallback until a turn commits) and after every committed turn, failed or
-// not.
+// before committing. Called after every committed turn, failed or not.
 //
 // It is kept for a client-managed agent, whose failed invocation returns it
 // inline (see failedOutput), and for a detached one, whose finalize has no
@@ -1207,9 +1280,7 @@ func newAgentRuntime[State any](
 		fail:        rt.failTransform,
 	}
 	rt.sess.onStartTurn = rt.patcher.beginTurn
-	// The initial state (fresh, client-provided, or loaded from a snapshot)
-	// is the client-managed failure fallback until a turn completes.
-	rt.sess.captureLastGood()
+	rt.sess.captureInitial()
 
 	return rt, nil
 }
@@ -1814,20 +1885,10 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 	fnErr error,
 	abortedByUser bool,
 ) {
-	// The state the row lands with. The live state is every turn's work when
-	// they all committed; when the last one did not, its partial mutations
-	// have to go, the same rollback an attached turn gets by not snapshotting.
-	// Detach suspended those snapshots, so the fallbacks are the copy
-	// captureLastGood took at the last committed turn, and the parent row when
-	// nothing has committed since the detach.
-	finalState := *rt.session.State()
-	if !rt.sess.lastTurnCommitted {
-		if last := rt.sess.lastGoodState; last != nil {
-			finalState = *last
-		} else if pending.ParentID != "" {
-			finalState = rt.parentState(ctx, pending.ParentID, finalState)
-		}
-	}
+	// The state the row lands with: everything through the last turn that
+	// committed, so an unfinished turn's mutations do not ride onto a row
+	// that is now resumable.
+	finalState := *rt.sess.committedState(ctx)
 	// Captured outside the SaveSnapshot callback (which must stay pure): the
 	// finalizer runs after fn returned, so these are stable. The abort/error
 	// branches below own their reasons and ignore this clean-success default.
@@ -1900,25 +1961,6 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 		logger.Error(ctx, "agent: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "error", err)
 	}
-}
-
-// parentState reads the state off the pending row's parent, the last snapshot
-// written before the detach suspended them. It backs the finalize's rollback
-// for a run that aborted or failed before any post-detach turn committed:
-// there is nothing in memory to fall back to, and the parent is the last
-// committed turn. Returns fallback when the parent cannot be read or carries
-// no state, which loses the rollback but never the row.
-func (rt *agentRuntime[State]) parentState(ctx context.Context, parentID string, fallback SessionState[State]) SessionState[State] {
-	parent, err := rt.cfg.store.GetSnapshot(ctx, parentID)
-	if err != nil {
-		logger.Error(ctx, "agent: failed to read parent snapshot for finalize rollback",
-			"parentId", parentID, "error", err)
-		return fallback
-	}
-	if parent == nil || parent.State == nil {
-		return fallback
-	}
-	return *jsonClone(parent.State)
 }
 
 // loadSession constructs a Session from the invocation's init payload,
@@ -2027,6 +2069,17 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 	case SnapshotStatusPending:
 		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
+	case SnapshotStatusAborted:
+		// An aborted row is the one terminal shape written twice: the abort
+		// flips the pending row, which carries no state, and the finalize
+		// that follows stamps the state onto it. A row still between the two
+		// (the process died, or the finalize write failed) holds nothing, and
+		// resuming it would silently hand back an empty session in place of
+		// the conversation the caller asked to continue.
+		if snap.State == nil {
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+				"snapshot %q was aborted before its invocation recorded any state; resume from an earlier snapshot", snap.SnapshotID)
+		}
 	}
 	if snap.State != nil {
 		// Stores may return rows sharing memory with their internal
@@ -2945,10 +2998,13 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil, fmt.Errorf("generate: %w", err)
 				}
 				sess.SetMessages(turnSessionMessages(modelResp.History()))
-				// The generate response's reason verbatim, as on the success
-				// arm: a cancelled loop reports "aborted", so the turn's
-				// snapshot lands aborted rather than failed.
-				return &TurnResult{FinishReason: AgentFinishReason(modelResp.FinishReason)}, fmt.Errorf("generate: %w", err)
+				// No reason: the TurnResult here only says the turn committed,
+				// and [SessionRunner.Run] derives the rest from the error it
+				// is handed. The success arm forwards generate's reason
+				// verbatim, but this arm must not, because a response the loop
+				// completed and post-processing then rejected still carries
+				// the model's own "stop".
+				return &TurnResult{}, fmt.Errorf("generate: %w", err)
 			}
 
 			// Replace session messages with the full history minus the
