@@ -22,6 +22,7 @@ The pattern mirrors `tests/specs/generate.yaml` for the Generate API.
 ### Top-Level Structure
 
 ```yaml
+capabilities: [<capability>]    # Every name `requires` may use; see below
 tests:
   - name: <string>              # Human-readable test name
     description: <string>       # Optional description
@@ -35,7 +36,13 @@ tests:
 `requires` lists the capabilities a test depends on. Each harness declares
 the capabilities its runtime implements and **skips** (not fails) any test
 naming one it does not, so the shared spec can carry cases for features an
-SDK has not adopted yet. Known capabilities:
+SDK has not adopted yet.
+
+Because every harness skips what it does not recognize, a misspelled name
+would otherwise skip the test in all of them and be reported by none. The
+top-level `capabilities` list is the spec's own registry of valid names, and
+a `requires` entry absent from it **fails** in every harness. Adding a
+capability means adding it there and to the table below. Known capabilities:
 
 | Capability | Meaning |
 |------------|---------|

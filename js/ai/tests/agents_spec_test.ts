@@ -132,12 +132,17 @@ const SpecTestSchema = z.object({
   description: z.string().optional(),
   agent: z.string(),
   // Capability gate; tests naming a capability outside SUPPORTED_REQUIRES
-  // are skipped. See docs/agents-conformance-testing.md.
+  // are skipped, and one outside the suite's own `capabilities` fails. See
+  // docs/agents-conformance-testing.md.
   requires: z.array(z.string()).optional(),
   steps: z.array(SpecStepSchema),
 });
 
 const SpecSuiteSchema = z.object({
+  // Every name a test may put in `requires`. It is the spec's own registry,
+  // so a misspelled capability fails here rather than skipping the test in
+  // every SDK at once.
+  capabilities: z.array(z.string()).default([]),
   tests: z.array(SpecTestSchema),
 });
 
@@ -993,8 +998,18 @@ describe('Agent conformance spec', () => {
   // names anything absent here is skipped, so the shared spec can carry
   // cases for features this SDK has not adopted yet.
   const SUPPORTED_REQUIRES = new Set<string>();
+  const KNOWN_REQUIRES = new Set(spec.capabilities);
 
   for (const test of spec.tests) {
+    const unknown = (test.requires ?? []).filter((r) => !KNOWN_REQUIRES.has(r));
+    if (unknown.length > 0) {
+      it(test.name, () => {
+        assert.fail(
+          `unknown capabilities: ${unknown.join(', ')}; add them to the spec's capabilities list or fix the spelling`
+        );
+      });
+      continue;
+    }
     const unsupported = (test.requires ?? []).filter(
       (r) => !SUPPORTED_REQUIRES.has(r)
     );

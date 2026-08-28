@@ -9,6 +9,13 @@
 # See docs/agents-conformance-testing.md for harness requirements and
 # full spec format reference.
 
+# Every capability a test may name in `requires`. A harness skips a test
+# naming a capability it does not implement, so this list is what separates
+# "not adopted yet" from a misspelled name: a `requires` entry absent here
+# fails every harness instead of silently skipping in all of them.
+capabilities:
+  - resumable-failures
+
 tests:
   # ---------------------------------------------------------------------------
   # Basic single-turn

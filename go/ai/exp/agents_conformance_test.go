@@ -60,7 +60,8 @@ const specPath = "../../../tests/specs/agent.yaml"
 // supportedRequires lists the gated spec capabilities this runtime
 // implements. A test whose `requires` names anything absent here is
 // skipped, so the shared spec can carry cases for features an SDK has not
-// adopted yet.
+// adopted yet. A name absent from the spec's own `capabilities` list is a
+// typo instead, and fails.
 var supportedRequires = map[string]bool{
 	"resumable-failures": true,
 }
@@ -77,7 +78,11 @@ type customState = map[string]any
 // ---------------------------------------------------------------------------
 
 type specSuite struct {
-	Tests []specTest `yaml:"tests"`
+	// Capabilities is every name a test may put in `requires`. It is the
+	// spec's own registry, so a misspelled capability fails here rather than
+	// skipping the test in every SDK at once.
+	Capabilities []string   `yaml:"capabilities"`
+	Tests        []specTest `yaml:"tests"`
 }
 
 type specTest struct {
@@ -384,9 +389,17 @@ func TestAgentConformance(t *testing.T) {
 		t.Fatal("spec contains no tests")
 	}
 
+	known := map[string]bool{}
+	for _, c := range suite.Capabilities {
+		known[c] = true
+	}
+
 	for _, tc := range suite.Tests {
 		t.Run(tc.Name, func(t *testing.T) {
 			for _, req := range tc.Requires {
+				if !known[req] {
+					t.Fatalf("unknown capability %q; add it to the spec's capabilities list or fix the spelling", req)
+				}
 				if !supportedRequires[req] {
 					t.Skipf("requires unsupported capability %q", req)
 				}
