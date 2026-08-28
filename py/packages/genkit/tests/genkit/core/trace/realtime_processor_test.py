@@ -23,6 +23,7 @@ they start and when they end, enabling real-time trace visualization.
 from collections.abc import Sequence
 from unittest.mock import MagicMock
 
+import pytest
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
@@ -154,6 +155,24 @@ def test_realtime_processor_on_start_with_parent_context() -> None:
     # Verify span was still exported
     assert len(exporter.exported_spans) == 1
     assert list(exporter.exported_spans[0]) == [mock_span]
+
+
+def test_realtime_processor_on_start_does_not_swallow_encode_bugs() -> None:
+    """A broken encoder must stay loud — on_start is not a quiet catch-all."""
+
+    class BrokenExporter(SpanExporter):
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+            raise TypeError('span context is None')
+
+        def shutdown(self) -> None:
+            return None
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return True
+
+    processor = RealtimeSpanProcessor(BrokenExporter())
+    with pytest.raises(TypeError, match='span context is None'):
+        processor.on_start(MagicMock(spec=Span))
 
 
 def test_realtime_processor_multiple_spans() -> None:

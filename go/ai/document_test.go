@@ -141,6 +141,68 @@ func TestReasoningPartJSON(t *testing.T) {
 	if unmarshaledPart.ContentType != "plain/text" {
 		t.Errorf("unmarshaled reasoning content type = %q, want %q", unmarshaledPart.ContentType, "plain/text")
 	}
+
+	if got := unmarshaledPart.Metadata["signature"]; got == nil {
+		t.Errorf("unmarshaled reasoning part lost its signature, metadata = %v", unmarshaledPart.Metadata)
+	}
+}
+
+func TestReasoningPartWithoutSignature(t *testing.T) {
+	// A part with no signature carries no metadata at all. A metadata map
+	// holding only a nil signature reads as "this part has metadata" to
+	// consumers, which stops adjacent reasoning parts from being merged.
+	p := NewReasoningPart("thinking", nil)
+	if p.Metadata != nil {
+		t.Errorf("Metadata = %v, want nil", p.Metadata)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+	if got, want := string(b), `{"reasoning":"thinking"}`; got != want {
+		t.Errorf("marshaled = %s, want %s", got, want)
+	}
+}
+
+func TestReasoningPartClonesSignature(t *testing.T) {
+	// A caller reusing a buffer across streamed chunks must not be able to
+	// rewrite a signature it has already handed off.
+	buf := []byte("sig123")
+	p := NewReasoningPart("thinking", buf)
+	copy(buf, "XXXXXX")
+
+	got, ok := p.Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature = %#v, want []byte", p.Metadata["signature"])
+	}
+	if string(got) != "sig123" {
+		t.Errorf("signature = %q, want %q: the caller's buffer is aliased", got, "sig123")
+	}
+}
+
+func TestEmptyReasoningPartRoundTrip(t *testing.T) {
+	// The reasoning key marks the kind, so it has to survive an empty text:
+	// dropping it turns the part into an empty text part on the way back, and
+	// the wire schema lists reasoning as required.
+	p := NewReasoningPart("", []byte("sig123"))
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+
+	var got Part
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("failed to unmarshal reasoning part: %v", err)
+	}
+
+	if !got.IsReasoning() {
+		t.Errorf("empty reasoning part became kind %v, want %v (marshaled as %s)", got.Kind, PartReasoning, b)
+	}
+	if got.Text != "" {
+		t.Errorf("Text = %q, want empty", got.Text)
+	}
 }
 
 func TestNewDataPart(t *testing.T) {

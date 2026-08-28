@@ -15,6 +15,7 @@
  */
 import { z } from 'zod';
 import { DocumentDataSchema } from './document';
+import { RuntimeErrorSchema } from './error';
 import { MiddlewareRefSchema } from './middleware';
 import {
   CustomPartSchema,
@@ -344,6 +345,7 @@ export const FinishReasonSchema = z.enum([
   'length',
   'blocked',
   'aborted',
+  'failed',
   'interrupted',
   'other',
   'unknown',
@@ -377,6 +379,14 @@ export const ModelResponseSchema = z.object({
   message: MessageSchema.optional(),
   finishReason: FinishReasonSchema,
   finishMessage: z.string().optional(),
+  /**
+   * Structured failure information for a response that accompanies an
+   * error, set whenever `finishReason` is `failed` or `aborted`. It is the
+   * classified form of `finishMessage`, so a caller reading a response that
+   * travelled as data (a trace, a persisted turn) can branch on
+   * `error.status` instead of matching a string.
+   */
+  error: RuntimeErrorSchema.optional(),
   latencyMs: z.number().optional(),
   usage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */

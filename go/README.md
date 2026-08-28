@@ -1224,6 +1224,18 @@ case errors.Is(err, status.ErrResourceExhausted):
 
 Models, tools, prompts, and provider APIs all report failures this way, so recovery logic reads as a switch rather than a string match.
 
+A generation failure keeps the progress the loop made: once the request has resolved, the classified error comes back alongside a partial `ai.ModelResponse`. When the loop stopped early, the response reports `ai.FinishReasonFailed` with the cause in `FinishMessage` if something broke (a failed model call, a failed tool), or `ai.FinishReasonAborted` if the caller stopped it: a cancelled context, an expired deadline, or a limit it set such as max turns. `History()` carries the conversation up to that point:
+
+```go
+resp, err := genkit.Generate(ctx, g /* ... */)
+if err != nil && resp != nil {
+    transcript := resp.History() // A conversation you can send again.
+    cause := resp.Error          // The same failure, classified.
+}
+```
+
+`resp.Error` is the structured form of `FinishMessage`, so a response that travelled as data (a trace, a persisted turn) still says why it stopped without anyone matching a string. That history stops at a turn seam: the completed tool rounds, and nothing from the turn that failed. A model message whose tools did not all answer is dropped along with the round it opened, because no provider accepts a conversation that ends in an unanswered tool request. Send the history back to retry the failed step without repeating the tool calls that already succeeded. Text streamed before the failure reached your callback, so watch the stream if you want to show it.
+
 Your own failures work the same way. Derive a subtype to keep a parent's status, and use `PublicErrorf` when the message is safe to return to a client:
 
 ```go

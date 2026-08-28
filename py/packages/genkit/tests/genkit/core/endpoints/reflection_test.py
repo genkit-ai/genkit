@@ -443,3 +443,21 @@ async def test_values_default_model_ref_is_name() -> None:
         assert response.json() == {'defaultModel': 'echoModel'}
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_no_cors_headers_returned(asgi_client: AsyncClient) -> None:
+    """Test that the reflection server does not return CORS headers, matching JS/Go."""
+    response = await asgi_client.get('/api/__health', headers={'Origin': 'https://evil.example'})
+    assert response.status_code == 200
+    assert 'access-control-allow-origin' not in response.headers
+
+    preflight = await asgi_client.options(
+        '/api/runAction',
+        headers={
+            'Origin': 'https://evil.example',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type',
+        },
+    )
+    assert 'access-control-allow-origin' not in preflight.headers

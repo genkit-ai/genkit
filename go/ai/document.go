@@ -154,14 +154,18 @@ func NewCustomPart(customData map[string]any) *Part {
 
 // NewReasoningPart returns a Part containing reasoning text
 func NewReasoningPart(text string, signature []byte) *Part {
-	return &Part{
+	p := &Part{
 		Kind:        PartReasoning,
 		ContentType: "plain/text",
 		Text:        text,
-		Metadata: map[string]any{
-			"signature": signature,
-		},
 	}
+	if len(signature) > 0 {
+		// Cloned because the part outlives the call: [Part.Clone] copies the
+		// metadata map but not the bytes under it, so a caller reusing a
+		// buffer across chunks would mutate signatures already handed off.
+		p.Metadata = map[string]any{"signature": slices.Clone(signature)}
+	}
+	return p
 }
 
 // NewResourcePart returns a Part containing a resource reference.
@@ -348,7 +352,10 @@ type partSchema struct {
 	Resource     *ResourcePart  `json:"resource,omitempty" yaml:"resource,omitempty"`
 	Custom       map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty"`
-	Reasoning    string         `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+	// Reasoning is a pointer so that a reasoning part with empty text stays a
+	// reasoning part: what marks the kind is the key being present, not the
+	// text being non-empty.
+	Reasoning *string `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
 }
 
 // unmarshalPartFromSchema updates Part p based on the schema s.
@@ -370,9 +377,9 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	case s.Custom != nil:
 		p.Kind = PartCustom
 		p.Custom = s.Custom
-	case s.Reasoning != "":
+	case s.Reasoning != nil:
 		p.Kind = PartReasoning
-		p.Text = s.Reasoning
+		p.Text = *s.Reasoning
 		p.ContentType = "plain/text"
 	case s.Data != nil:
 		p.Kind = PartData
