@@ -762,8 +762,9 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 	b.WriteString("from where it stopped, either as-is or steered with instructions. A ")
 	b.WriteString("completed task accepts follow-up instructions in its own session the ")
 	b.WriteString("same way, without repeating the finished work. Handles of the form ")
-	b.WriteString("\"<agent>:" + memHandlePrefix + "<n>\" are in-memory and valid only ")
-	b.WriteString("until this turn ends.\n")
+	b.WriteString("\"<agent>:" + memHandlePrefix + "<n>\" are in-memory and usable only ")
+	b.WriteString("while you work on the current request; they expire once you finish ")
+	b.WriteString("responding.\n")
 	b.WriteString("</sub-agents>")
 	return b.String()
 }

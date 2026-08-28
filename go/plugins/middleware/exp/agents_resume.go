@@ -156,7 +156,7 @@ func (a *Agents) resumeFromStash(ctx context.Context, ref aix.AgentRef, st *agen
 		// Unlike a store handle, nothing durable sits behind an in-memory
 		// one, so a miss is a dead end (slot kept), not a retry hint.
 		return delegationResult{Response: fmt.Sprintf(
-			"Error: no in-memory state is held for %q. In-memory handles (\"<agent>:%s<n>\") live only until the turn that minted them ends; delegate the task again. For handles that survive turns, give the sub-agent a session store.",
+			"Error: no in-memory state is held for %q. In-memory handles (\"<agent>:%s<n>\") expire once the response that received them is finished; delegate the task again. For handles that survive across requests, give the sub-agent a session store.",
 			in.TaskID, memHandlePrefix)}, nil
 	}
 	if background {
