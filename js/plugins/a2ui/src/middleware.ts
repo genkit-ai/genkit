@@ -366,8 +366,12 @@ function transformResponse(
  */
 function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
   let changed = false;
-  const messages = req.messages.map((message) => {
-    if (!Array.isArray(message.content)) return message;
+  const messages: MessageData[] = [];
+  for (const message of req.messages) {
+    if (!Array.isArray(message.content)) {
+      messages.push(message);
+      continue;
+    }
     let msgChanged = false;
     const content: Part[] = [];
     for (const part of message.content) {
@@ -379,10 +383,19 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
         content.push(part as Part);
       }
     }
-    if (!msgChanged) return message;
+    if (!msgChanged) {
+      messages.push(message);
+      continue;
+    }
     changed = true;
-    return { ...message, content };
-  });
+    // Drop a message that sanitizing emptied out. This happens when its only
+    // content was an a2ui part whose envelopes all summarized to nothing (e.g.
+    // an empty or all-unrecognized envelope array). Sending `content: []`
+    // downstream would make providers like Gemini and Vertex reject the
+    // request, so skip the message entirely instead.
+    if (content.length === 0) continue;
+    messages.push({ ...message, content });
+  }
   return changed ? { ...req, messages } : req;
 }
 
@@ -404,7 +417,9 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
  *
  * Consecutive surface envelopes are grouped into a single block (one surface is
  * usually several envelopes: create + update(s)). Unknown envelope shapes are
- * dropped; the caller keeps the message non-empty when everything drops.
+ * dropped, so an all-unrecognized (or empty) envelope array summarizes to an
+ * empty string; {@link sanitizeInboundA2ui} then drops the emptied message
+ * rather than sending empty content downstream.
  */
 function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
   const out: string[] = [];

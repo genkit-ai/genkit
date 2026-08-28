@@ -312,6 +312,47 @@ describe('a2ui() middleware', () => {
     assert.strictEqual(decoded[1].updateComponents.surfaceId, 's1');
   });
 
+  it('drops a message emptied by sanitizing instead of sending empty content', async () => {
+    // A message whose only part is an a2ui part with an empty (or all-
+    // unrecognized) envelope array summarizes to nothing. Sending it downstream
+    // with `content: []` makes providers like Gemini/Vertex reject the request,
+    // so the middleware must drop the whole message instead.
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: { envelopes: [] },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'hi' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+
+    // The emptied model message is gone entirely; no message has empty content.
+    assert.ok(
+      !seen.messages.some(
+        (m: any) => Array.isArray(m.content) && m.content.length === 0
+      )
+    );
+    // The still-meaningful user message survives.
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    assert.ok(userMsg);
+    assert.strictEqual(userMsg.content[0].text, 'hi');
+  });
+
   it('a new render never reuses a surface id copied from history', async () => {
     // Regression for the "new answer overwrites the prior surface in place"
     // bug: history keeps real ids (for action correlation), so the model can
