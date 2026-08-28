@@ -148,13 +148,12 @@ func (s *Spark) Init(ctx context.Context) []api.Action {
 	if apiKey == "" {
 		apiKey = os.Getenv("SPARK_API_KEY")
 	}
-	if apiKey == "" {
-		panic("spark plugin initialization failed: apiKey is required")
-	}
 
 	opts := []option.RequestOption{
-		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
+	}
+	if apiKey != "" {
+		opts = append(opts, option.WithAPIKey(apiKey))
 	}
 	opts = append(opts, s.Opts...)
 

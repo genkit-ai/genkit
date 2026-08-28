@@ -31,20 +31,76 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
-func TestPluginRequiresAPIKey(t *testing.T) {
+func TestPluginIgnoresOpenAIAPIKey(t *testing.T) {
 	t.Setenv("SPARK_API_KEY", "")
 	// An OPENAI_API_KEY must never be picked up as a fallback: sending it to
 	// Spark would silently authenticate with the wrong provider's key.
 	t.Setenv("OPENAI_API_KEY", "sk-should-not-be-used")
 
-	defer func() {
-		got := recover()
-		if got != "spark plugin initialization failed: apiKey is required" {
-			t.Fatalf("panic = %v, want missing API key error", got)
-		}
-	}()
+	var mu sync.Mutex
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"4.0Ultra",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
 
-	(&spark.Spark{}).Init(context.Background())
+	ctx := context.Background()
+	plugin := &spark.Spark{Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("spark/4.0Ultra"))
+
+	if _, err := genkit.Generate(ctx, g, ai.WithPrompt("hi")); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want no inherited OPENAI_API_KEY", gotAuth)
+	}
+}
+
+func TestPluginAcceptsAPIKeyInOpts(t *testing.T) {
+	t.Setenv("SPARK_API_KEY", "")
+
+	var mu sync.Mutex
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"4.0Ultra",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &spark.Spark{Opts: []option.RequestOption{
+		option.WithBaseURL(server.URL),
+		option.WithAPIKey("opts-key"),
+	}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("spark/4.0Ultra"))
+
+	if _, err := genkit.Generate(ctx, g, ai.WithPrompt("hi")); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer opts-key" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer opts-key")
+	}
 }
 
 func TestPluginConfigPrecedence(t *testing.T) {
@@ -151,7 +207,18 @@ func TestChatConfigApplyToChatCompletion(t *testing.T) {
 		StopSequences:   []string{"STOP"},
 	}
 	var params openai.ChatCompletionNewParams
-	// Exercises the field mapping; the zero-value fields must be left untouched
-	// and the set fields must apply without panicking.
 	cfg.ApplyToChatCompletion(&params)
+
+	if !params.Temperature.Valid() || params.Temperature.Value != temperature {
+		t.Errorf("Temperature = %v, want %v", params.Temperature, temperature)
+	}
+	if !params.TopP.Valid() || params.TopP.Value != topP {
+		t.Errorf("TopP = %v, want %v", params.TopP, topP)
+	}
+	if !params.MaxTokens.Valid() || params.MaxTokens.Value != 64 {
+		t.Errorf("MaxTokens = %v, want 64", params.MaxTokens)
+	}
+	if !slices.Equal(params.Stop.OfStringArray, []string{"STOP"}) {
+		t.Errorf("Stop = %v, want [STOP]", params.Stop.OfStringArray)
+	}
 }
