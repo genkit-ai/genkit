@@ -135,12 +135,13 @@ describe('a2uiEnvelopesFromParts', () => {
     assert.deepStrictEqual(a2uiEnvelopesFromParts(content), []);
   });
 
-  it('drops null / non-object / array envelope elements without throwing', () => {
+  it('drops null / non-object / array / non-envelope elements without throwing', () => {
     // Malformed model output: envelopes should never contain these, but the
-    // guard must not throw and must not leak non-envelopes into the result
-    // (arrays are `typeof 'object'`, so they get an explicit check).
+    // positive server-envelope check must not throw and must keep only real
+    // surface envelopes. Arrays are `typeof 'object'`, and a stray object like
+    // `{ foo: 1 }` carries no surface discriminant, so both are dropped.
     const part = {
-      data: { envelopes: [null, 'nope', [], sampleEnvelope] },
+      data: { envelopes: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
       metadata: { mimeType: A2UI_MIME_TYPE },
     };
     assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);

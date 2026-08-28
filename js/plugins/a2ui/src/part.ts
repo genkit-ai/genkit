@@ -96,22 +96,31 @@ export function a2uiEnvelopesFromParts(
   for (const part of parts) {
     if (!isA2uiPart(part)) continue;
     for (const env of part.data.envelopes) {
-      // Keep only server → client surface envelopes. Inbound action envelopes
-      // (a user action echoed in history) are dropped, and any null /
-      // non-object garbage from malformed model output is skipped so the
-      // `A2uiServerEnvelope[]` return type stays honest. Arrays are excluded
-      // explicitly since `typeof [] === 'object'`.
-      if (!env || typeof env !== 'object' || Array.isArray(env)) continue;
-      if (isActionEnvelope(env)) continue;
-      out.push(env);
+      // Keep only server → client surface envelopes. This is a positive check,
+      // so inbound action envelopes (a user action echoed in history) and any
+      // null / non-object / array / arbitrary-object garbage from malformed
+      // model output are all excluded, keeping the `A2uiServerEnvelope[]`
+      // return type honest.
+      if (isServerEnvelope(env)) out.push(env);
     }
   }
   return out;
 }
 
-/** Narrows an envelope to a client → server action envelope. */
-function isActionEnvelope(
-  env: A2uiEnvelope
-): env is Extract<A2uiEnvelope, { action: unknown }> {
-  return 'action' in env;
+/** The discriminant keys of the server → client surface envelopes. */
+const SERVER_ENVELOPE_KEYS = [
+  'createSurface',
+  'updateComponents',
+  'updateDataModel',
+  'deleteSurface',
+] as const;
+
+/**
+ * Narrows a value to a server → client surface envelope by checking for one of
+ * the known surface discriminant keys. Arrays are excluded explicitly since
+ * `typeof [] === 'object'`.
+ */
+function isServerEnvelope(env: unknown): env is A2uiServerEnvelope {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return false;
+  return SERVER_ENVELOPE_KEYS.some((key) => key in env);
 }
