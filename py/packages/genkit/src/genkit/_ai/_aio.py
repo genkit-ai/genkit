@@ -44,7 +44,7 @@ from genkit._ai._agents._base import (
 from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, StateT, get_current_session
 from genkit._ai._agents._types import ChunkTransform, StateTransform
-from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
+from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, action_to_embed_request, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
     EvaluatorFn,
@@ -124,7 +124,6 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
-    EmbedRequest,
     EvalRequest,
     EvalResponse,
     MiddlewareRef,
@@ -1593,14 +1592,7 @@ class Genkit:
 
         documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
 
-        response = (
-            await embed_action.run(
-                EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
-                    options=final_options,
-                )
-            )
-        ).response
+        response = (await embed_action.run(action_to_embed_request(embed_action, documents, final_options))).response
         return response.embeddings
 
     async def embed_many(
@@ -1634,14 +1626,7 @@ class Genkit:
         )
 
         wire_options = normalize_config(config=options) if options is not None else None
-        response = (
-            await embed_action.run(
-                EmbedRequest(
-                    input=documents,  # type: ignore[arg-type]
-                    options=wire_options,
-                )
-            )
-        ).response
+        response = (await embed_action.run(action_to_embed_request(embed_action, documents, wire_options))).response
         return response.embeddings
 
     async def evaluate(

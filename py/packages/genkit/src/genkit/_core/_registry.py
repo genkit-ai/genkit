@@ -43,6 +43,7 @@ from genkit._core._action import (
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
+    EmbedRequest,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -50,7 +51,6 @@ from genkit._core._model import (
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
     ActionMetadata,
-    EmbedRequest,
     EmbedResponse,
     EvalRequest,
     EvalResponse,

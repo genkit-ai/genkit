@@ -111,10 +111,12 @@ ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 # Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
 # ModelRequest[ModelConfig] you can assign a ModelConfig into.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT')
+# Same unbounded / invariant story as ModelRequestConfigT: options is writable.
+EmbedRequestOptionsT = TypeVar('EmbedRequestOptionsT')
 
 
 def declared_config_type(cls: type) -> type | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+    """The class on ``ModelRequest[ThatClass]`` / ``EmbedRequest[ThatClass]``, or None."""
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -364,6 +366,58 @@ class OutputConfig(OutputConfigData):
     """
 
 
+class EmbedRequest(GenkitModel, Generic[EmbedRequestOptionsT]):
+    """Hand-written embed request. ``options`` is the plugin's config class.
+
+    Annotate ``request: EmbedRequest[MyOptions]``. ``ai.embed(options={'task_type':
+    'retrieval'})`` arrives as a ``MyOptions`` instance. Bare ``EmbedRequest``
+    still gets a raw dict.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    input: list[Document]
+    options: EmbedRequestOptionsT | None = None
+
+    @field_validator('options', mode='before')
+    @classmethod
+    def _check_options_type(cls, v: object) -> object:
+        """A mapping is the bag the plugin schema coerces.
+
+        A Pydantic instance is only legal if it is that schema. OpenAIConfig
+        on an Ollama embedder is a caller mistake — pass a mapping instead.
+        """
+        if v is None:
+            return v
+        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
+            return v
+        if isinstance(v, BaseModel):
+            expected = declared_config_type(cls)
+            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+                raise ValueError(
+                    f'options must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
+                )
+            if expected is dict:
+                raise ValueError(f'options must be a mapping, got {type(v).__name__}')
+            return v
+        raise ValueError(f'options must be a BaseModel or mapping, got {type(v).__name__}')
+
+    @field_validator('input', mode='before')
+    @classmethod
+    def _wrap_input(cls, v: list[DocumentData] | None) -> list[Document]:
+        """Wrap DocumentData in Document veneer. A dumped request sends dicts."""
+        if v is None:
+            return []
+        wrapped: list[Document] = []
+        for d in v:
+            if isinstance(d, Document):
+                wrapped.append(d)
+            elif isinstance(d, dict):
+                wrapped.append(Document(d.get('content') or [], d.get('metadata')))
+            else:
+                wrapped.append(Document(d.content, d.metadata))
+        return wrapped
+
+
 class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with veneer types and flat output accessors.
 
@@ -392,8 +446,8 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
-    messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
-    docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
+    messages: list[Message]
+    docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)

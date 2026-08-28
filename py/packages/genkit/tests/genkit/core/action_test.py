@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Message, ModelRequest, Part, TextPart
+from genkit import Document, EmbedRequest, Message, ModelRequest, Part, TextPart
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -435,3 +435,79 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginCfg)
     assert seen['config'].temperature == 0.5
+
+
+@pytest.mark.asyncio
+async def test_action_revalidates_bare_embed_request_into_plugin_options() -> None:
+    """Action.run: a bare EmbedRequest with a dict options arrives as the plugin class."""
+
+    class PluginOptions(BaseModel):
+        model_config = ConfigDict(extra='allow')
+        task_type: str | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def embed_fn(request: EmbedRequest[PluginOptions]) -> str:
+        seen['options'] = request.options
+        return 'ok'
+
+    action = Action(name='pluginEmbedder', kind=ActionKind.EMBEDDER, fn=embed_fn)
+    request = EmbedRequest(
+        input=[Document.from_text('hi')],
+        options={'task_type': 'retrieval'},
+    )
+    assert request.options == {'task_type': 'retrieval'}
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['options'], PluginOptions)
+    assert seen['options'].task_type == 'retrieval'
+
+
+@pytest.mark.asyncio
+async def test_action_rejects_foreign_options_class() -> None:
+    """Action.run: a request already carrying OpenAICfg is not dumped into OllamaCfg."""
+
+    class OpenAICfg(BaseModel):
+        temperature: float | None = None
+
+    class OllamaCfg(BaseModel):
+        temperature: float | None = None
+
+    async def embed_fn(request: EmbedRequest[OllamaCfg]) -> str:
+        return 'ok'
+
+    action = Action(name='ollama', kind=ActionKind.EMBEDDER, fn=embed_fn)
+    request = EmbedRequest[OpenAICfg](
+        input=[Document.from_text('hi')],
+        options=OpenAICfg(temperature=0.5),
+    )
+
+    with pytest.raises(GenkitError, match=r'options must be .+\.OllamaCfg or a mapping, got .+\.OpenAICfg'):
+        await action.run(input=request)
+
+
+@pytest.mark.asyncio
+async def test_action_coerces_dict_options_from_other_request_type() -> None:
+    """Action.run: a mapping on EmbedRequest[dict] still becomes the plugin class."""
+
+    class PluginCfg(BaseModel):
+        task_type: str | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def embed_fn(request: EmbedRequest[PluginCfg]) -> str:
+        seen['options'] = request.options
+        return 'ok'
+
+    action = Action(name='pluginEmbedder', kind=ActionKind.EMBEDDER, fn=embed_fn)
+    request = EmbedRequest[dict](
+        input=[Document.from_text('hi')],
+        options={'task_type': 'retrieval'},
+    )
+    assert type(request.options) is dict
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['options'], PluginCfg)
+    assert seen['options'].task_type == 'retrieval'

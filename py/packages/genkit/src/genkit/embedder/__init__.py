@@ -37,9 +37,9 @@ from genkit._ai._embedding import (
     embedder,
     embedder_action_metadata,
 )
+from genkit._core._model import EmbedRequest
 from genkit._core._typing import (
     Embedding,
-    EmbedRequest,
     EmbedResponse,
 )
 

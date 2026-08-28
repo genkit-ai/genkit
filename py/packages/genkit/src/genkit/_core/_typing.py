@@ -253,14 +253,6 @@ class DocumentData(GenkitModel):
     metadata: Metadata | None = None
 
 
-class EmbedRequest(GenkitModel):
-    """Model for embedrequest data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    input: list[DocumentData] = Field(...)
-    options: Any | None = Field(default=None)
-
-
 class EmbedResponse(GenkitModel):
     """Model for embedresponse data."""
 

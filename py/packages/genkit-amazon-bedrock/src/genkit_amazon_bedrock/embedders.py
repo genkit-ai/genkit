@@ -36,7 +36,7 @@ rejected with ``Invalid parameter combination``. Image embedding needs
 
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 
 import structlog
@@ -409,7 +409,7 @@ class BedrockEmbedder:
         )
         return EmbedResponse(embeddings=[Embedding(embedding=vector) for vector in vectors])
 
-    async def _embed_titan_text(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_titan_text(self, documents: Sequence[DocumentData]) -> list[list[float]]:
         # Every document is validated before the first call goes out, so a bad
         # batch costs nothing.
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
@@ -418,7 +418,7 @@ class BedrockEmbedder:
     async def _titan_text_vector(self, text: str) -> list[float]:
         return _require_vector(_single_embedding(await self._invoke({'inputText': text})))
 
-    async def _embed_titan_multimodal(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_titan_multimodal(self, documents: Sequence[DocumentData]) -> list[list[float]]:
         bodies: list[dict[str, Any]] = []
         for index, document in enumerate(documents):
             text = document_text(document)
@@ -461,7 +461,7 @@ class BedrockEmbedder:
             raise GenkitError(message=f'bedrock embed: titan multimodal: {message}', status='INTERNAL')
         return _require_vector(_single_embedding(payload))
 
-    async def _embed_cohere(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_cohere(self, documents: Sequence[DocumentData]) -> list[list[float]]:
         # Any media part is ignored: these models take text only.
         texts = [_require_cohere_text(document, index) for index, document in enumerate(documents)]
         # The one family with a batch API, so chunks replace the per-document
@@ -487,7 +487,7 @@ class BedrockEmbedder:
             )
         return batch
 
-    async def _embed_nova(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_nova(self, documents: Sequence[DocumentData]) -> list[list[float]]:
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
         return await self._run_bounded([(index, self._nova_vector(text)) for index, text in enumerate(texts)])
 

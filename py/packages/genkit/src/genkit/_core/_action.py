@@ -710,22 +710,26 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if input is None and self._first_arg_optional:
             return input
         payload: object = input
-        # A differently-typed ModelRequest with a mapping config is dumped and
-        # re-parsed into the plugin class. A Pydantic config instance of the
+        # A differently-typed ModelRequest / EmbedRequest with a mapping bag is
+        # dumped and re-parsed into the plugin class. A Pydantic instance of the
         # wrong class is a caller mistake — dump would silently coerce it.
         if isinstance(input, BaseModel):
             try:
                 return self._input_type.validate_python(input)
             except ValidationError:
-                config = getattr(input, 'config', None)
-                if isinstance(config, BaseModel):
+                typed_bag = getattr(input, 'config', None)
+                field = 'config'
+                if not isinstance(typed_bag, BaseModel):
+                    typed_bag = getattr(input, 'options', None)
+                    field = 'options'
+                if isinstance(typed_bag, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
                     raise GenkitError(
                         message=(
                             f"Invalid input for action '{self.name}': "
-                            f'config must be {want} or a mapping, '
-                            f'got {config_type_path(type(config))}'
+                            f'{field} must be {want} or a mapping, '
+                            f'got {config_type_path(type(typed_bag))}'
                         ),
                         status='INVALID_ARGUMENT',
                     ) from None

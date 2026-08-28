@@ -16,18 +16,20 @@
 
 """Embedding types and utilities for Genkit."""
 
+import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, cast
+from typing import Annotated, Any, ClassVar, cast, get_args, get_origin, get_type_hints
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
 from genkit._core._action import Action, ActionKind, get_func_description
-from genkit._core._model import Document
+from genkit._core._error import GenkitError
+from genkit._core._model import Document, EmbedRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, EmbedRequest, EmbedResponse
+from genkit._core._typing import ActionMetadata, EmbedResponse
 
 
 class EmbedderSupports(BaseModel):
@@ -74,13 +76,62 @@ class Embedder:
         options: dict[str, Any] | None = None,
     ) -> EmbedResponse:
         """Generate embeddings for a list of documents."""
-        # Document veneer is compatible with DocumentData at runtime
-        return (
-            await self._action.run(EmbedRequest(input=documents, options=options))  # type: ignore[arg-type]
-        ).response
+        return (await self._action.run(action_to_embed_request(self._action, documents, options))).response
 
 
 EmbedderFn = Callable[[EmbedRequest], Awaitable[EmbedResponse]]
+
+
+def _check_embed_request_annotation(name: str, fn: EmbedderFn) -> None:
+    """Reject embedder fns whose request annotation is not an EmbedRequest class.
+
+    Unions like ``EmbedRequest[X] | None`` are an antipattern: embed() never
+    passes None, and a non-class annotation silently disables typed-request
+    construction (the request falls back to the untyped carrier + rebuild).
+    Fail fast at definition time with an actionable message instead.
+    """
+    try:
+        hints = get_type_hints(fn, include_extras=True)
+        params = list(inspect.signature(fn).parameters)
+    except Exception:  # noqa: BLE001 - unresolvable annotations: let Action handle it
+        return
+    if not params:
+        return
+    ann = hints.get(params[0])
+    if ann is None:
+        return
+    if get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
+    if isinstance(ann, type) and issubclass(ann, EmbedRequest):
+        return
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f"Embedder '{name}': the request parameter must be annotated as EmbedRequest "
+            f'or EmbedRequest[YourOptions], got {ann!r}. Unions such as '
+            f"'EmbedRequest[X] | None' are not allowed: embed() never passes None, "
+            f'and non-class annotations disable typed-request construction.'
+        ),
+    )
+
+
+def action_to_embed_request(
+    action: Action,
+    documents: list[Document],
+    options: dict[str, Any] | None,
+) -> EmbedRequest[Any]:
+    """Build an EmbedRequest, using the action's class when it is parameterized."""
+    request_kwargs: dict[str, Any] = dict(
+        input=documents,
+        options=options if options is not None else {},
+    )
+    input_class = action.input_class
+    if inspect.isclass(input_class) and issubclass(input_class, EmbedRequest) and input_class is not EmbedRequest:
+        try:
+            return input_class(**request_kwargs)
+        except ValidationError:
+            pass
+    return EmbedRequest(**request_kwargs)
 
 
 def embedder_action_metadata(
@@ -180,6 +231,7 @@ def define_embedder(
     config_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Action:
     """Register a custom embedder action."""
+    _check_embed_request_annotation(name, fn)
     action = embedder(
         name,
         fn,
