@@ -41,6 +41,7 @@ export async function findProjectRoot(): Promise<string> {
     'requirements.txt',
     'pom.xml',
     'build.gradle',
+    'build.gradle.kts',
     'pubspec.yaml',
   ];
 
@@ -135,6 +136,13 @@ function matchRuntimeMarker(file: string, isFile: boolean): Runtime {
   }
   if (file === 'pubspec.yaml') {
     return 'dart';
+  }
+  if (
+    file === 'pom.xml' ||
+    file === 'build.gradle' ||
+    file === 'build.gradle.kts'
+  ) {
+    return 'java';
   }
   return undefined;
 }
