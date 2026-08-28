@@ -370,17 +370,7 @@ func TestAgentsResumeExpiredRecoversCommittedProgress(t *testing.T) {
 	if err != nil || committed == nil {
 		t.Fatalf("read committed snapshot %q: %v", committedID, err)
 	}
-	stale := time.Now().Add(-10 * time.Minute)
-	pending, err := store.SaveSnapshot(ctx, "", func(_ *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error) {
-		return &aix.SessionSnapshot[any]{
-			SessionID:   committed.SessionID,
-			ParentID:    committed.SnapshotID,
-			Status:      aix.SnapshotStatusPending,
-			CreatedAt:   stale,
-			UpdatedAt:   stale,
-			HeartbeatAt: &stale,
-		}, nil
-	})
+	pending, err := saveDeadPendingRow(store, committed.SessionID, committed.SnapshotID)
 	if err != nil {
 		t.Fatalf("SaveSnapshot pending row: %v", err)
 	}
@@ -438,16 +428,7 @@ func TestAgentsResumeExpiredWithNothingSavedRefused(t *testing.T) {
 		aix.WithSessionStore[any](store),
 	)
 
-	stale := time.Now().Add(-10 * time.Minute)
-	pending, err := store.SaveSnapshot(ctx, "", func(_ *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error) {
-		return &aix.SessionSnapshot[any]{
-			SessionID:   "sess-dead",
-			Status:      aix.SnapshotStatusPending,
-			CreatedAt:   stale,
-			UpdatedAt:   stale,
-			HeartbeatAt: &stale,
-		}, nil
-	})
+	pending, err := saveDeadPendingRow(store, "sess-dead", "")
 	if err != nil {
 		t.Fatalf("SaveSnapshot pending row: %v", err)
 	}
@@ -468,9 +449,75 @@ func TestAgentsResumeExpiredWithNothingSavedRefused(t *testing.T) {
 	if len(resumes) != 1 {
 		t.Fatalf("expected 1 resume response, got %d", len(resumes))
 	}
-	if !strings.Contains(resumes[0].Response, "Error resuming task") ||
-		!strings.Contains(resumes[0].Response, "recorded any state") {
+	if !strings.Contains(resumes[0].Response, "saved no resumable progress") ||
+		!strings.Contains(resumes[0].Response, "Delegate the task again") {
 		t.Errorf("expected an honest nothing-saved refusal, got %q", resumes[0].Response)
+	}
+}
+
+// saveDeadPendingRow writes a dead worker's pending row the way the detach
+// handler mints one: created now (newer than every committed row in the
+// session) with a heartbeat that went stale.
+func saveDeadPendingRow(store *localstore.InMemorySessionStore[any], sessionID, parentID string) (*aix.SessionSnapshot[any], error) {
+	now := time.Now()
+	stale := now.Add(-10 * time.Minute)
+	return store.SaveSnapshot(ctx, "", func(_ *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error) {
+		return &aix.SessionSnapshot[any]{
+			SessionID:   sessionID,
+			ParentID:    parentID,
+			Status:      aix.SnapshotStatusPending,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			HeartbeatAt: &stale,
+		}, nil
+	})
+}
+
+func TestAgentsResumeExpiredFinishedParentRequiresInstructions(t *testing.T) {
+	// The parent behind a dead task can be a finished turn; continuing past
+	// it gets the same instructions gate as a completed task, since an empty
+	// input would re-run the finished turn instead of continuing the work.
+	g := newTestGenkit(t)
+
+	store := localstore.NewInMemorySessionStore[any]()
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(failNTimesModel(t, g, "test/keeper", 0, "kept", nil))},
+		aix.WithSessionStore[any](store),
+	)
+
+	first, err := genkit.Generate(ctx, g,
+		ai.WithModel(delegateOnceModel(t, g, "test/seed", "delegate_to_keeper", "start X")),
+		ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded := delegationResponses(t, first.History(), "delegate_to_keeper")
+	committedID := strings.TrimPrefix(seeded[0].TaskID, "keeper:")
+	committed, err := store.GetSnapshot(ctx, committedID)
+	if err != nil || committed == nil {
+		t.Fatalf("read committed snapshot %q: %v", committedID, err)
+	}
+	pending, err := saveDeadPendingRow(store, committed.SessionID, committed.SnapshotID)
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending row: %v", err)
+	}
+
+	deadTask := "keeper:" + pending.SnapshotID
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+			return textResp(req, "done"), nil
+		}
+		return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": deadTask}}), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "last finished turn") {
+		t.Fatalf("expected the finished-parent instructions gate, got %+v", resumes)
 	}
 }
 

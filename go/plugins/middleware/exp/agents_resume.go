@@ -225,16 +225,21 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 		if snap.State != nil {
 			return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 		}
-		// Aborted before anything was recorded: the row itself holds nothing,
-		// so fall back to the session's latest committed snapshot.
-		return a.runResumeFromSession(ctx, ref, st, agent, invocationNum, in, snap.SessionID, background)
+		// Aborted with no state: the row is caught between the abort flip and
+		// the finalize, and only the runtime's heartbeat heuristic can say
+		// whether that finalize is still coming. Resume the row itself and
+		// let the runtime adjudicate: a live worker's rejection says to retry
+		// this same ID shortly, a dead one's names the parent snapshot to
+		// resume instead, and either message reaches the model through the
+		// error text.
+		return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 
 	case aix.SnapshotStatusExpired:
 		// The worker is presumed dead, but "presumed" is the word: a slow
-		// worker may still be alive and beating late, and resuming its
-		// session would fork the run against it. Abort the row first as a
-		// fence (a live worker observes the flip and stops; a dead one is
-		// unaffected), then resume from whatever the session durably holds.
+		// worker may still be alive and beating late, and resuming past it
+		// would fork the run against it. Abort the row first as a fence (a
+		// live worker observes the flip and stops; a dead one is
+		// unaffected), then resume from whatever the run durably holds.
 		if _, err := agent.Abort(ctx, snapshotID); err != nil {
 			logger.Debug(ctx, "resume fence abort failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
 		}
@@ -244,7 +249,7 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 		if snap, err := agent.GetSnapshot(ctx, snapshotID); err == nil && snap.State != nil && snap.Status != aix.SnapshotStatusPending {
 			return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 		}
-		return a.runResumeFromSession(ctx, ref, st, agent, invocationNum, in, snap.SessionID, background)
+		return a.resumeFromParent(ctx, ref, st, agent, invocationNum, in, snap.ParentID, background)
 	}
 	a.releaseDelegation(st)
 	return delegationResult{Response: fmt.Sprintf("Error: task %q is in an unexpected state (%q) and cannot be resumed.", in.TaskID, snap.Status)}, nil
@@ -270,18 +275,31 @@ func (a *Agents) runResumeFromSnapshot(ctx context.Context, ref aix.AgentRef, st
 	return a.runResumeWith(ctx, ref, st, agent, invocationNum, in, background, aix.WithSnapshotID[json.RawMessage](snapshotID))
 }
 
-// runResumeFromSession resumes from the session's latest committed snapshot;
-// the fallback when the handle's own row holds no state (a dead worker's
-// pending row, an abort that never finalized). What it recovers is whatever
-// the run persisted before it detached; a background delegation detaches at
-// turn zero, so there may be nothing, and the runtime's rejection is
-// translated into the honest advice.
-func (a *Agents) runResumeFromSession(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in resumeInput, sessionID string, background bool) (delegationResult, error) {
-	if sessionID == "" {
+// resumeFromParent recovers a dead task from its pending row's parent: the
+// last snapshot committed before the detach. The session's latest row cannot
+// serve here, because it is the dead pending row itself (minted at detach,
+// newer than every committed turn), so the parent pointer is the one durable
+// path back to the committed work.
+//
+// A background delegation detaches at turn zero and has no parent, which is
+// the honest nothing-was-saved case. The parent is read first so a finished
+// parent turn gets the same instructions gate as a completed task: an empty
+// input would re-run that finished turn rather than continue the dead work.
+func (a *Agents) resumeFromParent(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in resumeInput, parentID string, background bool) (delegationResult, error) {
+	if parentID == "" {
 		return delegationResult{Response: fmt.Sprintf(
-			"Error: task %q saved no resumable progress (its worker stopped before recording any). Delegate the task again if the work is still needed.", in.TaskID)}, nil
+			"Error: task %q saved no resumable progress (it detached at the start of the run, and its worker died before finalizing). Delegate the task again if the work is still needed.", in.TaskID)}, nil
 	}
-	return a.runResumeWith(ctx, ref, st, agent, invocationNum, in, background, aix.WithSessionID[json.RawMessage](sessionID))
+	parent, err := agent.GetSnapshot(ctx, parentID)
+	if err != nil {
+		return delegationResult{Response: fmt.Sprintf(
+			"Error: task %q kept its progress in snapshot %q, which could not be read (%v). Try again later.", in.TaskID, parentID, err)}, nil
+	}
+	if parent.Status == aix.SnapshotStatusCompleted && parent.FinishReason.CarriesResult() && in.Instructions == "" {
+		return delegationResult{Response: fmt.Sprintf(
+			"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)}, nil
+	}
+	return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, parentID, background)
 }
 
 // runResumeWith is the shared tail of every store-backed resume: the optional
