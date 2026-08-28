@@ -135,11 +135,12 @@ describe('a2uiEnvelopesFromParts', () => {
     assert.deepStrictEqual(a2uiEnvelopesFromParts(content), []);
   });
 
-  it('tolerates null / non-object envelope elements without throwing', () => {
-    // Malformed model output: envelopes should never be nullish, but the guard
-    // must not throw if they are.
+  it('drops null / non-object / array envelope elements without throwing', () => {
+    // Malformed model output: envelopes should never contain these, but the
+    // guard must not throw and must not leak non-envelopes into the result
+    // (arrays are `typeof 'object'`, so they get an explicit check).
     const part = {
-      data: { envelopes: [null, 'nope', sampleEnvelope] },
+      data: { envelopes: [null, 'nope', [], sampleEnvelope] },
       metadata: { mimeType: A2UI_MIME_TYPE },
     };
     assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);

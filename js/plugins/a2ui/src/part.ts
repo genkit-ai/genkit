@@ -99,8 +99,9 @@ export function a2uiEnvelopesFromParts(
       // Keep only server → client surface envelopes. Inbound action envelopes
       // (a user action echoed in history) are dropped, and any null /
       // non-object garbage from malformed model output is skipped so the
-      // `A2uiServerEnvelope[]` return type stays honest.
-      if (!env || typeof env !== 'object') continue;
+      // `A2uiServerEnvelope[]` return type stays honest. Arrays are excluded
+      // explicitly since `typeof [] === 'object'`.
+      if (!env || typeof env !== 'object' || Array.isArray(env)) continue;
       if (isActionEnvelope(env)) continue;
       out.push(env);
     }
