@@ -4368,7 +4368,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 			want string
 		}{
 			{"a live heartbeat means the write is coming", time.Now(), "retry this same snapshot ID"},
-			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "resume from an earlier snapshot"},
+			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "has no parent; there is nothing to resume"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				_, err := af.RunText(ctx, "carry on", WithSnapshotID[testState](stateless(tc.beat)))
@@ -7526,6 +7526,9 @@ func TestAgent_ResumeFromSnapshotID_StalePendingReportsDeadWorker(t *testing.T) 
 	}
 	if !strings.Contains(ge.Message, "presumed dead") {
 		t.Errorf("expected error message to name the dead worker, got %q", ge.Message)
+	}
+	if !strings.Contains(ge.Message, out1.SnapshotID) {
+		t.Errorf("expected error message to name the parent snapshot %q, got %q", out1.SnapshotID, ge.Message)
 	}
 
 	// A live heartbeat on the same row keeps the still-running story.

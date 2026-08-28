@@ -2139,10 +2139,18 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 		// wait would have them wait forever. The same staleness rule the
 		// read shaping applies (isHeartbeatExpired) decides which story the
 		// error tells; either way the row itself is not resumable, since a
-		// pending row carries no state.
+		// pending row carries no state. The resume point behind it is its
+		// parent: the last snapshot committed before the detach, which the
+		// error names so the caller is not sent hunting for it. A pending
+		// row with no parent belongs to a run that detached before
+		// committing anything, and there is genuinely nothing to resume.
 		if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
+			if snap.ParentID != "" {
+				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+					"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it, then resume from its parent snapshot %q", snap.SnapshotID, snap.ParentID)
+			}
 			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
-				"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it, then resume from an earlier snapshot", snap.SnapshotID)
+				"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it. It recorded no progress, so there is nothing to resume", snap.SnapshotID)
 		}
 		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
@@ -2166,8 +2174,12 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 					"snapshot %q is still being finalized: its invocation was aborted and has not recorded the state yet; retry this same snapshot ID", snap.SnapshotID)
 			}
+			if snap.ParentID != "" {
+				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+					"snapshot %q was aborted before its invocation recorded any state; resume from its parent snapshot %q", snap.SnapshotID, snap.ParentID)
+			}
 			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
-				"snapshot %q was aborted before its invocation recorded any state; resume from an earlier snapshot", snap.SnapshotID)
+				"snapshot %q was aborted before its invocation recorded any state and has no parent; there is nothing to resume", snap.SnapshotID)
 		}
 	}
 	if snap.State != nil {
