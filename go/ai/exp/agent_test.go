@@ -4265,6 +4265,52 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		}
 	})
 
+	t.Run("an aborted row still being finalized points at itself", func(t *testing.T) {
+		// The abort flips the pending row and the finalize stamps the state
+		// on, so a row caught between them carries none. What the caller does
+		// next differs by which half of that window it is, and the heartbeat
+		// the abort left running is what says.
+		ctx := context.Background()
+		store := newTestInMemStore[testState]()
+		af := defineCounterAgent(newTestRegistry(t), "resumeMidFinalize", WithSessionStore(store))
+
+		stateless := func(beat time.Time) string {
+			snap, err := store.SaveSnapshot(ctx, "",
+				func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+					return &SessionSnapshot[testState]{
+						Status:      SnapshotStatusAborted,
+						HeartbeatAt: &beat,
+					}, nil
+				})
+			if err != nil {
+				t.Fatalf("SaveSnapshot: %v", err)
+			}
+			return snap.SnapshotID
+		}
+
+		for _, tc := range []struct {
+			name string
+			beat time.Time
+			want string
+		}{
+			{"a live heartbeat means the write is coming", time.Now(), "retry this same snapshot ID"},
+			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "resume from an earlier snapshot"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := af.RunText(ctx, "carry on", WithSnapshotID[testState](stateless(tc.beat)))
+				if err == nil {
+					t.Fatal("resuming a stateless aborted row was accepted")
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("error %q does not contain %q", err, tc.want)
+				}
+				if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
+					t.Errorf("status = %q, want %q", ge.Status, core.FAILED_PRECONDITION)
+				}
+			})
+		}
+	})
+
 	t.Run("a deadline aborts too, and the error says which", func(t *testing.T) {
 		store := newTestInMemStore[testState]()
 		entered := make(chan struct{})

@@ -84,6 +84,16 @@ func isHeartbeatExpired[State any](snap *SessionSnapshot[State], timeout time.Du
 	return time.Since(*snap.HeartbeatAt) > timeout
 }
 
+// finalizeInFlight reports whether an aborted snapshot carrying no state is
+// still waiting for the write that stamps one on. The abort flips the pending
+// row's status and leaves its heartbeat where the worker left it; only the
+// finalize writes the state, and it clears the heartbeat as it lands. A beat
+// inside timeout therefore says a live worker is between the two writes, and a
+// stale or absent one says it died there.
+func finalizeInFlight[State any](snap *SessionSnapshot[State], timeout time.Duration) bool {
+	return snap.HeartbeatAt != nil && time.Since(*snap.HeartbeatAt) <= timeout
+}
+
 // --- SessionRunner ---
 
 // SessionRunner extends Session with agent-runtime functionality:
@@ -2084,10 +2094,22 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 		// An aborted row is the one terminal shape written twice: the abort
 		// flips the pending row, which carries no state, and the finalize
 		// that follows stamps the state onto it. A row still between the two
-		// (the process died, or the finalize write failed) holds nothing, and
-		// resuming it would silently hand back an empty session in place of
-		// the conversation the caller asked to continue.
+		// holds nothing, and resuming it would silently hand back an empty
+		// session in place of the conversation the caller asked to continue.
+		//
+		// Which half of that window this is decides what the caller should do
+		// next, and the heartbeat says: the abort leaves it running and the
+		// finalize clears it, so a live beat means the state is one write
+		// away and this same ID is the thing to wait on. Sending that caller
+		// to an earlier snapshot would fork the run away from the work the
+		// finalize is about to commit. Only a quiet beat means the write is
+		// never coming (the process died, or the write failed), and the
+		// earlier snapshot really is the resume point.
 		if snap.State == nil {
+			if finalizeInFlight(snap, defaultHeartbeatTimeout) {
+				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+					"snapshot %q is still being finalized: its invocation was aborted and has not recorded the state yet; retry this same snapshot ID", snap.SnapshotID)
+			}
 			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"snapshot %q was aborted before its invocation recorded any state; resume from an earlier snapshot", snap.SnapshotID)
 		}
