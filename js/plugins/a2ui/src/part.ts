@@ -28,7 +28,12 @@
  */
 
 import { type Part } from 'genkit';
-import { A2UI_MIME_TYPE, type A2uiEnvelope, type A2uiPart } from './types.js';
+import {
+  A2UI_MIME_TYPE,
+  type A2uiEnvelope,
+  type A2uiPart,
+  type A2uiServerEnvelope,
+} from './types.js';
 
 /** A minimal structural view of a Genkit part for these helpers. */
 interface PartLike {
@@ -76,14 +81,36 @@ export function isA2uiPart(part: unknown): part is A2uiPart {
  * be `undefined`); a nullish list is treated as empty.
  *
  * Returns `[]` for content that carries no a2ui parts (e.g. plain prose).
+ *
+ * The result is typed as {@link A2uiServerEnvelope}[] — the surfaces the agent
+ * renders — because that is all a render stream carries. Any inbound
+ * {@link ActionEnvelope} (a user action echoed in history) is filtered out, so
+ * the returned envelopes can be handed straight to a renderer's message
+ * processor without a cast.
  */
 export function a2uiEnvelopesFromParts(
   parts: readonly Part[] | null | undefined
-): A2uiEnvelope[] {
+): A2uiServerEnvelope[] {
   if (!Array.isArray(parts)) return [];
-  const out: A2uiEnvelope[] = [];
+  const out: A2uiServerEnvelope[] = [];
   for (const part of parts) {
-    if (isA2uiPart(part)) out.push(...part.data.envelopes);
+    if (!isA2uiPart(part)) continue;
+    for (const env of part.data.envelopes) {
+      // Keep only server → client surface envelopes. Inbound action envelopes
+      // (a user action echoed in history) are dropped, and any null /
+      // non-object garbage from malformed model output is skipped so the
+      // `A2uiServerEnvelope[]` return type stays honest.
+      if (!env || typeof env !== 'object') continue;
+      if (isActionEnvelope(env)) continue;
+      out.push(env);
+    }
   }
   return out;
+}
+
+/** Narrows an envelope to a client → server action envelope. */
+function isActionEnvelope(
+  env: A2uiEnvelope
+): env is Extract<A2uiEnvelope, { action: unknown }> {
+  return 'action' in env;
 }

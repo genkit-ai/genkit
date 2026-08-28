@@ -17,11 +17,25 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from '../src/part.js';
-import { A2UI_MIME_TYPE, type A2uiEnvelope } from '../src/types.js';
+import {
+  A2UI_MIME_TYPE,
+  type A2uiEnvelope,
+  type ActionEnvelope,
+} from '../src/types.js';
 
 const sampleEnvelope: A2uiEnvelope = {
   createSurface: { surfaceId: 's1', catalogId: 'c1' },
   version: 'v0.9',
+};
+
+const sampleActionEnvelope: ActionEnvelope = {
+  action: {
+    name: 'submit',
+    surfaceId: 's1',
+    sourceComponentId: 'btn',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    context: {},
+  },
 };
 
 describe('a2uiPart', () => {
@@ -107,5 +121,27 @@ describe('a2uiEnvelopesFromParts', () => {
   it('returns [] for a nullish parts list', () => {
     assert.deepStrictEqual(a2uiEnvelopesFromParts(null), []);
     assert.deepStrictEqual(a2uiEnvelopesFromParts(undefined), []);
+  });
+
+  it('filters out inbound action envelopes, keeping only server envelopes', () => {
+    const content = [
+      a2uiPart([sampleActionEnvelope, sampleEnvelope, sampleActionEnvelope]),
+    ];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), [sampleEnvelope]);
+  });
+
+  it('returns [] for a part carrying only action envelopes', () => {
+    const content = [a2uiPart([sampleActionEnvelope])];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), []);
+  });
+
+  it('tolerates null / non-object envelope elements without throwing', () => {
+    // Malformed model output: envelopes should never be nullish, but the guard
+    // must not throw if they are.
+    const part = {
+      data: { envelopes: [null, 'nope', sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
   });
 });
