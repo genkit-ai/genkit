@@ -203,7 +203,14 @@ func (h *AgentHandle) Metadata() *AgentMetadata {
 		return nil
 	}
 	h.metaOnce.Do(func() {
-		h.meta, h.metaSrc = AgentMetadataOf(h.metaSrc), nil
+		// Derive only when there is a descriptor to derive from. A handle
+		// constructed with eager metadata and no metaSrc (the shape a remote
+		// transport takes, having no api.Action to inspect, like JS
+		// remoteAgent filling stateManagement) keeps what it was built with;
+		// running the derivation over a nil source would clobber it to nil.
+		if h.metaSrc != nil {
+			h.meta, h.metaSrc = AgentMetadataOf(h.metaSrc), nil
+		}
 	})
 	return h.meta
 }

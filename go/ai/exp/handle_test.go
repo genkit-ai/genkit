@@ -707,3 +707,18 @@ func TestActionTransportForwardsStreamChunks(t *testing.T) {
 		t.Errorf("streamed chunks = %q, want %q", streamed, want)
 	}
 }
+
+func TestAgentHandle_MetadataKeepsEagerValue(t *testing.T) {
+	// A transport with no api.Action to derive metadata from (the shape a
+	// remote handle takes) sets meta at construction and leaves metaSrc nil.
+	// The lazy derivation must not run over the nil source and clobber the
+	// eager value back to nil.
+	meta := &AgentMetadata{StateManagement: AgentStateManagementServer, Abortable: true}
+	h := &AgentHandle{name: "remote", meta: meta}
+	for i := 0; i < 2; i++ {
+		got := h.Metadata()
+		if got == nil || got.StateManagement != AgentStateManagementServer || !got.Abortable {
+			t.Fatalf("Metadata() call %d = %+v, want the eagerly set metadata kept", i+1, got)
+		}
+	}
+}
