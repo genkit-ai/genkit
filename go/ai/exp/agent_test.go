@@ -6395,6 +6395,123 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	}
 }
 
+// TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted pins the second
+// interrupt to the same landing as the first. [ai.Generate] reports a
+// restarted tool that interrupts again with a FAILED_PRECONDITION, because its
+// caller asked for a completed generation, and taking that at face value would
+// write a failed row whose documented recovery cannot work: the tip it holds
+// ends on a model message carrying an unanswered tool request, which is not a
+// turn seam, so re-attempting the turn sends the model a conversation no
+// provider accepts. Only Resume answers this row, exactly as for the first
+// interrupt.
+func TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+	store := newTestInMemStore[testState]()
+
+	interruptTool := defineTestTool(reg, "interruptor", "interrupts every time",
+		func(tc *ai.ToolContext, input any) (any, error) {
+			return nil, tc.Interrupt(&ai.InterruptOptions{
+				Metadata: map[string]any{"reason": "needs approval"},
+			})
+		},
+	)
+	var modelCalls atomic.Int32
+	defineTestModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			return &ai.ModelResponse{
+				Request: req,
+				Message: &ai.Message{
+					Role:    ai.RoleModel,
+					Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "interruptor"})},
+				},
+			}, nil
+		})
+	ai.DefineGenerateAction(ctx, reg)
+	ai.DefinePrompt(reg, "interruptPrompt",
+		ai.WithModelName("test/interrupt"),
+		ai.WithTools(interruptTool),
+	)
+
+	af := DefinePromptAgent[testState](reg, "interruptPrompt", WithSessionStore[testState](store))
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Turn 1: the tool interrupts on its first run.
+	te := sendTurn(t, conn, "do it")
+	if te.FinishReason != AgentFinishReasonInterrupted {
+		t.Fatalf("first TurnEnd.FinishReason = %q, want %q", te.FinishReason, AgentFinishReasonInterrupted)
+	}
+	first, err := store.GetSnapshot(ctx, te.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	pending := interruptParts(first.State.Messages)
+	if len(pending) != 1 {
+		t.Fatalf("first turn left %d interrupts, want 1", len(pending))
+	}
+
+	// Turn 2: restart the interrupted tool, which interrupts again.
+	if err := conn.SendResume(&ToolResume{Restart: pending}); err != nil {
+		t.Fatalf("SendResume: %v", err)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonInterrupted {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonInterrupted)
+	}
+	if out.Error != nil {
+		t.Errorf("Error = %+v, want none: a second interrupt is a turn outcome", out.Error)
+	}
+	// The restart resolves before the model is consulted again, so the second
+	// turn adds no model call.
+	if got := modelCalls.Load(); got != 1 {
+		t.Errorf("model calls = %d, want 1 (the restart interrupted before generate)", got)
+	}
+
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+	}
+	if snap.FinishReason != AgentFinishReasonInterrupted {
+		t.Errorf("snapshot finish reason = %q, want %q", snap.FinishReason, AgentFinishReasonInterrupted)
+	}
+	if snap.Error != nil {
+		t.Errorf("snapshot error = %+v, want none", snap.Error)
+	}
+	// The row is answerable: it holds a fresh interrupt, so Resume has
+	// something to resolve.
+	if got := len(interruptParts(snap.State.Messages)); got != 1 {
+		t.Errorf("snapshot carries %d interrupts, want the fresh one", got)
+	}
+}
+
+// interruptParts collects the unanswered interrupt parts on a conversation's
+// last model message.
+func interruptParts(msgs []*ai.Message) []*ai.Part {
+	if len(msgs) == 0 {
+		return nil
+	}
+	var parts []*ai.Part
+	for _, p := range msgs[len(msgs)-1].Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
 // TestAgent_Detach_CompletedHonorsResultOverride verifies the detach finalizer
 // applies an AgentResult.FinishReason override on clean success, matching the
 // synchronous path (the override does not leak into the failed/aborted cases,

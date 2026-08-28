@@ -2813,6 +2813,17 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil
 				},
 			)
+			// An interrupt is a turn outcome, not a failure, even when it
+			// arrives as one. [ai.Generate] reports a restarted tool that
+			// interrupted again with a FAILED_PRECONDITION, because its
+			// caller asked for a completed generation; the agent's caller did
+			// not. The tip that comes back is the same answerable interrupt a
+			// first-run interrupt leaves, and only [Resume] can answer either,
+			// so the turn takes the success path and commits the same way
+			// both times. No other error carries this finish reason.
+			if err != nil && modelResp != nil && modelResp.FinishReason == ai.FinishReasonInterrupted {
+				err = nil
+			}
 			if err != nil {
 				// The partial's history ends at a turn seam (see
 				// [ai.Generate]), so it is a conversation the caller can
