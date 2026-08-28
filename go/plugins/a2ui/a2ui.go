@@ -475,10 +475,10 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 // about them.
 func sanitizeInboundA2UI(req *ai.ModelRequest) *ai.ModelRequest {
 	changed := false
-	messages := make([]*ai.Message, len(req.Messages))
-	for i, message := range req.Messages {
-		messages[i] = message
+	var messages []*ai.Message
+	for _, message := range req.Messages {
 		if message == nil || message.Content == nil {
+			messages = append(messages, message)
 			continue
 		}
 		msgChanged := false
@@ -495,12 +495,21 @@ func sanitizeInboundA2UI(req *ai.ModelRequest) *ai.ModelRequest {
 			}
 		}
 		if !msgChanged {
+			messages = append(messages, message)
+			continue
+		}
+		changed = true
+		// Drop a message that sanitizing emptied out. This happens when its only
+		// content was an a2ui part whose envelopes all summarized to nothing
+		// (e.g. an empty or all-unrecognized envelope array). Sending empty
+		// content downstream would make providers like Gemini and Vertex reject
+		// the request, so skip the message entirely instead.
+		if len(content) == 0 {
 			continue
 		}
 		msgCopy := message.Clone()
 		msgCopy.Content = content
-		messages[i] = msgCopy
-		changed = true
+		messages = append(messages, msgCopy)
 	}
 	if !changed {
 		return req
@@ -510,19 +519,61 @@ func sanitizeInboundA2UI(req *ai.ModelRequest) *ai.ModelRequest {
 	return &newReq
 }
 
-// summarizeEnvelopes summarizes a batch of a2ui envelopes / actions into a short
-// text string.
+// summarizeEnvelopes converts an array of a2ui envelopes from an inbound message
+// part back into model-readable text — the inverse of the outbound
+// block-to-part transform.
+//
+// The two envelope kinds are handled differently on purpose:
+//
+//   - Assistant-authored surface envelopes (createSurface, updateComponents,
+//     updateDataModel, deleteSurface) are reconstructed as the canonical a2ui
+//     fenced block the model originally emitted. Replaying a prior turn's
+//     surface as history therefore shows the model its own UI output in the
+//     exact format it is asked to produce, reinforcing correct behavior.
+//     (Summarizing it to a sentinel like [rendered UI surface] instead taught
+//     the model to emit that literal string in place of a real block.)
+//   - Client-synthesized action envelopes never had a block form, so they become
+//     a short text summary the model can reason about.
+//
+// Consecutive surface envelopes are grouped into a single block (one surface is
+// usually several envelopes: create + update(s)). Unknown envelope shapes are
+// dropped, so an all-unrecognized (or empty) envelope array summarizes to an
+// empty string; sanitizeInboundA2UI then drops the emptied message rather than
+// sending empty content downstream.
 func summarizeEnvelopes(envelopes []Envelope) string {
-	var lines []string
-	seen := map[string]bool{}
-	add := func(line string) {
-		if !seen[line] {
-			seen[line] = true
-			lines = append(lines, line)
+	var out []string
+	var pendingSurface []Envelope
+
+	flushSurface := func() {
+		if len(pendingSurface) == 0 {
+			return
 		}
+		// Keep the real surface ids verbatim. The model may not reuse them for a
+		// NEW surface: the parser forces a fresh id onto every createSurface
+		// block (see forceSurfaceID), so a copied id can't overwrite a prior
+		// surface. Keeping the real ids lets the model correlate a replayed
+		// action ([UI action ... on surface <id>]) with the surface it targeted,
+		// which matters when several surfaces are on screen at once.
+		//
+		// Encode compactly (not pretty-printed): fewer tokens, and it collapses
+		// the payload to a single line so the block is exactly three lines (open
+		// fence, JSON, close fence). Because JSON escapes any newline inside a
+		// string as \n, an A2UI Text value containing a fenced code sample can't
+		// put a literal ``` at the start of a line, so it can never prematurely
+		// close this block (the parser's close fence is line-anchored).
+		if b, err := json.Marshal(pendingSurface); err == nil {
+			out = append(out, "```a2ui\n"+string(b)+"\n```")
+		}
+		pendingSurface = nil
 	}
+
 	for _, e := range envelopes {
+		if e == nil {
+			continue
+		}
 		if action, ok := e["action"].(map[string]any); ok {
+			// Emit any buffered surface block before the action, preserving order.
+			flushSurface()
 			name, _ := action["name"].(string)
 			surfaceID, _ := action["surfaceId"].(string)
 			ctx := ""
@@ -531,17 +582,22 @@ func summarizeEnvelopes(envelopes []Envelope) string {
 					ctx = " context=" + string(b)
 				}
 			}
-			add(fmt.Sprintf("[UI action %q on surface %s%s]", name, surfaceID, ctx))
-		} else if cs, ok := e["createSurface"].(map[string]any); ok {
-			surfaceID, _ := cs["surfaceId"].(string)
-			add(fmt.Sprintf("[UI surface %s created]", surfaceID))
-		} else if _, ok := e["updateComponents"]; ok {
-			add("[rendered UI surface]")
-		} else if _, ok := e["updateDataModel"]; ok {
-			add("[rendered UI surface]")
-		} else if _, ok := e["deleteSurface"]; ok {
-			add("[rendered UI surface]")
+			out = append(out, fmt.Sprintf("[UI action %q on surface %s%s]", name, surfaceID, ctx))
+		} else if hasSurfaceEnvelope(e) {
+			pendingSurface = append(pendingSurface, e)
 		}
 	}
-	return strings.Join(lines, " ")
+	flushSurface()
+	return strings.Join(out, "\n")
+}
+
+// hasSurfaceEnvelope reports whether e is an assistant-authored surface envelope
+// (createSurface, updateComponents, updateDataModel, or deleteSurface).
+func hasSurfaceEnvelope(e Envelope) bool {
+	for _, key := range []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"} {
+		if v, ok := e[key]; ok && v != nil {
+			return true
+		}
+	}
+	return false
 }

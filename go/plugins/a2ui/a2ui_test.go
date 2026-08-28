@@ -327,6 +327,221 @@ func TestMiddlewareSkipsParseOnAbnormalFinish(t *testing.T) {
 	}
 }
 
+// A prior assistant surface replayed as history must be reconstructed as the
+// canonical fenced a2ui block the model originally emitted, NOT summarized to a
+// sentinel like [rendered UI surface] (which taught the model to echo that
+// literal string instead of real UI).
+func TestMiddlewareReplaysPriorSurfaceAsBlock(t *testing.T) {
+	r := newTestRegistry(t)
+	m, captured := echoModel(t, r, "test/replay", "ok")
+
+	catalog := BasicCatalog()
+	surfacePart := newPart([]Envelope{
+		{"createSurface": map[string]any{"surfaceId": "s1", "catalogId": catalog.ID}, "version": "v0.9"},
+		{"updateComponents": map[string]any{"surfaceId": "s1", "components": []any{
+			map[string]any{"id": "root", "component": "Text", "text": "hi"},
+		}}, "version": "v0.9"},
+	})
+	modelMsg := ai.NewMessage(ai.RoleModel, nil, ai.NewTextPart("Here you go:"), surfacePart)
+	userMsg := ai.NewUserTextMessage("thanks")
+
+	cfg := &Config{Instructions: InstructionsNone}
+	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
+		t.Fatal(err)
+	}
+
+	var modelSeen *ai.Message
+	for _, msg := range *captured {
+		if msg.Role == ai.RoleModel {
+			modelSeen = msg
+			break
+		}
+	}
+	if modelSeen == nil {
+		t.Fatalf("expected a model message; messages=%v", *captured)
+	}
+	for _, p := range modelSeen.Content {
+		if IsPart(p) {
+			t.Fatal("model saw a raw a2ui data part; it should have been sanitized")
+		}
+	}
+	joined := ""
+	for _, p := range modelSeen.Content {
+		joined += p.Text + "\n"
+	}
+	if strings.Contains(joined, "[rendered UI surface]") || strings.Contains(joined, "[UI surface") {
+		t.Errorf("prior surface summarized to a sentinel: %q", joined)
+	}
+	if !strings.Contains(joined, "```a2ui") || !strings.Contains(joined, "createSurface") || !strings.Contains(joined, "updateComponents") {
+		t.Errorf("prior surface not reconstructed as a fenced block: %q", joined)
+	}
+	if !strings.Contains(joined, "Here you go:") {
+		t.Errorf("leading prose lost: %q", joined)
+	}
+	// The real surface id is kept verbatim so a replayed action can correlate
+	// with this surface.
+	if !strings.Contains(joined, `"surfaceId":"s1"`) {
+		t.Errorf("real surface id not preserved verbatim: %q", joined)
+	}
+}
+
+// A message whose only content is an a2ui part with an empty (or all-
+// unrecognized) envelope array summarizes to nothing. The middleware must drop
+// the whole message rather than send empty content downstream (which providers
+// like Gemini/Vertex reject).
+func TestMiddlewareDropsEmptiedMessage(t *testing.T) {
+	r := newTestRegistry(t)
+	m, captured := echoModel(t, r, "test/empty", "ok")
+
+	emptyPart := newPart(nil)
+	modelMsg := ai.NewMessage(ai.RoleModel, nil, emptyPart)
+	userMsg := ai.NewUserTextMessage("hi")
+
+	cfg := &Config{Instructions: InstructionsNone}
+	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, msg := range *captured {
+		if len(msg.Content) == 0 {
+			t.Fatalf("a message was sent downstream with empty content: %v", *captured)
+		}
+	}
+	// The still-meaningful user message survives.
+	var userSeen *ai.Message
+	for _, msg := range *captured {
+		if msg.Role == ai.RoleUser {
+			userSeen = msg
+		}
+	}
+	if userSeen == nil || len(userSeen.Content) == 0 || userSeen.Content[0].Text != "hi" {
+		t.Errorf("user message did not survive sanitizing; messages=%v", *captured)
+	}
+}
+
+// Regression for the "new answer overwrites the prior surface in place" bug:
+// history keeps real ids (for action correlation), so the model can copy an old
+// id into a fresh createSurface. The parser must still mint a distinct id for
+// that new render.
+func TestMiddlewareNewRenderNeverReusesHistoryID(t *testing.T) {
+	r := newTestRegistry(t)
+	catalog := BasicCatalog()
+
+	// The model copies the prior surface's real id (s1) into a brand-new
+	// createSurface - exactly what it does after seeing s1 in history.
+	reply := "Here you go:\n```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"s1","catalogId":"` + catalog.ID + `"}},` +
+		`{"updateComponents":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"new"}]}}]` +
+		"\n```"
+	m, captured := echoModel(t, r, "test/reuse", reply)
+
+	priorSurface := newPart([]Envelope{
+		{"createSurface": map[string]any{"surfaceId": "s1", "catalogId": catalog.ID}},
+		{"updateComponents": map[string]any{"surfaceId": "s1", "components": []any{
+			map[string]any{"id": "root", "component": "Text", "text": "old"},
+		}}},
+	})
+	actionPart := newPart([]Envelope{
+		{"action": map[string]any{"name": "refresh", "surfaceId": "s1"}},
+	})
+	modelMsg := ai.NewMessage(ai.RoleModel, nil, priorSurface)
+	userMsg := ai.NewMessage(ai.RoleUser, nil, actionPart)
+
+	cfg := &Config{SurfaceID: "sfc-new"}
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The new render is minted onto the fixed id sfc-new, NOT the copied s1, so
+	// it can't overwrite the prior surface.
+	envs := EnvelopesFromParts(resp.Message.Content)
+	var create, update map[string]any
+	for _, e := range envs {
+		if cs, ok := e["createSurface"].(map[string]any); ok {
+			create = cs
+		}
+		if uc, ok := e["updateComponents"].(map[string]any); ok {
+			update = uc
+		}
+	}
+	if create == nil || create["surfaceId"] != "sfc-new" {
+		t.Errorf("createSurface id = %v, want sfc-new", create["surfaceId"])
+	}
+	if update == nil || update["surfaceId"] != "sfc-new" {
+		t.Errorf("updateComponents id = %v, want sfc-new", update["surfaceId"])
+	}
+
+	// Meanwhile, the sanitized history the model saw kept the real id on both
+	// the reconstructed surface block and the action line (correlation).
+	var modelSeen, userSeen *ai.Message
+	for _, msg := range *captured {
+		switch msg.Role {
+		case ai.RoleModel:
+			modelSeen = msg
+		case ai.RoleUser:
+			userSeen = msg
+		}
+	}
+	modelText := ""
+	for _, p := range modelSeen.Content {
+		modelText += p.Text + "\n"
+	}
+	if !strings.Contains(modelText, `"surfaceId":"s1"`) {
+		t.Errorf("history lost the real surface id: %q", modelText)
+	}
+	userText := ""
+	for _, p := range userSeen.Content {
+		userText += p.Text + "\n"
+	}
+	if !strings.Contains(userText, "on surface s1") {
+		t.Errorf("action summary lost the real surface id: %q", userText)
+	}
+}
+
+// Consecutive surface envelopes are grouped into one fenced block, but an action
+// between them splits the output (the block precedes the action summary).
+func TestMiddlewareGroupsSurfacesSplitsAroundAction(t *testing.T) {
+	r := newTestRegistry(t)
+	m, captured := echoModel(t, r, "test/group", "ok")
+
+	catalog := BasicCatalog()
+	part := newPart([]Envelope{
+		{"createSurface": map[string]any{"surfaceId": "s1", "catalogId": catalog.ID}},
+		{"updateComponents": map[string]any{"surfaceId": "s1", "components": []any{}}},
+		{"action": map[string]any{"name": "refresh", "surfaceId": "s1"}},
+	})
+	userMsg := ai.NewMessage(ai.RoleUser, nil, part)
+
+	cfg := &Config{Instructions: InstructionsNone}
+	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(userMsg), ai.WithUse(cfg)); err != nil {
+		t.Fatal(err)
+	}
+
+	var userSeen *ai.Message
+	for _, msg := range *captured {
+		if msg.Role == ai.RoleUser {
+			userSeen = msg
+		}
+	}
+	joined := ""
+	for _, p := range userSeen.Content {
+		joined += p.Text + "\n"
+	}
+	// Exactly one fenced block (the two surface envelopes grouped together).
+	if got := strings.Count(joined, "```a2ui"); got != 1 {
+		t.Errorf("got %d fenced blocks, want 1: %q", got, joined)
+	}
+	// Plus the action rendered as a text summary after it.
+	if !strings.Contains(joined, "UI action") {
+		t.Errorf("action summary missing: %q", joined)
+	}
+	// The block precedes the action line (source order preserved).
+	if strings.Index(joined, "```a2ui") > strings.Index(joined, "UI action") {
+		t.Errorf("block should precede action line: %q", joined)
+	}
+}
+
 func TestConfigRejectsInvalidValidateMode(t *testing.T) {
 	if _, err := (&Config{Validate: "strick"}).New(ctx); err == nil {
 		t.Fatal("expected an error for an invalid Validate mode")

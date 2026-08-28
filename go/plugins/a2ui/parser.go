@@ -328,7 +328,18 @@ func (p *streamParser) finalizeBlock(raw string) ([]Envelope, error) {
 	}
 
 	if hasCreate {
-		// A full-surface render. Enforce the "must contain a root" protocol rule.
+		// A full-surface render. createSurface means "new surface" by
+		// definition, so the id the model wrote is never authoritative — force
+		// every envelope in this block onto the freshly-minted surfaceID, even
+		// if the model copied a real id from replayed history (which would
+		// otherwise reuse and overwrite that prior surface in place). This is
+		// the single chokepoint that guarantees a distinct surface per render,
+		// so history can keep real ids verbatim (needed to correlate actions
+		// with their surface) without risking id reuse.
+		for _, e := range out {
+			forceSurfaceID(e, surfaceID)
+		}
+		// Enforce the "must contain a root" protocol rule.
 		if msg := validateRoot(out); msg != "" {
 			return p.reject(msg)
 		}
@@ -379,6 +390,21 @@ func (p *streamParser) finalizeBlock(raw string) ([]Envelope, error) {
 	}
 	out = append([]Envelope{create}, out...)
 	return out, nil
+}
+
+// forceSurfaceID overwrites the surfaceId of whichever payload e carries with
+// surfaceID, unconditionally (unlike the placeholder-only swap in
+// normalizeEnvelope). Used to force every envelope in a createSurface-bearing
+// block onto a single freshly-minted id, so a model that copied a real id from
+// replayed history can't reuse and overwrite a prior surface. Mirrors the JS
+// parser's forceSurfaceId.
+func forceSurfaceID(e Envelope, surfaceID string) {
+	for _, key := range []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"} {
+		if payload, ok := e[key].(map[string]any); ok {
+			payload["surfaceId"] = surfaceID
+			return
+		}
+	}
 }
 
 // envelopeSurfaceID reads the surface id an envelope targets, regardless of its
