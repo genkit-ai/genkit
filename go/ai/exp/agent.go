@@ -2133,6 +2133,17 @@ func loadSession[State any](
 func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State]) (*Session[State], *SessionSnapshot[State], error) {
 	switch snap.Status {
 	case SnapshotStatusPending:
+		// A pending row normally means the detached invocation is still
+		// running, but the heartbeat can say otherwise: a stale beat means
+		// the worker died without finalizing, and telling that caller to
+		// wait would have them wait forever. The same staleness rule the
+		// read shaping applies (isHeartbeatExpired) decides which story the
+		// error tells; either way the row itself is not resumable, since a
+		// pending row carries no state.
+		if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+				"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it, then resume from an earlier snapshot", snap.SnapshotID)
+		}
 		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
 	case SnapshotStatusAborted:

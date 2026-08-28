@@ -7487,6 +7487,64 @@ func TestAgent_ResumeFromSessionID_PendingTipRejected(t *testing.T) {
 	}
 }
 
+func TestAgent_ResumeFromSnapshotID_StalePendingReportsDeadWorker(t *testing.T) {
+	// A pending row whose heartbeat went stale belongs to a worker that is
+	// presumed dead: no finalize is coming, so "wait for it" would be a lie.
+	// The rejection stays FAILED_PRECONDITION but names the dead worker and
+	// points at abort-then-resume-from-an-earlier-snapshot instead.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "stalePendingFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
+	pending, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID:   out1.SessionID,
+			ParentID:    out1.SnapshotID,
+			Status:      SnapshotStatusPending,
+			CreatedAt:   stale,
+			UpdatedAt:   stale,
+			HeartbeatAt: &stale,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending row: %v", err)
+	}
+
+	out, err := af.RunText(ctx, "second", WithSnapshotID[testState](pending.SnapshotID))
+	if err == nil {
+		t.Fatalf("expected error for stale pending row, got output: %+v", out)
+	}
+	ge := core.AsGenkitError(err)
+	if ge.Status != core.FAILED_PRECONDITION {
+		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
+	}
+	if !strings.Contains(ge.Message, "presumed dead") {
+		t.Errorf("expected error message to name the dead worker, got %q", ge.Message)
+	}
+
+	// A live heartbeat on the same row keeps the still-running story.
+	now := time.Now()
+	if _, err := store.SaveSnapshot(ctx, pending.SnapshotID, func(snap *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		snap.HeartbeatAt = &now
+		return snap, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot refresh heartbeat: %v", err)
+	}
+	_, err = af.RunText(ctx, "second", WithSnapshotID[testState](pending.SnapshotID))
+	if err == nil {
+		t.Fatal("expected error for live pending row")
+	}
+	if ge := core.AsGenkitError(err); !strings.Contains(ge.Message, "still running") {
+		t.Errorf("expected error message to say still running, got %q", ge.Message)
+	}
+}
+
 func TestAgent_ClientManagedState_MintsSessionID(t *testing.T) {
 	// With no store configured and a state object that carries no session
 	// ID, the framework mints one and stamps it inside the output state,
