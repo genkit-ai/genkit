@@ -702,8 +702,9 @@ func TestAgentsWaitForUnknownJoinRefused(t *testing.T) {
 
 // TestAgentsAbortBackgroundTask drives the abort control end to end. The task
 // is stopped mid-flight, so the abort has to reach the work and not just the
-// row, and a later check has to agree: an orchestrator told "pending" after it
-// aborted would go back to waiting on work that is gone.
+// row, and a later check has to agree. The report waits a short grace for the
+// worker's finalize, so the answer here is the settled, resumable aborted row
+// rather than the stateless mid-flip window (which reads as pending).
 func TestAgentsAbortBackgroundTask(t *testing.T) {
 	g := newTestGenkit(t)
 
@@ -796,6 +797,67 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	checked := decodeToolOutput[backgroundTasksResult](t, checkOuts[0])
 	if len(checked.Tasks) != 1 || checked.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
 		t.Errorf("check after abort: want 1 aborted task, got %+v", checked.Tasks)
+	}
+}
+
+// TestAgentsAbortReportsWindingDownAsPending pins the abort report's honesty:
+// aborted is a promise the row is settled and resumable, so a worker that has
+// not finalized inside the grace reports as pending (still winding down), and
+// the settled row is left for a later check or wait.
+func TestAgentsAbortReportsWindingDownAsPending(t *testing.T) {
+	g := newTestGenkit(t)
+	restore := abortSettleGrace
+	abortSettleGrace = 50 * time.Millisecond
+	t.Cleanup(func() { abortSettleGrace = restore })
+
+	// The sub-agent deliberately ignores its cancellation until released, so
+	// the finalize cannot land inside the shortened grace.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	genkitx.DefineCustomAgent[any](g, "stubborn",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				<-release
+				return nil, errors.New("released")
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := toolModel(t, g, "test/orch-stubborn", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_stubborn")
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_stubborn",
+				Input: map[string]any{"task": "dig in", "background": true},
+			}), nil
+		case len(toolOutputs(req.Messages, abortBackgroundTasksToolName)) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  abortBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "stubborn"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	abortOuts := toolOutputs(resp.History(), abortBackgroundTasksToolName)
+	if len(abortOuts) != 1 {
+		t.Fatalf("expected 1 abort response, got %d", len(abortOuts))
+	}
+	aborted := decodeToolOutput[backgroundTasksResult](t, abortOuts[0])
+	if len(aborted.Tasks) != 1 || aborted.Tasks[0].Status != string(aix.SnapshotStatusPending) {
+		t.Errorf("abort of an unfinalized task: want a pending report, got %+v", aborted.Tasks)
 	}
 }
 

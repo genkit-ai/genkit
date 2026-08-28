@@ -78,6 +78,14 @@ const (
 	waitForFirst = "first"
 )
 
+// abortSettleGrace bounds how long an abort report waits for the flipped
+// row's finalize before reporting the winding-down row as it stands. The
+// worker's finalize follows its cancellation promptly, so the settled,
+// resumable row is the common answer inside the grace; a worker that
+// outlives it reports as pending, honestly, and settles on a later check.
+// Package-level var so tests can shorten it.
+var abortSettleGrace = 5 * time.Second
+
 // asyncDelegateInput is the delegation tool input when [Agents.Async] is set:
 // the plain task plus the background flag.
 type asyncDelegateInput struct {
@@ -529,21 +537,26 @@ var (
 			// know about a task that outlived the request to cancel it.
 			return cur, nil
 		}
-		st, err := agent.Abort(ctx, snapshotID)
-		if err != nil {
+		if _, err := agent.Abort(ctx, snapshotID); err != nil {
 			return nil, err
 		}
-		if st == aix.SnapshotStatusAborted {
-			// The abort settled the row, and the row just read is the same one
-			// with a new status. Restamping it beats rebuilding a partial
-			// snapshot from the few fields this path happens to need, and it
-			// keeps the abort's own outcome out of reach of a re-read that
-			// could fail on its own.
-			cur.Status = st
-			return cur, nil
+		// The flip is an ack, not an outcome: aborted is a promise the row is
+		// settled and resumable, and the row right after the flip is not that
+		// yet (the shaped read reports the window as pending). Wait a short
+		// grace for the worker's finalize and return the settled, resumable
+		// row, which is the common case; a worker that outlives the grace
+		// reports as pending, honestly, and settles on a later check or wait.
+		// Nothing here stamps a status onto a row it did not read.
+		waitCtx, cancel := context.WithTimeout(ctx, abortSettleGrace)
+		defer cancel()
+		if snap, err := agent.WaitForSnapshot(waitCtx, snapshotID); err == nil {
+			return snap, nil
+		} else if ctx.Err() != nil {
+			// The caller's own context ended; surface that, not the grace.
+			return nil, ctx.Err()
 		}
-		// The task settled between the read and the abort, so the abort was a
-		// no-op on a terminal row. Re-read for the answer it now carries.
+		// The grace elapsed, or the wait failed on its own: report the row as
+		// it stands (or that same failure) rather than inventing an outcome.
 		return agent.GetSnapshot(ctx, snapshotID)
 	}
 )
