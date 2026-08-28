@@ -4059,6 +4059,9 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		if err == nil {
 			t.Fatal("Output err is nil, want the cancellation")
 		}
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point beside the error")
+		}
 		// The stopped turn committed nothing, so it wrote no snapshot and the
 		// resume point stays the turn before it.
 		snap, err := store.GetSnapshot(context.Background(), out.SnapshotID)
@@ -4196,6 +4199,9 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		<-entered
 		cancel()
 		out, _ := outputWithin(t, conn, 10*time.Second)
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point")
+		}
 		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
 			return s.Status == SnapshotStatusAborted
 		})
