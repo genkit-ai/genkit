@@ -326,7 +326,7 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 	return ai.NewMultipartTool(
 		s.toolName(SkillToolName),
 		"Load a skill's instructions by name.",
-		func(_ *ai.ToolContext, in useSkillInput) (*ai.MultipartToolResponse, error) {
+		func(tc *ai.ToolContext, in useSkillInput) (*ai.MultipartToolResponse, error) {
 			si, ok := lookupSkill(info, in.SkillName)
 			if !ok {
 				return &ai.MultipartToolResponse{
@@ -339,7 +339,7 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 					Output: fmt.Sprintf(skillAlreadyLoadedStub, si.Name),
 				}, nil
 			}
-			content, err := s.renderSkill(si)
+			content, err := s.renderSkill(tc, si)
 			if err != nil {
 				release()
 				return nil, err
@@ -356,14 +356,14 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 // renderSkill reads a skill and returns the instructions to place in the
 // conversation. Both entry points go through it, so an activation and a
 // preload deliver byte-identical content.
-func (s *Skills) renderSkill(si skillInfo) (string, error) {
+func (s *Skills) renderSkill(ctx context.Context, si skillInfo) (string, error) {
 	data, err := readSkillFile(si.Path)
 	if err != nil {
 		return "", err
 	}
 	var resources string
 	if s.AllowResourceAccess {
-		resources = listSkillResources(si.Dir, s.toolName(SkillResourceToolName))
+		resources = listSkillResources(ctx, si.Dir, s.toolName(SkillResourceToolName))
 	}
 	return wrapSkillContent(si, string(data), resources), nil
 }
@@ -905,14 +905,20 @@ func wrapSkillContent(si skillInfo, body, resources string) string {
 // they exist without any of them being read. The optional directory names in
 // the specification are conventions, not a closed set, so everything the skill
 // ships is listed.
-func listSkillResources(dir, toolName string) string {
+func listSkillResources(ctx context.Context, dir, toolName string) string {
 	root := filepath.Clean(dir)
 	var (
 		files     []string
 		truncated bool
 	)
+	// The walk never fails: every entry error is reported and swallowed below,
+	// so WalkDir has nothing left to return. An unreadable corner of a skill
+	// directory costs the model that listing, not the activation, which is why
+	// this degrades rather than propagating.
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			logger.Debug(ctx, "skill resource could not be listed, skipping",
+				"path", p, "error", err)
 			return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
 		}
 		rel, relErr := filepath.Rel(root, p)
@@ -1010,7 +1016,7 @@ func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog
 		if !preload[name] || present[name] {
 			continue
 		}
-		content, err := s.renderSkill(info[name])
+		content, err := s.renderSkill(ctx, info[name])
 		if err != nil {
 			// The skill stays loadable through the activation tool, so this
 			// degrades preloading rather than losing the skill.
