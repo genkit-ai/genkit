@@ -139,6 +139,15 @@ a2ui-surface {
   display: block;
   margin-top: 10px;
   padding: 18px;
+
+  /* `white-space` is inherited, and `.bubble` sets `pre-wrap` for chat prose.
+     Left alone it bleeds into the surface's shadow DOM, where the catalog's Lit
+     templates carry literal newlines/indentation between nodes (e.g. Column's
+     `${map(...)}` and CheckBox's `<label>` block). Under `pre-wrap` those render
+     as real line breaks, producing huge vertical gaps and knocking labels off
+     their checkbox baseline. Reset it so the surface controls its own layout. */
+  white-space: normal;
+
   --a2ui-color-background: #ffffff;
   --a2ui-color-on-background: #1b2030;
   --a2ui-color-surface: #ffffff;
