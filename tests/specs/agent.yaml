@@ -1634,6 +1634,48 @@ tests:
           errorContains:
             status: INVALID_ARGUMENT
 
+  - name: an empty input runs a fresh turn on a conversation that did not fail
+    requires: [resumable-failures]
+    description: >
+      Nothing in the rule is specific to a failure. An input with no payload
+      runs the turn on the conversation as it stands, so a completed tip gets a
+      fresh model call on the messages already there and no new user message
+      joins them.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 66666666-6666-4666-8666-666666666666 }
+        inputs:
+          - message: { role: user, content: [{ text: hello }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hi there }] }
+            finishReason: stop
+        expectOutput:
+          finishReason: stop
+
+      - type: send
+        init: { sessionId: 66666666-6666-4666-8666-666666666666 }
+        inputs:
+          - {}
+        modelResponses:
+          - message: { role: model, content: [{ text: anything else }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: anything else }] }
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snapContinued
+
+      - type: getSnapshotData
+        snapshotId: '{{snapContinued}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hello }] }
+              - { role: model, content: [{ text: hi there }] }
+              - { role: model, content: [{ text: anything else }] }
+
   # ---------------------------------------------------------------------------
   # Client-managed state
   # ---------------------------------------------------------------------------
