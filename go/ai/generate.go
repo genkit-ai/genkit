@@ -745,8 +745,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			// The whole round goes, the model message that opened it
 			// included: a failed tool leaves its request unanswered, and
 			// [failurePartial] hands back a conversation that can be
-			// re-sent. revisedMsg records interrupt bookkeeping for a round
-			// that is being discarded, so it is dropped with the rest.
+			// re-sent.
 			return failurePartial(resp, req, err), err
 		}
 		if revisedMsg != nil {
@@ -1558,12 +1557,10 @@ func stampPendingToolOutcome(part *Part, resp *MultipartToolResponse) {
 // handleToolRequests processes any tool requests in the response. On success
 // it returns either a new request to continue the conversation, or, when a
 // tool interrupted, a nil request and the revised model message carrying the
-// interrupt metadata. On error it returns a partial model message alongside
-// the error: tool calls whose results arrived by the time the error was
-// collected carry their pendingOutput or interrupt metadata, so the caller
-// can preserve that work. The error is reported as soon as it arrives; a
-// still-running sibling is left to finish detached and its result is
-// discarded.
+// interrupt metadata. On error it returns no message: the caller drops the
+// whole round, so the results that did arrive have nowhere to go. The error
+// is reported as soon as it arrives; a still-running sibling is left to
+// finish detached and its result is discarded.
 func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, resp *ModelResponse, cb ModelStreamCallback, messageIndex int, runTool toolRunnerFunc) (*ModelRequest, *Message, error) {
 	toolRequests := resp.ToolRequests()
 	if len(toolRequests) == 0 {
@@ -1691,28 +1688,13 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	}
 
 	if toolErr != nil {
-		// A slow or hung sibling must not hold the failure hostage: harvest
-		// the results that already arrived without blocking and leave the
-		// rest to finish detached.
-	drain:
-		for len(receivedIndexes) < len(toolRequests) {
-			select {
-			case res := <-resultChan:
-				receivedIndexes = append(receivedIndexes, res.index)
-			default:
-				break drain
-			}
-		}
-		// The partial message is assembled on an isolated copy of the model
-		// message, since the stragglers keep writing into revisedMsg after
-		// this returns. Each received index is safe to take: its goroutine's
-		// revision (pendingOutput, interrupt metadata) was published by the
-		// channel send, and no other goroutine writes that element.
-		partialMsg := clone(resp.Message)
-		for _, idx := range receivedIndexes {
-			partialMsg.Content[idx] = revisedMsg.Content[idx]
-		}
-		return nil, partialMsg, toolErr
+		// Nothing rides back with the error. The caller drops the whole
+		// round, the model message that opened it included, because a
+		// conversation ending on a tool request nothing answered is one no
+		// provider accepts. A still-running sibling keeps revising its own
+		// element of revisedMsg after this returns, which nothing reads, and
+		// its send cannot block: resultChan buffers one slot per request.
+		return nil, nil, toolErr
 	}
 
 	if hasInterrupts {
@@ -1738,7 +1720,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			Index:   messageIndex + 1,
 		})
 		if err != nil {
-			return nil, revisedMsg, fmt.Errorf("streaming callback failed: %w", err)
+			return nil, nil, fmt.Errorf("streaming callback failed: %w", err)
 		}
 	}
 
