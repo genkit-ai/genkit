@@ -42,6 +42,25 @@ from genkit.model import FinishReason
 from genkit.plugin_api import ActionRunContext
 from genkit_openai.models.utils import _extract_text, extract_config_dict
 
+# GPT Image 1 has a different configuration surface from DALL-E models.
+_GPT_IMAGE_1_CONFIG_SCHEMA: dict[str, Any] = {
+    'type': 'object',
+    'properties': {
+        'size': {
+            'type': 'string',
+            'enum': ['1024x1024', '1536x1024', '1024x1536', 'auto'],
+        },
+        'style': {'type': 'string', 'enum': ['vivid', 'natural']},
+        'user': {'type': 'string'},
+        'n': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'default': 1},
+        'quality': {'type': 'string', 'enum': ['low', 'medium', 'high']},
+        'background': {'type': 'string', 'enum': ['transparent', 'opaque', 'auto']},
+        'moderation': {'type': 'string', 'enum': ['low', 'auto']},
+        'output_compression': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+        'output_format': {'type': 'string', 'enum': ['png', 'jpeg', 'web']},
+    },
+}
+
 # Supported image generation models with their metadata.
 SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     'dall-e-3': ModelInfo(
@@ -56,6 +75,7 @@ SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-image-1': ModelInfo(
         label='OpenAI - GPT Image 1',
+        config_schema=_GPT_IMAGE_1_CONFIG_SCHEMA,
         supports=Supports(
             media=False,
             output=['media'],

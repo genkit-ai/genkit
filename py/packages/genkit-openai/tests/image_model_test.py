@@ -97,9 +97,7 @@ class TestToImageGenerateParams:
 
         assert 'response_format' not in got
 
-    @pytest.mark.parametrize(
-        'model_name', ['GPT-IMAGE-1', 'gpt-image-1-mini', 'gpt-image-1.5']
-    )
+    @pytest.mark.parametrize('model_name', ['GPT-IMAGE-1', 'gpt-image-1-mini', 'gpt-image-1.5'])
     def test_gpt_image_variants_omit_response_format(self, model_name: str) -> None:
         """Verify GPT Image variants use the API's base64-only response shape."""
         request = ModelRequest(
@@ -263,6 +261,20 @@ class TestSupportedImageModels:
         for name, info in SUPPORTED_IMAGE_MODELS.items():
             assert info.supports is not None, f'{name} has no supports metadata'
             assert 'media' in (info.supports.output or []), f"{name} should support 'media' output"
+
+    def test_gpt_image_1_exposes_config_schema(self) -> None:
+        """Verify GPT Image 1 advertises its model-specific config constraints."""
+        schema = SUPPORTED_IMAGE_MODELS['gpt-image-1'].config_schema
+
+        assert schema is not None
+        properties = schema['properties']
+        assert properties['size']['enum'] == ['1024x1024', '1536x1024', '1024x1536', 'auto']
+        assert properties['quality']['enum'] == ['low', 'medium', 'high']
+        assert properties['background']['enum'] == ['transparent', 'opaque', 'auto']
+        assert properties['moderation']['enum'] == ['low', 'auto']
+        assert properties['output_compression'] == {'type': 'integer', 'minimum': 1, 'maximum': 100}
+        assert properties['output_format']['enum'] == ['png', 'jpeg', 'web']
+        assert 'response_format' not in properties
 
 
 class TestOpenAIImageModel:
