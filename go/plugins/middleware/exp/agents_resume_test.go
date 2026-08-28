@@ -218,7 +218,10 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 			return textResp(req, "done: "+lastResume.Response), nil
 		}
 	})
-	mw := &Agents{Agents: []aix.AgentRef{{Name: "helper"}}}
+	// MaxDelegations pins the refusal's slot refund: the delegation and the
+	// corrected follow-up spend the two slots, so the instructions-less
+	// refusal in between must return the one it reserved.
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "helper"}}, MaxDelegations: 2}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {

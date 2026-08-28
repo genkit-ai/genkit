@@ -164,7 +164,7 @@ func (a *Agents) resumeFromStash(ctx context.Context, ref aix.AgentRef, st *agen
 		return delegationResult{Response: fmt.Sprintf(
 			"Error: in-memory handle %q cannot be resumed in the background (background work requires the sub-agent to have a session store). Resume it without \"background\".", in.TaskID)}, nil
 	}
-	if refusal := a.requireFollowUpInstructions(stash.status, in); refusal != nil {
+	if refusal := a.requireFollowUpInstructions(st, stash.status, in); refusal != nil {
 		return *refusal, nil
 	}
 
@@ -215,7 +215,7 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 
 	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed:
 		if snap.Status == aix.SnapshotStatusCompleted && snap.FinishReason.CarriesResult() {
-			if refusal := a.requireFollowUpInstructions(string(aix.SnapshotStatusCompleted), in); refusal != nil {
+			if refusal := a.requireFollowUpInstructions(st, string(aix.SnapshotStatusCompleted), in); refusal != nil {
 				return *refusal, nil
 			}
 		}
@@ -259,11 +259,14 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 // completed task. An empty input re-attempts the last committed turn, which
 // is the right retry for a run that stopped short and pure duplicate work for
 // one that finished; the refusal names the fix and returns the slot, since
-// the corrected call is a real run that can succeed.
-func (a *Agents) requireFollowUpInstructions(settled string, in resumeInput) *delegationResult {
+// the corrected call is a real run that can succeed. The release happens
+// here, next to the refusal it belongs to, so every gate call site inherits
+// the refund instead of each having to remember it.
+func (a *Agents) requireFollowUpInstructions(st *agentsState, settled string, in resumeInput) *delegationResult {
 	if settled != string(aix.SnapshotStatusCompleted) || in.Instructions != "" {
 		return nil
 	}
+	a.releaseDelegation(st)
 	return &delegationResult{Response: fmt.Sprintf(
 		"Task %q already completed. To follow up in the sub-agent's session, call this tool again with instructions; re-running it without instructions would only repeat the finished work.", in.TaskID)}
 }
@@ -296,6 +299,9 @@ func (a *Agents) resumeFromParent(ctx context.Context, ref aix.AgentRef, st *age
 			"Error: task %q kept its progress in snapshot %q, which could not be read (%v). Try again later.", in.TaskID, parentID, err)}, nil
 	}
 	if parent.Status == aix.SnapshotStatusCompleted && parent.FinishReason.CarriesResult() && in.Instructions == "" {
+		// Same refund reason as requireFollowUpInstructions: the corrected
+		// call with instructions is a real run that can succeed.
+		a.releaseDelegation(st)
 		return delegationResult{Response: fmt.Sprintf(
 			"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)}, nil
 	}
