@@ -90,7 +90,7 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Serving store-backed and stateless agents over HTTP |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop (HITL): a tool that pauses for approval and resumes with the answer |
 | [basic‑tool‑interrupts‑exp](samples/basic-tool-interrupts-exp/main.go) | The same HITL program on the in-preview tools API, so the diff between the two is the API |
-| [basic‑middleware](samples/basic-middleware) | Model middleware, one program each: [retry-fallback](samples/basic-middleware/retry-fallback/main.go) composes `Retry` and `Fallback` into a cascade that survives a dead model, [filesystem](samples/basic-middleware/filesystem) gives the model file access scoped to a single directory, and [skills](samples/basic-middleware/skills) loads `SKILL.md` personas on demand |
+| [basic‑middleware](samples/basic-middleware) | Model middleware, one program each: [retry-fallback](samples/basic-middleware/retry-fallback/main.go) composes `Retry` and `Fallback` into a cascade that survives a dead model, [filesystem](samples/basic-middleware/filesystem) gives the model file access scoped to a single directory, [skills](samples/basic-middleware/skills) loads `SKILL.md` personas on demand, and [context-compression](samples/basic-middleware/context-compression) keeps a verbose research loop inside a token budget without losing the visible history |
 | [basic‑errors](samples/basic-errors/main.go) | Classifying failures with sentinels and recovering with `errors.Is` |
 | [basic‑durable‑streaming‑exp](samples/basic-durable-streaming-exp/main.go) | Reconnectable streams with replay, on the in-preview `core/x/streaming` API |
 
@@ -846,6 +846,7 @@ The `middleware` plugin also ships with:
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
+- [`ContextCompression`](samples/basic-middleware/context-compression) *(preview, in `plugins/middleware/exp`)* — compresses the model's view of long conversations (tool response dedupe and truncation, LLM summarization of older turns) while the caller-visible history stays complete, with compaction recorded as message metadata.
 
 [See the retry + fallback sample](samples/basic-middleware/retry-fallback/main.go) for a full composition.
 

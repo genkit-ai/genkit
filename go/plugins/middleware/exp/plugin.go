@@ -14,10 +14,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package exp provides experimental middleware for the agent APIs in
-// [github.com/firebase/genkit/go/ai/exp]: [Agents] for sub-agent delegation and
-// [Artifacts] for session artifact access. These middlewares are experimental
-// and may change in any minor release, tracking the agent APIs they build on.
+// Package exp provides experimental middleware: [Agents] for sub-agent
+// delegation and [Artifacts] for session artifact access (both building on
+// the agent APIs in [github.com/firebase/genkit/go/ai/exp]), and
+// [ContextCompression] for keeping long conversations inside a context
+// budget. These middlewares are experimental and may change in any minor
+// release.
 package exp
 
 import (
@@ -31,10 +33,11 @@ import (
 // registered middleware names (e.g. genkit-middleware-exp/agents).
 const provider = "genkit-middleware-exp"
 
-// Middleware provides the experimental agent middleware ([Agents], [Artifacts])
-// as a Genkit plugin. Register it with [genkit.WithPlugins] during
-// [genkit.Init] to make them resolvable by name (e.g. for the Dev UI). Using
-// them directly via [ai.WithUse] does not require the plugin.
+// Middleware provides the experimental middleware ([Agents], [Artifacts],
+// [ContextCompression]) as a Genkit plugin. Register it with
+// [genkit.WithPlugins] during [genkit.Init] to make them resolvable by name
+// (e.g. for the Dev UI). Using them directly via [ai.WithUse] does not
+// require the plugin.
 type Middleware struct{}
 
 func (p *Middleware) Name() string { return provider }
@@ -45,5 +48,6 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 	return []*ai.MiddlewareDesc{
 		ai.NewMiddleware("Delegate tasks to registered sub-agents via per-agent tools", Agents{}),
 		ai.NewMiddleware("Provide read/write tools for session artifacts", Artifacts{}),
+		ai.NewMiddleware("Compress the model's view of long conversations while preserving the full history", ContextCompression{}),
 	}, nil
 }

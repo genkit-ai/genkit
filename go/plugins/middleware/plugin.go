@@ -25,8 +25,9 @@ import (
 
 const provider = "genkit-middleware"
 
-// Middleware provides the built-in middleware (Retry, Fallback, ToolApproval)
-// as a Genkit plugin. Register it with [genkit.WithPlugins] during [genkit.Init].
+// Middleware provides the built-in middleware (Retry, Fallback, ToolApproval,
+// Skills, Filesystem) as a Genkit plugin. Register it with
+// [genkit.WithPlugins] during [genkit.Init].
 type Middleware struct{}
 
 func (p *Middleware) Name() string { return provider }
