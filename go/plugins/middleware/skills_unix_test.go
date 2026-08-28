@@ -89,7 +89,7 @@ func TestSkillsResourceReadRefusesFifo(t *testing.T) {
 	}
 
 	// The listing must not offer it either.
-	if got := listSkillResources(py, SkillResourceToolName); strings.Contains(got, "pipe") {
+	if got := listSkillResources(ctx, py, SkillResourceToolName); strings.Contains(got, "pipe") {
 		t.Errorf("the resource listing advertises a FIFO: %q", got)
 	}
 }
