@@ -43,7 +43,7 @@ const DefaultVersion = "v0.9"
 // emitted envelopes. [Config.Version] is validated against it so a typo cannot
 // stamp a version the renderer will reject at runtime. Matches the JS plugin's
 // SUPPORTED_VERSIONS.
-var SupportedVersions = []string{"v0.9"}
+var SupportedVersions = []string{"v0.9", "v0.9.1"}
 
 // supportedVersions is SupportedVersions as a set for O(1) validation.
 var supportedVersions = func() map[string]bool {

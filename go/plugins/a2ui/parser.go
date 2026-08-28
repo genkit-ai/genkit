@@ -45,7 +45,7 @@ const (
 // line, and the streaming parser must still catch it. The required trailing
 // newline guards against a false positive from prose that merely mentions the
 // fence.
-var openFenceRE = regexp.MustCompile("(?i)```[ \t]*a2ui[ \t]*\r?\n")
+var openFenceRE = regexp.MustCompile("(?i)```a2ui[ \t]*\r?\n")
 
 // partialOpenFenceRE matches, at the very end of the buffer, the longest suffix
 // that could still be completing an opening fence on the next chunk: 1-3

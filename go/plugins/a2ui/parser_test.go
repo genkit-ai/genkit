@@ -424,6 +424,56 @@ func TestParserSplitRenderRootInLaterList(t *testing.T) {
 	}
 }
 
+// Prose that merely mentions the fence mid-sentence must not open a block. A2UI
+// Text "may use inline Markdown", so a model can write "I emit an ```a2ui block
+// like this"; there the a2ui tag is followed by more text on the same line, not
+// a newline, so the required trailing newline keeps it prose. This also guards
+// against a fence with stray spaces between the backticks and the tag
+// ("``` a2ui\n") being mistaken for an opening fence.
+func TestParserInlineFenceMentionStaysProse(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "To render UI I emit an ```a2ui fenced block like this."
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushed, _ := p.flush()
+	prose, batches := collect(append(segs, flushed...))
+	if len(batches) != 0 {
+		t.Fatalf("got %d batches, want 0 (inline mention must stay prose)", len(batches))
+	}
+	if !strings.Contains(prose, "```a2ui fenced block") {
+		t.Errorf("prose = %q, want the inline fence mention preserved", prose)
+	}
+}
+
+// A fence with spaces between the backticks and the tag ("``` a2ui\n") is NOT a
+// valid opening fence: the tag must immediately follow the backticks (mirroring
+// the JS OPEN_FENCE_RE). Such text stays prose.
+func TestParserSpacedFenceTagNotOpened(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "``` a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"}}]` +
+		"\n```"
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushed, _ := p.flush()
+	_, batches := collect(append(segs, flushed...))
+	if len(batches) != 0 {
+		t.Errorf("got %d batches, want 0 (spaced fence tag must not open a block)", len(batches))
+	}
+}
+
 // A large block delivered in many small deltas parses correctly (also exercises
 // the incremental in-block scan cursor).
 func TestParserLargeBlockManyDeltas(t *testing.T) {
