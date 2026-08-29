@@ -17,6 +17,17 @@
 import { McpServerConfig } from '../client/client.js';
 import type { StdioServerParameters, Transport } from '../client/index.js';
 
+function mergeHeaders(
+  requestHeaders: HeadersInit | undefined,
+  configHeaders: HeadersInit
+): Record<string, string> {
+  const headers = new Headers(requestHeaders);
+  new Headers(configHeaders).forEach((value, key) => headers.set(key, value));
+  const merged: Record<string, string> = {};
+  headers.forEach((value, key) => (merged[key] = value));
+  return merged;
+}
+
 /**
  * Creates an MCP transport instance based on the provided server configuration.
  * It supports creating SSE, Stdio, or using a pre-configured custom transport.
@@ -39,13 +50,19 @@ export async function transportFrom(
   }
   // Handle SSE config
   if ('url' in config && config.url) {
-    const { url, ...httpConfig } = config;
+    const { headers, url, ...httpConfig } = config;
     const { StreamableHTTPClientTransport } = await import(
       '@modelcontextprotocol/sdk/client/streamableHttp.js'
     );
     return {
       transport: new StreamableHTTPClientTransport(new URL(url), {
         ...httpConfig,
+        requestInit: headers
+          ? {
+              ...httpConfig.requestInit,
+              headers: mergeHeaders(httpConfig.requestInit?.headers, headers),
+            }
+          : httpConfig.requestInit,
         sessionId,
       }),
       type: 'http',
