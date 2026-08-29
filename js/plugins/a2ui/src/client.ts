@@ -27,7 +27,7 @@
 
 import { remoteAgent } from 'genkit/beta/client';
 import { a2uiEnvelopesFromParts, a2uiPart } from './part.js';
-import type { A2uiClientAction, A2uiEnvelope } from './types.js';
+import type { A2uiClientAction, A2uiServerEnvelope } from './types.js';
 
 export { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from './part.js';
 export {
@@ -38,12 +38,14 @@ export {
   type A2uiComponent,
   type A2uiEnvelope,
   type A2uiPart,
+  type A2uiServerEnvelope,
+  type ActionEnvelope,
 } from './types.js';
 
 /** A single event yielded while streaming an A2UI agent turn. */
 export type A2uiStreamEvent =
   | { type: 'text'; text: string }
-  | { type: 'envelopes'; envelopes: A2uiEnvelope[] };
+  | { type: 'envelopes'; envelopes: A2uiServerEnvelope[] };
 
 /** Options for {@link streamA2uiAgent}. */
 export interface StreamA2uiAgentOptions {
@@ -62,7 +64,9 @@ export interface StreamA2uiAgentOptions {
 /** Normalizes a string message into a Genkit user message. */
 function toMessage(message: string | Record<string, unknown>) {
   if (typeof message === 'string') {
-    return { role: 'user', content: [{ text: message }] };
+    // `as const` keeps `role` as the literal `'user'` rather than widening to
+    // `string`, so the result is assignable to an agent input `message`.
+    return { role: 'user' as const, content: [{ text: message }] };
   }
   return message;
 }
@@ -134,7 +138,9 @@ export function actionToMessage(action: A2uiClientAction) {
       : '') +
     '.';
   return {
-    role: 'user',
+    // `as const` keeps `role` as the literal `'user'` rather than widening to
+    // `string`, so the result is assignable to an agent input `message`.
+    role: 'user' as const,
     content: [{ text: summary }, a2uiPart([{ action }])],
   };
 }
