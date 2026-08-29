@@ -143,7 +143,7 @@ export function startServer(
   port: number,
   host: string = DEFAULT_HOST
 ) {
-  const projectRuntime = detectRuntimeSync(manager.projectRoot);
+  const projectRuntime = detectRuntimeSync(manager.projectRoot) || 'unknown';
   let server: Server;
   const app = express();
 

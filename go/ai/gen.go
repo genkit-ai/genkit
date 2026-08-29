@@ -96,7 +96,7 @@ type GenerateActionOptions struct {
 	// Docs provides retrieved documents to be used as context for this generation.
 	Docs []*Document `json:"docs,omitempty"`
 	// MaxTurns is the maximum number of tool call iterations that can be performed
-	// in a single generate call. Defaults to 5.
+	// in a single generate call. Defaults to 50 in Go; other runtimes set their own.
 	MaxTurns int `json:"maxTurns,omitempty"`
 	// Messages contains the conversation history for multi-turn prompting when supported.
 	Messages []*Message `json:"messages,omitempty"`
@@ -457,7 +457,7 @@ type reasoningPart struct {
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
-	Reasoning string `json:"reasoning,omitempty"`
+	Reasoning string `json:"reasoning"`
 }
 
 // RerankerRequest represents a request to rerank documents based on relevance.

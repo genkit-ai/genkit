@@ -109,7 +109,6 @@ func DefineExploreFlow(g *genkit.Genkit) {
 				ai.WithModel(model),
 				ai.WithSystem("You are a helpful project analyst. Use the filesystem tools to explore the workspace before answering."),
 				ai.WithPrompt(input.Question),
-				ai.WithMaxTurns(20),
 				ai.WithUse(&middleware.Filesystem{RootDir: workspaceDir}),
 				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 					// Every tool turn streams as well, and those chunks carry no
@@ -143,7 +142,6 @@ func DefineEditFlow(g *genkit.Genkit) {
 						"Keep unrelated content unchanged.",
 				),
 				ai.WithPrompt("Apply the following change to the workspace and report what you did:\n\n%s", input.Instruction),
-				ai.WithMaxTurns(20),
 				ai.WithUse(&middleware.Filesystem{
 					RootDir:          workspaceDir,
 					AllowWriteAccess: true,
