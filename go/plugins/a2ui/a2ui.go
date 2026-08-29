@@ -430,33 +430,54 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 		surfaceID: surfaceID,
 	})
 	var newContent []*ai.Part
+
+	// flushHeld drains whatever the parser is still holding (a withheld prose
+	// tail, or an unterminated trailing block) and appends it. Called at every
+	// non-text boundary and once at the end.
+	flushHeld := func() error {
+		tail, err := parser.flush()
+		if err != nil {
+			return err
+		}
+		newContent = append(newContent, partsFromSegments(tail)...)
+		return nil
+	}
+
 	for _, part := range resp.Message.Content {
-		if part.IsText() {
-			// Push then flush per text part (matching the JS middleware) so a
-			// part's output lands in place, before any following non-text part.
-			// Flushing once after the whole loop would move text the parser held
-			// back from part N behind every later part: a tool-calling turn
-			// [Text("Checking the weather."), toolRequest] would otherwise come
-			// out as [Text("Checking the "), toolRequest, Text("weather.")],
-			// reordering recorded history and the messages replayed to the model
-			// next iteration. Per-part flush keeps ordering; the trade-off is
-			// that an a2ui block split across two adjacent text parts of the
-			// final message is not stitched back together, which does not happen
-			// in practice (the aggregator coalesces adjacent text).
-			pushed, err := parser.push(part.Text)
+		if part.IsText() && part.Text != "" {
+			// Push WITHOUT flushing between consecutive text parts so an a2ui
+			// block that spans several adjacent text parts is stitched back
+			// together. The model's final message is not guaranteed to coalesce
+			// adjacent text: the Gemini plugin, for instance, aggregates a turn
+			// into ~30 separate text parts (fence, JSON body split many ways,
+			// close fence, then a trailing empty-text part carrying the thought
+			// signature), so a per-part flush would reset the parser mid-block
+			// and leak the whole surface back out as raw prose. This mirrors the
+			// streaming path, which shares one parser across all chunks and
+			// flushes only once at the end.
+			segments, err := parser.push(part.Text)
 			if err != nil {
 				return nil, err
 			}
-			flushed, err := parser.flush()
-			if err != nil {
-				return nil, err
-			}
-			segments := append(pushed, flushed...)
 			newContent = append(newContent, partsForTextPart(part, segments)...)
 		} else {
+			// A non-text part (e.g. a toolRequest) or an empty-text part (e.g.
+			// the trailing thought-signature carrier) is a boundary: flush any
+			// held tail so it lands before this part, preserving order. This is
+			// what a tool-calling turn [Text("Checking the weather."),
+			// toolRequest] relies on so the prose is not reordered behind the
+			// toolRequest. Then carry the part through untouched so its metadata
+			// (thought signatures, content type) survives.
+			if err := flushHeld(); err != nil {
+				return nil, err
+			}
 			newContent = append(newContent, part)
 		}
 	}
+	if err := flushHeld(); err != nil {
+		return nil, err
+	}
+
 	newResp := *resp
 	msgCopy := resp.Message.Clone()
 	msgCopy.Content = newContent

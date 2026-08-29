@@ -133,6 +133,85 @@ func TestMiddlewareRewritesFinalMessage(t *testing.T) {
 	}
 }
 
+// The aggregated final message is not guaranteed to coalesce adjacent text: the
+// Gemini plugin splits a turn into many text parts (fence, JSON body split many
+// ways, close fence, then a trailing empty-text part carrying the thought
+// signature). transformResponse must stitch a block spanning several parts into
+// a single a2ui data part rather than flushing per part and leaking the whole
+// surface back out as raw prose.
+func TestMiddlewareRewritesFinalMessageSplitAcrossParts(t *testing.T) {
+	r := newTestRegistry(t)
+	catalog := BasicCatalog()
+	sig := "thought-sig-xyz"
+
+	// The fenced block, chopped into many adjacent text parts the way a
+	// streaming provider aggregates them, followed by an empty-text part that
+	// only carries a thought signature (as Gemini does).
+	parts := []*ai.Part{
+		ai.NewTextPart("Here you go:\n\n``"),
+		ai.NewTextPart("`a2ui\n[{\"createSurface\":{\"surfaceId\":\"SURFACE_ID\","),
+		ai.NewTextPart("\"catalogId\":\"" + catalog.ID + "\"}},"),
+		ai.NewTextPart("{\"updateComponents\":{\"surfaceId\":\"SURFACE_ID\","),
+		ai.NewTextPart("\"components\":[{\"id\":\"root\",\"component\":\"Text\","),
+		ai.NewTextPart("\"text\":\"hi\"}]}}]\n``"),
+		ai.NewTextPart("`"),
+	}
+	sigPart := ai.NewTextPart("")
+	sigPart.Metadata = map[string]any{"signature": sig}
+	parts = append(parts, sigPart)
+
+	m := ai.NewModel("test/split", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Request: req, Message: ai.NewMessage(ai.RoleModel, nil, parts...)}, nil
+	})
+	m.Register(r)
+
+	cfg := &Config{SurfaceID: "fixed-surface", Validate: ValidateStrict}
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("card please"), ai.WithUse(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The block spread over many parts must be stitched into exactly two
+	// envelopes on a single a2ui data part.
+	envs := EnvelopesFromParts(resp.Message.Content)
+	if len(envs) != 2 {
+		t.Fatalf("got %d envelopes, want 2; content=%v", len(envs), resp.Message.Content)
+	}
+	cs, _ := envs[0]["createSurface"].(map[string]any)
+	if cs["surfaceId"] != "fixed-surface" {
+		t.Errorf("surfaceId = %v, want fixed-surface", cs["surfaceId"])
+	}
+
+	// No text part should still contain the raw fence: the JSON must have been
+	// parsed out, not leaked back as prose.
+	for _, p := range resp.Message.Content {
+		if p.IsText() && strings.Contains(p.Text, "a2ui") {
+			t.Errorf("raw a2ui fence leaked into prose: %q", p.Text)
+		}
+	}
+
+	// The leading prose survives, and the trailing empty-text signature part is
+	// carried through untouched.
+	hasProse := false
+	hasSig := false
+	for _, p := range resp.Message.Content {
+		if p.IsText() && strings.Contains(p.Text, "Here you go:") {
+			hasProse = true
+		}
+		if p.Metadata != nil && p.Metadata["signature"] == sig {
+			hasSig = true
+		}
+	}
+	if !hasProse {
+		t.Error("expected the leading prose to be preserved as a text part")
+	}
+	if !hasSig {
+		t.Error("expected the trailing thought-signature part to survive")
+	}
+}
+
 func TestMiddlewareTransformsStream(t *testing.T) {
 	r := newTestRegistry(t)
 	catalog := BasicCatalog()

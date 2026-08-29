@@ -60,6 +60,7 @@ import (
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/a2ui"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -126,6 +127,9 @@ prose brief; put the substance in the UI. When asked about weather, call the
 getWeather tool, then render a nice Card/Column summarizing it (temperature,
 condition, humidity). Feel free to add a Button (e.g. "Refresh") when useful.`),
 			ai.WithTools(getWeather),
+			// Retry transient model failures (UNAVAILABLE, RESOURCE_EXHAUSTED,
+			// etc.) with exponential backoff before giving up.
+			ai.WithUse(&middleware.Retry{MaxRetries: 5}),
 			ai.WithUse(&a2ui.Config{}), // defaults to the bundled basic catalog
 		},
 		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
