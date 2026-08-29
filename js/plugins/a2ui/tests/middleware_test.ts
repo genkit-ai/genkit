@@ -245,6 +245,39 @@ describe('a2ui() middleware', () => {
     );
   });
 
+  it('transforms both message and candidates[0] when a response carries both', async () => {
+    // A response could carry a top-level `message` AND a `candidates` array at
+    // once (e.g. a prior middleware pre-populated `message` while keeping
+    // `candidates`). Both must be transformed so a consumer reading either sees
+    // the parsed a2ui part, never the raw fence text.
+    const mw = modelHook({ surfaceId: 'sfc' });
+    const res = await mw(req('sys'), undefined, async () => ({
+      message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
+      candidates: [
+        {
+          index: 0,
+          finishReason: 'stop',
+          message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
+        },
+      ],
+    }));
+
+    for (const content of [
+      (res as any).message.content,
+      (res as any).candidates[0].message.content,
+    ]) {
+      const envelopes = a2uiEnvelopesFromParts(content);
+      assert.strictEqual(envelopes.length, 2);
+      assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+      assert.ok(
+        !content.some(
+          (p: any) => typeof p.text === 'string' && p.text.includes('```')
+        ),
+        'raw fence must not leak into either shape'
+      );
+    }
+  });
+
   it('leaves plain prose responses untouched (no a2ui parts)', async () => {
     const mw = modelHook({});
     const res = await mw(req('sys'), undefined, async () => ({

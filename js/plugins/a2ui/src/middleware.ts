@@ -378,23 +378,25 @@ function transformResponse(
 
   const newMessage = { ...message, content: newContent };
 
-  // Write the transformed message back to the same shape the model used. A
-  // model that returned a top-level `message` gets it back there; one that
-  // returned the candidates shape (e.g. google-genai) gets candidate[0]
-  // rewritten, so consumers reading `candidates` (not just the collapsed
-  // GenerateResponse.message getter) see the a2ui parts too. Only candidate 0
-  // is transformed: the framework collapses to `candidates[0].message` and
-  // candidateCount defaults to 1, and each candidate would otherwise consume
-  // the shared surface-id replay state.
-  if (response.message) {
-    return { ...response, message: newMessage };
+  // Write the transformed message back to WHICHEVER shape(s) the response
+  // carries, so no consumer sees the raw prose. Real providers (e.g.
+  // google-genai) use the candidates shape, but a response could carry a
+  // top-level `message` and a `candidates` array at once (e.g. a prior
+  // middleware pre-populated `message` while keeping `candidates`); updating
+  // only one would leave the other holding the untransformed fence text. Only
+  // candidate 0 is transformed: the framework collapses to
+  // `candidates[0].message` and candidateCount defaults to 1, and each
+  // candidate would otherwise consume the shared surface-id replay state.
+  const result = { ...response };
+  if (result.message) {
+    result.message = newMessage;
   }
-  return {
-    ...response,
-    candidates: response.candidates!.map((c, i) =>
+  if (result.candidates?.[0]) {
+    result.candidates = result.candidates.map((c, i) =>
       i === 0 ? { ...c, message: newMessage } : c
-    ),
-  };
+    );
+  }
+  return result;
 }
 
 /**
