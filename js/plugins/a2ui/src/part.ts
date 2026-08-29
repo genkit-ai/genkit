@@ -15,7 +15,7 @@
  */
 
 /**
- * Helpers for working with the canonical "a2ui part" — a Genkit `data` part
+ * Helpers for working with the canonical "a2ui part" - a Genkit `data` part
  * whose `data` is an object `{ envelopes }` wrapping an array of A2UI envelopes,
  * tagged with {@link A2UI_MIME_TYPE}.
  *
@@ -28,7 +28,16 @@
  */
 
 import { type Part } from 'genkit';
-import { A2UI_MIME_TYPE, type A2uiEnvelope, type A2uiPart } from './types.js';
+import {
+  A2UI_MIME_TYPE,
+  type A2uiEnvelope,
+  type A2uiPart,
+  type A2uiServerEnvelope,
+  type CreateSurfaceEnvelope,
+  type DeleteSurfaceEnvelope,
+  type UpdateComponentsEnvelope,
+  type UpdateDataModelEnvelope,
+} from './types.js';
 
 /** A minimal structural view of a Genkit part for these helpers. */
 interface PartLike {
@@ -76,14 +85,62 @@ export function isA2uiPart(part: unknown): part is A2uiPart {
  * be `undefined`); a nullish list is treated as empty.
  *
  * Returns `[]` for content that carries no a2ui parts (e.g. plain prose).
+ *
+ * The result is typed as {@link A2uiServerEnvelope}[] - the surfaces the agent
+ * renders - because that is all a render stream carries. Any inbound
+ * {@link ActionEnvelope} (a user action echoed in history) is filtered out, so
+ * the returned envelopes can be handed straight to a renderer's message
+ * processor without a cast.
  */
 export function a2uiEnvelopesFromParts(
   parts: readonly Part[] | null | undefined
-): A2uiEnvelope[] {
+): A2uiServerEnvelope[] {
   if (!Array.isArray(parts)) return [];
-  const out: A2uiEnvelope[] = [];
+  const out: A2uiServerEnvelope[] = [];
   for (const part of parts) {
-    if (isA2uiPart(part)) out.push(...part.data.envelopes);
+    if (!isA2uiPart(part)) continue;
+    for (const env of part.data.envelopes) {
+      // Keep only server-to-client surface envelopes. This is a positive check,
+      // so inbound action envelopes (a user action echoed in history) and any
+      // null / non-object / array / arbitrary-object garbage from malformed
+      // model output are all excluded, keeping the `A2uiServerEnvelope[]`
+      // return type honest.
+      if (isServerEnvelope(env)) out.push(env);
+    }
   }
   return out;
+}
+
+/**
+ * The discriminant key each server-to-client surface envelope carries (every
+ * variant is `{ version } & { <key>: ... }`). Deriving this from the union keeps
+ * {@link SERVER_ENVELOPE_KEYS} honest: a typo or a stale key stops compiling.
+ */
+type ServerEnvelopeKey =
+  | Exclude<keyof CreateSurfaceEnvelope, 'version'>
+  | Exclude<keyof UpdateComponentsEnvelope, 'version'>
+  | Exclude<keyof UpdateDataModelEnvelope, 'version'>
+  | Exclude<keyof DeleteSurfaceEnvelope, 'version'>;
+
+/**
+ * The discriminant keys of the server-to-client surface envelopes. The
+ * `satisfies` guard validates every entry against {@link ServerEnvelopeKey}, so
+ * an invalid or misspelled key is a compile error rather than a silently dropped
+ * envelope at runtime.
+ */
+const SERVER_ENVELOPE_KEYS = [
+  'createSurface',
+  'updateComponents',
+  'updateDataModel',
+  'deleteSurface',
+] as const satisfies readonly ServerEnvelopeKey[];
+
+/**
+ * Narrows a value to a server-to-client surface envelope by checking for one of
+ * the known surface discriminant keys. Arrays are excluded explicitly since
+ * `typeof [] === 'object'`.
+ */
+function isServerEnvelope(env: unknown): env is A2uiServerEnvelope {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return false;
+  return SERVER_ENVELOPE_KEYS.some((key) => key in env);
 }

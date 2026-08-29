@@ -238,6 +238,260 @@ describe('a2ui() middleware', () => {
     assert.match(joined, /Tokyo/);
   });
 
+  it('replays a prior assistant surface as a fenced a2ui block, not a sentinel', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              { text: 'Here you go:' },
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                      version: 'v0.9',
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'hi' },
+                        ],
+                      },
+                      version: 'v0.9',
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'thanks' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    // The a2ui part is gone (the model converter never sees the mime type)...
+    assert.ok(!modelMsg.content.some((p: any) => isA2uiPart(p)));
+    const joined = modelMsg.content.map((p: any) => p.text).join('\n');
+    // ...replaced by the canonical fenced block the model originally emitted,
+    // NOT the old `[rendered UI surface]` sentinel that poisoned the model.
+    assert.doesNotMatch(joined, /\[rendered UI surface\]/);
+    assert.doesNotMatch(joined, /\[UI surface/);
+    assert.match(joined, /```a2ui/);
+    assert.match(joined, /createSurface/);
+    assert.match(joined, /updateComponents/);
+    assert.match(joined, /Here you go:/);
+
+    // The reconstructed block round-trips: parsing it yields the envelopes.
+    const block = joined.slice(
+      joined.indexOf('```a2ui') + '```a2ui'.length,
+      joined.lastIndexOf('```')
+    );
+    const decoded = JSON.parse(block.trim());
+    assert.strictEqual(decoded.length, 2);
+    assert.ok(decoded[0].createSurface);
+
+    // The real surface id is kept verbatim (NOT scrubbed to a placeholder), so
+    // a replayed action `[UI action ... on surface s1]` can still be correlated
+    // with this surface. Reuse is prevented at the parser instead: every
+    // `createSurface` mints a fresh id (see the distinct-id test).
+    assert.strictEqual(decoded[0].createSurface.surfaceId, 's1');
+    assert.strictEqual(decoded[1].updateComponents.surfaceId, 's1');
+  });
+
+  it('drops a message emptied by sanitizing instead of sending empty content', async () => {
+    // A message whose only part is an a2ui part with an empty (or all-
+    // unrecognized) envelope array summarizes to nothing. Sending it downstream
+    // with `content: []` makes providers like Gemini/Vertex reject the request,
+    // so the middleware must drop the whole message instead.
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: { envelopes: [] },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'hi' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+
+    // The emptied model message is gone entirely; no message has empty content.
+    assert.ok(
+      !seen.messages.some(
+        (m: any) => Array.isArray(m.content) && m.content.length === 0
+      )
+    );
+    // The still-meaningful user message survives.
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    assert.ok(userMsg);
+    assert.strictEqual(userMsg.content[0].text, 'hi');
+  });
+
+  it('a new render never reuses a surface id copied from history', async () => {
+    // Regression for the "new answer overwrites the prior surface in place"
+    // bug: history keeps real ids (for action correlation), so the model can
+    // copy an old id into a fresh `createSurface`. The parser must still mint a
+    // distinct id for that new render.
+    const mw = modelHook({ surfaceId: 'sfc-new' });
+    let seen: any;
+    const res = await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'old' },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [{ action: { name: 'refresh', surfaceId: 's1' } }],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        // The model copies the prior surface's real id (`s1`) into a brand-new
+        // createSurface - exactly what it does after seeing `s1` in history.
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                text: `Here you go:
+\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "s1", "catalogId": "${basicCatalog.id}" } },
+  { "updateComponents": { "surfaceId": "s1", "components": [
+    { "id": "root", "component": "Text", "text": "new" }
+  ] } }
+]
+\`\`\`
+`,
+              },
+            ],
+          },
+        };
+      }
+    );
+
+    // The new render is minted onto the fixed id `sfc-new`, NOT the copied `s1`,
+    // so it can't overwrite the prior surface.
+    const envelopes = a2uiEnvelopesFromParts((res as any).message.content);
+    const create = envelopes.find((e: any) => e.createSurface) as any;
+    const update = envelopes.find((e: any) => e.updateComponents) as any;
+    assert.strictEqual(create.createSurface.surfaceId, 'sfc-new');
+    assert.strictEqual(update.updateComponents.surfaceId, 'sfc-new');
+
+    // Meanwhile, the sanitized history the model saw kept the real id on both
+    // the reconstructed surface block and the action line (correlation).
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    const modelText = modelMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(modelText, /"surfaceId"\s*:\s*"s1"/);
+
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const userText = userMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(userText, /on surface s1/);
+  });
+
+  it('groups consecutive surface envelopes into one block but splits around an action', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    { updateComponents: { surfaceId: 's1', components: [] } },
+                    { action: { name: 'refresh', surfaceId: 's1' } },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const joined = userMsg.content.map((p: any) => p.text).join('\n');
+    // Exactly one fenced block (the two surface envelopes grouped together)...
+    assert.strictEqual((joined.match(/```a2ui/g) ?? []).length, 1);
+    // ...plus the action rendered as a text summary after it.
+    assert.match(joined, /UI action "refresh"/);
+    // The block precedes the action line (source order preserved).
+    assert.ok(joined.indexOf('```a2ui') < joined.indexOf('UI action'));
+  });
+
   it('mints the same surface id in the stream and the final message', async () => {
     // Default surface-id policy (random UUID). The stream parse and the final
     // parse must agree on the id for the same surface.
