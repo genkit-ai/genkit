@@ -199,14 +199,23 @@ class SpecTest(SpecModel):
     name: str
     description: str | None = None
     agent: str
+    # Capabilities the test depends on. A test naming a capability outside
+    # SUPPORTED_REQUIRES is skipped, so the shared spec can carry cases for
+    # features this runtime has not adopted yet; one outside the suite's own
+    # capabilities list is a typo and fails.
+    requires: list[str] | None = None
     steps: list[SpecStep]
 
 
 class SpecSuite(SpecModel):
+    # Every name a test may put in `requires`. It is the spec's own registry,
+    # so a misspelled capability fails here rather than skipping the test in
+    # every SDK at once.
+    capabilities: list[str] = []
     tests: list[SpecTest]
 
 
-def load_spec() -> list[SpecTest]:
+def load_spec() -> SpecSuite:
     path = spec_path()
     with path.open() as f:
         raw = yaml.safe_load(f)
@@ -216,10 +225,12 @@ def load_spec() -> list[SpecTest]:
         raise AssertionError(f'agent.yaml: {e}') from e
     if not suite.tests:
         raise AssertionError('agent.yaml contains no tests')
-    return suite.tests
+    return suite
 
 
-SPEC_TESTS = load_spec()
+SPEC_SUITE = load_spec()
+SPEC_TESTS = SPEC_SUITE.tests
+KNOWN_REQUIRES: frozenset[str] = frozenset(SPEC_SUITE.capabilities)
 
 
 # ---------------------------------------------------------------------------
@@ -836,9 +847,20 @@ async def execute_wait_until_completed(*, agent: Agent, step: WaitUntilCompleted
 # ---------------------------------------------------------------------------
 
 
+# Gated spec capabilities this runtime implements; see SpecTest.requires.
+SUPPORTED_REQUIRES: frozenset[str] = frozenset()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('spec_test', SPEC_TESTS, ids=[t.name for t in SPEC_TESTS])
 async def test_agent_conformance(spec_test: SpecTest) -> None:
+    unknown = [r for r in (spec_test.requires or []) if r not in KNOWN_REQUIRES]
+    assert not unknown, (
+        f"unknown capabilities: {', '.join(unknown)}; add them to the spec's capabilities list or fix the spelling"
+    )
+    unsupported = [r for r in (spec_test.requires or []) if r not in SUPPORTED_REQUIRES]
+    if unsupported:
+        pytest.skip(f'requires unsupported capabilities: {", ".join(unsupported)}')
     harness = setup_harness()
     agent = harness.agents.get(spec_test.agent)
     assert agent is not None, f'Unknown agent {spec_test.agent!r} in test {spec_test.name!r}'

@@ -27,20 +27,34 @@
  * to the agent as the next turn.
  */
 
-import { basicCatalog, Context } from '@a2ui/lit/v0_9';
+import { A2uiSurface, basicCatalog, Context } from '@a2ui/lit/v0_9';
 // Importing the v0_9 entry registers <a2ui-surface> and all basic components.
 import '@a2ui/lit/v0_9';
 import { renderMarkdown } from '@a2ui/markdown-it';
-import { MessageProcessor } from '@a2ui/web_core/v0_9';
+import { MessageProcessor, type A2uiMessage } from '@a2ui/web_core/v0_9';
 import { injectBasicCatalogStyles } from '@a2ui/web_core/v0_9/basic_catalog';
 import {
   a2uiEnvelopesFromParts,
   actionToMessage,
   type A2uiClientAction,
+  type A2uiServerEnvelope,
 } from '@genkit-ai/a2ui/client';
 import { ContextProvider } from '@lit/context';
-import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import {
+  remoteAgent,
+  type AgentChat,
+  type AgentInput,
+} from 'genkit/beta/client';
 import './style.css';
+
+// Compile-time guard: the plugin's `A2uiServerEnvelope` (what
+// `a2uiEnvelopesFromParts` returns) must stay assignable to web_core's
+// `A2uiMessage`, so envelopes can be handed to `processor.processMessages`
+// without a cast. This holds only while the plugin's `SUPPORTED_VERSIONS`
+// matches web_core's version enum; if they diverge, this line fails the build
+// (rather than silently forcing consumers back to `as any`).
+const _a2uiMessageCompat: A2uiMessage = null as unknown as A2uiServerEnvelope;
+void _a2uiMessageCompat;
 
 // Inject the basic catalog's default styles into the document.
 injectBasicCatalogStyles();
@@ -55,12 +69,10 @@ injectBasicCatalogStyles();
 // stray selectable blank line *and* inflates the Text box, which throws off the
 // `align-items: center` vertical alignment of icons next to titles/labels in
 // Rows and Buttons. Trim the output so every Text is exactly its visible size.
-const renderMarkdownTrimmed = ((value: string, options: unknown) =>
-  renderMarkdown(value, options as any).then((html) =>
-    html.trim()
-  )) as typeof renderMarkdown;
+const renderMarkdownTrimmed: typeof renderMarkdown = (value, options) =>
+  renderMarkdown(value, options).then((html) => html.trim());
 
-new ContextProvider(document.body as any, {
+new ContextProvider(document.body, {
   context: Context.markdown,
   initialValue: renderMarkdownTrimmed,
 });
@@ -96,16 +108,19 @@ const sendBtn = document.getElementById('send') as HTMLButtonElement;
 
 /** Shared message processor + a place to route surface actions back to the agent. */
 const processor = new MessageProcessor([basicCatalog], (action) => {
-  onSurfaceAction(action as unknown as A2uiClientAction);
+  onSurfaceAction(action);
 });
 
 // When a surface is (re)created, drop its renderer into the newest agent bubble.
 let pendingSurfaceSlot: HTMLDivElement | null = null;
-processor.onSurfaceCreated((surface: any) => {
+processor.onSurfaceCreated((surface) => {
   const slot = pendingSurfaceSlot ?? newAgentBubble();
   pendingSurfaceSlot = null;
   slot.querySelector('a2ui-surface')?.remove();
-  const el = document.createElement('a2ui-surface') as any;
+  // `createElement` returns a plain `HTMLElement` (the v0_9 tag isn't in the
+  // DOM's `HTMLElementTagNameMap`), so narrow to the renderer's element class
+  // to get a typed `surface` property.
+  const el = document.createElement('a2ui-surface') as A2uiSurface;
   el.surface = surface;
   slot.appendChild(el);
   scrollToBottom();
@@ -140,7 +155,7 @@ async function send(text: string) {
 }
 
 /** Runs a single agent turn, streaming prose + surfaces into the log. */
-async function runTurn(message: string | Record<string, unknown>) {
+async function runTurn(message: string | AgentInput) {
   const agentBubble = newAgentBubble();
   const prose = document.createElement('div');
   prose.className = 'prose';
@@ -149,7 +164,7 @@ async function runTurn(message: string | Record<string, unknown>) {
   pendingSurfaceSlot = agentBubble;
 
   try {
-    const turn = chat.sendStream(message as any);
+    const turn = chat.sendStream(message);
     for await (const chunk of turn.stream) {
       if (chunk.text) {
         prose.textContent += chunk.text;
@@ -176,10 +191,7 @@ async function onSurfaceAction(action: A2uiClientAction) {
   label.textContent = `▶ ${action.name}`;
   setBusy(true);
   // Wrap the action's message as an AgentInput (`{ message }`).
-  await runTurn({ message: actionToMessage(action) } as Record<
-    string,
-    unknown
-  >);
+  await runTurn({ message: actionToMessage(action) });
   setBusy(false);
 }
 
