@@ -184,6 +184,67 @@ describe('a2ui() middleware', () => {
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
   });
 
+  it('stitches a block split across many final-message text parts', async () => {
+    // The aggregated final message is not guaranteed to coalesce adjacent text:
+    // the Gemini plugin splits a turn into many text parts (fence, JSON body
+    // split many ways, close fence, then a trailing empty-text part carrying
+    // the thought signature). transformResponse must stitch a block spanning
+    // several parts into a single a2ui data part rather than flushing per part
+    // and leaking the whole surface back out as raw prose.
+    const mw = modelHook({ surfaceId: 'sfc' });
+
+    const content = [
+      { text: 'Here is the weather:\n\n``' },
+      { text: `\`a2ui\n[{"createSurface":{"surfaceId":"SURFACE_ID",` },
+      { text: `"catalogId":"${basicCatalog.id}"}},` },
+      { text: `{"updateComponents":{"surfaceId":"SURFACE_ID",` },
+      { text: `"components":[{"id":"root","component":"Text",` },
+      { text: `"text":"hi"}]}}]\n\`\`` },
+      { text: '`' },
+      // A trailing empty-text part that only carries a thought signature.
+      { text: '', metadata: { signature: 'thought-sig-xyz' } },
+    ];
+
+    // Return the *candidates* shape that real models (e.g. google-genai) emit,
+    // not a pre-collapsed top-level `message`. The middleware must transform
+    // candidates[0].message, otherwise it silently passes the raw fence text
+    // through (the bug this guards against).
+    const res = await mw(req('sys'), undefined, async () => ({
+      candidates: [
+        { index: 0, finishReason: 'stop', message: { role: 'model', content } },
+      ],
+    }));
+    const out = (res as any).candidates[0].message.content;
+
+    // The block spread over many parts is stitched into exactly two envelopes
+    // on a single a2ui data part.
+    const envelopes = a2uiEnvelopesFromParts(out);
+    assert.strictEqual(envelopes.length, 2);
+    assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+
+    // No text part should still contain the raw fence: the JSON must have been
+    // parsed out, not leaked back as prose.
+    assert.ok(
+      !out.some(
+        (p: any) => typeof p.text === 'string' && p.text.includes('a2ui')
+      )
+    );
+
+    // The leading prose survives, and the trailing signature part is carried
+    // through untouched.
+    assert.ok(
+      out.some(
+        (p: any) =>
+          typeof p.text === 'string' && p.text.includes('Here is the weather')
+      ),
+      'expected the leading prose to be preserved'
+    );
+    assert.ok(
+      out.some((p: any) => p.metadata?.signature === 'thought-sig-xyz'),
+      'expected the trailing thought-signature part to survive'
+    );
+  });
+
   it('leaves plain prose responses untouched (no a2ui parts)', async () => {
     const mw = modelHook({});
     const res = await mw(req('sys'), undefined, async () => ({
@@ -674,5 +735,57 @@ describe('a2ui() end-to-end via ai.generate', () => {
     const envelopes = a2uiEnvelopesFromParts(res.message!.content);
     assert.strictEqual(envelopes.length, 2);
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+  });
+
+  it('rewrites a candidates-shaped model response (real provider shape)', async () => {
+    // Real providers (e.g. google-genai) return the `candidates` shape, not a
+    // pre-collapsed top-level `message`, and split the block across many text
+    // parts. This exercises the full ai.generate path end-to-end, catching the
+    // regression where transformResponse only read `response.message` and thus
+    // left the raw fence text in the persisted message.
+    const ai = genkit({});
+    const model = ai.defineModel({ name: 'echo-candidates' }, async () => {
+      return {
+        candidates: [
+          {
+            index: 0,
+            finishReason: 'stop',
+            message: {
+              role: 'model',
+              content: [
+                { text: 'Here is the weather:\n\n``' },
+                {
+                  text: `\`a2ui\n[{"createSurface":{"surfaceId":"SURFACE_ID",`,
+                },
+                { text: `"catalogId":"${basicCatalog.id}"}},` },
+                { text: `{"updateComponents":{"surfaceId":"SURFACE_ID",` },
+                { text: `"components":[{"id":"root","component":"Text",` },
+                { text: `"text":"hi"}]}}]\n\`\`` },
+                { text: '`' },
+              ],
+            },
+          },
+        ],
+        finishReason: 'stop',
+      };
+    });
+
+    const res = await ai.generate({
+      model,
+      prompt: 'weather please',
+      use: [a2ui({ surfaceId: 'sfc' })],
+    });
+
+    // The final (collapsed) message carries the parsed a2ui data part, not raw
+    // fence text.
+    const envelopes = a2uiEnvelopesFromParts(res.message!.content);
+    assert.strictEqual(envelopes.length, 2);
+    assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+    assert.ok(
+      !res
+        .message!.content.filter((p: any) => typeof p.text === 'string')
+        .some((p: any) => p.text.includes('a2ui')),
+      'raw a2ui fence must not leak into prose'
+    );
   });
 });

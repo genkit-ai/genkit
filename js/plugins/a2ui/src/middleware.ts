@@ -331,26 +331,69 @@ function transformResponse(
     surfaceId: () => string;
   }
 ): GenerateResponseData {
-  const message = response.message;
+  // Real models (e.g. google-genai) return the candidates shape, not a
+  // top-level `message`; only the GenerateResponse constructor later collapses
+  // `message ?? candidates[0].message`. Read from whichever the model used so
+  // the transform runs on the real path, not just when a caller hands us a
+  // pre-collapsed `message`.
+  const message = response.message ?? response.candidates?.[0]?.message;
   if (!message?.content) return response;
 
   const parser = new A2uiStreamParser(opts);
+
   const newContent: Part[] = [];
+
+  // Drains whatever the parser is still holding (a withheld prose tail, or an
+  // unterminated trailing block) and appends it. Called at every non-text
+  // boundary and once at the end.
+  const flushHeld = () => {
+    const tail = parser.flush();
+    newContent.push(...partsFromParse(tail));
+  };
+
   for (const part of message.content) {
-    if (isTextPart(part)) {
-      // Combine the streamed-push and final-flush segments so ordering (prose
-      // before/after a block) is preserved in the aggregated message too.
-      const pushed = parser.push(part.text);
-      const flushed = parser.flush();
-      const segments = [...pushed.segments, ...flushed.segments];
-      newContent.push(...partsFromParse({ segments } as ParseResult));
+    if (isTextPart(part) && part.text !== '') {
+      // Push WITHOUT flushing between consecutive text parts so an a2ui block
+      // that spans several adjacent text parts is stitched back together. The
+      // model's final message is not guaranteed to coalesce adjacent text: the
+      // Gemini plugin, for instance, aggregates a turn into many separate text
+      // parts (fence, JSON body split many ways, close fence, then a trailing
+      // empty-text part carrying the thought signature), so a per-part flush
+      // would reset the parser mid-block and leak the whole surface back out as
+      // raw prose. This mirrors the streaming path, which shares one parser
+      // across all chunks and flushes only once at the end.
+      newContent.push(...partsFromParse(parser.push(part.text)));
     } else {
+      // A non-text part (e.g. a toolRequest) or an empty-text part (e.g. the
+      // trailing thought-signature carrier) is a boundary: flush any held tail
+      // so it lands before this part, preserving order. This is what a
+      // tool-calling turn [text("Checking the weather."), toolRequest] relies
+      // on so the prose is not reordered behind the toolRequest. Then carry the
+      // part through untouched so its metadata survives.
+      flushHeld();
       newContent.push(part);
     }
   }
+  flushHeld();
+
+  const newMessage = { ...message, content: newContent };
+
+  // Write the transformed message back to the same shape the model used. A
+  // model that returned a top-level `message` gets it back there; one that
+  // returned the candidates shape (e.g. google-genai) gets candidate[0]
+  // rewritten, so consumers reading `candidates` (not just the collapsed
+  // GenerateResponse.message getter) see the a2ui parts too. Only candidate 0
+  // is transformed: the framework collapses to `candidates[0].message` and
+  // candidateCount defaults to 1, and each candidate would otherwise consume
+  // the shared surface-id replay state.
+  if (response.message) {
+    return { ...response, message: newMessage };
+  }
   return {
     ...response,
-    message: { ...message, content: newContent },
+    candidates: response.candidates!.map((c, i) =>
+      i === 0 ? { ...c, message: newMessage } : c
+    ),
   };
 }
 
