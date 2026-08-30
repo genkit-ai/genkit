@@ -16,8 +16,15 @@
 
 """Tests for Flask handler decorator validation."""
 
+import asyncio
+
 import pytest
-from genkit_flask.handler import genkit_flask_handler
+from genkit_flask.handler import (
+    _LazyLoop,
+    _create_loop,
+    _iter_over_async,
+    genkit_flask_handler,
+)
 
 from genkit._core._error import GenkitError
 
@@ -54,6 +61,39 @@ class TestGenkitFlaskHandlerValidation:
         handler = genkit_flask_handler(FakeGenkit())  # type: ignore[arg-type]
         with pytest.raises(GenkitError, match='must apply @genkit_flask_handler on a @flow'):
             handler(None)  # type: ignore[arg-type]
+
+
+class TestCreateLoop:
+    """_create_loop must never hand back a closed event loop (#4925)."""
+
+    def test_returns_live_loop_when_current_is_closed(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.close()
+        assert loop.is_closed()
+
+        live = _create_loop()
+        assert not live.is_closed()
+        live.close()
+
+
+class TestLazyLoop:
+    """Streaming must not capture a loop that Flask closes before iteration (#4925)."""
+
+    def test_iter_over_async_works_after_handler_loop_closes(self) -> None:
+        async def agen() -> object:
+            yield 'a'
+            yield 'b'
+
+        # Simulate Flask: create/close the temporary loop used to run the handler,
+        # then consume the streaming iterable afterward with a lazy loop.
+        handler_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(handler_loop)
+        handler_loop.close()
+        assert handler_loop.is_closed()
+
+        chunks = list(_iter_over_async(agen(), _LazyLoop()))
+        assert chunks == ['a', 'b']
 
 
 class TestFlaskHandlerImports:
