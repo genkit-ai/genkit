@@ -8,3 +8,5 @@ pnpm-lock.yaml
 public/
 py/*
 README.md
+samples/js-openui/dist/
+samples/js-openui/dist-server/
