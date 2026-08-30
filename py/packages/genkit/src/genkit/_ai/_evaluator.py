@@ -33,6 +33,7 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
+    BaseEvalDataPoint,
     EvalFnResponse,
     EvalRequest,
     EvalResponse,
@@ -49,11 +50,25 @@ EVALUATOR_METADATA_KEY_IS_BILLED = 'evaluatorIsBilled'
 T = TypeVar('T')
 
 # User-provided evaluator function that evaluates a single datapoint.
-# Must be async (coroutine function).
-EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
+# Must be async (coroutine function). Receives BaseEvalDataPoint because the
+# stepper always guarantees a test_case_id before invoking the callback
+# (mirrors JS EvaluatorFn / BaseEvalDataPoint).
+EvaluatorFn = Callable[[BaseEvalDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
 # User-provided batch evaluator function that evaluates an EvaluationRequest
 BatchEvaluatorFn = Callable[[EvalRequest, T], Coroutine[Any, Any, list[EvalFnResponse]]]
+
+
+def _as_eval_datapoint(datapoint: BaseDataPoint) -> BaseEvalDataPoint:
+    """Fill in a missing test_case_id and return a BaseEvalDataPoint for the callback."""
+    return BaseEvalDataPoint(
+        input=datapoint.input,
+        output=datapoint.output,
+        context=datapoint.context,
+        reference=datapoint.reference,
+        test_case_id=datapoint.test_case_id or str(uuid.uuid4()),
+        trace_ids=datapoint.trace_ids,
+    )
 
 
 class EvaluatorRef(BaseModel):
@@ -127,9 +142,8 @@ def define_evaluator(
     async def eval_stepper_fn(req: EvalRequest) -> EvalResponse:
         eval_responses: list[EvalFnResponse] = []
         for index in range(len(req.dataset)):
-            datapoint = req.dataset[index]
-            if datapoint.test_case_id is None:
-                datapoint.test_case_id = str(uuid.uuid4())
+            # Dataset keeps BaseDataPoint (optional id); callbacks get BaseEvalDataPoint.
+            datapoint = _as_eval_datapoint(req.dataset[index])
             span_metadata = SpanMetadata(
                 name=f'Test Case {datapoint.test_case_id}',
                 type='evaluator',
