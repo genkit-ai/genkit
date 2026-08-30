@@ -63,6 +63,13 @@ const CONTENT_KEY = '_content';
 const CONTENT_TYPE = '_contentType';
 
 /**
+ * Source tag applied to Pinecone clients created by this plugin so usage is
+ * attributed to the Genkit integration.
+ * @see https://docs.pinecone.io/integrations/build-integration/attribute-usage-to-your-integration
+ */
+export const GENKIT_PINECONE_SOURCE_TAG = 'genkit';
+
+/**
  * pineconeRetrieverRef function creates a retriever for Pinecone.
  * @param params The params for the new Pinecone retriever
  * @param params.indexId The indexId for the Pinecone retriever
@@ -166,7 +173,7 @@ export function configurePineconeRetriever<
   const { indexId, embedder, embedderOptions } = {
     ...params,
   };
-  const pineconeConfig = params.clientParams ?? getDefaultConfig();
+  const pineconeConfig = resolvePineconeConfig(params.clientParams);
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
   const index = pinecone.index(indexId);
@@ -247,7 +254,7 @@ export function configurePineconeIndexer<
   const { indexId, embedder, embedderOptions } = {
     ...params,
   };
-  const pineconeConfig = params.clientParams ?? getDefaultConfig();
+  const pineconeConfig = resolvePineconeConfig(params.clientParams);
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
   const index = pinecone.index(indexId);
@@ -316,7 +323,7 @@ export async function createPineconeIndex(params: {
   clientParams?: PineconeConfiguration;
   options: CreateIndexOptions;
 }) {
-  const pineconeConfig = params.clientParams ?? getDefaultConfig();
+  const pineconeConfig = resolvePineconeConfig(params.clientParams);
   const pinecone = new Pinecone(pineconeConfig);
   return await pinecone.createIndex(params.options);
 }
@@ -332,7 +339,7 @@ export async function describePineconeIndex(params: {
   clientParams?: PineconeConfiguration;
   name: string;
 }) {
-  const pineconeConfig = params.clientParams ?? getDefaultConfig();
+  const pineconeConfig = resolvePineconeConfig(params.clientParams);
   const pinecone = new Pinecone(pineconeConfig);
   return await pinecone.describeIndex(params.name);
 }
@@ -348,9 +355,23 @@ export async function deletePineconeIndex(params: {
   clientParams?: PineconeConfiguration;
   name: string;
 }) {
-  const pineconeConfig = params.clientParams ?? getDefaultConfig();
+  const pineconeConfig = resolvePineconeConfig(params.clientParams);
   const pinecone = new Pinecone(pineconeConfig);
   return await pinecone.deleteIndex(params.name);
+}
+
+/**
+ * Resolves Pinecone client configuration, always attributing requests to Genkit.
+ * Explicit `clientParams.sourceTag` values are preserved when provided.
+ */
+export function resolvePineconeConfig(
+  clientParams?: PineconeConfiguration
+): PineconeConfiguration {
+  const base = clientParams ?? getDefaultConfig();
+  return {
+    ...base,
+    sourceTag: base.sourceTag ?? GENKIT_PINECONE_SOURCE_TAG,
+  };
 }
 
 function getDefaultConfig() {
