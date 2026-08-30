@@ -201,7 +201,7 @@ class ModelRef(Generic[ModelRefConfigT]):
 
 
 class Message(MessageData):
-    """Message wrapper with utility properties for text and tool requests."""
+    """Message wrapper with utility properties for text, media, and tool requests."""
 
     def __init__(
         self,
@@ -242,6 +242,11 @@ class Message(MessageData):
     def text(self) -> str:
         """All text parts concatenated into a single string."""
         return text_from_message(self)
+
+    @cached_property
+    def media(self) -> Media | None:
+        """First media part, or None."""
+        return first_media(self.content)
 
     @cached_property
     def tool_requests(self) -> list[ToolRequestPart]:
@@ -569,15 +574,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.tool_requests
 
     @cached_property
-    def media(self) -> list[Media]:
-        """All media parts in the response message."""
+    def media(self) -> Media | None:
+        """First media part in the response message, or None."""
         if self.message is None:
-            return []
-        return [
-            part.root.media
-            for part in self.message.content
-            if isinstance(part.root, MediaPart) and part.root.media is not None
-        ]
+            return None
+        return self.message.media
 
     @cached_property
     def interrupts(self) -> list[ToolRequestPart]:
@@ -674,6 +675,14 @@ def text_from_message(msg: Message) -> str:
 def text_from_content(content: Sequence[Part | DocumentPart]) -> str:
     """Concatenate text from a list of parts."""
     return ''.join(str(p.root.text) for p in content if hasattr(p.root, 'text') and p.root.text is not None)
+
+
+def first_media(content: Sequence[Part | DocumentPart]) -> Media | None:
+    """The first media part, or None."""
+    for part in content:
+        if isinstance(part.root, MediaPart) and part.root.media is not None:
+            return part.root.media
+    return None
 
 
 def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:
