@@ -72,6 +72,12 @@ const taskStatusUnknown = "unknown"
 // without task IDs.
 const noTaskIDsNote = "No task IDs given. Pass the taskId values returned by background delegations."
 
+// Join semantics of the wait tool ([waitBackgroundTasksInput.WaitFor]).
+const (
+	waitForAll   = "all"
+	waitForFirst = "first"
+)
+
 // asyncDelegateInput is the delegation tool input when [Agents.Async] is set:
 // the plain task plus the background flag.
 type asyncDelegateInput struct {
@@ -98,6 +104,12 @@ type backgroundTasksInput struct {
 type waitBackgroundTasksInput struct {
 	backgroundTasksInput
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty" jsonschema_description:"Maximum seconds to wait before returning the current statuses. 0 or omitted waits until every task settles; a negative value returns the current statuses immediately. Values too large to represent are treated as unbounded."`
+	// WaitFor selects the join: "all" (default) blocks until every listed
+	// task settles, "first" turns the join into a race and returns as soon
+	// as any one does, the rest reporting their current status. First-settled
+	// is what lets an orchestrator act on the first answer while the others
+	// keep working.
+	WaitFor string `json:"waitFor,omitempty" jsonschema_description:"\"all\" (default) waits until every listed task settles. \"first\" returns as soon as any one settles; the remaining tasks report their current status and keep running."`
 }
 
 // backgroundTaskReport is the per-task entry returned by the check and wait
@@ -247,7 +259,7 @@ func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
 			"Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.",
 			a.taskReportTool(st, readSnapshotOnce)),
 		aix.NewTool(names.wait,
-			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned.",
+			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to \"first\" to return as soon as any one task settles.",
 			a.waitForBackgroundTasks(st)),
 		aix.NewTool(names.abort,
 			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.",
@@ -290,6 +302,18 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 		if len(in.TaskIDs) == 0 {
 			return backgroundTasksResult{Note: noTaskIDsNote}, nil
 		}
+		first := false
+		switch in.WaitFor {
+		case "", waitForAll:
+		case waitForFirst:
+			first = true
+		default:
+			// A recoverable mistake, answered like an empty ID list: guidance
+			// the model can correct, not a decode failure that kills the turn.
+			return backgroundTasksResult{Note: fmt.Sprintf(
+				"Unknown waitFor value %q. Use %q (the default) to wait for every task, or %q to return when any one settles.",
+				in.WaitFor, waitForAll, waitForFirst)}, nil
+		}
 		// A negative timeout means "don't wait": report the current statuses.
 		if in.TimeoutSeconds < 0 {
 			return a.reportTasks(ctx, st, in.TaskIDs, readSnapshotOnce)
@@ -314,9 +338,14 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 			"tasks", len(in.TaskIDs), "timeoutSeconds", in.TimeoutSeconds)
 
 		g := genkit.FromContext(ctx)
-		reports := collectReports(in.TaskIDs, func(taskID string) backgroundTaskReport {
-			return a.awaitTask(waitCtx, g, st, taskID, start)
-		})
+		var reports []backgroundTaskReport
+		if first {
+			reports = a.collectFirstSettled(waitCtx, g, st, in.TaskIDs, start)
+		} else {
+			reports = collectReports(in.TaskIDs, func(taskID string) backgroundTaskReport {
+				return a.awaitTask(waitCtx, g, st, taskID, start)
+			})
+		}
 
 		// The calling context ending is cancellation, not a timeout; let it
 		// fail the tool call rather than dressing it up as a settled result.
@@ -336,6 +365,14 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 			}
 		}
 		if pending > 0 {
+			if first && pending < len(reports) {
+				// The race was won, not timed out: at least one task settled
+				// and the return is the caller's chosen semantics.
+				logger.Debug(ctx, "wait for background tasks returned on first settle",
+					"pending", pending, "elapsedMs", time.Since(start).Milliseconds())
+				res.Note = "Returned on the first settled task; the remaining tasks report their current status and keep running."
+				return res, nil
+			}
 			logger.Debug(ctx, "wait for background tasks timed out",
 				"pending", pending, "elapsedMs", time.Since(start).Milliseconds())
 			res.TimedOut = true
@@ -391,6 +428,39 @@ func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []str
 		return backgroundTasksResult{}, err
 	}
 	return res, nil
+}
+
+// collectFirstSettled runs one follow per task concurrently and returns as
+// soon as any of them settles, cancelling the remaining follows so each
+// reports its task as it stands. "Settles" is the same rule the wait loop
+// counts by (Terminal()), unknown included: an unresolvable handle is an
+// answer the caller must act on, not something to keep waiting behind.
+// Reports come back in input order.
+func (a *Agents) collectFirstSettled(ctx context.Context, g *genkit.Genkit, st *agentsState, taskIDs []string, start time.Time) []backgroundTaskReport {
+	raceCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type indexed struct {
+		i      int
+		report backgroundTaskReport
+	}
+	ch := make(chan indexed, len(taskIDs))
+	for i, taskID := range taskIDs {
+		go func(i int, taskID string) {
+			ch <- indexed{i, a.awaitTask(raceCtx, g, st, taskID, start)}
+		}(i, taskID)
+	}
+	reports := make([]backgroundTaskReport, len(taskIDs))
+	for range taskIDs {
+		res := <-ch
+		reports[res.i] = res.report
+		if aix.SnapshotStatus(res.report.Status).Terminal() {
+			// The first settle ends the race. Cancelling is idempotent, so
+			// later settles that raced the cancellation just land in their
+			// slots.
+			cancel()
+		}
+	}
+	return reports
 }
 
 // collectReports builds one report per entry of taskIDs, fetching each

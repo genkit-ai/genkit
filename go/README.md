@@ -504,7 +504,7 @@ ai.WithUse(&middlewarex.Agents{
 })
 ```
 
-The orchestrator then launches with `{"task": "...", "background": true}`, posts an update while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn. An abort is safe to call on any task: one that had already finished is left alone and reports its result, so the orchestrator never loses an answer by giving up on it.
+The orchestrator then launches with `{"task": "...", "background": true}`, posts an update while the sub-agent runs, and collects the result later. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn, and `waitFor: "first"` turns the join into a race: the tool returns as soon as any listed task settles while the rest keep running, so the orchestrator can act on the first answer. An abort is safe to call on any task: one that had already finished is left alone and reports its result, so the orchestrator never loses an answer by giving up on it.
 
 Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give a sub-agent `&middlewarex.Artifacts{}` so it can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
 

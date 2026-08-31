@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -573,6 +574,128 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 	if len(res.Tasks) != 1 || res.Tasks[0].Status != taskStatusUnknown ||
 		!strings.Contains(res.Tasks[0].Error, "not found") {
 		t.Errorf("expected the missing snapshot to settle as unknown/not-found, got %+v", res.Tasks)
+	}
+}
+
+// TestAgentsWaitForFirstSettled pins the wait tool's race join: with
+// waitFor "first" the tool returns as soon as any listed task settles, the
+// still-running tasks report as pending, and the return is not a timeout.
+func TestAgentsWaitForFirstSettled(t *testing.T) {
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "quick",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/quick", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "quick answer"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	// The slow sub-agent finishes only when released, so the race can only be
+	// won by the quick one.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	genkitx.DefineCustomAgent[any](g, "slow",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return nil, errors.New("released")
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := toolModel(t, g, "test/orch-race", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		slowLaunches := toolOutputs(req.Messages, "delegate_to_slow")
+		quickLaunches := toolOutputs(req.Messages, "delegate_to_quick")
+		switch {
+		case len(slowLaunches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_slow",
+				Input: map[string]any{"task": "dig forever", "background": true},
+			}), nil
+		case len(quickLaunches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_quick",
+				Input: map[string]any{"task": "answer fast", "background": true},
+			}), nil
+		case len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) == 0:
+			// The slow task first in the list, so a settled result in slot 1
+			// proves the join raced instead of following input order.
+			return toolReqResp(req, &ai.ToolRequest{
+				Name: waitBackgroundTasksToolName,
+				Input: map[string]any{
+					"taskIds": []string{
+						lenientDelegation(slowLaunches[0]).TaskID,
+						lenientDelegation(quickLaunches[0]).TaskID,
+					},
+					"waitFor": "first",
+				},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "quick"}, {Name: "slow"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waits) != 1 {
+		t.Fatalf("expected 1 wait result, got %d", len(waits))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, waits[0])
+	if res.TimedOut {
+		t.Errorf("a won race must not report TimedOut: %+v", res)
+	}
+	if len(res.Tasks) != 2 {
+		t.Fatalf("expected 2 reports, got %+v", res.Tasks)
+	}
+	if got := res.Tasks[0]; got.Status != string(aix.SnapshotStatusPending) {
+		t.Errorf("slow task report = %+v, want pending", got)
+	}
+	if got := res.Tasks[1]; got.Status != string(aix.SnapshotStatusCompleted) || got.Response != "quick answer" {
+		t.Errorf("quick task report = %+v, want the settled answer", got)
+	}
+	if !strings.Contains(res.Note, "first settled") {
+		t.Errorf("expected the race note, got %q", res.Note)
+	}
+}
+
+// TestAgentsWaitForUnknownJoinRefused pins the recoverable guidance for a
+// waitFor value the tool does not know.
+func TestAgentsWaitForUnknownJoinRefused(t *testing.T) {
+	g := newTestGenkit(t)
+	genkitx.DefineAgent[any](g, "quick",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/quick2", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "unused"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	orch := toolModel(t, g, "test/orch-badjoin", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) > 0 {
+			return textResp(req, "done"), nil
+		}
+		return toolReqResp(req, &ai.ToolRequest{
+			Name:  waitBackgroundTasksToolName,
+			Input: map[string]any{"taskIds": []string{"quick:whatever"}, "waitFor": "any"},
+		}), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "quick"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, toolOutputs(resp.History(), waitBackgroundTasksToolName)[0])
+	if !strings.Contains(res.Note, `"first"`) || len(res.Tasks) != 0 {
+		t.Fatalf("expected join guidance and no reports, got %+v", res)
 	}
 }
 
