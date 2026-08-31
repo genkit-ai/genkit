@@ -556,12 +556,14 @@ var (
 // it is the one the caller asked to stop.
 //
 // The abort never waits: it answers "did the stop land?", and the wait tool is
-// the one tool that waits. After the flip, one shaped re-read decides the
-// report. A terminal row is the settled truth: the worker's finalize won the
-// race, or the worker was already dead and the flipped row reads as expired.
-// Anything else reports taskStatusAborting, because aborted is a promise the
-// row is settled and resumable, and the row inside the winding-down window is
-// not that yet. Nothing here stamps a status onto a row it did not read.
+// the one tool that waits. The answer comes from Abort's own return, not from
+// a re-read that could fail on its own and turn a delivered stop into
+// "unknown": [aix.SnapshotStatusAborted] means the flip is durable (or was
+// already), so the task is winding down toward the settled, resumable row and
+// the report says taskStatusAborting; aborted is a promise the row is settled,
+// and the winding-down window is not that yet. Any other terminal return
+// means the task settled between the read and the abort, and one re-read
+// fetches the answer it now carries.
 func (a *Agents) abortSnapshot() snapshotFetch {
 	return func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error) {
 		cur, err := agent.GetSnapshot(ctx, snapshotID)
@@ -574,22 +576,22 @@ func (a *Agents) abortSnapshot() snapshotFetch {
 			// know about a task that outlived the request to cancel it.
 			return cur, nil, nil
 		}
-		if _, err := agent.Abort(ctx, snapshotID); err != nil {
-			return nil, nil, err
-		}
-		snap, err := agent.GetSnapshot(ctx, snapshotID)
+		flipped, err := agent.Abort(ctx, snapshotID)
 		if err != nil {
 			return nil, nil, err
 		}
-		if snap.Status.Terminal() {
-			return snap, nil, nil
+		if flipped == aix.SnapshotStatusAborted {
+			return nil, &backgroundTaskReport{
+				Status: taskStatusAborting,
+				Error: fmt.Sprintf(
+					"The stop signal was delivered and the task is winding down; its progress is being saved and it will settle as %q. No further action is needed to stop it. Collect the settled state with %s only if you need it.",
+					aix.SnapshotStatusAborted, a.backgroundToolNames().wait),
+			}, nil
 		}
-		return nil, &backgroundTaskReport{
-			Status: taskStatusAborting,
-			Error: fmt.Sprintf(
-				"The stop signal was delivered and the task is winding down; its progress is being saved and it will settle as %q. No further action is needed to stop it. Collect the settled state with %s only if you need it.",
-				aix.SnapshotStatusAborted, a.backgroundToolNames().wait),
-		}, nil
+		// The task settled between the read and the abort, so the abort was a
+		// no-op on a terminal row. Re-read for the answer it now carries.
+		snap, err := agent.GetSnapshot(ctx, snapshotID)
+		return snap, nil, err
 	}
 }
 

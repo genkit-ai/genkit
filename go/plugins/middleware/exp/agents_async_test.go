@@ -779,11 +779,10 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	if len(aborted.Tasks) != 1 {
 		t.Fatalf("expected 1 aborted task, got %+v", aborted.Tasks)
 	}
-	// The abort's single re-read races the worker's finalize, so the report
-	// is "aborting" (the usual answer) or the settled aborted row when the
-	// finalize won; either way it explains itself, and neither is the raw
-	// mid-flip window (which the shaped read hides as pending).
-	if got := aborted.Tasks[0]; (got.Status != taskStatusAborting && got.Status != string(aix.SnapshotStatusAborted)) || got.Error == "" {
+	// The flip's own return decides the report, so stopping a live task
+	// answers "aborting" deterministically: no re-read races the worker's
+	// finalize, and the raw mid-flip window is never exposed.
+	if got := aborted.Tasks[0]; got.Status != taskStatusAborting || got.Error == "" {
 		t.Errorf("unexpected abort report: %+v", got)
 	}
 
