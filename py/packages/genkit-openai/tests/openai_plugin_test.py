@@ -52,7 +52,11 @@ async def test_openai_plugin_init() -> None:
 
 @pytest.mark.parametrize(
     'kind, name',
-    [(ActionKind.MODEL, 'gpt-3.5-turbo')],
+    [
+        (ActionKind.MODEL, 'gpt-3.5-turbo'),
+        # Unlisted ids still resolve when asked for by name.
+        (ActionKind.MODEL, 'codex-mini-latest'),
+    ],
 )
 @pytest.mark.asyncio
 async def test_openai_plugin_resolve_action(kind: ActionKind, name: str) -> None:
@@ -75,6 +79,8 @@ async def test_openai_plugin_list_actions() -> None:
         Model(id='gpt-3.5-turbo', created=1677610602, object='model', owned_by='openai'),
         Model(id='o4-mini-deep-research-2025-06-26', created=1750866121, object='model', owned_by='system'),
         Model(id='codex-mini-latest', created=1746673257, object='model', owned_by='system'),
+        Model(id='babbage-002', created=1692634615, object='model', owned_by='system'),
+        Model(id='davinci-002', created=1692634301, object='model', owned_by='system'),
         Model(id='text-embedding-ada-002', created=1671217299, object='model', owned_by='openai-internal'),
     ]
     plugin = OpenAI(api_key='test-key')
@@ -92,7 +98,12 @@ async def test_openai_plugin_list_actions() -> None:
     # list_actions is cached after the first API fetch.
     assert mock_client.models.list.call_count == 1
 
-    assert len(actions) == len(entries)
+    # Ids Chat Completions does not serve are dropped from the listing.
+    listed = {action.name for action in actions}
+    assert 'openai/codex-mini-latest' not in listed
+    assert 'openai/babbage-002' not in listed
+    assert 'openai/davinci-002' not in listed
+    assert len(actions) == len(entries) - 3
     assert actions[0].name == 'openai/gpt-4-0613'
     assert actions[-1].name == 'openai/text-embedding-ada-002'
 
