@@ -58,6 +58,21 @@ def _record_latency(output: object, latency_ms: float) -> object:
     return output
 
 
+REDACTED_CONTEXT_KEYS = frozenset({'auth', 'secrets'})
+
+
+def context_for_telemetry(*, context: dict[str, Any]) -> dict[str, Any]:
+    # The Dev UI Context panel dumps this object. Tokens and API keys
+    # live under auth/secrets, so those keys stay off the span.
+    if not (REDACTED_CONTEXT_KEYS & context.keys()):
+        return context
+    traced = dict(context)
+    for key in REDACTED_CONTEXT_KEYS:
+        if key in traced:
+            traced[key] = '<redacted>'
+    return traced
+
+
 def _sanitize_value(val: object, seen: set[int] | None = None) -> object:
     """Recursively filter out dictionary keys or list items that cannot be serialized to JSON."""
     if seen is None:
@@ -756,14 +771,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # Surface action context (auth, headers, etc.) on the span so the Dev UI
         # trace inspector can render the "Context" panel for a flow run.
         if ctx.context:
+            traced_context = context_for_telemetry(context=ctx.context)
             try:
-                extra_metadata['context'] = json.dumps(ctx.context)
+                extra_metadata['context'] = json.dumps(traced_context)
             except Exception:
                 try:
-                    cleaned_context = _sanitize_value(ctx.context)
+                    cleaned_context = _sanitize_value(traced_context)
                     extra_metadata['context'] = json.dumps(cleaned_context)
                 except Exception:
-                    extra_metadata['context'] = str(ctx.context)
+                    extra_metadata['context'] = str(traced_context)
         span_meta = SpanMetadata(
             name=self._name,
             type='action',
