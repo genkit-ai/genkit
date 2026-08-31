@@ -1500,6 +1500,30 @@ describe('toOpenAiRequestBody', () => {
       },
     });
   });
+  it('never serializes the transport routing key', () => {
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      config: { transport: 'chat_completions' },
+    } as unknown as GenerateRequest;
+
+    const actualOutput = toOpenAIRequestBody('gpt-4o', request);
+
+    expect(actualOutput).not.toHaveProperty('transport');
+    expect(JSON.stringify(actualOutput)).not.toContain('transport');
+  });
+  it('rejects an opt-in to the responses transport', () => {
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      config: { transport: 'responses' },
+    } as unknown as GenerateRequest;
+
+    expect(() => toOpenAIRequestBody('gpt-4o', request)).toThrow(
+      expect.objectContaining({
+        status: 'INVALID_ARGUMENT',
+        message: expect.stringContaining('Chat Completions'),
+      })
+    );
+  });
 });
 
 describe('openAIModelRunner', () => {
