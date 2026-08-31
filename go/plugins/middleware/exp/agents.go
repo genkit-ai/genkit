@@ -218,14 +218,6 @@ type agentsState struct {
 	// conversation is the latest request message list, captured each turn for
 	// optional history forwarding.
 	conversation []*ai.Message
-	// stashes holds the final state of settled synchronous delegations to
-	// client-managed sub-agents, keyed by minted in-memory handle
-	// ("<agent>:mem-<n>"), so the resume tool can replay them for the rest
-	// of this generate call. Client-managed state is durable nowhere, so the
-	// stash (and every handle into it) dies with the call by construction.
-	stashes map[string]*memStash
-	// memSeq allocates in-memory handle numbers.
-	memSeq int
 	// labels holds the caller-chosen delegation labels by task handle, for
 	// echoing on background-task reports. Like the stash, it is a per-call
 	// reading aid: after a restart the transcript still pairs each label with
@@ -258,7 +250,6 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	prefix := a.prefix()
 	st := &agentsState{
 		settledReports: make(map[string]backgroundTaskReport),
-		stashes:        make(map[string]*memStash),
 		labels:         make(map[string]string),
 	}
 
@@ -451,11 +442,6 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 	}
 
 	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
-	if isClientManaged(agent) {
-		// A client-managed run's final state came back inline; hold it so the
-		// result's handle has something to resume for the rest of this call.
-		a.stashClientState(st, ref, out, &result)
-	}
 	a.labelTask(st, &result, name)
 	logger.Debug(ctx, "sub-agent delegation finished",
 		"agent", ref.Name, "finishReason", string(out.FinishReason),
@@ -793,15 +779,14 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 		b.WriteString("valid: check them before delegating the same work again.\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("Delegation results carry a taskId where the sub-agent's progress is ")
-	b.WriteString("addressable. If a delegation fails or is aborted, its saved progress is ")
-	b.WriteString("not lost: call " + a.resumeToolName() + " with the taskId to resume it ")
-	b.WriteString("from where it stopped, either as-is or steered with instructions. A ")
-	b.WriteString("completed task accepts follow-up instructions in its own session the ")
-	b.WriteString("same way, without repeating the finished work. Handles of the form ")
-	b.WriteString("\"<agent>:" + memHandlePrefix + "<n>\" are in-memory and usable only ")
-	b.WriteString("while you work on the current request; they expire once you finish ")
-	b.WriteString("responding.\n")
+	b.WriteString("Results of delegations to sub-agents that keep sessions carry a taskId ")
+	b.WriteString("where the sub-agent's progress is addressable. If such a delegation ")
+	b.WriteString("fails or is aborted, its saved progress is not lost: call ")
+	b.WriteString(a.resumeToolName() + " with the taskId to resume it from where it ")
+	b.WriteString("stopped, either as-is or steered with instructions. A completed task ")
+	b.WriteString("accepts follow-up instructions in its own session the same way, ")
+	b.WriteString("without repeating the finished work. A result without a taskId is not ")
+	b.WriteString("resumable; delegate again to redo that work.\n")
 	b.WriteString("</sub-agents>")
 	return b.String()
 }

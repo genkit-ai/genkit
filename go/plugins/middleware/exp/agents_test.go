@@ -422,9 +422,6 @@ func TestAgentsSubAgentFailureReported(t *testing.T) {
 	}
 }
 
-// TestAgentsArtifactStrategies verifies that, run inside an orchestrator agent
-// (so a session exists), sub-agent artifacts are merged into the parent session
-// under both strategies and that inline includes content while session does not.
 func TestAgentsSyncDelegationCarriesTaskHandle(t *testing.T) {
 	// A synchronous delegation to a server-managed sub-agent settles with the
 	// run's last committed snapshot on the output, and the result stamps it as
@@ -498,10 +495,10 @@ func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
 	}
 }
 
-func TestAgentsClientManagedSyncResultCarriesMemHandle(t *testing.T) {
-	// A client-managed sub-agent persists nothing, so its settled state is
-	// held in the middleware's per-call stash and the result carries the
-	// minted in-memory handle instead of a snapshot-backed one.
+func TestAgentsClientManagedDelegationNotResumable(t *testing.T) {
+	// A client-managed sub-agent persists nothing, so its settled result
+	// carries no task handle, and the resume tool refuses a handle naming it:
+	// only server-managed sub-agents leave resume points behind.
 	g := newTestGenkit(t)
 
 	genkitx.DefineAgent[any](g, "ephemeral",
@@ -510,8 +507,28 @@ func TestAgentsClientManagedSyncResultCarriesMemHandle(t *testing.T) {
 		}))},
 	)
 
-	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_ephemeral", "do X")
-	mw := &Agents{Agents: []aix.AgentRef{{Name: "ephemeral"}}}
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		delegations := toolOutputs(req.Messages, "delegate_to_ephemeral")
+		resumes := toolOutputs(req.Messages, "resume_subagent")
+		switch {
+		case len(delegations) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_ephemeral", Input: map[string]any{"task": "do X"}}), nil
+		case len(resumes) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+				Input: map[string]any{"taskId": "ephemeral:whatever"}}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	// A server-managed sibling keeps the resume tool registered, so the
+	// refusal (and not a missing tool) is what answers the model.
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/keeper", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "kept"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "ephemeral"}, {Name: "keeper"}}}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
@@ -521,14 +538,18 @@ func TestAgentsClientManagedSyncResultCarriesMemHandle(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 delegation response, got %d", len(got))
 	}
-	if !strings.HasPrefix(got[0].TaskID, "ephemeral:"+memHandlePrefix) {
-		t.Errorf("TaskID = %q, want an \"ephemeral:%s<n>\" in-memory handle", got[0].TaskID, memHandlePrefix)
+	if got[0].TaskID != "" || got[0].Status != "" {
+		t.Errorf("client-managed result carries a handle: taskId=%q status=%q", got[0].TaskID, got[0].Status)
 	}
-	if got[0].Status != string(aix.SnapshotStatusCompleted) {
-		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusCompleted)
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "not resumable") {
+		t.Fatalf("expected the client-managed resume refusal, got %+v", resumes)
 	}
 }
 
+// TestAgentsArtifactStrategies verifies that, run inside an orchestrator agent
+// (so a session exists), sub-agent artifacts are merged into the parent session
+// under both strategies and that inline includes content while session does not.
 func TestAgentsArtifactStrategies(t *testing.T) {
 	for _, strategy := range []ArtifactStrategy{ArtifactStrategyInline, ArtifactStrategySession} {
 		t.Run(string(strategy), func(t *testing.T) {

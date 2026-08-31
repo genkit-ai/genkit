@@ -250,45 +250,6 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeClientManagedFromStash(t *testing.T) {
-	// A failed client-managed delegation is resumable within the same call
-	// through the stash behind its in-memory handle: the retry sees the held
-	// conversation, and the settled continuation is re-stashed under a fresh
-	// handle.
-	g := newTestGenkit(t)
-
-	var seen [][]*ai.Message
-	genkitx.DefineAgent[any](g, "eph",
-		aix.InlinePrompt{ai.WithModel(failNTimesModel(t, g, "test/eph", 1, "recovered", &seen))},
-	)
-
-	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_eph", "resume_subagent", "try X", "")
-	mw := &Agents{Agents: []aix.AgentRef{{Name: "eph"}}}
-
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	failures := delegationResponses(t, resp.History(), "delegate_to_eph")
-	if len(failures) != 1 || !strings.HasPrefix(failures[0].TaskID, "eph:"+memHandlePrefix) {
-		t.Fatalf("expected a failed delegation with an in-memory handle, got %+v", failures)
-	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
-	if len(resumes) != 1 || resumes[0].Response != "recovered" {
-		t.Fatalf("expected the stash resume to settle, got %+v", resumes)
-	}
-	if !strings.HasPrefix(resumes[0].TaskID, "eph:"+memHandlePrefix) || resumes[0].TaskID == failures[0].TaskID {
-		t.Errorf("expected a fresh in-memory handle on the continuation, got %q (was %q)", resumes[0].TaskID, failures[0].TaskID)
-	}
-	if len(seen) != 2 {
-		t.Fatalf("expected the sub-agent model to run twice, ran %d times", len(seen))
-	}
-	retry := seen[1]
-	if len(retry) == 0 || !strings.Contains(retry[len(retry)-1].Text(), "try X") {
-		t.Errorf("expected the retry to re-attempt the held conversation, messages: %v", retry)
-	}
-}
-
 func TestAgentsResumeCarriesLabel(t *testing.T) {
 	// A resumed task is the same undertaking, so the caller-chosen label
 	// follows the handle onto the continuation's result.
@@ -319,36 +280,6 @@ func TestAgentsResumeCarriesLabel(t *testing.T) {
 	resumes := delegationResponses(t, resp.History(), "resume_subagent")
 	if len(resumes) != 1 || resumes[0].Response != "recovered" || resumes[0].Name != "second-try" {
 		t.Fatalf("expected the label to follow the resume, got %+v", resumes)
-	}
-}
-
-func TestAgentsResumeUnknownMemHandleRefused(t *testing.T) {
-	// An in-memory handle from another call (or a made-up one) has no stash
-	// behind it; the refusal explains the handle's lifetime and the durable
-	// alternative.
-	g := newTestGenkit(t)
-
-	genkitx.DefineAgent[any](g, "eph",
-		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/eph", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			return textResp(req, "unused"), nil
-		}))},
-	)
-
-	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
-			return textResp(req, "done"), nil
-		}
-		return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": "eph:mem-99"}}), nil
-	})
-	mw := &Agents{Agents: []aix.AgentRef{{Name: "eph"}}}
-
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
-	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "no in-memory state") {
-		t.Fatalf("expected a stash-miss refusal, got %+v", resumes)
 	}
 }
 
