@@ -57,6 +57,7 @@ import {
   SUPPORTED_GPT_MODELS,
 } from './gpt.js';
 import {
+  isNonStreamingResponsesModelName,
   isResponsesOnlyModelName,
   OpenAIResponsesConfigSchema,
   openAIResponsesModelRef,
@@ -138,6 +139,9 @@ function createResolver(pluginOptions: PluginOptions) {
         client,
         pluginOptions,
         modelRef,
+        streaming: !isNonStreamingResponsesModelName(
+          toModelName(actionName, pluginOptions.name)
+        ),
       });
     } else {
       const modelRef = openAIModelRef({ name: actionName });
@@ -249,6 +253,9 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
             client,
             pluginOptions,
             modelRef,
+            streaming: !isNonStreamingResponsesModelName(
+              toModelName(modelRef.name, pluginOptions.name)
+            ),
           })
         )
       );

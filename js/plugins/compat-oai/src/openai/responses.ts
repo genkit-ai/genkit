@@ -75,6 +75,25 @@ export function isResponsesOnlyModelName(
   );
 }
 
+/**
+ * Responses-only models that reject `stream: true`. A streaming caller gets
+ * the completed response delivered as a single chunk instead. Hand-curated
+ * like {@link RESPONSES_ONLY_MODELS}, from the per-model feature tables.
+ */
+export const NON_STREAMING_RESPONSES_MODELS = ['o1-pro', 'o3-pro'] as const;
+
+/**
+ * Checks whether a Responses model name must not be streamed, with the same
+ * suffix bias as {@link isResponsesOnlyModelName}.
+ * @param name The bare model name, without the plugin namespace.
+ */
+export function isNonStreamingResponsesModelName(name?: string): boolean {
+  if (!name) return false;
+  return NON_STREAMING_RESPONSES_MODELS.some(
+    (base) => name === base || name.startsWith(`${base}-`)
+  );
+}
+
 /** OpenAI Responses API custom configuration schema. */
 export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
   store: z.boolean().optional(),
@@ -84,7 +103,8 @@ export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
 const RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
-    tools: false,
+    tools: true,
+    toolChoice: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],
