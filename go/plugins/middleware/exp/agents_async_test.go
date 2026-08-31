@@ -1248,3 +1248,82 @@ func TestBackgroundTaskToolsAcceptNoArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentsSyncTaskCheckDoesNotDuplicateArtifacts(t *testing.T) {
+	// A synchronous delegation to a server-managed sub-agent merges its
+	// artifacts under the run's snapshot-based namespace, the same
+	// deterministic one the background-task report path folds under, so
+	// checking the sync result's taskId re-merges over the identical names
+	// instead of duplicating the artifacts in the parent session.
+	g := newTestGenkit(t)
+
+	genkitx.DefineCustomAgent[any](g, "writer",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				resp.SendArtifact(&aix.Artifact{
+					Name:  "report.md",
+					Parts: []*ai.Part{ai.NewTextPart("the report body")},
+				})
+				sess.AddMessages(ai.NewModelTextMessage("wrote the report"))
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{
+				Message:   ai.NewModelTextMessage("wrote the report"),
+				Artifacts: sess.Artifacts(),
+			}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	delegating := toolModel(t, g, "test/orch-sync-check", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if len(toolOutputs(req.Messages, checkBackgroundTasksToolName)) > 0 {
+			return textResp(req, "done"), nil
+		}
+		if res, ok := lastDelegationOutput(req.Messages, "delegate_to_writer"); ok {
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  checkBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{res.TaskID}},
+			}), nil
+		}
+		return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_writer", Input: map[string]any{"task": "write a report"}}), nil
+	})
+
+	// The orchestrator is itself an agent, so the delegation runs within a
+	// session the artifacts can merge into.
+	orchestrator := genkitx.DefineCustomAgent[any](g, "orchestrator",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			var last *ai.Message
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				r, err := genkit.Generate(ctx, g,
+					ai.WithModel(delegating),
+					ai.WithMessages(input.Message),
+					ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "writer"}}, Async: true}),
+				)
+				if err != nil {
+					return nil, err
+				}
+				last = r.Message
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{Message: last, Artifacts: sess.Artifacts()}, nil
+		},
+	)
+
+	out, err := orchestrator.RunText(ctx, "please produce a report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Artifacts) != 1 {
+		t.Fatalf("expected exactly 1 merged artifact after check, got %v", artifactNames(out.Artifacts))
+	}
+	name := out.Artifacts[0].Name
+	if !strings.HasPrefix(name, "writer_") || !strings.HasSuffix(name, "/report.md") || name == "writer_1/report.md" {
+		t.Errorf("artifact name = %q, want the snapshot-based \"writer_<snap>/report.md\" namespace", name)
+	}
+}

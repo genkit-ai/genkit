@@ -275,7 +275,7 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		// synchronous delegation.
 		logger.Debug(ctx, "background launch settled synchronously",
 			"agent", ref.Name, "finishReason", string(out.FinishReason))
-		result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+		result := a.foldDelegationOutput(ctx, ref, out, invocationID(ref, out, invocationNum))
 		a.labelTask(st, &result, name)
 		return result, nil
 	}
@@ -687,10 +687,10 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		if snap.State != nil {
 			arts = snap.State.Artifacts
 		}
-		// Deterministic namespace (unlike the sync path's per-call counter):
-		// AddArtifacts replaces by name, so a re-check after the orchestrator
-		// restarts overwrites the same artifact names instead of duplicating
-		// them.
+		// Deterministic namespace, shared with the synchronous fold
+		// (invocationID): AddArtifacts replaces by name, so a re-check of the
+		// same run, in this call or after the orchestrator restarts,
+		// overwrites the same artifact names instead of duplicating them.
 		folded := a.foldDelegationOutput(ctx, ref, &aix.AgentOutput[json.RawMessage]{
 			FinishReason: snap.FinishReason,
 			Message:      tip,

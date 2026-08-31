@@ -335,7 +335,7 @@ func (a *Agents) runResumeWith(ctx context.Context, ref aix.AgentRef, st *agents
 		a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
 		return result, nil
 	}
-	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+	result := a.foldDelegationOutput(ctx, ref, out, invocationID(ref, out, invocationNum))
 	// The continuation is the same undertaking; its label follows the handle.
 	a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
 	return result, nil

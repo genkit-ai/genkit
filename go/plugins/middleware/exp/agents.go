@@ -101,7 +101,8 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) 
 // (default) returns artifact content in the tool result and merges artifacts
 // into the parent session; ArtifactStrategySession merges into the session only
 // and returns names. Merged artifacts are namespaced by an invocation ID
-// (<agent>_<n>/<name>) and tagged with the source agent.
+// (<agent>_<snapshotId prefix>/<name> for a run with a snapshot behind it,
+// <agent>_<n>/<name> otherwise) and tagged with the source agent.
 //
 // If a sub-agent interrupts (e.g. for human input) it is reported back to the
 // orchestrator as a normal tool response, not propagated as an interrupt: there
@@ -452,7 +453,7 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
 	}
 
-	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+	result := a.foldDelegationOutput(ctx, ref, out, invocationID(ref, out, invocationNum))
 	a.labelTask(st, &result, name)
 	logger.Debug(ctx, "sub-agent delegation finished",
 		"agent", ref.Name, "finishReason", string(out.FinishReason),
@@ -589,6 +590,20 @@ func (a *Agents) taskLabel(st *agentsState, taskID string) string {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.labels[taskID]
+}
+
+// invocationID returns the artifact namespace for a settled delegation
+// output. A server-managed run is namespaced by its snapshot ID, the same
+// deterministic namespace the background-task report path folds under, so one
+// run merges identical artifact names no matter which path folds it, and
+// AddArtifacts' replace-by-name makes a later re-check of the run's handle
+// idempotent instead of duplicative. A run with no snapshot behind it (a
+// client-managed sub-agent) falls back to the per-call invocation number.
+func invocationID(ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationNum int) string {
+	if out.SnapshotID != "" && out.FinishReason != aix.AgentFinishReasonDetached {
+		return fmt.Sprintf("%s_%s", ref.Name, shortSnapshotID(out.SnapshotID))
+	}
+	return fmt.Sprintf("%s_%d", ref.Name, invocationNum)
 }
 
 // settledStatus maps a settled finish reason onto the status vocabulary the
