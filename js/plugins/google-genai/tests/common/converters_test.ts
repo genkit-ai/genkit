@@ -1457,6 +1457,38 @@ describe('Part conversions back and forth', () => {
 });
 
 describe('toGeminiTool', () => {
+  it('should resolve legacy definitions and reject circular references', () => {
+    assert.deepStrictEqual(
+      toGeminiTool({
+        name: 'legacy',
+        inputSchema: {
+          type: 'object',
+          properties: { item: { $ref: '#/definitions/Item' } },
+          definitions: { Item: { type: 'string' } },
+        } as any,
+      }).parameters?.properties?.item,
+      { type: SchemaType.STRING }
+    );
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'recursive',
+          inputSchema: {
+            type: 'object',
+            properties: { child: { $ref: '#/$defs/Node' } },
+            $defs: {
+              Node: {
+                type: 'object',
+                properties: { child: { $ref: '#/$defs/Node' } },
+              },
+            },
+          } as any,
+        }),
+      /Circular reference detected in schema: #\/\$defs\/Node/
+    );
+  });
+
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
     const got = toGeminiTool({
       name: 'foo',

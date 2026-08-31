@@ -43,12 +43,38 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: toGeminiSchemaProperty(tool.inputSchema, tool.inputSchema),
   };
   return declaration;
 }
 
-function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
+function toGeminiSchemaProperty(
+  property?: ToolDefinition['inputSchema'],
+  rootSchema?: ToolDefinition['inputSchema'],
+  seen: Set<string> = new Set()
+) {
+  if (property?.$ref) {
+    if (seen.has(property.$ref)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Circular reference detected in schema: ${property.$ref}`,
+      });
+    }
+    let definitionName: string | undefined;
+    let definitions: ToolDefinition['inputSchema'] | undefined;
+    if (property.$ref.startsWith('#/$defs/')) {
+      definitionName = property.$ref.substring('#/$defs/'.length);
+      definitions = rootSchema?.$defs;
+    } else if (property.$ref.startsWith('#/definitions/')) {
+      definitionName = property.$ref.substring('#/definitions/'.length);
+      definitions = (rootSchema as any)?.definitions;
+    }
+    const definition = definitionName ? definitions?.[definitionName] : undefined;
+    if (definition) {
+      const nextSeen = new Set(seen).add(property.$ref);
+      return toGeminiSchemaProperty(definition, rootSchema, nextSeen);
+    }
+  }
   if (!property || !property.type) {
     return undefined;
   }
@@ -79,7 +105,9 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     if (property.properties) {
       Object.keys(property.properties).forEach((key) => {
         nestedProperties[key] = toGeminiSchemaProperty(
-          property.properties[key]
+          property.properties[key],
+          rootSchema,
+          seen
         );
       });
     }
@@ -93,7 +121,7 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     return {
       ...baseSchema,
       type: SchemaType.ARRAY,
-      items: toGeminiSchemaProperty(property.items),
+      items: toGeminiSchemaProperty(property.items, rootSchema, seen),
     };
   } else {
     const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;
