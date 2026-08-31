@@ -24,8 +24,10 @@ import pytest
 from genkit_openai.models import OpenAIModel
 from genkit_openai.models.utils import strip_markdown_fences
 from genkit_openai.typing import OpenAIConfig
+from pydantic import BaseModel
 
 from genkit import (
+    GenkitError,
     Message,
     ModelRequest,
     ModelResponse,
@@ -225,6 +227,26 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
         model_any._generate_stream.assert_called_once()
     else:
         model_any._generate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_bad_config_type() -> None:
+    """A config type we cannot send is INVALID_ARGUMENT so retry skips it."""
+    ctx_mock = MagicMock(spec=ActionRunContext)
+    type(ctx_mock).is_streaming = PropertyMock(return_value=False)
+    model = OpenAIModel(model='gpt-4', client=MagicMock())
+
+    class OtherConfig(BaseModel):
+        pass
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=OtherConfig(),
+    )
+
+    with pytest.raises(GenkitError) as raised:
+        await model.generate(request, ctx_mock)
+    assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.parametrize(

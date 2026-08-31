@@ -107,6 +107,7 @@ def test_from_http_code() -> None:
     """Reverse map: shared codes pick the retry default; unmapped 5xx are INTERNAL."""
     assert from_http_code(200) == 'OK'
     assert from_http_code(400) == 'INVALID_ARGUMENT'
+    assert from_http_code(408) == 'DEADLINE_EXCEEDED'
     assert from_http_code(401) == 'UNAUTHENTICATED'
     assert from_http_code(403) == 'PERMISSION_DENIED'
     assert from_http_code(404) == 'NOT_FOUND'

@@ -17,6 +17,7 @@
 """Exhaustive tests for models/utils.py utility functions."""
 
 import base64
+import json
 
 import httpx
 import pytest
@@ -760,3 +761,29 @@ def test_reraise_openai_error_marks_503_unavailable() -> None:
     with pytest.raises(GenkitError) as raised:
         reraise_openai_error(error)
     assert raised.value.status == 'UNAVAILABLE'
+
+
+def test_reraise_openai_error_marks_request_shaping_invalid_argument() -> None:
+    """A request we could never send is INVALID_ARGUMENT so retry skips it."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('No text content found in the first message'))
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+def test_reraise_openai_error_marks_empty_model_reply_internal() -> None:
+    """An empty model reply is not a bad request — retry can try again."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('Unable to determine content part'))
+    assert raised.value.status == 'INTERNAL'
+
+
+def test_reraise_openai_error_marks_malformed_tool_json_internal() -> None:
+    """Malformed tool-call JSON from the model is INTERNAL so retry can try again."""
+    try:
+        json.loads('{')
+    except json.JSONDecodeError as error:
+        with pytest.raises(GenkitError) as raised:
+            reraise_openai_error(error)
+        assert raised.value.status == 'INTERNAL'
+        return
+    raise AssertionError('expected JSONDecodeError')

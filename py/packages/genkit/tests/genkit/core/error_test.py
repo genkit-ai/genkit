@@ -14,6 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Unit tests for the error module."""
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -153,13 +155,21 @@ def test_wrap_http_error_coerces_string_status_code() -> None:
     assert error.status == 'UNAVAILABLE'
 
 
-@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1])
+@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301])
 def test_wrap_http_error_leaves_missing_status_unclassified(status_code: object) -> None:
-    """No HTTP status means retry still sees the raw error."""
+    """No HTTP failure status means retry still sees the raw error."""
     cause = RuntimeError('model failed')
     with pytest.raises(RuntimeError) as raised:
         wrap_http_error(cause, status_code=status_code)
     assert raised.value is cause
+
+
+def test_wrap_http_error_marks_408_deadline_exceeded() -> None:
+    """A request timeout is transient — retry should wait and try again."""
+    cause = RuntimeError('request timeout')
+    error = wrap_http_error(cause, status_code=408)
+    assert error.status == 'DEADLINE_EXCEEDED'
+    assert error.cause is cause
 
 
 def test_wrap_http_error_reads_retry_after() -> None:

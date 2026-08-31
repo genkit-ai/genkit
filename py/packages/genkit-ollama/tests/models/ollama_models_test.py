@@ -26,6 +26,7 @@ import ollama as ollama_api
 import pytest
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
+from pydantic import ValidationError
 
 from genkit import (
     ActionRunContext,
@@ -69,6 +70,36 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(GenkitError) as raised:
                 await model.generate(self.request, self.ctx)
         self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
+
+    async def test_generate_marks_unresolved_api_type_internal(self) -> None:
+        """A plugin misconfig is INTERNAL, not a bad caller request."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        with patch.object(
+            model,
+            '_generate_classified',
+            AsyncMock(side_effect=ValueError('Unresolved API type: nope')),
+        ):
+            with self.assertRaises(GenkitError) as raised:
+                await model.generate(self.request, self.ctx)
+        self.assertEqual(raised.exception.status, 'INTERNAL')
+
+    async def test_generate_marks_response_validation_error_internal(self) -> None:
+        """A response shape we rejected is INTERNAL so retry can try again."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        with patch.object(
+            model,
+            '_generate_classified',
+            AsyncMock(side_effect=ValidationError.from_exception_data('ModelResponse', [])),
+        ):
+            with self.assertRaises(GenkitError) as raised:
+                await model.generate(self.request, self.ctx)
+        self.assertEqual(raised.exception.status, 'INTERNAL')
 
     async def test_generate_leaves_missing_http_status_unclassified(self) -> None:
         """A mid-stream ResponseError(status_code=-1) is not an HTTP status."""

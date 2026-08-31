@@ -44,11 +44,17 @@ from genkit.plugin_api import wrap_http_error
 def reraise_openai_error(error: Exception) -> NoReturn:
     """Re-raise an OpenAI HTTP or request-shaping error as a classified GenkitError.
 
-    Transport failures pass through so retry can still try again.
+    A bad request (missing text, wrong config type) is INVALID_ARGUMENT so
+    retry does not burn attempts on it. A model reply we could not read
+    (malformed tool JSON, empty content) is INTERNAL so retry can try again.
     """
     if isinstance(error, APIStatusError):
         raise wrap_http_error(error, status_code=error.status_code) from error
+    if isinstance(error, json.JSONDecodeError):
+        raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
     if isinstance(error, ValueError):
+        if str(error) == 'Unable to determine content part':
+            raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
         raise GenkitError(status='INVALID_ARGUMENT', message=str(error), cause=error) from error
     raise error
 

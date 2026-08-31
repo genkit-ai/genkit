@@ -89,9 +89,18 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'LANGUAGE',
         'MALICIOUS',
         'IMAGE_SAFETY',
+        'IMAGE_PROHIBITED_CONTENT',
+        'IMAGE_RECITATION',
     ):
         return FinishReason.BLOCKED
-    if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'UNEXPECTED_TOOL_CALL',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+    ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN
 
@@ -1591,40 +1600,42 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
+            # The HTTP call happens on the first iteration, not on the
+            # await that created the generator, so classify has to cover
+            # the async for as well.
+            accumulated_content: list[Part] = []
+            finish_reason = FinishReason.UNKNOWN
+            usage_metadata: Any = None
+            async for response_chunk in generator:
+                content = await self._contents_from_response(response_chunk)
+                if content:  # Only process if we have content
+                    accumulated_content.extend(content)
+                    ctx.send_chunk(
+                        chunk=ModelResponseChunk(
+                            content=content,
+                            role=Role.MODEL,
+                        )
+                    )
+                # The terminating reason and cumulative token usage ride on the trailing
+                # chunks, so hold onto the latest values we see as the stream drains —
+                # otherwise a streamed turn reports no finish reason and no usage at all.
+                if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    fr = response_chunk.candidates[0].finish_reason
+                    if fr:
+                        finish_reason = _to_finish_reason(fr)
+                if response_chunk.usage_metadata is not None:
+                    usage_metadata = response_chunk.usage_metadata
+
+            return ModelResponse(
+                message=Message(
+                    role=Role.MODEL,
+                    content=accumulated_content,
+                ),
+                finish_reason=finish_reason,
+                usage=_usage_from_metadata(usage_metadata),
+            )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-
-        accumulated_content: list[Part] = []
-        finish_reason = FinishReason.UNKNOWN
-        usage_metadata: Any = None
-        async for response_chunk in generator:
-            content = await self._contents_from_response(response_chunk)
-            if content:  # Only process if we have content
-                accumulated_content.extend(content)
-                ctx.send_chunk(
-                    chunk=ModelResponseChunk(
-                        content=content,
-                        role=Role.MODEL,
-                    )
-                )
-            # The terminating reason and cumulative token usage ride on the trailing
-            # chunks, so hold onto the latest values we see as the stream drains —
-            # otherwise a streamed turn reports no finish reason and no usage at all.
-            if response_chunk.candidates and response_chunk.candidates[0] is not None:
-                fr = response_chunk.candidates[0].finish_reason
-                if fr:
-                    finish_reason = _to_finish_reason(fr)
-            if response_chunk.usage_metadata is not None:
-                usage_metadata = response_chunk.usage_metadata
-
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=accumulated_content,
-            ),
-            finish_reason=finish_reason,
-            usage=_usage_from_metadata(usage_metadata),
-        )
 
     @cached_property
     def metadata(self) -> dict:

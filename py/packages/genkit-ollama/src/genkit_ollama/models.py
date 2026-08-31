@@ -89,7 +89,7 @@ from typing import Any, Literal, cast
 
 import ollama as ollama_api
 import structlog
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import (
@@ -254,7 +254,13 @@ class OllamaModel:
             return await self._generate_classified(request=request, ctx=ctx, client=client, content=content)
         except ollama_api.ResponseError as e:
             raise wrap_http_error(e, status_code=getattr(e, 'status_code', None)) from e
+        except ValidationError as e:
+            # A response Part/Message we could not build is not a bad caller
+            # request — retry can try again.
+            raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
         except ValueError as e:
+            if str(e).startswith('Unresolved API type:'):
+                raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
             raise GenkitError(status='INVALID_ARGUMENT', message=str(e), cause=e) from e
 
     async def _generate_classified(

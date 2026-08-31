@@ -96,6 +96,7 @@ _STATUS_CODE_MAP: dict[StatusName, int] = {
 _HTTP_CODE_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
 _HTTP_CODE_TO_STATUS.update({
     400: 'INVALID_ARGUMENT',
+    408: 'DEADLINE_EXCEEDED',
     409: 'ABORTED',
     500: 'INTERNAL',
 })
@@ -139,8 +140,9 @@ def from_http_code(code: int) -> StatusName:
     """Canonical status name for an HTTP status code.
 
     Any 5xx with no explicit entry falls through to ``INTERNAL``; unmapped
-    4xx codes return ``UNKNOWN``. Plugins wrap provider HTTP errors with this
-    so retry can skip a 400 without also skipping a 503.
+    4xx codes return ``UNKNOWN``. A 408 is ``DEADLINE_EXCEEDED`` so retry
+    can wait out a transient timeout. Plugins wrap provider HTTP errors
+    with this so retry can skip a 400 without also skipping a 503.
     """
     mapped = _HTTP_CODE_TO_STATUS.get(code)
     if mapped is not None:
@@ -369,7 +371,10 @@ def wrap_http_error(error: Exception, *, status_code: object, message: str | Non
     instead of coming back in a second.
     """
     resolved = http_code(status_code)
-    if resolved is None:
+    # A 2xx/3xx on an exception is not a failure status. Leave it
+    # unclassified so retry still sees the raw error, instead of a
+    # GenkitError that claims OK.
+    if resolved is None or resolved < 400:
         raise error
     retry_after_ms = retry_after_ms_from_error(error)
     response_metadata: ErrorResponseMetadata | None = None
