@@ -337,9 +337,18 @@ export function toOpenAIResponsesRequestBody(
     topP: top_p,
     topK, // the Responses API has no equivalent
     stopSequences, // the Responses API has no equivalent
+    // Chat Completions schema keys with no Responses equivalent, dropped so a
+    // dual-transport model's declared chat config cannot leak onto this wire.
+    frequencyPenalty,
+    presencePenalty,
+    logProbs,
+    topLogProbs,
     visualDetailLevel, // consumed while building the input items above
     version: modelVersion,
     store,
+    previousResponseId,
+    reasoningEffort,
+    reasoningSummary,
     instructions: instructionsFromConfig,
     tools: toolsFromConfig,
     include: includeFromConfig,
@@ -422,6 +431,22 @@ export function toOpenAIResponsesRequestBody(
     store: storeValue,
     ...restOfConfig,
   };
+
+  // Set after the spread so a declared key beats a raw passthrough one, the
+  // same precedence the reasoning fields below get.
+  if (previousResponseId !== undefined) {
+    body.previous_response_id = previousResponseId;
+  }
+
+  // Composed onto any raw `reasoning` object from the passthrough so the
+  // declared fields win without discarding the rest of it.
+  if (reasoningEffort !== undefined || reasoningSummary !== undefined) {
+    body.reasoning = {
+      ...body.reasoning,
+      ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+      ...(reasoningSummary !== undefined ? { summary: reasoningSummary } : {}),
+    };
+  }
 
   // Composed onto any raw `text` object from the passthrough (e.g. verbosity)
   // rather than replacing it wholesale.

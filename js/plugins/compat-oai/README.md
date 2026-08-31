@@ -140,6 +140,70 @@ const result = await ai.generate({
 console.log(result.text);
 ```
 
+### OpenAI Responses API
+
+Models that OpenAI serves only over the [Responses API](https://platform.openai.com/docs/api-reference/responses), such as `gpt-5-pro`, `o1-pro`, `o3-pro` and the codex family, are routed there automatically:
+
+```typescript
+import { openAI } from '@genkit-ai/compat-oai/openai';
+
+const response = await ai.generate({
+  model: openAI.model('gpt-5-pro'),
+  prompt: 'Tell me a joke.',
+});
+```
+
+Models available on both transports default to Chat Completions. Opt a request into the Responses API with `openAI.responsesModel()`:
+
+```typescript
+const response = await ai.generate({
+  model: openAI.responsesModel('gpt-4o'),
+  prompt: 'Tell me a joke.',
+});
+```
+
+or from dotprompt frontmatter, or any other place that carries config:
+
+```yaml
+model: openai/gpt-4o
+config:
+  transport: responses
+```
+
+Built-in OpenAI tools such as web search pass through `config.tools`:
+
+```typescript
+const response = await ai.generate({
+  model: openAI.responsesModel('gpt-4o'),
+  prompt: 'What happened in the news today?',
+  config: { tools: [{ type: 'web_search' }] },
+});
+```
+
+By default requests are stateless: the plugin pins `store: false` and asks OpenAI to return encrypted reasoning, so multi-turn conversations replay the full history from Genkit messages and nothing is retained server-side. To use server-side threading instead, opt into storage and thread responses yourself:
+
+```typescript
+const first = await ai.generate({
+  model: openAI.responsesModel('gpt-4o'),
+  prompt: 'Pick a number between 1 and 10.',
+  config: { store: true },
+});
+
+const second = await ai.generate({
+  model: openAI.responsesModel('gpt-4o'),
+  prompt: 'Double it.',
+  config: { store: true, previousResponseId: (first.raw as { id: string }).id },
+});
+```
+
+When threading with `previousResponseId`, send only the new user turn; the server already holds the earlier context.
+
+The pro models can take several minutes per request; raise the SDK's default 10-minute timeout through the plugin's `timeout` option if needed:
+
+```typescript
+openAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30 * 60 * 1000 });
+```
+
 ### Custom models & other Cloud providers
 
 ```typescript

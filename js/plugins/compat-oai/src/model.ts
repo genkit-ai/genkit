@@ -34,7 +34,13 @@ import {
   z,
 } from 'genkit';
 import { parsePartialJson } from 'genkit/extract';
-import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
+import type {
+  ModelAction,
+  ModelInfo,
+  ModelMiddleware,
+  ToolDefinition,
+} from 'genkit/model';
+import { simulateConstrainedGeneration } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
 import type {
@@ -50,6 +56,7 @@ import type {
   CompletionChoice,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
+import { openAIResponsesModelRunner } from './responses.js';
 import {
   extractDataFromBase64Url,
   generateFilenameFromContentType,
@@ -536,6 +543,15 @@ export function toOpenAIRequestBody(
       message: `The 'responses' transport is not supported by ${modelVersion ?? modelName}; it is served over the Chat Completions API.`,
     });
   }
+  // Near-miss values ('Responses', a YAML typo) would otherwise be silently
+  // dropped and served over Chat Completions - the one silent cell in the
+  // transport matrix.
+  if (transport !== undefined && transport !== 'chat_completions') {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Unknown transport '${transport}'.`,
+    });
+  }
 
   const tools: ChatCompletionTool[] = request.tools?.map(toOpenAITool) ?? [];
   if (toolsFromConfig) {
@@ -690,7 +706,10 @@ export function openAIModelRunner(
  * @param params.client The OpenAI client instance.
  * @param params.modelRef Optional reference to the model's configuration and
  * custom options.
-
+ * @param params.responsesTransport Set true when the provider also serves this
+ * model over the Responses API; a request carrying
+ * `config: { transport: 'responses' }` is then dispatched to that transport
+ * instead of Chat Completions.
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAIModel<
@@ -701,19 +720,60 @@ export function defineCompatOpenAIModel<
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: ModelRequestBuilder;
   pluginOptions?: PluginOptions;
+  responsesTransport?: boolean;
 }): ModelAction {
   const { name, client, pluginOptions, modelRef, requestBuilder } = params;
   const modelName = toModelName(name, pluginOptions?.name);
   const actionName =
     modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
 
+  const chatRunner = openAIModelRunner(
+    modelName,
+    client,
+    requestBuilder,
+    pluginOptions
+  );
+  const responsesRunner = params.responsesTransport
+    ? openAIResponsesModelRunner(modelName, client, pluginOptions)
+    : undefined;
+  const runner: typeof chatRunner = responsesRunner
+    ? (request, options) =>
+        request.config?.transport === 'responses'
+          ? responsesRunner(request, options)
+          : chatRunner(request, options)
+    : chatRunner;
+
+  // Registering constrained keeps core's simulateConstrainedGeneration off,
+  // because it would strip output.schema into the prompt before the transport
+  // dispatch runs. Models that never declared constrained still need that
+  // simulation on their Chat Completions requests, so the middleware below
+  // re-applies it for exactly those.
+  const ownConstrained = modelRef?.info?.supports?.constrained;
+  const supports = params.responsesTransport
+    ? {
+        ...modelRef?.info?.supports,
+        constrained: ownConstrained ?? ('all' as const),
+      }
+    : modelRef?.info?.supports;
+  const use: ModelMiddleware[] | undefined =
+    params.responsesTransport && !ownConstrained
+      ? [
+          (req, next) =>
+            req.config?.transport === 'responses'
+              ? next(req)
+              : simulateConstrainedGeneration()(req, next),
+        ]
+      : undefined;
+
   return model(
     {
       name: actionName,
       ...modelRef?.info,
+      ...(supports ? { supports } : {}),
+      ...(use ? { use } : {}),
       configSchema: modelRef?.configSchema,
     },
-    openAIModelRunner(modelName, client, requestBuilder, pluginOptions)
+    runner
   );
 }
 

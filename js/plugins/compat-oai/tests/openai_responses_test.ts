@@ -685,6 +685,81 @@ describe('toOpenAIResponsesRequestBody', () => {
 
     expect(body.include).toStrictEqual(['message.output_text.logprobs']);
   });
+
+  test('drops declared chat-schema keys that have no Responses equivalent', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-4o', {
+      messages: [],
+      config: {
+        transport: 'responses',
+        frequencyPenalty: 0.5,
+        presencePenalty: 0.5,
+        logProbs: true,
+        topLogProbs: 3,
+      },
+    });
+
+    expect(body).not.toHaveProperty('frequencyPenalty');
+    expect(body).not.toHaveProperty('presencePenalty');
+    expect(body).not.toHaveProperty('logProbs');
+    expect(body).not.toHaveProperty('topLogProbs');
+  });
+
+  test('lets the declared previousResponseId win over a raw passthrough key', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: {
+        previousResponseId: 'resp_declared',
+        previous_response_id: 'resp_raw',
+      },
+    });
+
+    expect(body.previous_response_id).toBe('resp_declared');
+  });
+
+  test('keeps a raw previous_response_id passthrough when no declared key is set', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { previous_response_id: 'resp_raw' },
+    });
+
+    expect(body.previous_response_id).toBe('resp_raw');
+  });
+
+  test('maps previousResponseId onto the wire field', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { previousResponseId: 'resp_prev' },
+    });
+
+    expect(body.previous_response_id).toBe('resp_prev');
+    expect(body).not.toHaveProperty('previousResponseId');
+  });
+
+  test('maps reasoning effort and summary into the reasoning object', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: { reasoningEffort: 'low', reasoningSummary: 'auto' },
+    });
+
+    expect(body.reasoning).toStrictEqual({ effort: 'low', summary: 'auto' });
+    expect(body).not.toHaveProperty('reasoningEffort');
+    expect(body).not.toHaveProperty('reasoningSummary');
+  });
+
+  test('composes declared reasoning fields over a raw passthrough object', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [],
+      config: {
+        reasoningSummary: 'detailed',
+        reasoning: { effort: 'high', summary: 'auto' },
+      },
+    });
+
+    expect(body.reasoning).toStrictEqual({
+      effort: 'high',
+      summary: 'detailed',
+    });
+  });
 });
 
 describe('fromOpenAIResponse', () => {
@@ -1487,13 +1562,13 @@ describe('openAI plugin routing', () => {
     ).toContain('transport');
   });
 
-  test('leaves dual-transport names on Chat Completions', async () => {
+  test('declares the transport key on dual-transport chat models', async () => {
     const plugin = openAI({ apiKey: 'key' });
     const action = await plugin.model('gpt-5');
 
     expect(
       Object.keys(action.__action.metadata?.model.customOptions.properties)
-    ).not.toContain('transport');
+    ).toContain('transport');
   });
 
   test('gives Responses-only refs the transport-aware config schema', () => {
@@ -1638,6 +1713,86 @@ describe('openAI plugin routing', () => {
     );
   });
 
+  test('dispatches a dual-transport model to Responses on config opt-in', async () => {
+    const plugin = openAI({ apiKey: 'key' });
+    const action = await plugin.model('gpt-4o');
+    server.setNextResponse({ body: textResponse('via responses') });
+
+    const result = await action({
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: { transport: 'responses' },
+    });
+
+    expect(result.message?.content[0].text).toBe('via responses');
+    const sent = server.requests[server.requests.length - 1];
+    expect(sent.url).toBe('/v1/responses');
+    expect(sent.body).not.toHaveProperty('transport');
+  });
+
+  test('streams a dual-transport model over Responses on config opt-in', async () => {
+    const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          type: 'response.created',
+          response: fakeResponse(),
+          sequence_number: 0,
+        },
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            id: 'msg_1',
+            type: 'message',
+            role: 'assistant',
+            status: 'in_progress',
+            content: [],
+          },
+          sequence_number: 1,
+        },
+        {
+          type: 'response.content_part.added',
+          item_id: 'msg_1',
+          output_index: 0,
+          content_index: 0,
+          part: { type: 'output_text', text: '', annotations: [] },
+          sequence_number: 2,
+        },
+        {
+          type: 'response.output_text.delta',
+          item_id: 'msg_1',
+          output_index: 0,
+          content_index: 0,
+          delta: 'streamed',
+          sequence_number: 3,
+        },
+        {
+          type: 'response.completed',
+          response: textResponse('streamed'),
+          sequence_number: 4,
+        },
+      ],
+    });
+
+    const { response, stream } = ai.generateStream({
+      model: openAI.model('gpt-4o'),
+      prompt: 'hi',
+      config: { transport: 'responses' },
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk.text);
+    }
+    const result = await response;
+
+    expect(result.text).toBe('streamed');
+    expect(chunks.join('')).toBe('streamed');
+    const sent = server.requests[server.requests.length - 1];
+    expect(sent.url).toBe('/v1/responses');
+    expect(sent.body.stream).toBe(true);
+  });
+
   test('lists Responses-only models with the transport-aware config schema', async () => {
     const plugin = openAI({ apiKey: 'key' });
     server.setNextResponse({
@@ -1656,6 +1811,157 @@ describe('openAI plugin routing', () => {
     expect(
       Object.keys(metadata.metadata?.model.customOptions.properties)
     ).toContain('transport');
+  });
+});
+
+describe('openAI.responsesModel', () => {
+  test('returns a namespaced ref pinned to the responses transport', () => {
+    const ref = openAI.responsesModel('gpt-4o');
+
+    expect(ref.name).toBe('openai/gpt-4o');
+    expect(ref.config).toStrictEqual({ transport: 'responses' });
+    expect(Object.keys(ref.configSchema!.shape)).toContain(
+      'previousResponseId'
+    );
+  });
+
+  test('merges call-site config under the pin', () => {
+    const ref = openAI.responsesModel('gpt-4o', { reasoningEffort: 'low' });
+
+    expect(ref.config).toStrictEqual({
+      reasoningEffort: 'low',
+      transport: 'responses',
+    });
+  });
+
+  test('withConfig replaces config wholesale but re-injects the pin', () => {
+    const ref = openAI
+      .responsesModel('gpt-4o', { reasoningEffort: 'low' })
+      .withConfig({ temperature: 0.5 });
+
+    expect(ref.config).toStrictEqual({
+      temperature: 0.5,
+      transport: 'responses',
+    });
+  });
+
+  test('keeps the pin through a withConfig().withVersion() chain', () => {
+    const ref = openAI
+      .responsesModel('gpt-4o')
+      .withConfig({ temperature: 0.5 })
+      .withVersion('gpt-4o-2024-08-06');
+
+    expect(ref.version).toBe('gpt-4o-2024-08-06');
+    expect(ref.config).toStrictEqual({
+      temperature: 0.5,
+      transport: 'responses',
+    });
+    // The chained ref must stay pinned for the next withConfig too.
+    expect(ref.withConfig({ temperature: 1 }).config).toStrictEqual({
+      temperature: 1,
+      transport: 'responses',
+    });
+  });
+
+  test('routes a dual-transport model over the Responses API end to end', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({ body: textResponse('opted in') });
+
+      const result = await ai.generate({
+        model: openAI.responsesModel('gpt-4o'),
+        prompt: 'hi',
+      });
+
+      expect(result.text).toBe('opted in');
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/responses');
+      expect(sent.body.model).toBe('gpt-4o');
+      expect(sent.body).not.toHaveProperty('transport');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
+  });
+
+  test('keeps simulating an output schema on the plain chat path', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              message: { role: 'assistant', content: '{"colour":"blue"}' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      });
+
+      // gpt-3.5-turbo's Chat Completions API rejects response_format
+      // json_schema, so with no transport opt-in the schema must still be
+      // simulated into the prompt rather than sent natively.
+      await ai.generate({
+        model: openAI.model('gpt-3.5-turbo'),
+        prompt: 'pick one',
+        output: { schema: z.object({ colour: z.string() }) },
+      });
+
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/chat/completions');
+      expect(sent.body.response_format?.type).not.toBe('json_schema');
+      expect(JSON.stringify(sent.body.messages)).toContain('colour');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
+  });
+
+  test('sends an output schema natively on the dispatched path', async () => {
+    const server = new FakeOpenAIServer();
+    await server.start();
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+    try {
+      const ai = genkit({ plugins: [openAI({ apiKey: 'key' })] });
+      server.setNextResponse({ body: textResponse('{"colour":"blue"}') });
+
+      // gpt-5's chat info declares no `constrained`, so without the dispatch
+      // default this would be simulated into the prompt instead.
+      await ai.generate({
+        model: openAI.responsesModel('gpt-5'),
+        prompt: 'pick one',
+        output: { schema: z.object({ colour: z.string() }) },
+      });
+
+      const sent = server.requests[server.requests.length - 1];
+      expect(sent.url).toBe('/v1/responses');
+      expect(sent.body.text.format.type).toBe('json_schema');
+      expect(JSON.stringify(sent.body.input)).not.toContain('colour');
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_BASE_URL;
+      } else {
+        process.env.OPENAI_BASE_URL = previousBaseUrl;
+      }
+      server.stop();
+    }
   });
 });
 
@@ -1694,6 +2000,18 @@ describe('chat completions transport handling', () => {
       runner({
         messages: [{ role: 'user', content: [{ text: 'hi' }] }],
         config: { transport: 'responses' },
+      })
+    ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
+
+  test('rejects a near-miss transport value instead of serving it silently', async () => {
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIModelRunner('gpt-4o', client);
+
+    await expect(
+      runner({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { transport: 'Responses' },
       })
     ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
   });
