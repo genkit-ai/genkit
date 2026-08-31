@@ -465,10 +465,11 @@ async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> N
         check=check,
     )
     started = await ai.generate_operation(model='bg-model', prompt='a cat video')
-    # wrapped_start nests timing under metadata, so the dump has no stray keys.
-    assert started.metadata is not None and 'latencyMs' in started.metadata
+    dumped = started.model_dump(by_alias=True)
+    assert 'latencyMs' not in dumped
+    assert dumped.get('metadata') in (None, {})
 
-    reloaded = Operation.model_validate(started.model_dump(by_alias=True))
+    reloaded = Operation.model_validate(dumped)
     updated = await ai.check_operation(reloaded)
 
     assert updated.id == 'bg-op-123'

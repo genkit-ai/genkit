@@ -112,8 +112,7 @@ async def test_check_operation_round_trips_persisted_dump() -> None:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-rt', start=start, check=check)
-    # The shape wrapped_start produces: action key set, latency nested in metadata.
-    op = Operation(id='job-1', done=False, action='/background-model/bg-rt', metadata={'latencyMs': 42.0})
+    op = Operation(id='job-1', done=False, action='/background-model/bg-rt')
 
     reloaded = Operation.model_validate(op.model_dump(by_alias=True))
     updated = await ai.check_operation(reloaded)
@@ -171,7 +170,7 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-cancel-rt', start=start, check=check, cancel=cancel)
-    op = Operation(id='job-1', done=False, action='/background-model/bg-cancel-rt', metadata={'latencyMs': 42.0})
+    op = Operation(id='job-1', done=False, action='/background-model/bg-cancel-rt')
 
     reloaded = Operation.model_validate(op.model_dump(by_alias=True))
     updated = await ai.cancel_operation(reloaded)

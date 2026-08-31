@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, TypeVar
 
@@ -263,16 +262,10 @@ def define_background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        start_time = time.perf_counter()
         op = await start(request, ctx)
-        # Set action key in format: /{action_type}/{name}
+        # The handle needs this key so check/cancel can find the job later.
         op.action = action_key
-        latency_ms = (time.perf_counter() - start_time) * 1000
-        if op.metadata is None:
-            op.metadata = {}
-        op.metadata['latencyMs'] = latency_ms
         return op
 
     # Wrap the check function (no ctx parameter)
