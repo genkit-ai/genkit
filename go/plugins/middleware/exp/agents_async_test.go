@@ -800,6 +800,49 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	}
 }
 
+// TestAgentsBackgroundLaunchEchoesLabel pins the label plumbing: a
+// caller-chosen name rides the launch result and background-task reports next
+// to the taskId, purely as a reading aid.
+func TestAgentsBackgroundLaunchEchoesLabel(t *testing.T) {
+	g := newTestGenkit(t)
+	genkitx.DefineAgent[any](g, "quick",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/quick-label", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "quick answer"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	orch := toolModel(t, g, "test/orch-label", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_quick")
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_quick",
+				Input: map[string]any{"task": "answer fast", "background": true, "name": "fast-lane"},
+			}), nil
+		case len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "quick"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := lenientDelegation(toolOutputs(resp.History(), "delegate_to_quick")[0])
+	if launch.Name != "fast-lane" {
+		t.Errorf("launch result Name = %q, want %q", launch.Name, "fast-lane")
+	}
+	waited := decodeToolOutput[backgroundTasksResult](t, toolOutputs(resp.History(), waitBackgroundTasksToolName)[0])
+	if len(waited.Tasks) != 1 || waited.Tasks[0].Name != "fast-lane" {
+		t.Errorf("report did not echo the label: %+v", waited.Tasks)
+	}
+}
+
 // TestAgentsAbortReportsWindingDownAsPending pins the abort report's honesty:
 // aborted is a promise the row is settled and resumable, so a worker that has
 // not finalized inside the grace reports as pending (still winding down), and

@@ -289,6 +289,39 @@ func TestAgentsResumeClientManagedFromStash(t *testing.T) {
 	}
 }
 
+func TestAgentsResumeCarriesLabel(t *testing.T) {
+	// A resumed task is the same undertaking, so the caller-chosen label
+	// follows the handle onto the continuation's result.
+	g := newTestGenkit(t)
+	genkitx.DefineAgent[any](g, "flaky",
+		aix.InlinePrompt{ai.WithModel(failNTimesModel(t, g, "test/flaky-label", 1, "recovered", nil))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	orch := toolModel(t, g, "test/orch-label2", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+			return textResp(req, "done"), nil
+		}
+		if res, ok := lastDelegationOutput(req.Messages, "delegate_to_flaky"); ok {
+			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": res.TaskID}}), nil
+		}
+		return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_flaky",
+			Input: map[string]any{"task": "try X", "name": "second-try"}}), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "flaky"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures := delegationResponses(t, resp.History(), "delegate_to_flaky")
+	if len(failures) != 1 || failures[0].Name != "second-try" {
+		t.Fatalf("expected the labeled failure, got %+v", failures)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 1 || resumes[0].Response != "recovered" || resumes[0].Name != "second-try" {
+		t.Fatalf("expected the label to follow the resume, got %+v", resumes)
+	}
+}
+
 func TestAgentsResumeUnknownMemHandleRefused(t *testing.T) {
 	// An in-memory handle from another call (or a made-up one) has no stash
 	// behind it; the refusal explains the handle's lifetime and the durable

@@ -179,6 +179,8 @@ func (a *Agents) resumeFromStash(ctx context.Context, ref aix.AgentRef, st *agen
 	// Re-stash the continued conversation under a fresh handle so the next
 	// failure or follow-up starts from this run's end, not the original's.
 	a.stashClientState(st, ref, out, &result)
+	// The continuation is the same undertaking; its label follows the handle.
+	a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
 	return result, nil
 }
 
@@ -333,15 +335,20 @@ func (a *Agents) runResumeWith(ctx context.Context, ref aix.AgentRef, st *agents
 		names := a.backgroundToolNames()
 		logger.Debug(ctx, "background resume started",
 			"agent", ref.Name, "taskId", taskID, "resumedFrom", in.TaskID, "sessionId", out.SessionID)
-		return delegationResult{
+		result := delegationResult{
 			TaskID: taskID,
 			Status: string(aix.SnapshotStatusPending),
 			Response: fmt.Sprintf(
 				"Task %s resumed in the background as %s. Collect the result with %s or %s, or stop it with %s.",
 				in.TaskID, taskID, names.check, names.wait, names.abort),
-		}, nil
+		}
+		a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
+		return result, nil
 	}
-	return a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum)), nil
+	result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+	// The continuation is the same undertaking; its label follows the handle.
+	a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
+	return result, nil
 }
 
 // runResumedSubAgent runs the agent with the resume init option and the

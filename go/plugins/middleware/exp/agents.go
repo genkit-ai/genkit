@@ -226,6 +226,11 @@ type agentsState struct {
 	stashes map[string]*memStash
 	// memSeq allocates in-memory handle numbers.
 	memSeq int
+	// labels holds the caller-chosen delegation labels by task handle, for
+	// echoing on background-task reports. Like the stash, it is a per-call
+	// reading aid: after a restart the transcript still pairs each label with
+	// its taskId at the delegation that minted it.
+	labels map[string]string
 	// settledReports caches terminal background-task reports by task ID for
 	// the rest of the generate call: completed, failed, and aborted rows
 	// never change, so later re-checks skip the snapshot fetch and artifact
@@ -254,6 +259,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	st := &agentsState{
 		settledReports: make(map[string]backgroundTaskReport),
 		stashes:        make(map[string]*memStash),
+		labels:         make(map[string]string),
 	}
 
 	// Every generated tool name is validated against the set as it is built:
@@ -340,6 +346,9 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 // delegateInput is the input schema for a delegation tool.
 type delegateInput struct {
 	Task string `json:"task" jsonschema_description:"A clear, self-contained description of the task to delegate."`
+	// Name is a caller-chosen reading aid, never identity: the taskId stays
+	// the handle; the label just keeps several concurrent tasks readable.
+	Name string `json:"name,omitempty" jsonschema_description:"Optional short label for this delegation (e.g. \"sources-sweep\"). Echoed on the result and on background-task reports next to the taskId, to keep several tasks readable. Not an identifier."`
 }
 
 // delegationResult is the output of a delegation tool.
@@ -364,6 +373,9 @@ type delegationResult struct {
 	// "aborted", or the finish reason for the rest) for a synchronous
 	// delegation that carries a handle. Empty whenever TaskID is.
 	Status string `json:"status,omitempty"`
+	// Name echoes the caller-chosen label for this delegation, when one was
+	// given (see delegateInput.Name). A resumed task keeps its label.
+	Name string `json:"name,omitempty"`
 }
 
 type delegatedArtifact struct {
@@ -377,7 +389,7 @@ type delegatedArtifact struct {
 // agent resolution, sub-agent execution, and artifact merging.
 func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {
 	return func(ctx context.Context, in delegateInput) (delegationResult, error) {
-		return a.runDelegation(ctx, ref, st, in.Task)
+		return a.runDelegation(ctx, ref, st, in.Task, in.Name)
 	}
 }
 
@@ -410,7 +422,7 @@ func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agen
 // runDelegation is the synchronous delegation body, shared by the plain
 // delegation tool and the async-enabled variant when the model does not
 // request background execution.
-func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
+func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task, name string) (delegationResult, error) {
 	invocationNum, conversation, agent, refusal := a.beginDelegation(ctx, ref, st)
 	if refusal != nil {
 		return *refusal, nil
@@ -444,6 +456,7 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 		// result's handle has something to resume for the rest of this call.
 		a.stashClientState(st, ref, out, &result)
 	}
+	a.labelTask(st, &result, name)
 	logger.Debug(ctx, "sub-agent delegation finished",
 		"agent", ref.Name, "finishReason", string(out.FinishReason),
 		"durationMs", time.Since(start).Milliseconds(), "artifacts", len(result.Artifacts))
@@ -555,6 +568,30 @@ func noFinalMessageResponse(artifacts int) string {
 	default:
 		return fmt.Sprintf("The task completed, but the agent gave no final message; its result is in the %d artifacts it produced.", artifacts)
 	}
+}
+
+// labelTask stamps the caller-chosen label on a settled result and records it
+// against the result's handle so background-task reports can echo it for the
+// rest of the call. A label with no handle still rides the result (the
+// transcript keeps the pairing); a handle with no label is left alone.
+func (a *Agents) labelTask(st *agentsState, result *delegationResult, name string) {
+	if name == "" {
+		return
+	}
+	result.Name = name
+	if result.TaskID == "" {
+		return
+	}
+	st.mu.Lock()
+	st.labels[result.TaskID] = name
+	st.mu.Unlock()
+}
+
+// taskLabel returns the label recorded for a handle in this call, or "".
+func (a *Agents) taskLabel(st *agentsState, taskID string) string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.labels[taskID]
 }
 
 // settledStatus maps a settled finish reason onto the status vocabulary the

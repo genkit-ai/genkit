@@ -91,6 +91,8 @@ var abortSettleGrace = 5 * time.Second
 type asyncDelegateInput struct {
 	Task       string `json:"task" jsonschema_description:"A clear, self-contained description of the task to delegate."`
 	Background bool   `json:"background,omitempty" jsonschema_description:"Run the delegation in the background. The tool returns immediately with a taskId; collect the result later with check_background_tasks or wait_for_background_tasks."`
+	// Name mirrors delegateInput.Name.
+	Name string `json:"name,omitempty" jsonschema_description:"Optional short label for this delegation (e.g. \"sources-sweep\"). Echoed on the result and on background-task reports next to the taskId, to keep several tasks readable. Not an identifier."`
 }
 
 // backgroundTasksInput is the input of the check and abort tools: a bare list
@@ -127,6 +129,9 @@ type backgroundTaskReport struct {
 	TaskID string `json:"taskId"`
 	// Agent is the sub-agent running the task.
 	Agent string `json:"agent,omitempty"`
+	// Name is the caller-chosen label of the delegation behind TaskID, when
+	// one was given in this generate call (see delegateInput.Name).
+	Name string `json:"name,omitempty"`
 	// Status is the task's lifecycle state: "pending", "completed", "failed",
 	// "aborted", "expired" (worker presumed dead), or "unknown" (the ID could
 	// not be resolved; see Error). It answers what the reader must act on
@@ -161,9 +166,9 @@ type backgroundTasksResult struct {
 func (a *Agents) delegateAsync(ref aix.AgentRef, st *agentsState) func(context.Context, asyncDelegateInput) (delegationResult, error) {
 	return func(ctx context.Context, in asyncDelegateInput) (delegationResult, error) {
 		if !in.Background {
-			return a.runDelegation(ctx, ref, st, in.Task)
+			return a.runDelegation(ctx, ref, st, in.Task, in.Name)
 		}
-		return a.launchDelegation(ctx, ref, st, in.Task)
+		return a.launchDelegation(ctx, ref, st, in.Task, in.Name)
 	}
 }
 
@@ -174,7 +179,7 @@ func (a *Agents) delegateAsync(ref aix.AgentRef, st *agentsState) func(context.C
 // slot, so the synchronous fallback it hints at is not refused by a cap the
 // refusal consumed. History is never forwarded: detach requires a
 // server-managed sub-agent, and server-managed init rejects seeded state.
-func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task string) (delegationResult, error) {
+func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *agentsState, task, name string) (delegationResult, error) {
 	invocationNum, _, agent, refusal := a.beginDelegation(ctx, ref, st)
 	if refusal != nil {
 		return *refusal, nil
@@ -206,13 +211,15 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		names := a.backgroundToolNames()
 		logger.Debug(ctx, "background task started",
 			"agent", ref.Name, "taskId", taskID, "sessionId", out.SessionID)
-		return delegationResult{
+		result := delegationResult{
 			TaskID: taskID,
 			Status: string(aix.SnapshotStatusPending),
 			Response: fmt.Sprintf(
 				"Background task %s started for agent %q. Collect the result with %s or %s, or stop it with %s.",
 				taskID, ref.Name, names.check, names.wait, names.abort),
-		}, nil
+		}
+		a.labelTask(st, &result, name)
+		return result, nil
 	case aix.AgentFinishReasonFailed:
 		// FAILED_PRECONDITION is how the runtime rejects a detach-incapable
 		// agent (no session store, or one without subscriber support). The
@@ -252,7 +259,9 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		// synchronous delegation.
 		logger.Debug(ctx, "background launch settled synchronously",
 			"agent", ref.Name, "finishReason", string(out.FinishReason))
-		return a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum)), nil
+		result := a.foldDelegationOutput(ctx, ref, out, fmt.Sprintf("%s_%d", ref.Name, invocationNum))
+		a.labelTask(st, &result, name)
+		return result, nil
 	}
 }
 
@@ -585,7 +594,7 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		return backgroundTaskReport{TaskID: taskID, Status: taskStatusUnknown, Error: err.Error()}, err
 	}
 
-	report := backgroundTaskReport{TaskID: taskID, Agent: ref.Name}
+	report := backgroundTaskReport{TaskID: taskID, Agent: ref.Name, Name: a.taskLabel(st, taskID)}
 	// Both fetches dispatch a companion action of the sub-agent, which applies
 	// the runtime's read shaping: a pending row whose heartbeat went stale is
 	// surfaced as expired.
