@@ -63,6 +63,16 @@ const (
 	// It is comfortably larger than defaultHeartbeatInterval so a single missed
 	// beat does not trip expiry.
 	defaultHeartbeatTimeout = 60 * time.Second
+	// windDownHeartbeatBudget bounds how long an aborted invocation keeps
+	// heartbeating while its worker drains toward the finalize write. The
+	// beats are what keep a live, winding-down worker's row reading as
+	// pending (see finalizeInFlight) instead of expired the moment the abort
+	// flip lands: the flip stops the work, not the worker, and a drain
+	// through a slow tool call can outlast defaultHeartbeatTimeout. A worker
+	// that has not finalized within the budget is presumed wedged; its beats
+	// stop, the row goes stale and reads as expired, and the task stays
+	// recoverable instead of winding down forever.
+	windDownHeartbeatBudget = 5 * time.Minute
 )
 
 // settleGrace is how long [AgentConnection.Output] waits for a cancelled
@@ -1824,8 +1834,7 @@ func (rt *agentRuntime[State]) handleDetach(
 	rt.router.stopAndWait()
 
 	// Refresh the heartbeat on an interval, decoupled from clientCtx (the work
-	// outlives the client connection); stopped when the turn settles or an abort
-	// lands, both below.
+	// outlives the client connection); stopped when the turn settles, below.
 	hbCtx, stopHeartbeat := context.WithCancel(context.WithoutCancel(clientCtx))
 	go rt.runHeartbeat(hbCtx, pending.SnapshotID)
 
@@ -1836,7 +1845,17 @@ func (rt *agentRuntime[State]) handleDetach(
 		for status := range statusCh {
 			if status == SnapshotStatusAborted {
 				abortedByUser.Store(true)
-				stopHeartbeat()
+				// The flip stops the work, not the worker: the run is winding
+				// down toward its finalize write now, and the heartbeat keeps
+				// running so readers see that finalize coming
+				// (finalizeInFlight) instead of presuming the worker dead the
+				// moment the flip lands. The fnDone goroutine below stops the
+				// beats right before the finalize; the budget bounds a worker
+				// whose fn never observes the cancellation, so a truly wedged
+				// run still goes stale and reads as expired. A timer firing
+				// after the fnDone stop re-cancels an already-cancelled
+				// context, which is a no-op.
+				time.AfterFunc(windDownHeartbeatBudget, stopHeartbeat)
 				cancelWork()
 				return
 			}
@@ -1849,7 +1868,8 @@ func (rt *agentRuntime[State]) handleDetach(
 		stopSub()
 		// The turn has settled; stop refreshing the heartbeat before the
 		// finalize write so no beat races it. (A stray beat would be a no-op
-		// anyway: the mutator only touches a still-pending row.)
+		// anyway: the mutator only touches rows still awaiting their
+		// finalize, and SaveSnapshot's atomicity keeps either order safe.)
 		stopHeartbeat()
 		rt.intake.stopAndWait()
 		rt.router.close()
@@ -1867,11 +1887,11 @@ func (rt *agentRuntime[State]) handleDetach(
 	}, nil
 }
 
-// runHeartbeat refreshes the detached pending snapshot's heartbeat every
-// defaultHeartbeatInterval until ctx is cancelled (the turn settled or an abort
-// landed). A transient store error is logged and the loop continues; a
-// persistently failing worker simply stops beating, which is exactly the
-// staleness a reader detects as expired.
+// runHeartbeat refreshes the detached snapshot's heartbeat every
+// defaultHeartbeatInterval until ctx is cancelled (the turn settled, or the
+// wind-down budget elapsed after an abort). A transient store error is logged
+// and the loop continues; a persistently failing worker simply stops beating,
+// which is exactly the staleness a reader detects as expired.
 func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID string) {
 	ticker := time.NewTicker(defaultHeartbeatInterval)
 	defer ticker.Stop()
@@ -1888,18 +1908,26 @@ func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID stri
 	}
 }
 
-// beatHeartbeat refreshes a pending snapshot's HeartbeatAt via an ordinary
+// beatHeartbeat refreshes a detached snapshot's HeartbeatAt via an ordinary
 // SaveSnapshot: the mutator carries the existing row through unchanged but for
 // HeartbeatAt, so the caller-managed CreatedAt/UpdatedAt are preserved and a
 // beat does not register as a state change - no dedicated store method needed.
-// It only touches a still-pending row (returning nil otherwise), so a beat
-// never resurrects a terminal snapshot or clobbers a concurrent abort/finalize.
-// Shared by runHeartbeat and exercised directly in tests.
+// A beat lands in the two windows where a live worker is still owed a write:
+// while the detached turn runs (pending) and while an aborted turn drains
+// toward its finalize (aborted with no state yet - the window finalizeInFlight
+// reads by this very heartbeat). Any other row is settled, and the beat no-ops
+// rather than resurrect it; a beat racing the finalize is safe in either order
+// (SaveSnapshot is atomic, and a beat after the finalize sees the state and
+// no-ops). Shared by runHeartbeat and exercised directly in tests.
 func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) error {
 	now := time.Now()
 	_, err := store.SaveSnapshot(ctx, snapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			if existing == nil || existing.Status != SnapshotStatusPending {
+			if existing == nil {
+				return nil, nil
+			}
+			windingDown := existing.Status == SnapshotStatusAborted && existing.State == nil
+			if existing.Status != SnapshotStatusPending && !windingDown {
 				return nil, nil
 			}
 			updated := *existing

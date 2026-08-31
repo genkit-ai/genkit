@@ -3730,6 +3730,66 @@ func TestAgent_Heartbeat_BeatIsNoopOnTerminalSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgent_Heartbeat_BeatLandsInAbortWindDownWindow(t *testing.T) {
+	// The abort flip stops the work, not the worker: while the aborted row
+	// awaits its finalize (no state yet), the worker keeps beating so readers
+	// see the finalize coming (finalizeInFlight) instead of presuming it dead
+	// the moment the flip lands. The beat must land in that window and must
+	// still no-op on a finalized aborted row.
+	store := newTestInMemStore[testState]()
+	old := time.Now().Add(-time.Hour)
+	winding, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID:   "sess-winding",
+				Status:      SnapshotStatusAborted,
+				CreatedAt:   old,
+				UpdatedAt:   old,
+				HeartbeatAt: &old,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot winding row: %v", err)
+	}
+	if err := beatHeartbeat(context.Background(), store, winding.SnapshotID); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+	after, err := store.GetSnapshot(context.Background(), winding.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if after.HeartbeatAt == nil || !after.HeartbeatAt.After(old) {
+		t.Errorf("beat did not land in the wind-down window: HeartbeatAt=%v", after.HeartbeatAt)
+	}
+	if after.Status != SnapshotStatusAborted || !after.UpdatedAt.Equal(old) {
+		t.Errorf("beat changed more than the heartbeat: status=%q updatedAt=%v", after.Status, after.UpdatedAt)
+	}
+
+	finalized, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID: "sess-finalized",
+				Status:    SnapshotStatusAborted,
+				State:     &SessionState[testState]{Messages: []*ai.Message{ai.NewUserTextMessage("kept")}},
+				CreatedAt: old,
+				UpdatedAt: old,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot finalized row: %v", err)
+	}
+	if err := beatHeartbeat(context.Background(), store, finalized.SnapshotID); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+	settled, err := store.GetSnapshot(context.Background(), finalized.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if settled.HeartbeatAt != nil {
+		t.Errorf("beat stamped a heartbeat on a finalized aborted row: %v", settled.HeartbeatAt)
+	}
+}
+
 func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	// SendArtifact must behave the same way regardless of whether detach
 	// has landed: the artifact is added to the session and shows up in
