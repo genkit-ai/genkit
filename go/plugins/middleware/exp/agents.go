@@ -222,9 +222,9 @@ type agentsState struct {
 	// optional history forwarding.
 	conversation []*ai.Message
 	// labels holds the caller-chosen delegation labels by task handle, for
-	// echoing on background-task reports. Like the stash, it is a per-call
-	// reading aid: after a restart the transcript still pairs each label with
-	// its taskId at the delegation that minted it.
+	// echoing on background-task reports. It is a per-call reading aid: after
+	// a restart the transcript still pairs each label with its taskId at the
+	// delegation that minted it.
 	labels map[string]string
 	// settledReports caches terminal background-task reports by task ID for
 	// the rest of the generate call: completed, failed, and aborted rows
