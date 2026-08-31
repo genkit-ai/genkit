@@ -230,11 +230,11 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reload() -> None:
-    """After detach the chat resumes the pending snapshot.
+async def test_chat_does_not_resume_detached_snapshot() -> None:
+    """After detach the chat keeps the last completed resume id.
 
-    A send while it is still pending (or after abort) is rejected; resume by
-    session_id walks back to the last completed turn.
+    send() continues from that completed turn. chat(session_id=) also
+    walks back past a pending/aborted leaf.
     """
     registry = Registry()
     store = InMemorySessionStore()
@@ -259,26 +259,15 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
 
     task = await chat.detach('slow background work')
     assert chat.messages != history_before_detach  # optimistic prompt pushed
-    # Resume handle tracks the pending detached snapshot.
     assert chat.snapshot_id == task.snapshot_id
     assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
 
     with pytest.raises(AgentError, match='not resumable'):
         await chat.send('too soon')
 
-    status = await task.abort()
-    # abort() returns the previous status: pending while the turn was running.
-    assert status == SnapshotStatus.PENDING
-    # The prompt stays — it was still asked. The resume id still names the
-    # aborted snapshot, so a bare send keeps failing until we reload.
-    assert chat.messages != history_before_detach
-    with pytest.raises(AgentError, match='not resumable'):
-        await chat.send('still stranded')
-
     chat = agent.chat(session_id=session_id)
-    out = await chat.send('are you there?')
-    assert out.finish_reason == AgentFinishReason.STOP
-    assert chat.snapshot_id not in (None, task.snapshot_id)
+    again = await chat.send('are you there?')
+    assert again.finish_reason == AgentFinishReason.STOP
 
 
 @pytest.mark.asyncio

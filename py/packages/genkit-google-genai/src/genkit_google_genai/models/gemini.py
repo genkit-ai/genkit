@@ -97,9 +97,9 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'OTHER',
         'MALFORMED_FUNCTION_CALL',
         'MISSING_THOUGHT_SIGNATURE',
-        'UNEXPECTED_TOOL_CALL',
         'NO_IMAGE',
         'IMAGE_OTHER',
+        'UNEXPECTED_TOOL_CALL',
     ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN

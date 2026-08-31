@@ -60,6 +60,14 @@ from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHo
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 
 
+def _ok_schema_response() -> ModelResponse:
+    """A reply that satisfies the TestSchema used by the output-config tests."""
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"foo": 1, "bar": "x"}'))]),
+    )
+
+
 @pytest.fixture
 def setup_test() -> SetupFixture:
     """Setup a test fixture for the veneer tests."""
@@ -837,7 +845,8 @@ async def test_generate_stream_no_need_to_await_response(
 @pytest.mark.asyncio
 async def test_generate_with_output(setup_test: SetupFixture) -> None:
     """Test that the generate function with output works."""
-    ai, *_ = setup_test
+    ai, _, pm, *_ = setup_test
+    pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -876,7 +885,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     )
 
     response = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -888,7 +897,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -905,7 +914,8 @@ async def test_generate_defaults_to_json_format(
     setup_test: SetupFixture,
 ) -> None:
     """When Output is provided, format will default to json."""
-    ai, *_ = setup_test
+    ai, _, pm, *_ = setup_test
+    pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -945,7 +955,7 @@ async def test_generate_defaults_to_json_format(
     )
 
     response = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -953,7 +963,7 @@ async def test_generate_defaults_to_json_format(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -966,7 +976,8 @@ async def test_generate_json_format_unconstrained(
     setup_test: SetupFixture,
 ) -> None:
     """When Output is provided, format will default to json."""
-    ai, *_ = setup_test
+    ai, _, pm, *_ = setup_test
+    pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -1004,7 +1015,7 @@ async def test_generate_json_format_unconstrained(
     )
 
     response = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1013,7 +1024,7 @@ async def test_generate_json_format_unconstrained(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1219,7 +1230,8 @@ async def test_generate_json_format_unconstrained_with_instructions(
     setup_test: SetupFixture,
 ) -> None:
     """When output_instructions is provided, instructions are injected."""
-    ai, *_ = setup_test
+    ai, _, pm, *_ = setup_test
+    pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -1284,7 +1296,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     )
 
     response = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1294,7 +1306,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1314,7 +1326,8 @@ async def test_generate_output_instructions_true_injects_standard(
     passing ``True`` is how a caller opts back into the schema instructions -- e.g.
     when running unconstrained against a model without native structured output.
     """
-    ai, *_ = setup_test
+    ai, _, pm, *_ = setup_test
+    pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -1325,7 +1338,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # True -> the standard schema preamble is injected.
     on = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1338,7 +1351,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # Unset -> json's default (False) means nothing is injected.
     off = await ai.generate(
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1411,10 +1424,12 @@ class MockBananaFormat(FormatDef):
     def handle(self, schema: dict[str, Any] | None) -> Formatter:
         """Handle the format."""
 
-        def message_parser(msg: Message) -> str:
+        def message_parser(msg: Message) -> Any:  # noqa: ANN401
             """Parse the message."""
             parts = [p.root.text or '' for p in msg.content if hasattr(p.root, 'text') and p.root.text]
-            return f'banana {"".join(parts)}'  # type: ignore[arg-type]
+            if schema:
+                return {'foo': 1, 'bar': f'banana {"".join(parts)}'}
+            return f'banana {"".join(parts)}'
 
         def chunk_parser(chunk: ModelResponseChunk) -> str:
             """Parse the chunk."""
@@ -1474,7 +1489,7 @@ async def test_define_format(setup_test: SetupFixture) -> None:
 
     response = await stream_result.response
 
-    assert response.output == 'banana model says'
+    assert response.output == TestSchema(foo=1, bar='banana model says')
     assert chunks == ['banana chunk 1', 'banana chunk 2', 'banana chunk 3']
 
     assert response.request == ModelRequest(

@@ -21,7 +21,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit._core._schema import to_json_schema
+from genkit._core._error import GenkitError
+from genkit._core._schema import InvalidOutputSchemaError, parse_schema, to_json_schema
 
 
 def test_to_json_schema_pydantic_model() -> None:
@@ -203,3 +204,24 @@ class TestPassthroughBehavior:
     def test_passthrough_behavior(self, schema: dict[str, Any]) -> None:
         """A dict representing a JSON Schema should be returned as-is."""
         assert to_json_schema(schema) == schema
+
+
+def test_parse_schema_accepts_matching_data() -> None:
+    parse_schema(data={'name': 'Ada', 'age': 36}, json_schema={'type': 'object', 'required': ['name']})
+
+
+def test_parse_schema_rejects_wrong_shape() -> None:
+    with pytest.raises(GenkitError, match='Schema validation failed') as raised:
+        parse_schema(data='nope', json_schema={'type': 'object'})
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert '(root)' in raised.value.original_message
+    assert 'Provided data' not in raised.value.original_message
+    assert 'Required JSON schema' not in raised.value.original_message
+
+
+def test_parse_schema_invalid_schema_is_invalid_argument() -> None:
+    """A broken output_schema must not leak a raw jsonschema exception."""
+    with pytest.raises(InvalidOutputSchemaError, match='Invalid output_schema') as raised:
+        parse_schema(data={'a': 1}, json_schema={'type': 'not-a-json-type'})
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert isinstance(raised.value, GenkitError)

@@ -68,6 +68,7 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
+from genkit._core._schema import check_output_schema
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
@@ -100,6 +101,10 @@ ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.ABORTED,
     FinishReason.INTERRUPTED,
 })
+
+# These parsers extract JSON. The extracted value still has to match the
+# schema. Other format parsers (enum, text, custom) return the output as-is.
+JSON_EXTRACT_FORMATS = frozenset({'json', 'array', 'jsonl'})
 
 
 def log_output_parse(
@@ -990,16 +995,21 @@ async def _generate_action_turn(
         generated_msg = response.message
         tool_requests = [x for x in generated_msg.content if x.root.tool_request] if generated_msg is not None else []
 
-        if is_debug_enabled(logger):
+        def log_responded(resp: ModelResponse | None = None) -> None:
+            # After schema/loop stamps so the breadcrumb matches the
+            # finish_reason the caller actually got.
+            if not is_debug_enabled(logger):
+                return
+            stamped = resp if resp is not None else response
             responded: dict[str, object] = {
                 'model': turn_options.model,
                 'turn': current_turn,
-                'finish_reason': response.finish_reason,
+                'finish_reason': stamped.finish_reason,
                 'tool_requests': len(tool_requests),
             }
-            if response.usage is not None:
-                responded['input_tokens'] = response.usage.input_tokens
-                responded['output_tokens'] = response.usage.output_tokens
+            if stamped.usage is not None:
+                responded['input_tokens'] = stamped.usage.input_tokens
+                responded['output_tokens'] = stamped.usage.output_tokens
             logger.debug('model responded', **responded)
 
         log_output_parse(
@@ -1014,6 +1024,9 @@ async def _generate_action_turn(
 
         # A ticket means generate is done. Don't run tools against a start handle.
         if generated_msg is None or response.operation is not None:
+            if generated_msg is None:
+                response.assert_valid_schema()
+                log_responded()
             return _persist_threaded_conversation(response, turn_options.messages)
 
         # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
@@ -1033,21 +1046,37 @@ async def _generate_action_turn(
             generated_msg.metadata = existing_meta
 
         if turn_options.return_tool_requests or len(tool_requests) == 0:
-            if len(tool_requests) == 0 and response.finish_reason not in ABNORMAL_FINISH_REASONS:
+            if len(tool_requests) == 0:
                 response.assert_valid_schema()
+            log_responded()
             return _persist_threaded_conversation(response, turn_options.messages)
 
         max_iters = turn_options.max_turns if turn_options.max_turns is not None else DEFAULT_MAX_TURNS
 
         if current_turn + 1 > max_iters:
-            raise GenerationResponseError(
-                response=response,
-                message=f'Exceeded maximum tool call iterations ({max_iters})',
-                status='ABORTED',
-                details={'request': request},
-            )
+            response.finish_reason = FinishReason.ABORTED
+            response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
+            log_responded()
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         raise_if_aborted(ctx.abort_signal)
+
+        known_tools = {t.name for t in turn_tools}
+        if turn_options.tools:
+            known_tools.update(turn_options.tools)
+        missing_tool = next(
+            (
+                p.root.tool_request.name
+                for p in tool_requests
+                if isinstance(p.root, ToolRequestPart) and p.root.tool_request.name not in known_tools
+            ),
+            None,
+        )
+        if missing_tool is not None:
+            response.finish_reason = FinishReason.FAILED
+            response.finish_message = f'Tool {missing_tool} not found'
+            log_responded()
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         revised_model_msg, tool_msg = await resolve_tool_requests(
             registry=registry,
@@ -1069,8 +1098,10 @@ async def _generate_action_turn(
             interrupted_resp.finish_reason = FinishReason.INTERRUPTED
             interrupted_resp.finish_message = 'One or more tool calls resulted in interrupts.'
             interrupted_resp.message = Message(revised_model_msg)
+            log_responded(interrupted_resp)
             return _persist_threaded_conversation(interrupted_resp, turn_options.messages)
 
+        log_responded()
         # If the loop will continue, stream out the tool response message...
         if tool_msg:
             chunks.stream_chunk(
@@ -1102,13 +1133,37 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    result = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
     assert_hook_kept_operation(
         boxed=boxed_start.response,
-        after_hooks=result,
+        after_hooks=response,
         name=model.name,
     )
-    return result
+    # The caller's output_schema is what this turn asked for. A wrap_generate
+    # that hung its own request on the response is still judged against that,
+    # not whatever leftover output config it copied.
+    out = raw_request.output
+    output = OutputConfig(
+        format=out.format if out else None,
+        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
+        json_schema=out.json_schema if out else None,
+        constrained=out.constrained if out else None,
+        content_type=out.content_type if out else None,
+    )
+    if response.request is None:
+        response.request = ModelRequest(
+            messages=list(raw_request.messages or []),
+            output=output,
+        )
+    else:
+        response.request = response.request.model_copy(update={'output': output})
+    if formatter and response._message_parser is None:
+        response._message_parser = lambda msg: formatter.parse_message(msg)
+    if out and out.schema_type:
+        response._schema_type = out.schema_type
+    response.assert_valid()
+    response.assert_valid_schema()
+    return response
 
 
 def apply_format(
@@ -1349,6 +1404,13 @@ async def resolve_parameters(
             )
         format_def = cast(FormatDef, looked_up_format)
 
+    if request.output and request.output.json_schema is not None:
+        json_schema = request.output.json_schema
+        if hasattr(json_schema, 'model_dump'):
+            json_schema = json_schema.model_dump()
+        if isinstance(json_schema, dict):
+            check_output_schema(json_schema)
+
     return (model_action, tools, format_def)
 
 
@@ -1436,7 +1498,10 @@ async def resolve_tool_requests(
         tool_request = tool_req_root.tool_request
 
         if tool_request.name not in tool_dict:
-            raise RuntimeError(f'failed {tool_request.name} not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'Tool {tool_request.name} not found',
+            )
         tool = tool_dict[tool_request.name]
         work.append((i, tool, tool_req_root))
 
@@ -1865,23 +1930,3 @@ def _find_corresponding_tool_response(
         if p.tool_response.name == request.tool_request.name and p.tool_response.ref == request.tool_request.ref:
             return p
     return None
-
-
-# TODO(#4336): extend GenkitError
-class GenerationResponseError(Exception):
-    # TODO(#4337): use status enum
-    """Error raised when a generation request fails."""
-
-    def __init__(
-        self,
-        response: ModelResponse,
-        message: str,
-        status: str,
-        details: dict[str, Any],
-    ) -> None:
-        """Initialize with the failed response and error details."""
-        super().__init__(message)
-        self.response: ModelResponse = response
-        self.message: str = message
-        self.status: str = status
-        self.details: dict[str, Any] = details

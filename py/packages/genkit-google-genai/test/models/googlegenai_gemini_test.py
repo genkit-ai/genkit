@@ -1222,10 +1222,15 @@ async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> 
     assert raised.value.status == 'UNAVAILABLE'
 
 
-def test_to_finish_reason_image_policy_vs_no_image() -> None:
-    """Image-policy refusals are blocked; a missing image is just other."""
+def test_to_finish_reason_image_policy() -> None:
+    """Image-policy refusals stay blocked so a leftover is not labeled a schema miss."""
     assert _to_finish_reason('IMAGE_SAFETY') == FinishReason.BLOCKED
     assert _to_finish_reason('IMAGE_PROHIBITED_CONTENT') == FinishReason.BLOCKED
     assert _to_finish_reason('IMAGE_RECITATION') == FinishReason.BLOCKED
+
+
+def test_to_finish_reason_image_other_and_unexpected_tool() -> None:
+    """No-image / unspecified image stop / bad tool call are other, not unknown."""
     assert _to_finish_reason('NO_IMAGE') == FinishReason.OTHER
     assert _to_finish_reason('IMAGE_OTHER') == FinishReason.OTHER
+    assert _to_finish_reason('UNEXPECTED_TOOL_CALL') == FinishReason.OTHER

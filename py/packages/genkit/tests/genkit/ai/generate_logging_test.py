@@ -98,6 +98,57 @@ async def test_generate_logs_named_records_when_debug_enabled(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal still gets a model-responded record so the log panel shows why."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await ai.generate(prompt='hi')
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.text == 'nope'
+
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.BLOCKED
+    assert 'response' not in responded[0]
+
+
+@pytest.mark.asyncio
+async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The breadcrumb uses the stamped finish, not the model's original stop."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await ai.generate(prompt='hi', output_schema={'type': 'object'})
+    assert response.finish_reason == FinishReason.FAILED
+
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.FAILED
+
+
+@pytest.mark.asyncio
 async def test_response_is_not_serialized_when_debug_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """The payload is not built at all when the event would be dropped."""
     structlog.reset_defaults()
@@ -146,7 +197,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
     ]
 
     with capture_logs() as entries:
-        await generate_action(
+        response = await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
@@ -154,6 +205,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
                 output=GenerateActionOutputConfig(format='json'),
             ),
         )
+    assert response.finish_reason == FinishReason.BLOCKED
 
     warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
     assert len(warned) == 1
@@ -243,7 +295,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
     with capture_logs() as entries:
-        await generate_action(
+        response = await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
@@ -251,11 +303,15 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
                 tools=['hold'],
             ),
         )
+    assert response.finish_reason == FinishReason.INTERRUPTED
 
     interrupted = [e for e in entries if e['event'] == 'tool triggered an interrupt']
     assert len(interrupted) == 1
     assert interrupted[0]['tool'] == 'hold'
     assert 'generation paused by tool interrupts' in [e['event'] for e in entries]
+    responded = [e for e in entries if e['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.INTERRUPTED
 
 
 @pytest.mark.asyncio

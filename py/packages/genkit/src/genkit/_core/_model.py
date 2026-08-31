@@ -29,13 +29,14 @@ from functools import cached_property
 from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._error import GenkitError
 from genkit._core._extract_json import extract_json
+from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     Candidate,
     DocumentData,
@@ -45,7 +46,6 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
-    GenkitRuntimeError,
     Media,
     MediaModel,
     MediaPart,
@@ -70,6 +70,15 @@ from genkit._core._typing import (
 # shows up in the IDE the same day it becomes legal.
 ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
+
+# The model's own reason stays on the response. A leftover that failed
+# schema on a normal stop becomes ERROR instead.
+_KEEP_MODEL_FINISH_REASONS = frozenset({
+    FinishReason.BLOCKED,
+    FinishReason.ABORTED,
+    FinishReason.INTERRUPTED,
+    FinishReason.OTHER,
+})
 
 
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
@@ -499,7 +508,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     message: Message | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
-    error: GenkitRuntimeError | None = None
     latency_ms: float | None = None
     usage: GenerationUsage | None = None
     custom: dict[str, Any] | None = None
@@ -516,14 +524,65 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.custom = {}
 
     def assert_valid(self) -> None:
-        """Validate response structure. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+        """No-op. A blocked or empty reply is still a response the caller can read."""
 
     def assert_valid_schema(self) -> None:
-        """Validate response conforms to output schema. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+        """Mark this response as unusable structured output without throwing.
+
+        A leftover echo or a wrong-shape JSON is not a Recipe. generate()
+        still returns so the leftover stays on ``.text``; we set
+        ``finish_reason=error`` and ``.output`` is None.
+        A blocked/aborted/interrupted/other finish keeps the model's reason.
+        """
+        schema = self.request.output_schema if self.request is not None else None
+        if schema is None and self._schema_type is None:
+            return
+        if self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
+            return
+
+        try:
+            parsed = self._raw_parsed_output()
+        except ValueError:
+            preview = (self.text or '')[:200]
+            self.finish_reason = FinishReason.FAILED
+            self.finish_message = f'Model output was not valid JSON for the requested schema: {preview}'
+            return
+
+        # A custom format's parser can return a string on purpose (enum,
+        # text). Still check it against the schema — MAYBE is not one of
+        # POSITIVE/NEGATIVE/NEUTRAL.
+        if self._message_parser is not None and not isinstance(parsed, (dict, list)):
+            if schema is not None:
+                try:
+                    parse_schema(data=parsed, json_schema=schema)
+                except GenkitError as error:
+                    if error.original_message.startswith('Invalid output_schema'):
+                        raise
+                    self.finish_reason = FinishReason.FAILED
+                    self.finish_message = error.original_message
+            return
+
+        if schema is not None:
+            try:
+                parse_schema(data=parsed, json_schema=schema)
+            except GenkitError as error:
+                if error.original_message.startswith('Invalid output_schema'):
+                    raise
+                self.finish_reason = FinishReason.FAILED
+                self.finish_message = error.original_message
+                return
+        if self._schema_type is None:
+            return
+        try:
+            _ = self._schema_type.model_validate(parsed)
+        except ValidationError:
+            self.finish_reason = FinishReason.FAILED
+            self.finish_message = 'Model output did not match the requested schema.'
+
+    def _raw_parsed_output(self) -> object:
+        if self._message_parser and self.message is not None:
+            return self._message_parser(self.message)
+        return extract_json(self.text)
 
     def __eq__(self, other: object) -> bool:
         """Compare responses by message, finish_reason, and poll snapshot.
@@ -552,22 +611,43 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
     @property
     def output(self) -> OutputT:
-        """Parsed JSON output from the response text, validated against schema if set.
+        """Parsed structured output, or None when the reply is not that shape.
 
-        Recomputed each read so attaching a schema after a first touch still
-        returns the typed model.
+        generate() does not throw on a leftover string. If you asked for a
+        schema and this is not it, read ``finish_reason`` / ``.text`` instead.
         """
-        if self._message_parser and self.message is not None:
-            parsed = self._message_parser(self.message)
-        else:
-            parsed = extract_json(self.text)
+        schema = self.request.output_schema if self.request is not None else None
+        wants_schema = schema is not None or self._schema_type is not None
+        if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
+            return cast(OutputT, None)
+        if wants_schema and self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
+            return cast(OutputT, None)
 
-        # If we have a schema type and the parsed output is a dict, validate and
-        # return a proper Pydantic instance. Skip if parsed is already the correct
-        # type or if it's not a dict (e.g., custom formats may return strings).
-        if self._schema_type is not None and parsed is not None and isinstance(parsed, dict):
-            return cast(OutputT, self._schema_type.model_validate(parsed))
+        try:
+            parsed = self._raw_parsed_output()
+        except ValueError:
+            if wants_schema:
+                return cast(OutputT, None)
+            raise
 
+        if self._message_parser is not None and not isinstance(parsed, (dict, list)):
+            if schema is not None:
+                try:
+                    parse_schema(data=parsed, json_schema=schema)
+                except GenkitError:
+                    return cast(OutputT, None)
+            return cast(OutputT, parsed)
+
+        if schema is not None:
+            try:
+                parse_schema(data=parsed, json_schema=schema)
+            except GenkitError:
+                return cast(OutputT, None)
+        if self._schema_type is not None and parsed is not None:
+            try:
+                return cast(OutputT, self._schema_type.model_validate(parsed))
+            except ValidationError:
+                return cast(OutputT, None)
         return cast(OutputT, parsed)
 
     @property
@@ -697,8 +777,17 @@ def text_from_message(msg: Message) -> str:
 
 
 def text_from_content(content: Sequence[Part | DocumentPart]) -> str:
-    """Concatenate text from a list of parts."""
-    return ''.join(str(p.root.text) for p in content if hasattr(p.root, 'text') and p.root.text is not None)
+    """Concatenate text parts.
+
+    Thoughts ride on ``ReasoningPart``, so they stay out of ``.text`` —
+    that's the visible reply, not the model's scratch work.
+    """
+    texts: list[str] = []
+    for p in content:
+        root = p.root
+        if isinstance(root, TextPart) and root.text is not None:
+            texts.append(str(root.text))
+    return ''.join(texts)
 
 
 def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:

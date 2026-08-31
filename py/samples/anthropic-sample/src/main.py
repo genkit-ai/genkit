@@ -171,6 +171,7 @@ async def cat_opus_4_7(data: CatInput) -> Cat:
         output_format='json',
         output_schema=Cat,
     )
+    assert response.output is not None
     return response.output
 
 
@@ -198,6 +199,7 @@ async def cat_opus_4_8(data: CatInput) -> Cat:
         output_format='json',
         output_schema=Cat,
     )
+    assert response.output is not None
     return response.output
 
 
