@@ -320,6 +320,17 @@ func (a *Agents) runResumeWith(ctx context.Context, ref aix.AgentRef, st *agents
 		return delegationResult{Response: fmt.Sprintf("Error resuming task %q: %v", in.TaskID, err)}, nil
 	}
 
+	if background && out.FinishReason == aix.AgentFinishReasonFailed && maybeDetachRejection(agent, out) {
+		// launchDelegation's hedge, mirrored: only a metadata-less agent
+		// reaches the runtime's detach rejection (the pre-flight above
+		// refused a genkit-defined agent that cannot detach), and the
+		// refusal names the synchronous retry, so it returns its slot.
+		a.releaseDelegation(st)
+		return delegationResult{Response: fmt.Sprintf(
+			"Error resuming task %q: %s If this agent lacks a session store that supports background work, resume it without \"background\" instead.",
+			in.TaskID, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))}, nil
+	}
+
 	if out.FinishReason == aix.AgentFinishReasonDetached {
 		taskID := formatTaskID(ref.Name, out.SnapshotID)
 		names := a.backgroundToolNames()

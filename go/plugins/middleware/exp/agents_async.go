@@ -101,12 +101,12 @@ const (
 )
 
 // asyncDelegateInput is the delegation tool input when [Agents.Async] is set:
-// the plain task plus the background flag.
+// the plain input plus the background flag. The embedded struct keeps one
+// description of task and name, so the two tool modes cannot teach the model
+// two different delegation shapes.
 type asyncDelegateInput struct {
-	Task       string `json:"task" jsonschema_description:"A clear, self-contained description of the task to delegate."`
-	Background bool   `json:"background,omitempty" jsonschema_description:"Run the delegation in the background. The tool returns immediately with a taskId; collect the result later with check_background_tasks or wait_for_background_tasks."`
-	// Name mirrors delegateInput.Name.
-	Name string `json:"name,omitempty" jsonschema_description:"Optional short label for this delegation (e.g. \"sources-sweep\"). Echoed on the result and on background-task reports next to the taskId, to keep several tasks readable. Not an identifier."`
+	delegateInput
+	Background bool `json:"background,omitempty" jsonschema_description:"Run the delegation in the background. The tool returns immediately with a taskId; collect the result later with check_background_tasks or wait_for_background_tasks."`
 }
 
 // backgroundTasksInput is the input of the check and abort tools: a bare list
@@ -253,19 +253,12 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		}
 		logger.Warn(ctx, "background launch rejected",
 			"agent", ref.Name, "status", errStatus, "error", msg)
-		if agent.Metadata() == nil && out.Error != nil && out.Error.Status == status.FailedPrecondition {
-			// Only this failure earns its slot back, and only for an agent
-			// that published no metadata. The retry it points at is the
-			// synchronous delegation, so the cap must not turn that retry
-			// away. Every other failure is the sub-agent's own, and it ran to
-			// produce it, so it counts against the cap or an agent that always
-			// fails could be delegated to forever.
-			//
-			// The metadata check is what keeps the two apart. An agent that
-			// publishes metadata was already refused by the pre-flight above
-			// if it cannot detach, so a FAILED_PRECONDITION arriving here is
-			// by definition not the detach rejection: it came from the agent's
-			// own turn, and refunding it would leave the cap unable to bite.
+		if maybeDetachRejection(agent, out) {
+			// Only this failure earns its slot back. The retry it points at
+			// is the synchronous delegation, so the cap must not turn that
+			// retry away. Every other failure is the sub-agent's own, and it
+			// ran to produce it, so it counts against the cap or an agent
+			// that always fails could be delegated to forever.
 			a.releaseDelegation(st)
 			msg += " If this agent lacks a session store that supports background work, delegate to it without \"background\" instead."
 		}
@@ -279,6 +272,18 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		a.labelTask(st, &result, name)
 		return result, nil
 	}
+}
+
+// maybeDetachRejection reports whether a failed background run may be the
+// runtime's rejection of a detach-incapable agent. Only a metadata-less agent
+// can reach it: one that publishes metadata and cannot detach is refused by
+// the caller's pre-flight, so its own FAILED_PRECONDITIONs must not earn the
+// capability hedge (they came from the agent's turn, and refunding them would
+// leave the cap unable to bite). The rejection was decoded from the wire,
+// which keeps only the status name, so this is a category check and callers
+// phrase their hint conditionally rather than asserting the cause.
+func maybeDetachRejection(agent *aix.AgentHandle, out *aix.AgentOutput[json.RawMessage]) bool {
+	return agent.Metadata() == nil && out.Error != nil && out.Error.Status == status.FailedPrecondition
 }
 
 // backgroundTaskTools builds the shared background-task tools added when
