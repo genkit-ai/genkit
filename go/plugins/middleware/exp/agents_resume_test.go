@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,96 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
+
+// flakyStore wraps an in-memory session store so a test can fail or rewrite
+// individual snapshot reads and writes by ID, exercising the resume flow's
+// transient-error and race arms. The embedded store carries the interface's
+// remaining methods, subscriber support included.
+type flakyStore struct {
+	*localstore.InMemorySessionStore[any]
+	mu sync.Mutex
+	// failSave fails SaveSnapshot for exactly the given snapshot IDs.
+	failSave map[string]error
+	// getHook, when set, may replace the outcome of any GetSnapshot.
+	getHook func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error)
+}
+
+func newFlakyStore() *flakyStore {
+	return &flakyStore{
+		InMemorySessionStore: localstore.NewInMemorySessionStore[any](),
+		failSave:             map[string]error{},
+	}
+}
+
+func (s *flakyStore) setSaveFailure(id string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		delete(s.failSave, id)
+		return
+	}
+	s.failSave[id] = err
+}
+
+func (s *flakyStore) setGetHook(hook func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getHook = hook
+}
+
+func (s *flakyStore) SaveSnapshot(ctx context.Context, snapshotID string, fn func(*aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error)) (*aix.SessionSnapshot[any], error) {
+	s.mu.Lock()
+	err := s.failSave[snapshotID]
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.InMemorySessionStore.SaveSnapshot(ctx, snapshotID, fn)
+}
+
+func (s *flakyStore) GetSnapshot(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[any], error) {
+	snap, err := s.InMemorySessionStore.GetSnapshot(ctx, snapshotID)
+	s.mu.Lock()
+	hook := s.getHook
+	s.mu.Unlock()
+	if hook != nil {
+		return hook(snapshotID, snap, err)
+	}
+	return snap, err
+}
+
+// seedDeadKeeperTask defines a server-managed "keeper" sub-agent on store,
+// runs one delegation to commit a conversation, and plants a dead worker's
+// pending row on top of it. It returns the dead task's handle and the
+// committed (parent) snapshot ID.
+func seedDeadKeeperTask(t *testing.T, g *genkit.Genkit, store *flakyStore, keeperModel ai.Model) (deadTask, committedID string) {
+	t.Helper()
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(keeperModel)},
+		aix.WithSessionStore[any](store),
+	)
+	first, err := genkit.Generate(ctx, g,
+		ai.WithModel(delegateOnceModel(t, g, "test/seed", "delegate_to_keeper", "start X")),
+		ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded := delegationResponses(t, first.History(), "delegate_to_keeper")
+	if len(seeded) != 1 || seeded[0].TaskID == "" {
+		t.Fatalf("expected a seeded delegation with a handle, got %+v", seeded)
+	}
+	committedID = strings.TrimPrefix(seeded[0].TaskID, "keeper:")
+	committed, err := store.GetSnapshot(ctx, committedID)
+	if err != nil || committed == nil {
+		t.Fatalf("read committed snapshot %q: %v", committedID, err)
+	}
+	pending, err := saveDeadPendingRow(store.InMemorySessionStore, committed.SessionID, committed.SnapshotID)
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending row: %v", err)
+	}
+	return "keeper:" + pending.SnapshotID, committedID
+}
 
 // lastDelegationOutput decodes the newest tool response for toolName in msgs.
 // It is for model functions (no *testing.T in scope); decode problems surface
@@ -538,5 +629,187 @@ func TestAgentsResumeInBackground(t *testing.T) {
 	}
 	if waited.Tasks[0].Response != "recovered later" {
 		t.Errorf("background resume response = %q, want %q", waited.Tasks[0].Response, "recovered later")
+	}
+}
+
+func TestAgentsResumeExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
+	// The fence is the one write standing between the recovery and a live
+	// worker: a fence that fails must refuse rather than recover unfenced,
+	// and the refusal names a retry that can succeed, so it returns its slot.
+	// MaxDelegations of 1 pins the refund: the retried resume only fits if
+	// the failed fence gave its slot back.
+	g := newTestGenkit(t)
+	store := newFlakyStore()
+	deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+	pendingID := strings.TrimPrefix(deadTask, "keeper:")
+	store.setSaveFailure(pendingID, errors.New("store blip"))
+
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		resume := &ai.ToolRequest{Name: "resume_subagent",
+			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
+		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		case 0:
+			return toolReqResp(req, resume), nil
+		case 1:
+			// The blip clears; the model retries the same handle.
+			store.setSaveFailure(pendingID, nil)
+			return toolReqResp(req, resume), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 2 {
+		t.Fatalf("expected 2 resume responses, got %+v", resumes)
+	}
+	if !strings.Contains(resumes[0].Response, "could not fence") {
+		t.Errorf("expected the fence-failure refusal, got %q", resumes[0].Response)
+	}
+	if resumes[1].Response != "kept going" {
+		t.Errorf("expected the retried resume to recover, got %+v", resumes[1])
+	}
+}
+
+func TestAgentsResumeParentReadBlipRefundsSlot(t *testing.T) {
+	// A transient failure reading the dead task's parent snapshot refuses
+	// with a retry hint and returns its slot, exactly as resumeFromStore's
+	// own transient read arm does; MaxDelegations of 1 pins the refund.
+	g := newTestGenkit(t)
+	store := newFlakyStore()
+	deadTask, committedID := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+	store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
+		if id == committedID {
+			return nil, errors.New("parent read blip")
+		}
+		return snap, err
+	})
+
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		resume := &ai.ToolRequest{Name: "resume_subagent",
+			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
+		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		case 0:
+			return toolReqResp(req, resume), nil
+		case 1:
+			store.setGetHook(nil)
+			return toolReqResp(req, resume), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 2 {
+		t.Fatalf("expected 2 resume responses, got %+v", resumes)
+	}
+	if !strings.Contains(resumes[0].Response, "could not be read") || !strings.Contains(resumes[0].Response, "Try again later") {
+		t.Errorf("expected the transient parent-read refusal, got %q", resumes[0].Response)
+	}
+	if resumes[1].Response != "kept going" {
+		t.Errorf("expected the retried resume to recover, got %+v", resumes[1])
+	}
+}
+
+func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
+	// A worker that is alive after all observes the fence and keeps beating
+	// while it drains, so the post-fence re-read shapes the row as pending.
+	// The resume must not fall back to the parent (that would race the
+	// finalize and re-buy committed turns): it refuses, names the retry, and
+	// returns its slot. Once the row settles the same handle resumes.
+	g := newTestGenkit(t)
+	store := newFlakyStore()
+	deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+	pendingID := strings.TrimPrefix(deadTask, "keeper:")
+	// While the hook is set, any read of the fenced row reports a fresh
+	// heartbeat: the winding-down window as a live worker's beats keep it.
+	store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
+		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborted && snap.State == nil {
+			fresh := *snap
+			now := time.Now()
+			fresh.HeartbeatAt = &now
+			return &fresh, nil
+		}
+		return snap, err
+	})
+
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		resume := &ai.ToolRequest{Name: "resume_subagent",
+			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
+		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		case 0:
+			return toolReqResp(req, resume), nil
+		case 1:
+			// The worker "dies" without finalizing: beats stop, the row goes
+			// stale, and the same handle recovers through the parent.
+			store.setGetHook(nil)
+			return toolReqResp(req, resume), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 2 {
+		t.Fatalf("expected 2 resume responses, got %+v", resumes)
+	}
+	if !strings.Contains(resumes[0].Response, "winding down") {
+		t.Errorf("expected the winding-down refusal, got %q", resumes[0].Response)
+	}
+	if resumes[1].Response != "kept going" {
+		t.Errorf("expected the settled handle to resume, got %+v", resumes[1])
+	}
+}
+
+func TestAgentsResumeExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) {
+	// The worker the fence targeted was alive and its COMPLETED finalize won
+	// the race: the post-fence re-read finds a finished row, and an
+	// instructions-less resume of it must hit the same gate as any completed
+	// task instead of silently re-running the finished turn.
+	g := newTestGenkit(t)
+	store := newFlakyStore()
+	deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+	pendingID := strings.TrimPrefix(deadTask, "keeper:")
+	// After the fence flips the raw row, reads report the worker's completed
+	// finalize having landed instead.
+	store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
+		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborted {
+			done := *snap
+			done.Status = aix.SnapshotStatusCompleted
+			done.FinishReason = aix.AgentFinishReasonStop
+			done.State = &aix.SessionState[any]{Messages: []*ai.Message{ai.NewUserTextMessage("finished")}}
+			done.HeartbeatAt = nil
+			return &done, nil
+		}
+		return snap, err
+	})
+
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if len(toolOutputs(req.Messages, "resume_subagent")) == 0 {
+			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+				Input: map[string]any{"taskId": deadTask}}), nil
+		}
+		return textResp(req, "done"), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "already completed") {
+		t.Fatalf("expected the completed-task instructions gate, got %+v", resumes)
 	}
 }

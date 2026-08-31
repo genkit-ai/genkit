@@ -157,53 +157,95 @@ func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agen
 		return delegationResult{Response: fmt.Sprintf("Task %q is still running; only a settled task can be resumed.%s", in.TaskID, hint)}, nil
 
 	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
-		// The three settled seams resume the row directly. The read shaping
-		// guarantees an aborted row seen here carries state: one caught
-		// between the abort flip and the finalize reads as pending, and a
-		// dead worker's flipped row reads as expired, so neither reaches
-		// this arm.
-		if snap.Status == aix.SnapshotStatusCompleted && snap.FinishReason.CarriesResult() {
-			if refusal := a.requireFollowUpInstructions(st, string(aix.SnapshotStatusCompleted), in); refusal != nil {
-				return *refusal, nil
-			}
-		}
-		return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
+		return a.resumeSettled(ctx, ref, st, agent, invocationNum, in, snapshotID, snap, background)
 
 	case aix.SnapshotStatusExpired:
-		// The worker is presumed dead, but "presumed" is the word: a slow
-		// worker may still be alive and beating late, and resuming past it
-		// would fork the run against it. Abort the row first as a fence (a
-		// live worker observes the flip and stops; a dead one is
-		// unaffected), then resume from whatever the run durably holds.
-		if _, err := agent.Abort(ctx, snapshotID); err != nil {
-			logger.Debug(ctx, "resume fence abort failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
-		}
-		// Re-read once: if a finalize landed in the window (the worker was
-		// alive after all), the row now holds the run's full state and is
-		// itself the resume point.
-		if snap, err := agent.GetSnapshot(ctx, snapshotID); err == nil && snap.State != nil && snap.Status != aix.SnapshotStatusPending {
-			return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
-		}
-		return a.resumeFromParent(ctx, ref, st, agent, invocationNum, in, snap.ParentID, background)
+		return a.resumeExpired(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 	}
 	a.releaseDelegation(st)
 	return delegationResult{Response: fmt.Sprintf("Error: task %q is in an unexpected state (%q) and cannot be resumed.", in.TaskID, snap.Status)}, nil
 }
 
-// requireFollowUpInstructions refuses an instructions-less resume of a
-// completed task. An empty input re-attempts the last committed turn, which
-// is the right retry for a run that stopped short and pure duplicate work for
-// one that finished; the refusal names the fix and returns the slot, since
+// resumeSettled resumes a handle whose shaped row is settled (completed,
+// failed, or aborted), applying the completed-task instructions gate before
+// the run. The read shaping guarantees an aborted row seen here carries
+// state: one caught between the abort flip and the finalize reads as pending,
+// and a dead worker's flipped row reads as expired, so neither reaches this
+// path.
+func (a *Agents) resumeSettled(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in resumeInput, snapshotID string, snap *aix.SessionSnapshot[json.RawMessage], background bool) (delegationResult, error) {
+	if refusal := a.refuseEmptyFollowUp(st, snap, in, fmt.Sprintf(
+		"Task %q already completed. To follow up in the sub-agent's session, call this tool again with instructions; re-running it without instructions would only repeat the finished work.", in.TaskID)); refusal != nil {
+		return *refusal, nil
+	}
+	return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
+}
+
+// resumeExpired recovers a task whose worker is presumed dead. "Presumed" is
+// the word: a slow worker may still be alive and beating late, and resuming
+// past it would fork the run against it. The row is aborted first as a fence
+// (a live worker observes the flip and stops; a dead one is unaffected), and
+// one shaped re-read then decides the recovery point:
+//
+//   - A settled row (completed, failed, or aborted): a finalize landed in the
+//     window, so the worker was alive after all and the row itself holds the
+//     run's full state. It resumes like any settled handle, completed rows
+//     gated the same way.
+//   - A pending row: the fence reached a live worker, and the shaped read
+//     reports its wind-down as pending because the finalize is coming. That
+//     settled row will be the resume point, so the refusal names the retry
+//     and returns the slot.
+//   - Still expired: the worker really is gone, and the recovery falls back
+//     to the dead row's parent, the last snapshot committed before the
+//     detach.
+//
+// The fence is the one write standing between the recovery and a live
+// worker, so a fence that fails is a refusal, not a log line: proceeding
+// without it risks two live branches of one session. Fence and re-read
+// failures are transient (the retried call can succeed), so both refusals
+// return their slot.
+func (a *Agents) resumeExpired(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in resumeInput, snapshotID string, background bool) (delegationResult, error) {
+	if _, err := agent.Abort(ctx, snapshotID); err != nil {
+		logger.Debug(ctx, "resume fence abort failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
+		a.releaseDelegation(st)
+		return delegationResult{Response: fmt.Sprintf(
+			"Error: could not fence task %q before recovering it (%v). Try again later.", in.TaskID, err)}, nil
+	}
+	cur, err := agent.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		logger.Debug(ctx, "resume fence re-read failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
+		a.releaseDelegation(st)
+		return delegationResult{Response: fmt.Sprintf(
+			"Error: could not read task %q after fencing it (%v). Try again later.", in.TaskID, err)}, nil
+	}
+	switch cur.Status {
+	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
+		return a.resumeSettled(ctx, ref, st, agent, invocationNum, in, snapshotID, cur, background)
+	case aix.SnapshotStatusPending:
+		a.releaseDelegation(st)
+		hint := ""
+		if a.Async {
+			hint = fmt.Sprintf(" Collect its settled state with %s, then resume that.", a.backgroundToolNames().wait)
+		}
+		return delegationResult{Response: fmt.Sprintf(
+			"Task %q is still winding down after the stop signal reached it; its progress is being saved. Retry this taskId once it settles.%s", in.TaskID, hint)}, nil
+	}
+	return a.resumeFromParent(ctx, ref, st, agent, invocationNum, in, cur.ParentID, background)
+}
+
+// refuseEmptyFollowUp refuses an instructions-less resume of a snapshot whose
+// last committed turn finished (completed, with a result-carrying reason). An
+// empty input re-attempts the last committed turn, which is the right retry
+// for a run that stopped short and pure duplicate work for one that finished;
+// the refusal delivers msg (which names the fix) and returns the slot, since
 // the corrected call is a real run that can succeed. The release happens
 // here, next to the refusal it belongs to, so every gate call site inherits
 // the refund instead of each having to remember it.
-func (a *Agents) requireFollowUpInstructions(st *agentsState, settled string, in resumeInput) *delegationResult {
-	if settled != string(aix.SnapshotStatusCompleted) || in.Instructions != "" {
+func (a *Agents) refuseEmptyFollowUp(st *agentsState, snap *aix.SessionSnapshot[json.RawMessage], in resumeInput, msg string) *delegationResult {
+	if snap.Status != aix.SnapshotStatusCompleted || !snap.FinishReason.CarriesResult() || in.Instructions != "" {
 		return nil
 	}
 	a.releaseDelegation(st)
-	return &delegationResult{Response: fmt.Sprintf(
-		"Task %q already completed. To follow up in the sub-agent's session, call this tool again with instructions; re-running it without instructions would only repeat the finished work.", in.TaskID)}
+	return &delegationResult{Response: msg}
 }
 
 // runResumeFromSnapshot runs the sub-agent from the named snapshot and folds
@@ -230,15 +272,19 @@ func (a *Agents) resumeFromParent(ctx context.Context, ref aix.AgentRef, st *age
 	}
 	parent, err := agent.GetSnapshot(ctx, parentID)
 	if err != nil {
+		if !errors.Is(err, status.ErrNotFound) && !errors.Is(err, status.ErrFailedPrecondition) && !errors.Is(err, status.ErrInvalidArgument) {
+			// Transient, and the refusal names a retry that can succeed, so
+			// the slot comes back, the same refund resumeFromStore applies to
+			// its own transient read failures. The dead-end classes (a
+			// deleted parent, a rejected request) keep their slot.
+			a.releaseDelegation(st)
+		}
 		return delegationResult{Response: fmt.Sprintf(
 			"Error: task %q kept its progress in snapshot %q, which could not be read (%v). Try again later.", in.TaskID, parentID, err)}, nil
 	}
-	if parent.Status == aix.SnapshotStatusCompleted && parent.FinishReason.CarriesResult() && in.Instructions == "" {
-		// Same refund reason as requireFollowUpInstructions: the corrected
-		// call with instructions is a real run that can succeed.
-		a.releaseDelegation(st)
-		return delegationResult{Response: fmt.Sprintf(
-			"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)}, nil
+	if refusal := a.refuseEmptyFollowUp(st, parent, in, fmt.Sprintf(
+		"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)); refusal != nil {
+		return *refusal, nil
 	}
 	return a.runResumeFromSnapshot(ctx, ref, st, agent, invocationNum, in, parentID, background)
 }
