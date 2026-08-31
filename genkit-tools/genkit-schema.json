@@ -210,6 +210,9 @@
         },
         "sessionId": {
           "type": "string"
+        },
+        "omitState": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

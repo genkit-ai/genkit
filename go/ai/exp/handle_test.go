@@ -476,6 +476,63 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 	}
 }
 
+func TestAgentHandle_GetSnapshotMeta(t *testing.T) {
+	// The metadata read shapes exactly as the full read and drops only the
+	// state payload: a settled row reports its status with a nil State, and a
+	// row inside the abort wind-down window reads as pending through both.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "metaRead", WithSessionStore(store))
+
+	out, err := af.RunText(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	h := LookupAgent(reg, "metaRead")
+
+	full, err := h.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if full.State == nil {
+		t.Fatal("full read returned no state")
+	}
+	meta, err := h.GetSnapshotMeta(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotMeta: %v", err)
+	}
+	if meta.State != nil {
+		t.Errorf("meta read returned state: %+v", meta.State)
+	}
+	if meta.Status != full.Status || meta.SessionID != full.SessionID || meta.FinishReason != full.FinishReason {
+		t.Errorf("meta read shaped differently from the full read: meta=%+v full=%+v", meta, full)
+	}
+
+	// The abort-window shaping consults the stored state before dropping it,
+	// so the two reads tell the same status story for a winding-down row.
+	beat := time.Now()
+	winding, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID:   "sess-window",
+				Status:      SnapshotStatusAborted,
+				CreatedAt:   beat,
+				UpdatedAt:   beat,
+				HeartbeatAt: &beat,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot winding row: %v", err)
+	}
+	windingMeta, err := h.GetSnapshotMeta(context.Background(), winding.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotMeta(winding): %v", err)
+	}
+	if windingMeta.Status != SnapshotStatusPending {
+		t.Errorf("winding-down row meta status = %q, want %q", windingMeta.Status, SnapshotStatusPending)
+	}
+}
+
 func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 	t.Run("no session store", func(t *testing.T) {
 		reg := newTestRegistry(t)
@@ -483,6 +540,9 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 		h := LookupAgent(reg, "bare")
 		if _, err := h.GetSnapshot(context.Background(), "any"); !errors.Is(err, ErrSessionStoreNotConfigured) {
 			t.Fatalf("GetSnapshot error = %v, want ErrSessionStoreNotConfigured", err)
+		}
+		if _, err := h.GetSnapshotMeta(context.Background(), "any"); !errors.Is(err, ErrSessionStoreNotConfigured) {
+			t.Fatalf("GetSnapshotMeta error = %v, want ErrSessionStoreNotConfigured", err)
 		}
 		if _, err := h.GetLatestSnapshot(context.Background(), "sess"); !errors.Is(err, ErrSessionStoreNotConfigured) {
 			t.Fatalf("GetLatestSnapshot error = %v, want ErrSessionStoreNotConfigured", err)

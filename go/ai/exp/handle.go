@@ -308,6 +308,26 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string) (*Sess
 	return h.transport.GetSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID})
 }
 
+// GetSnapshotMeta fetches a session snapshot like [AgentHandle.GetSnapshot]
+// but omits the state payload: the returned snapshot carries the shaped
+// metadata only (status, finish reason, parent, session, timestamps, error)
+// and its State is nil. The shaping is identical to a full read - the
+// abort-window and expiry rules consult the stored state before it is
+// dropped - so the status story cannot differ between the two reads. Use it
+// to dispatch on where a task stands without serializing a potentially large
+// conversation history; the state transform does not run, exactly as on a
+// full read of a stateless row.
+//
+// It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
+// agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
+// missing snapshot is NOT_FOUND.
+func (h *AgentHandle) GetSnapshotMeta(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+	if snapshotID == "" {
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshotMeta: snapshotID is required", h.name)
+	}
+	return h.transport.GetSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID, OmitState: true})
+}
+
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
 // through the agent's waitForSnapshot companion action, returning the terminal
 // snapshot shaped exactly as [AgentHandle.GetSnapshot] shapes a read. An

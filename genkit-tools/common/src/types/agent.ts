@@ -441,6 +441,16 @@ export const GetSnapshotRequestSchema = z.object({
    * aborted included).
    */
   sessionId: z.string().optional(),
+  /**
+   * Omits the snapshot's state payload from the response. The read is
+   * shaped exactly as a full read (status defaulting, heartbeat expiry,
+   * and the abort-window rules all consider the stored state), but the
+   * response carries only the snapshot's metadata: status, finish reason,
+   * parent, session, timestamps, and error. For callers that dispatch on
+   * where a task stands, this skips serializing a potentially large
+   * conversation history.
+   */
+  omitState: z.boolean().optional(),
 });
 export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 

@@ -281,6 +281,13 @@ type Artifact struct {
 // (whatever its status). When both are set, the fetched snapshot must belong
 // to that session, or the request is rejected.
 type GetSnapshotRequest struct {
+	// OmitState omits the snapshot's state payload from the response. The read
+	// is shaped exactly as a full read (status defaulting, heartbeat expiry, and
+	// the abort-window rules all consider the stored state), but the response
+	// carries only the snapshot's metadata: status, finish reason, parent,
+	// session, timestamps, and error. For callers that dispatch on where a task
+	// stands, this skips serializing a potentially large conversation history.
+	OmitState bool `json:"omitState,omitempty"`
 	// SessionID identifies the session whose latest snapshot to fetch.
 	// Optional when SnapshotID is given. The latest snapshot is the session's
 	// most recently updated row regardless of status (pending, failed, or

@@ -783,7 +783,7 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*Ses
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
 	}
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "")
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "", false)
 }
 
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
@@ -824,7 +824,7 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
 	}
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID)
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID, false)
 }
 
 // Abort aborts the detached invocation behind a pending snapshot by

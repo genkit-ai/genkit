@@ -228,11 +228,18 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // must be non-empty; callers validate that before calling. op names the
 // operation the read serves, so a failure reports the caller's own name rather
 // than always the read's.
+//
+// With omitState set the response carries the shaped metadata only: the
+// shaping above still consults the stored state (the abort-window rules key
+// on its presence), but the state is dropped instead of cloned and
+// transformed. The transform never runs, which matches a stateless row's full
+// read: the transform shapes outbound state, and none goes out.
 func readSnapshot[State any](
 	ctx context.Context,
 	store SnapshotReader[State],
 	transform StateTransform[State],
 	op, snapshotID, sessionID string,
+	omitState bool,
 ) (*SessionSnapshot[State], error) {
 	// Resolve the snapshot. A snapshot ID fetches that exact row; a session ID
 	// alone fetches the session's latest row (whatever its status). When both
@@ -302,6 +309,12 @@ func readSnapshot[State any](
 	}
 	if resp.UpdatedAt.IsZero() {
 		resp.UpdatedAt = resp.CreatedAt
+	}
+	// A metadata-only read is done: shaping is complete, and the copied state
+	// pointer must not ride out on it.
+	if omitState {
+		resp.State = nil
+		return &resp, nil
 	}
 	// Clone before transforming: the [StateTransform] contract promises a fresh
 	// deep copy the transform may mutate in place, and the store's row may share
@@ -404,7 +417,7 @@ func waitSnapshot[State any](
 	read := func(snapshotID, sessionID string) (*SessionSnapshot[State], error) {
 		readCtx, cancel := context.WithTimeout(ctx, snapshotWaitReadTimeout)
 		defer cancel()
-		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID)
+		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID, false)
 	}
 
 	// retryRead decides what a failed read inside a wait means: a dead end or
@@ -559,7 +572,7 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID)
+			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.OmitState)
 		})
 
 	// waitForSnapshot takes getSnapshot's request, so a caller switching from
