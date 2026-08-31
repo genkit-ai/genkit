@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { LogStore } from '@genkit-ai/tools-common';
+import type { LogQuery, LogStore } from '@genkit-ai/tools-common';
 import {
   TraceDataSchema,
   TraceQueryFilterSchema,
@@ -40,6 +40,44 @@ export interface SpanBroadcastEvent {
   type: 'span_start' | 'span_end';
   traceId: string;
   span: SpanData;
+}
+
+/**
+ * Parses an integer parameter from query parameters with an optional fallback/default value.
+ */
+export function parseIntParam(value: unknown): number | undefined;
+export function parseIntParam(value: unknown, defaultValue: number): number;
+export function parseIntParam(
+  value: unknown,
+  defaultValue?: number
+): number | undefined {
+  if (value === undefined || value === null || value === '')
+    return defaultValue;
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isNaN(parsed) ? defaultValue : parsed;
+}
+
+/**
+ * Extracts and normalizes LogQuery parameters from request query and route path params.
+ */
+export function parseLogQuery(
+  query: express.Request['query'],
+  params?: { traceId?: string; spanId?: string }
+): LogQuery {
+  return {
+    limit: parseIntParam(query.limit, 100),
+    continuationToken: query.continuationToken
+      ? query.continuationToken.toString()
+      : undefined,
+    severityText: query.severityText
+      ? query.severityText.toString()
+      : undefined,
+    severityNumber: parseIntParam(query.severityNumber),
+    traceId:
+      params?.traceId ?? (query.traceId ? query.traceId.toString() : undefined),
+    spanId:
+      params?.spanId ?? (query.spanId ? query.spanId.toString() : undefined),
+  };
 }
 
 /**
@@ -202,7 +240,7 @@ export async function startTelemetryServer(params: {
       const { limit, continuationToken, filter } = request.query;
       response.json(
         await params.traceStore.list({
-          limit: limit ? Number.parseInt(limit.toString()) : 10,
+          limit: parseIntParam(limit, 10),
           continuationToken: continuationToken
             ? continuationToken.toString()
             : undefined,
@@ -218,28 +256,7 @@ export async function startTelemetryServer(params: {
 
   api.get('/api/logs', async (request, response, next) => {
     try {
-      const {
-        limit,
-        continuationToken,
-        severityText,
-        severityNumber,
-        traceId,
-        spanId,
-      } = request.query;
-      response.json(
-        await params.logStore.list({
-          limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
-          continuationToken: continuationToken
-            ? continuationToken.toString()
-            : undefined,
-          severityText: severityText ? severityText.toString() : undefined,
-          severityNumber: severityNumber
-            ? Number.parseInt(severityNumber.toString(), 10) || undefined
-            : undefined,
-          traceId: traceId ? traceId.toString() : undefined,
-          spanId: spanId ? spanId.toString() : undefined,
-        })
-      );
+      response.json(await params.logStore.list(parseLogQuery(request.query)));
     } catch (e) {
       next(e);
     }
@@ -247,21 +264,8 @@ export async function startTelemetryServer(params: {
 
   api.get('/api/traces/:traceId/logs', async (request, response, next) => {
     try {
-      const { limit, continuationToken, severityText, severityNumber } =
-        request.query;
-      const { traceId } = request.params;
       response.json(
-        await params.logStore.list({
-          limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
-          continuationToken: continuationToken
-            ? continuationToken.toString()
-            : undefined,
-          traceId,
-          severityText: severityText ? severityText.toString() : undefined,
-          severityNumber: severityNumber
-            ? Number.parseInt(severityNumber.toString(), 10) || undefined
-            : undefined,
-        })
+        await params.logStore.list(parseLogQuery(request.query, request.params))
       );
     } catch (e) {
       next(e);
@@ -272,22 +276,10 @@ export async function startTelemetryServer(params: {
     '/api/traces/:traceId/spans/:spanId/logs',
     async (request, response, next) => {
       try {
-        const { limit, continuationToken, severityText, severityNumber } =
-          request.query;
-        const { traceId, spanId } = request.params;
         response.json(
-          await params.logStore.list({
-            limit: limit ? Number.parseInt(limit.toString(), 10) || 100 : 100,
-            continuationToken: continuationToken
-              ? continuationToken.toString()
-              : undefined,
-            traceId,
-            spanId,
-            severityText: severityText ? severityText.toString() : undefined,
-            severityNumber: severityNumber
-              ? Number.parseInt(severityNumber.toString(), 10) || undefined
-              : undefined,
-          })
+          await params.logStore.list(
+            parseLogQuery(request.query, request.params)
+          )
         );
       } catch (e) {
         next(e);

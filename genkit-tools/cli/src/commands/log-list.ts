@@ -39,7 +39,7 @@ export interface LogListOptions {
  */
 export const logList = new Command('log:list')
   .description(
-    'list logs. By default, the most recent logs are returned. Note: Filtering by trace-id is highly recommended.'
+    'list logs, in reverse chronological order. Filtering by trace-id is highly recommended.'
   )
   .option('-l, --limit <number>', 'limit the number of returned logs', '15')
   .option('--trace-id <id>', 'filter by trace ID')
