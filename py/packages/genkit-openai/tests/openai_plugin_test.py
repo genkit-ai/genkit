@@ -81,6 +81,7 @@ async def test_openai_plugin_list_actions() -> None:
         Model(id='codex-mini-latest', created=1746673257, object='model', owned_by='system'),
         Model(id='babbage-002', created=1692634615, object='model', owned_by='system'),
         Model(id='davinci-002', created=1692634301, object='model', owned_by='system'),
+        Model(id='o3-pro', created=1748475948, object='model', owned_by='system'),
         Model(id='text-embedding-ada-002', created=1671217299, object='model', owned_by='openai-internal'),
     ]
     plugin = OpenAI(api_key='test-key')
@@ -103,7 +104,8 @@ async def test_openai_plugin_list_actions() -> None:
     assert 'openai/codex-mini-latest' not in listed
     assert 'openai/babbage-002' not in listed
     assert 'openai/davinci-002' not in listed
-    assert len(actions) == len(entries) - 3
+    assert 'openai/o3-pro' not in listed
+    assert len(actions) == len(entries) - 4
     assert actions[0].name == 'openai/gpt-4-0613'
     assert actions[-1].name == 'openai/text-embedding-ada-002'
 

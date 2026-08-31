@@ -116,7 +116,7 @@ def _classify_model(name: str) -> _ModelType:
     return _ModelType.CHAT
 
 
-_UNSUPPORTED_MODEL_MATCHERS = ('babbage', 'davinci', 'codex')
+_UNSUPPORTED_MODEL_MATCHERS = ('babbage', 'davinci', 'codex', '-pro')
 
 
 def _is_known_unsupported(name: str) -> bool:
