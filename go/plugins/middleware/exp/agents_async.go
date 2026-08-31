@@ -64,9 +64,31 @@ const (
 
 // taskStatusUnknown is the report status for a task that could not be resolved
 // (malformed ID, unconfigured agent, missing snapshot, or read error). It is
-// terminal for waiting purposes: pending is the only status that can still
-// change on its own.
+// terminal for waiting purposes: it only arrives once a read failure was
+// classified unhelpable.
 const taskStatusUnknown = "unknown"
+
+// taskStatusAborting is the report status of a task whose stop was delivered
+// but whose row has not settled yet: the abort flipped the row, and the worker
+// is winding down toward the settled, resumable "aborted". Only the abort tool
+// reports it, because it holds two facts the row alone cannot express (the
+// flip landed, and the row has not settled). It is never stored and never
+// cached; a later check reads the window as "pending", and a wait follows the
+// row to its settled state.
+const taskStatusAborting = "aborting"
+
+// reportSettled reports whether a task report's status can no longer change on
+// its own, which is the rule the wait tool counts by. Report statuses are a
+// superset of the runtime's snapshot statuses (taskStatusUnknown and
+// taskStatusAborting are report-only), so the rule lives here rather than as a
+// cast into [aix.SnapshotStatus.Terminal], which would misread "aborting" as
+// settled. Snapshot statuses keep the runtime's rule, anything not pending is
+// settled, so a status added there cannot be counted wrong here; "unknown" is
+// settled (see taskStatusUnknown) and "aborting" is not (its row is still
+// winding down).
+func reportSettled(reportStatus string) bool {
+	return reportStatus != string(aix.SnapshotStatusPending) && reportStatus != taskStatusAborting
+}
 
 // noTaskIDsNote is the guidance returned when a background-task tool is called
 // without task IDs.
@@ -77,14 +99,6 @@ const (
 	waitForAll   = "all"
 	waitForFirst = "first"
 )
-
-// abortSettleGrace bounds how long an abort report waits for the flipped
-// row's finalize before reporting the winding-down row as it stands. The
-// worker's finalize follows its cancellation promptly, so the settled,
-// resumable row is the common answer inside the grace; a worker that
-// outlives it reports as pending, honestly, and settles on a later check.
-// Package-level var so tests can shorten it.
-var abortSettleGrace = 5 * time.Second
 
 // asyncDelegateInput is the delegation tool input when [Agents.Async] is set:
 // the plain task plus the background flag.
@@ -133,10 +147,12 @@ type backgroundTaskReport struct {
 	// one was given in this generate call (see delegateInput.Name).
 	Name string `json:"name,omitempty"`
 	// Status is the task's lifecycle state: "pending", "completed", "failed",
-	// "aborted", "expired" (worker presumed dead), or "unknown" (the ID could
-	// not be resolved; see Error). It answers what the reader must act on
-	// rather than mirroring the stored row, so a task that committed without
-	// producing an answer reports "failed" and explains itself in Error.
+	// "aborted", "expired" (worker presumed dead), "aborting" (abort tool
+	// only: the stop was delivered and the task is winding down toward
+	// "aborted"), or "unknown" (the ID could not be resolved; see Error). It
+	// answers what the reader must act on rather than mirroring the stored
+	// row, so a task that committed without producing an answer reports
+	// "failed" and explains itself in Error.
 	// "completed" always carries a Response.
 	Status string `json:"status"`
 	// Response is the sub-agent's final text response, for completed tasks.
@@ -279,8 +295,8 @@ func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
 			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to \"first\" to return as soon as any one task settles.",
 			a.waitForBackgroundTasks(st)),
 		aix.NewTool(names.abort,
-			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.",
-			a.taskReportTool(st, abortSnapshot)),
+			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A live task reports \"aborting\" while it winds down and settles as \"aborted\"; a task that had already finished is unaffected and reports its result.",
+			a.taskReportTool(st, a.abortSnapshot())),
 	}
 }
 
@@ -373,11 +389,7 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 		res := backgroundTasksResult{Tasks: reports}
 		pending := 0
 		for _, report := range reports {
-			// Terminal() is the same rule the runtime applies, so a status
-			// added there cannot leave this loop counting it as settled.
-			// taskStatusUnknown reads terminal, which is right: it only
-			// arrives once a read failure was classified unhelpable.
-			if !aix.SnapshotStatus(report.Status).Terminal() {
+			if !reportSettled(report.Status) {
 				pending++
 			}
 		}
@@ -450,7 +462,7 @@ func (a *Agents) reportTasks(ctx context.Context, st *agentsState, taskIDs []str
 // collectFirstSettled runs one follow per task concurrently and returns as
 // soon as any of them settles, cancelling the remaining follows so each
 // reports its task as it stands. "Settles" is the same rule the wait loop
-// counts by (Terminal()), unknown included: an unresolvable handle is an
+// counts by (reportSettled), unknown included: an unresolvable handle is an
 // answer the caller must act on, not something to keep waiting behind.
 // Reports come back in input order.
 func (a *Agents) collectFirstSettled(ctx context.Context, g *genkit.Genkit, st *agentsState, taskIDs []string, start time.Time) []backgroundTaskReport {
@@ -470,7 +482,7 @@ func (a *Agents) collectFirstSettled(ctx context.Context, g *genkit.Genkit, st *
 	for range taskIDs {
 		res := <-ch
 		reports[res.i] = res.report
-		if aix.SnapshotStatus(res.report.Status).Terminal() {
+		if reportSettled(res.report.Status) {
 			// The first settle ends the race. Cancelling is idempotent, so
 			// later settles that raced the cancellation just land in their
 			// slots.
@@ -514,61 +526,72 @@ func collectReports(taskIDs []string, report func(taskID string) backgroundTaskR
 // dispatch companion actions of the sub-agent, so all three apply the runtime's
 // read shaping and all three keep the error chain live for classification.
 // Ending on the row, rather than on each tool's own idea of an outcome, is what
-// lets one report path serve every tool.
-type snapshotFetch func(context.Context, *aix.AgentHandle, string) (*aix.SessionSnapshot[json.RawMessage], error)
+// lets one report path serve every tool. A fetch that lands in a state no row
+// expresses returns a ready-made report instead (the abort tool's "aborting"),
+// and reportTask adopts its status and error onto the task.
+type snapshotFetch func(context.Context, *aix.AgentHandle, string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error)
 
 var (
-	readSnapshotOnce snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
-		return agent.GetSnapshot(ctx, snapshotID)
+	readSnapshotOnce snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error) {
+		snap, err := agent.GetSnapshot(ctx, snapshotID)
+		return snap, nil, err
 	}
-	awaitSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
-		return agent.WaitForSnapshot(ctx, snapshotID)
+	awaitSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error) {
+		snap, err := agent.WaitForSnapshot(ctx, snapshotID)
+		return snap, nil, err
 	}
-	// abortSnapshot reads before it stops anything, because there are rows an
-	// abort must not touch. Expiry is decided on read, not stored: a worker
-	// that stopped heartbeating leaves a row that is still pending in the
-	// store and reads as expired. Aborting that row overwrites the one signal
-	// telling the model the work is gone and should be delegated again, and
-	// the report caches as terminal, so nothing later can recover it.
-	//
-	// The read is not an extra cost. A task that already settled needs no
-	// abort at all and is answered from the row alone, which is one dispatch
-	// where aborting first then reading took two. Only a genuinely live task
-	// pays for both, and it is the one the caller asked to stop.
-	abortSnapshot snapshotFetch = func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], error) {
+)
+
+// abortSnapshot builds the abort tool's fetch. It reads before it stops
+// anything, because there are rows an abort must not touch. Expiry is decided
+// on read, not stored: a worker that stopped heartbeating leaves a row that is
+// still pending in the store and reads as expired. Aborting that row
+// overwrites the one signal telling the model the work is gone and should be
+// delegated again, and the report caches as terminal, so nothing later can
+// recover it.
+//
+// The read is not an extra cost. A task that already settled needs no abort at
+// all and is answered from the row alone, which is one dispatch where aborting
+// first then reading took two. Only a genuinely live task pays for both, and
+// it is the one the caller asked to stop.
+//
+// The abort never waits: it answers "did the stop land?", and the wait tool is
+// the one tool that waits. After the flip, one shaped re-read decides the
+// report. A terminal row is the settled truth: the worker's finalize won the
+// race, or the worker was already dead and the flipped row reads as expired.
+// Anything else reports taskStatusAborting, because aborted is a promise the
+// row is settled and resumable, and the row inside the winding-down window is
+// not that yet. Nothing here stamps a status onto a row it did not read.
+func (a *Agents) abortSnapshot() snapshotFetch {
+	return func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error) {
 		cur, err := agent.GetSnapshot(ctx, snapshotID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if cur.Status.Terminal() {
 			// Nothing to stop. Expired, completed, failed and already-aborted
 			// rows each report themselves, which is what the caller needs to
 			// know about a task that outlived the request to cancel it.
-			return cur, nil
+			return cur, nil, nil
 		}
 		if _, err := agent.Abort(ctx, snapshotID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		// The flip is an ack, not an outcome: aborted is a promise the row is
-		// settled and resumable, and the row right after the flip is not that
-		// yet (the shaped read reports the window as pending). Wait a short
-		// grace for the worker's finalize and return the settled, resumable
-		// row, which is the common case; a worker that outlives the grace
-		// reports as pending, honestly, and settles on a later check or wait.
-		// Nothing here stamps a status onto a row it did not read.
-		waitCtx, cancel := context.WithTimeout(ctx, abortSettleGrace)
-		defer cancel()
-		if snap, err := agent.WaitForSnapshot(waitCtx, snapshotID); err == nil {
-			return snap, nil
-		} else if ctx.Err() != nil {
-			// The caller's own context ended; surface that, not the grace.
-			return nil, ctx.Err()
+		snap, err := agent.GetSnapshot(ctx, snapshotID)
+		if err != nil {
+			return nil, nil, err
 		}
-		// The grace elapsed, or the wait failed on its own: report the row as
-		// it stands (or that same failure) rather than inventing an outcome.
-		return agent.GetSnapshot(ctx, snapshotID)
+		if snap.Status.Terminal() {
+			return snap, nil, nil
+		}
+		return nil, &backgroundTaskReport{
+			Status: taskStatusAborting,
+			Error: fmt.Sprintf(
+				"The stop signal was delivered and the task is winding down; its progress is being saved and it will settle as %q. No further action is needed to stop it. Collect the settled state with %s only if you need it.",
+				aix.SnapshotStatusAborted, a.backgroundToolNames().wait),
+		}, nil
 	}
-)
+}
 
 // reportTask resolves one task handle, obtains its snapshot through fetch, and
 // shapes the result into a report. Completed tasks surface the sub-agent's
@@ -578,8 +601,8 @@ var (
 // Reports for completed, failed, and aborted tasks are cached on st for the
 // rest of the generate call: those rows never change, so a re-check skips the
 // snapshot fetch and artifact re-merge (and cannot clobber a merged artifact
-// the orchestrator has since edited). Pending, expired, and unresolvable
-// reports can still change on their own and are never cached.
+// the orchestrator has since edited). Pending, aborting, expired, and
+// unresolvable reports can still change on their own and are never cached.
 func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsState, taskID string, fetch snapshotFetch) (backgroundTaskReport, error) {
 	st.mu.Lock()
 	cached, ok := st.settledReports[taskID]
@@ -611,7 +634,7 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		return report, err
 	}
 
-	snap, err := fetch(ctx, agent, snapshotID)
+	snap, ready, err := fetch(ctx, agent, snapshotID)
 	if err != nil {
 		logger.Debug(ctx, "background task read failed",
 			"taskId", taskID, "agent", ref.Name, "error", err)
@@ -633,6 +656,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 			report.Error = fmt.Sprintf("Could not read the task's status: %v. Check again later.", err)
 		}
 		return report, err
+	}
+	if ready != nil {
+		// The fetch settled on an outcome no row expresses; adopt it onto
+		// this task's identity. It is never cached: only rows that cannot
+		// change are.
+		report.Status, report.Error = ready.Status, ready.Error
+		return report, nil
 	}
 	report.Status = string(snap.Status)
 

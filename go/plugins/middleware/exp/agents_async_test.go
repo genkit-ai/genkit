@@ -702,9 +702,10 @@ func TestAgentsWaitForUnknownJoinRefused(t *testing.T) {
 
 // TestAgentsAbortBackgroundTask drives the abort control end to end. The task
 // is stopped mid-flight, so the abort has to reach the work and not just the
-// row, and a later check has to agree. The report waits a short grace for the
-// worker's finalize, so the answer here is the settled, resumable aborted row
-// rather than the stateless mid-flip window (which reads as pending).
+// row. The abort itself never waits: it answers "did the stop land?", either
+// with the settled row when the worker's finalize won the race or with
+// "aborting" while the task winds down, and the settled, resumable aborted
+// row is collected through the wait tool, which is the flow the tools teach.
 func TestAgentsAbortBackgroundTask(t *testing.T) {
 	g := newTestGenkit(t)
 
@@ -728,8 +729,8 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
 	)
 
-	// Scripted orchestrator: launch in background, abort, then check that the
-	// abort stuck.
+	// Scripted orchestrator: launch in background, abort, then collect the
+	// settled row through the wait tool.
 	var capturedSystem string
 	orch := toolModel(t, g, "test/orch-abort", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if sys := findSystem(req.Messages); sys != nil {
@@ -737,7 +738,7 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 		}
 		launches := toolOutputs(req.Messages, "delegate_to_researcher")
 		aborts := toolOutputs(req.Messages, abortBackgroundTasksToolName)
-		checks := toolOutputs(req.Messages, checkBackgroundTasksToolName)
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
 		switch {
 		case len(launches) == 0:
 			return toolReqResp(req, &ai.ToolRequest{
@@ -749,9 +750,9 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 				Name:  abortBackgroundTasksToolName,
 				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
 			}), nil
-		case len(checks) == 0:
+		case len(waits) == 0:
 			return toolReqResp(req, &ai.ToolRequest{
-				Name:  checkBackgroundTasksToolName,
+				Name:  waitBackgroundTasksToolName,
 				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
 			}), nil
 		default:
@@ -778,7 +779,11 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	if len(aborted.Tasks) != 1 {
 		t.Fatalf("expected 1 aborted task, got %+v", aborted.Tasks)
 	}
-	if got := aborted.Tasks[0]; got.Status != string(aix.SnapshotStatusAborted) || got.Error == "" {
+	// The abort's single re-read races the worker's finalize, so the report
+	// is "aborting" (the usual answer) or the settled aborted row when the
+	// finalize won; either way it explains itself, and neither is the raw
+	// mid-flip window (which the shaped read hides as pending).
+	if got := aborted.Tasks[0]; (got.Status != taskStatusAborting && got.Status != string(aix.SnapshotStatusAborted)) || got.Error == "" {
 		t.Errorf("unexpected abort report: %+v", got)
 	}
 
@@ -790,13 +795,16 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 		t.Error("the sub-agent was never cancelled: the abort reached the row but not the work")
 	}
 
-	checkOuts := toolOutputs(history, checkBackgroundTasksToolName)
-	if len(checkOuts) != 1 {
-		t.Fatalf("expected 1 check response, got %d", len(checkOuts))
+	waitOuts := toolOutputs(history, waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
 	}
-	checked := decodeToolOutput[backgroundTasksResult](t, checkOuts[0])
-	if len(checked.Tasks) != 1 || checked.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
-		t.Errorf("check after abort: want 1 aborted task, got %+v", checked.Tasks)
+	waited := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+	if len(waited.Tasks) != 1 || waited.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
+		t.Fatalf("wait after abort: want 1 settled aborted task, got %+v", waited.Tasks)
+	}
+	if got := waited.Tasks[0].Error; !strings.Contains(got, resumeSubagentToolName) {
+		t.Errorf("settled aborted report should carry the resume hint, got %q", got)
 	}
 }
 
@@ -843,20 +851,22 @@ func TestAgentsBackgroundLaunchEchoesLabel(t *testing.T) {
 	}
 }
 
-// TestAgentsAbortReportsWindingDownAsPending pins the abort report's honesty:
-// aborted is a promise the row is settled and resumable, so a worker that has
-// not finalized inside the grace reports as pending (still winding down), and
-// the settled row is left for a later check or wait.
-func TestAgentsAbortReportsWindingDownAsPending(t *testing.T) {
+// TestAgentsAbortReportsAbortingWhileWindingDown pins the abort report's
+// honesty without any waiting inside the abort: aborted is a promise the row
+// is settled and resumable, so a worker that has not finalized reports the
+// report-only "aborting" (the stop was delivered, the row is winding down),
+// and the settled aborted row arrives through the wait tool once the worker
+// lets go. That the wait settles at all also proves "aborting" was never
+// cached: a cached report would be returned without following the row.
+func TestAgentsAbortReportsAbortingWhileWindingDown(t *testing.T) {
 	g := newTestGenkit(t)
-	restore := abortSettleGrace
-	abortSettleGrace = 50 * time.Millisecond
-	t.Cleanup(func() { abortSettleGrace = restore })
 
 	// The sub-agent deliberately ignores its cancellation until released, so
-	// the finalize cannot land inside the shortened grace.
+	// the abort's single re-read deterministically finds the row unsettled.
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
 	genkitx.DefineCustomAgent[any](g, "stubborn",
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
@@ -884,6 +894,14 @@ func TestAgentsAbortReportsWindingDownAsPending(t *testing.T) {
 				Name:  abortBackgroundTasksToolName,
 				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
 			}), nil
+		case len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) == 0:
+			// The abort has reported; let the worker wind down and follow the
+			// row to its settled state.
+			unblock()
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
 		default:
 			return textResp(req, "done"), nil
 		}
@@ -899,8 +917,14 @@ func TestAgentsAbortReportsWindingDownAsPending(t *testing.T) {
 		t.Fatalf("expected 1 abort response, got %d", len(abortOuts))
 	}
 	aborted := decodeToolOutput[backgroundTasksResult](t, abortOuts[0])
-	if len(aborted.Tasks) != 1 || aborted.Tasks[0].Status != string(aix.SnapshotStatusPending) {
-		t.Errorf("abort of an unfinalized task: want a pending report, got %+v", aborted.Tasks)
+	if len(aborted.Tasks) != 1 || aborted.Tasks[0].Status != taskStatusAborting {
+		t.Errorf("abort of an unfinalized task: want an %q report, got %+v", taskStatusAborting, aborted.Tasks)
+	} else if got := aborted.Tasks[0].Error; !strings.Contains(got, waitBackgroundTasksToolName) {
+		t.Errorf("the aborting report should point at the wait tool, got %q", got)
+	}
+	waited := decodeToolOutput[backgroundTasksResult](t, toolOutputs(resp.History(), waitBackgroundTasksToolName)[0])
+	if waited.TimedOut || len(waited.Tasks) != 1 || waited.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
+		t.Errorf("wait after abort: want 1 settled aborted task, got %+v", waited)
 	}
 }
 
@@ -945,7 +969,7 @@ func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
 
 	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}
 	st := &agentsState{settledReports: map[string]backgroundTaskReport{}}
-	got, err := a.reportTask(ctx, g, st, formatTaskID("researcher", task.SnapshotID()), abortSnapshot)
+	got, err := a.reportTask(ctx, g, st, formatTaskID("researcher", task.SnapshotID()), a.abortSnapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
