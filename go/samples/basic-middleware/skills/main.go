@@ -20,8 +20,11 @@
 // fits and calls use_skill to load its full body into the conversation, so the
 // heavier instructions stay off the hot path until they are wanted.
 //
-// Four visually distinct skills ship here, so the effect is easy to eyeball:
-// haiku, pirate, shakespeare, and eli5.
+// Five visually distinct skills ship here, so the effect is easy to eyeball:
+// haiku, pirate, shakespeare, eli5, and limerick. The limerick skill also
+// shows the third step: its SKILL.md keeps only the instruction and points at
+// references/form.md, which the model fetches with read_skill_file when it
+// needs the metre. That tool is registered because AllowResourceAccess is set.
 //
 // Run it:
 //
@@ -42,6 +45,10 @@
 //	curl -N -X POST 'http://localhost:8080/askFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"question": "Explain recursion to me like I am five."}}'
+//
+//	curl -N -X POST 'http://localhost:8080/askFlow?stream=true' \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"question": "Write a limerick about a flaky test."}}'
 package main
 
 import (
@@ -101,14 +108,17 @@ func DefineAskFlow(g *genkit.Genkit) {
 		func(ctx context.Context, input AskRequest, sendChunk core.StreamCallback[string]) (string, error) {
 			text, err := genkit.GenerateText(ctx, g,
 				ai.WithModel(model),
-				ai.WithSystem(
-					"You have access to a use_skill tool that loads a specialised "+
-						"persona or style. Before answering, decide whether any listed "+
-						"skill fits the user's request, and if so, call use_skill with "+
-						"that name first. Then answer in the loaded style.",
-				),
+				// The middleware's own instructions already list the skills and
+				// name the tool that loads one, so this only says what to do
+				// once a skill is loaded.
+				ai.WithSystem("Answer in the style of whichever skill you loaded."),
 				ai.WithPrompt(input.Question),
-				ai.WithUse(&middleware.Skills{SkillPaths: []string{skillsDir}}),
+				ai.WithUse(&middleware.Skills{
+					SkillPaths: []string{skillsDir},
+					// Lets the model read the files a skill bundles, such as
+					// the limerick skill's references/form.md.
+					AllowResourceAccess: true,
+				}),
 				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 					// The use_skill turn streams too, and carries no text, so the
 					// answer looks like it starts late rather than arriving blank.
