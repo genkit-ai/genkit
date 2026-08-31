@@ -278,9 +278,12 @@ export async function startTelemetryServer(params: {
       '/api/otlp/v1/traces',
       '/api/otlp/v1/logs',
       '/api/otlp/v1/metrics',
+      '/api/otlp/:parentTraceId/:parentSpanId',
     ],
     async (request, response) => {
       try {
+        const { parentTraceId, parentSpanId } = request.params;
+
         if (
           !request.body.resourceSpans?.length &&
           !request.body.resourceLogs?.length
@@ -291,6 +294,16 @@ export async function startTelemetryServer(params: {
         }
         const traces = traceDataFromOtlp(request.body);
         for (const trace of traces) {
+          if (parentTraceId) {
+            trace.traceId = parentTraceId;
+            for (const span of Object.values(trace.spans)) {
+              span.attributes['genkit:otlp-traceId'] = span.traceId;
+              span.traceId = parentTraceId;
+              if (!span.parentSpanId && parentSpanId) {
+                span.parentSpanId = parentSpanId;
+              }
+            }
+          }
           const traceData = TraceDataSchema.parse(trace);
           await params.traceStore.save(traceData.traceId, traceData);
 

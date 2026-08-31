@@ -176,17 +176,17 @@ class ExportTee:
                 return True
         return True
 
-    def _emit(self, level: int, event: str, kw: dict[str, object]) -> None:
+    def _emit(self, level: int, event: str, args: tuple[object, ...], kw: dict[str, object]) -> None:
         from genkit._core._trace._log_exporter import emit_log
 
-        emit_log(level=level, event=event, attrs={**self._attrs, **kw})
+        emit_log(level=level, event=_interpolate_event(event, args), attrs={**self._attrs, **kw})
 
     def __getattr__(self, name: str) -> object:
         target = getattr(self._bound, name)
         if name == 'log' and callable(target):
 
             def emit_log(level: int, event: str, *args: object, **kw: object) -> object:
-                self._emit(level, event, kw)
+                self._emit(level, event, args, kw)
                 return target(level, event, *args, **kw)
 
             return emit_log
@@ -195,10 +195,20 @@ class ExportTee:
         emit_level = _EMIT_LEVELS[name]
 
         def emit_then(event: str, *args: object, **kw: object) -> object:
-            self._emit(emit_level, event, kw)
+            self._emit(emit_level, event, args, kw)
             return target(event, *args, **kw)
 
         return emit_then
+
+
+def _interpolate_event(event: str, args: tuple[object, ...]) -> str:
+    """Fill printf-style ``%s`` so the Dev UI panel matches the console line."""
+    if not args:
+        return event
+    try:
+        return event % args
+    except (TypeError, ValueError):
+        return event
 
 
 def get_logger(name: str | None = None) -> FilteringBoundLogger:

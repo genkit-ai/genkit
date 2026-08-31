@@ -47,13 +47,15 @@ SHUTDOWN_FLUSH_TIMEOUT_S = 2.0
 MAX_ATTRIBUTES = 32
 MAX_ATTR_CHARS = 2048
 REDACT_KEYS = frozenset({
-    'api_key',
+    'apikey',
+    'authtoken',
+    'accesstoken',
     'authorization',
     'password',
     'secret',
     'token',
-    'access_token',
 })
+REDACT_SUFFIXES = ('key', 'token', 'secret', 'password')
 
 SEVERITY: dict[int, tuple[int, str]] = {
     logging.DEBUG: (5, 'DEBUG'),
@@ -171,8 +173,13 @@ def _severity(*, level: int) -> tuple[int, str]:
 
 
 def _should_redact(*, key: str) -> bool:
-    lowered = key.lower()
-    return lowered in REDACT_KEYS or lowered.endswith('_key') or lowered.endswith('_token')
+    # apiKey / authToken / apikey all collapse to the same compact form so
+    # a plugin that logs the key under any of those names does not POST it
+    # to the telemetry server.
+    compact = key.lower().replace('_', '')
+    if compact in REDACT_KEYS:
+        return True
+    return any(compact.endswith(suffix) for suffix in REDACT_SUFFIXES)
 
 
 def _otlp_attributes(*, attrs: dict[str, object]) -> tuple[list[dict[str, object]], int]:
@@ -289,31 +296,38 @@ class LogServerExporter:
                 )
 
     def run_worker(self) -> None:
-        with httpx.Client(timeout=EXPORT_TIMEOUT_S) as client:
-            while True:
-                item = self.queue.get()
-                try:
-                    if item is None:
-                        return
-                    batch = [item]
-                    deadline = time.monotonic() + BATCH_DELAY_S
-                    while len(batch) < BATCH_SIZE:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            break
-                        try:
-                            nxt = self.queue.get(timeout=remaining)
-                        except Empty:
-                            break
-                        if nxt is None:
-                            self.queue.task_done()
-                            self.post_batch(client=client, records=batch)
+        try:
+            with httpx.Client(timeout=EXPORT_TIMEOUT_S) as client:
+                while True:
+                    item = self.queue.get()
+                    try:
+                        if item is None:
                             return
-                        batch.append(nxt)
+                        batch = [item]
+                        deadline = time.monotonic() + BATCH_DELAY_S
+                        while len(batch) < BATCH_SIZE:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            try:
+                                nxt = self.queue.get(timeout=remaining)
+                            except Empty:
+                                break
+                            if nxt is None:
+                                self.queue.task_done()
+                                self.post_batch(client=client, records=batch)
+                                return
+                            batch.append(nxt)
+                            self.queue.task_done()
+                        self.post_batch(client=client, records=batch)
+                    finally:
                         self.queue.task_done()
-                    self.post_batch(client=client, records=batch)
-                finally:
-                    self.queue.task_done()
+        except Exception as error:
+            # Client() or context-exit can raise before post_batch's guard.
+            # Stop accepting records so debug branches stop building payloads
+            # that will never export.
+            self.stopped = True
+            _diag(level=logging.ERROR, event=f'log export worker stopped: {error}')
 
     def post_batch(self, *, client: httpx.Client, records: list[dict[str, object]]) -> None:
         url = urljoin(self.telemetry_server_url, LOG_ENDPOINT)

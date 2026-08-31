@@ -93,11 +93,12 @@ HookResultT = TypeVar('HookResultT')
 
 # A termination known to be abnormal carries no conforming output, so a schema
 # error here would mask the finish reason the caller needs to handle it.
+# OTHER is the providers' catch-all for unmapped stop reasons (a normal
+# pause or compaction), not a signal that parsing should be skipped.
 ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.BLOCKED,
     FinishReason.ABORTED,
     FinishReason.INTERRUPTED,
-    FinishReason.OTHER,
 })
 
 
@@ -598,6 +599,11 @@ async def generate_with_request(
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
+    if not raw_request.messages:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='at least one message is required in generate request',
+        )
     registry = registry if registry.is_child else registry.new_child()
 
     if raw_request.tools:
@@ -700,10 +706,7 @@ class ChunkAccumulator:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
             return
-        try:
-            ctx.on_chunk(self.make(role=role, chunk=chunk))
-        except Exception as e:
-            logger.debug('tool stream callback failed, dropping chunk', error=e)
+        ctx.on_chunk(self.make(role=role, chunk=chunk))
 
     @contextlib.contextmanager
     def intercept_model_stream(
@@ -1030,7 +1033,7 @@ async def _generate_action_turn(
             generated_msg.metadata = existing_meta
 
         if turn_options.return_tool_requests or len(tool_requests) == 0:
-            if len(tool_requests) == 0:
+            if len(tool_requests) == 0 and response.finish_reason not in ABNORMAL_FINISH_REASONS:
                 response.assert_valid_schema()
             return _persist_threaded_conversation(response, turn_options.messages)
 
@@ -1340,7 +1343,10 @@ async def resolve_parameters(
     if request.output and request.output.format:
         looked_up_format = registry.lookup_value('format', request.output.format)
         if looked_up_format is None:
-            raise ValueError(f'Unable to resolve format {request.output.format}')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Unable to resolve format {request.output.format}',
+            )
         format_def = cast(FormatDef, looked_up_format)
 
     return (model_action, tools, format_def)

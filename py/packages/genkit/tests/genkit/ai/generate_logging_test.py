@@ -163,6 +163,34 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_other_finish_does_not_warn_as_abnormal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTHER is an unmapped stop reason, not a refusal — do not warn at info."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'info')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='{"ok": true}')]),
+            finish_reason=FinishReason.OTHER,
+        )
+    ]
+
+    with capture_logs() as entries:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+
+    warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
+    assert warned == []
+
+
+@pytest.mark.asyncio
 async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unparseable JSON is a debug breadcrumb; generate still returns."""
     structlog.reset_defaults()
@@ -277,8 +305,8 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_tool_stream_callback_failure_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A sinking tool-stream callback is logged and does not fail the tool."""
+async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sinking callback fails generate the same way a model-chunk sink does."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
@@ -306,8 +334,8 @@ async def test_tool_stream_callback_failure_is_dropped(monkeypatch: pytest.Monke
         if getattr(chunk, 'role', None) == Role.TOOL:
             raise RuntimeError('sink closed')
 
-    with capture_logs() as entries:
-        response = await generate_action(
+    with pytest.raises(RuntimeError, match='sink closed'):
+        await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
@@ -316,7 +344,3 @@ async def test_tool_stream_callback_failure_is_dropped(monkeypatch: pytest.Monke
             ),
             on_chunk=on_chunk,
         )
-
-    assert response.message is not None
-    dropped = [e for e in entries if e['event'] == 'tool stream callback failed, dropping chunk']
-    assert len(dropped) == 1

@@ -297,14 +297,27 @@ def test_get_logger_tees_debug_when_console_is_info() -> None:
         _exporter.enqueue = capture  # type: ignore[method-assign]
         try:
             logger.debug('looking up weather', city='Paris')
+            logger.error('Startup failed: %s: %s', 'ValueError', 'boom')
             logger.info('kept on console')
         finally:
             _exporter.enqueue = original  # type: ignore[method-assign]
 
     events = [r['body']['stringValue'] for r in queued]  # type: ignore[index]
     assert 'looking up weather' in events
+    assert 'Startup failed: ValueError: boom' in events
     assert 'kept on console' in events
     assert structlog_ok in {True, False}
+
+
+@pytest.mark.usefixtures('_reset_export', '_dev_env')
+def test_worker_stops_when_client_construction_fails() -> None:
+    """Client() raising must flip stopped so debug branches stop building records."""
+    with patch('genkit._core._trace._log_exporter.httpx.Client', side_effect=RuntimeError('no client')):
+        enable_log_export(url='http://127.0.0.1:9')
+        deadline = time.monotonic() + 2.0
+        while log_export_is_enabled() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert log_export_is_enabled() is False
 
 
 @pytest.mark.usefixtures('_reset_export', '_dev_env')
@@ -342,6 +355,22 @@ def test_build_log_record_bounds_and_redacts_attrs() -> None:
     assert isinstance(prompt, str)
     assert prompt.startswith('P' * MAX_ATTR_CHARS)
     assert prompt.endswith(f'...<{50} chars>')
+
+
+def test_build_log_record_redacts_camel_case_secrets() -> None:
+    """apiKey / authToken / apikey must not POST in cleartext to /api/otlp."""
+    record = build_log_record(
+        level=logging.DEBUG,
+        event='calling provider',
+        attrs={'apiKey': 'sk-secret', 'authToken': 'tok', 'apikey': 'sk-2', 'city': 'Paris'},
+    )
+    raw_attrs = record['attributes']
+    assert isinstance(raw_attrs, list)
+    keys = {item['key']: item['value'] for item in raw_attrs if isinstance(item, dict)}
+    assert keys['apiKey'] == {'stringValue': '[redacted]'}
+    assert keys['authToken'] == {'stringValue': '[redacted]'}
+    assert keys['apikey'] == {'stringValue': '[redacted]'}
+    assert keys['city'] == {'stringValue': 'Paris'}
 
 
 def test_put_poison_pill_lands_when_queue_is_full() -> None:
