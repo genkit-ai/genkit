@@ -59,7 +59,7 @@ func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 	// RegisterValue (which panics on a duplicate key): concurrent LoadCatalog
 	// calls for the same id all resolve to the same stored catalog, and the
 	// losers simply observe that an entry already existed.
-	if !genkit.RegisterValueIfAbsent(g, key, catalog) {
+	if !genkit.DefineValueIfAbsent(g, key, catalog) {
 		// Compare by content, not pointer identity: BasicCatalog() and a
 		// re-read LoadCatalogFile each allocate a fresh *Catalog, so a pointer
 		// check would warn on genuinely idempotent re-registration and stay

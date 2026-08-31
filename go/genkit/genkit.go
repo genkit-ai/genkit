@@ -426,7 +426,7 @@ func LookupAction(g *Genkit, key string) api.Action {
 	return g.reg.LookupAction(key)
 }
 
-// RegisterValue records an arbitrary value in the registry under the given
+// DefineValue records an arbitrary value in the registry under the given
 // name. Values are namespaced by convention using a "/type/name" key so
 // tooling can enumerate them by type (e.g. the Dev UI's GET /api/values?type=).
 // It panics if a value with the same name is already registered.
@@ -434,16 +434,16 @@ func LookupAction(g *Genkit, key string) api.Action {
 // This is the general-purpose counterpart of the typed Define* helpers, for
 // plugins that need to publish non-action resources (e.g. catalogs) that the
 // Dev UI or other components can discover via [ListValues].
-func RegisterValue(g *Genkit, name string, value any) {
+func DefineValue(g *Genkit, name string, value any) {
 	g.reg.RegisterValue(name, value)
 }
 
-// RegisterValueIfAbsent registers value under name only if nothing is already
+// DefineValueIfAbsent registers value under name only if nothing is already
 // registered under it in g's own registry, returning true if the value was
-// stored and false if an entry already existed. Unlike [RegisterValue] it never
+// stored and false if an entry already existed. Unlike [DefineValue] it never
 // panics on a duplicate, so it is safe for concurrent register-if-absent
 // callers (e.g. plugins seeding a shared resource) racing on the same key.
-func RegisterValueIfAbsent(g *Genkit, name string, value any) bool {
+func DefineValueIfAbsent(g *Genkit, name string, value any) bool {
 	return g.reg.RegisterValueIfAbsent(name, value)
 }
 
