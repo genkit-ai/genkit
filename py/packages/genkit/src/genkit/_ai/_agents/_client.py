@@ -1357,13 +1357,12 @@ class AgentChat(Generic[StateT]):
         # that push back (see send()).
         if raw.snapshot_id is not None:
             self._snapshot_id = raw.snapshot_id
-            # A failed/blocked/aborted row is inspectable, not a place the
-            # next send() can resume from. Keep the last completed id.
-            # DETACHED advances — the prompt was asked and the pending
-            # snapshot is where the next send continues after it settles.
+            # A failed/aborted row is inspectable, not a place the next
+            # send() can resume from. Keep the last completed id.
+            # Everything else was asked — including a blocked refusal —
+            # so the prompt stays and send continues from that snapshot.
             if raw.finish_reason not in {
                 AgentFinishReason.FAILED,
-                AgentFinishReason.BLOCKED,
                 AgentFinishReason.ABORTED,
             }:
                 self._resume_snapshot_id = raw.snapshot_id
