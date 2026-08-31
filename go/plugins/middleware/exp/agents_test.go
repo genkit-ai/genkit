@@ -547,6 +547,48 @@ func TestAgentsClientManagedDelegationNotResumable(t *testing.T) {
 	}
 }
 
+func TestAgentsTwoClientManagedInstancesCoexist(t *testing.T) {
+	// The shared resume tool is registered only when a configured sub-agent
+	// can leave a handle behind, so two default-configured instances whose
+	// sub-agents are all client-managed register no shared names, coexist on
+	// one generate call, and omit the resume guidance from the prompt.
+	g := newTestGenkit(t)
+	for _, name := range []string{"alpha", "beta"} {
+		genkitx.DefineAgent[any](g, name,
+			aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/"+name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return textResp(req, "ok"), nil
+			}))},
+		)
+	}
+
+	var capturedSystem string
+	orch := toolModel(t, g, "test/orch-two", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if sys := findSystem(req.Messages); sys != nil {
+			capturedSystem = sys.Text()
+		}
+		if len(toolOutputs(req.Messages, "delegate_to_alpha")) == 0 {
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_alpha", Input: map[string]any{"task": "go"}}), nil
+		}
+		return textResp(req, "done"), nil
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(
+			&Agents{Agents: []aix.AgentRef{{Name: "alpha"}}},
+			&Agents{Agents: []aix.AgentRef{{Name: "beta"}}},
+		))
+	if err != nil {
+		t.Fatalf("two client-managed instances on one call: %v", err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_alpha")
+	if len(got) != 1 || got[0].Response != "ok" {
+		t.Fatalf("delegation through the first instance failed: %+v", got)
+	}
+	if strings.Contains(capturedSystem, resumeSubagentToolName) {
+		t.Errorf("system prompt advertises the unregistered resume tool: %q", capturedSystem)
+	}
+}
+
 // TestAgentsArtifactStrategies verifies that, run inside an orchestrator agent
 // (so a session exists), sub-agent artifacts are merged into the parent session
 // under both strategies and that inline includes content while session does not.

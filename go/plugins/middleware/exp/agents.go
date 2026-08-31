@@ -164,12 +164,14 @@ type Agents struct {
 	// ToolPrefix is the prefix for generated delegation tool names. A nil value
 	// defaults to "delegate_to" (tools become delegate_to_<agent>); a pointer to
 	// the empty string uses bare agent names. An explicitly set, non-empty
-	// prefix also namespaces the [Agents.Async] background-task tools (e.g.
-	// research_check_background_tasks). Two Async instances in one generate
-	// call therefore need distinct, explicitly set prefixes: left at the
-	// default they both emit the bare background-task tool names, and the
-	// generate call is rejected for duplicate tools. New rejects colliding
-	// names within one instance; it cannot see a sibling.
+	// prefix also namespaces the shared tools: the [Agents.Async]
+	// background-task tools (e.g. research_check_background_tasks) and the
+	// resume tool (registered whenever any configured sub-agent may be
+	// server-managed). Two instances in one generate call that both register
+	// shared tools therefore need distinct, explicitly set prefixes: left at
+	// the default they emit the same bare names, and the generate call is
+	// rejected for duplicate tools. New rejects colliding names within one
+	// instance; it cannot see a sibling.
 	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the async background-task tools."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
@@ -195,7 +197,7 @@ type Agents struct {
 
 	// TODO: add a knob to disable or scope the resume tool (per agent, or
 	// retries vs follow-ups) once real-world usage shows which control
-	// matters; today it is always registered.
+	// matters.
 }
 
 func (a Agents) Name() string { return provider + "/agents" }
@@ -294,18 +296,27 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		}
 		tools = append(tools, a.backgroundTaskTools(st)...)
 	}
-	// The resume tool is always registered: server-managed tasks resume from
-	// their snapshots across turns, and client-managed ones from the per-call
-	// stash within this turn. Like the delegation tools, its input schema
-	// depends on whether background execution exists.
-	resumeName := a.resumeToolName()
-	if err := claimName(resumeName, "the resume tool"); err != nil {
-		return nil, err
-	}
-	if a.Async {
-		tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resumeAsync(st)))
-	} else {
-		tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resume(st)))
+	// The resume tool is registered only where it can ever succeed: a
+	// server-managed sub-agent leaves durable "<agent>:<snapshotId>" handles
+	// behind, and those handles are the currency the tool spends. A
+	// configuration whose sub-agents are all provably client-managed gets no
+	// resume tool (and no mention of it in the system prompt), which also
+	// keeps two default-configured instances of this middleware from
+	// colliding on the shared bare name when neither has anything to resume.
+	// Like the delegation tools, its input schema depends on whether
+	// background execution exists.
+	g := genkit.FromContext(ctx)
+	resumable := a.anyResumableAgent(g)
+	if resumable {
+		resumeName := a.resumeToolName()
+		if err := claimName(resumeName, "the resume tool"); err != nil {
+			return nil, err
+		}
+		if a.Async {
+			tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resumeAsync(st)))
+		} else {
+			tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resume(st)))
+		}
 	}
 
 	// The <sub-agents> block depends only on the configuration and the
@@ -313,7 +324,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	// tool-loop turn: New already runs exactly once per generate call, and
 	// re-rendering cost a registry lookup and a descriptor copy per agent per
 	// turn to produce a string the injector then dropped as identical.
-	instructions := a.buildInstructions(genkit.FromContext(ctx))
+	instructions := a.buildInstructions(g, resumable)
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		// Capture the latest messages for optional history forwarding. The
@@ -641,6 +652,27 @@ func runSubAgent(ctx context.Context, agent *aix.AgentHandle, task string, histo
 	return agent.Run(ctx, &aix.AgentInput{Detach: detach, Message: ai.NewUserTextMessage(task)}, opts...)
 }
 
+// anyResumableAgent reports whether any configured sub-agent can leave a
+// resumable task handle behind, which is what justifies registering the
+// shared resume tool: only server-managed sub-agents (those with a session
+// store) commit durable snapshots. An agent that cannot be resolved here, or
+// that publishes no metadata, counts as resumable, the same safe default
+// isClientManaged applies: the tool stays available for an agent that may
+// well have a store, and a wrong guess costs a refusal at call time rather
+// than a silently missing tool.
+func (a *Agents) anyResumableAgent(g *genkit.Genkit) bool {
+	for _, ref := range a.Agents {
+		if g == nil {
+			return true
+		}
+		agent := genkitx.LookupAgent(g, ref.Name)
+		if agent == nil || !isClientManaged(agent) {
+			return true
+		}
+	}
+	return false
+}
+
 // isClientManaged reports whether the agent owns its state on the client (no
 // session store), which is the only case that accepts seeded init state.
 //
@@ -746,8 +778,10 @@ func makeToolName(prefix, agentName string) string {
 // buildInstructions renders the <sub-agents> system prompt block. g may be
 // nil (e.g. outside an agent/Generate context), in which case only configured
 // descriptions are used. With [Agents.Async] set, the block also explains
-// background delegation and names this configuration's background-task tools.
-func (a *Agents) buildInstructions(g *genkit.Genkit) string {
+// background delegation and names this configuration's background-task tools;
+// with resumable set (the resume tool is registered) it explains task handles
+// and the resume tool.
+func (a *Agents) buildInstructions(g *genkit.Genkit, resumable bool) string {
 	prefix := a.prefix()
 	var b strings.Builder
 	b.WriteString("<sub-agents>\n")
@@ -778,15 +812,17 @@ func (a *Agents) buildInstructions(g *genkit.Genkit) string {
 		b.WriteString("running across turns, and task IDs from earlier tool results stay ")
 		b.WriteString("valid: check them before delegating the same work again.\n")
 	}
-	b.WriteString("\n")
-	b.WriteString("Results of delegations to sub-agents that keep sessions carry a taskId ")
-	b.WriteString("where the sub-agent's progress is addressable. If such a delegation ")
-	b.WriteString("fails or is aborted, its saved progress is not lost: call ")
-	b.WriteString(a.resumeToolName() + " with the taskId to resume it from where it ")
-	b.WriteString("stopped, either as-is or steered with instructions. A completed task ")
-	b.WriteString("accepts follow-up instructions in its own session the same way, ")
-	b.WriteString("without repeating the finished work. A result without a taskId is not ")
-	b.WriteString("resumable; delegate again to redo that work.\n")
+	if resumable {
+		b.WriteString("\n")
+		b.WriteString("Results of delegations to sub-agents that keep sessions carry a taskId ")
+		b.WriteString("where the sub-agent's progress is addressable. If such a delegation ")
+		b.WriteString("fails or is aborted, its saved progress is not lost: call ")
+		b.WriteString(a.resumeToolName() + " with the taskId to resume it from where it ")
+		b.WriteString("stopped, either as-is or steered with instructions. A completed task ")
+		b.WriteString("accepts follow-up instructions in its own session the same way, ")
+		b.WriteString("without repeating the finished work. A result without a taskId is not ")
+		b.WriteString("resumable; delegate again to redo that work.\n")
+	}
 	b.WriteString("</sub-agents>")
 	return b.String()
 }
