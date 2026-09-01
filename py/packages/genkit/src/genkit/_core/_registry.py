@@ -54,6 +54,7 @@ from genkit._core._typing import (
     EmbedResponse,
     EvalRequest,
     EvalResponse,
+    Operation,
 )
 
 logger = get_logger(__name__)
@@ -756,12 +757,15 @@ class Registry:
             return None
         return cast(Action[EmbedRequest, EmbedResponse, Never], action)
 
-    async def resolve_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+    async def resolve_model(
+        self, name: str
+    ) -> Action[ModelRequest, ModelResponse | Operation, ModelResponseChunk] | None:
         """Resolve a model action by name.
 
         Looks up a normal model first, then a background start action, so a
         name registered only with ``define_background_model`` is findable
-        under the same string callers already pass.
+        under the same string callers already pass. A start returns an
+        Operation, not a ModelResponse.
 
         Args:
             name: The model name (e.g., "gemini-pro" or "plugin/model").
@@ -775,12 +779,7 @@ class Registry:
             # kind. Callers still pass the same name they would for a normal
             # model.
             action = await self.resolve_action(ActionKind.BACKGROUND_MODEL, name)
-        if action is None:
-            return None
-        return cast(
-            Action[ModelRequest, ModelResponse, ModelResponseChunk],
-            action,
-        )
+        return action
 
     async def resolve_evaluator(self, name: str) -> Action[EvalRequest, EvalResponse, Never] | None:
         """Resolve an evaluator action by name with full type information.

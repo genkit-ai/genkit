@@ -776,6 +776,7 @@ class BoxedStart:
     """The ModelResponse start() produced, before wrap_model / wrap_generate."""
 
     response: ModelResponse | None = None
+    name: str = ''
 
 
 def assert_hook_kept_operation(*, boxed: ModelResponse | None, after_hooks: ModelResponse, name: str) -> None:
@@ -811,15 +812,7 @@ async def _generate_action_turn(
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
     boxed_start = BoxedStart()
-
-    if model.kind == ActionKind.BACKGROUND_MODEL and raw_request.resume is not None:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                f"Cannot resume background model '{model.name}'; "
-                'a background start cannot satisfy an interrupted tool turn'
-            ),
-        )
+    had_resume = raw_request.resume is not None
 
     raw_request, formatter = apply_format(raw_request, format_def)
 
@@ -927,14 +920,22 @@ async def _generate_action_turn(
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         chunks.message_index = params.message_index
-        # ``params.options`` picks up whatever wrap_generate middleware changed for
-        # this turn; the model request is rebuilt from it so those edits aren't lost.
+        # ``params.options`` picks up whatever wrap_generate middleware changed
+        # for this turn — including the model name. Re-resolve the action
+        # (and tools) so a reroute is not a silent no-op.
         turn_options = params.options
-        # Re-resolve and re-validate tools per turn to pick up dynamic tool
-        # injections or removals from middleware (e.g. wrap_generate).
+        turn_model = await resolve_model_action(registry, turn_options.model)
+        if turn_model.kind == ActionKind.BACKGROUND_MODEL and had_resume:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=(
+                    f"Cannot resume background model '{turn_model.name}'; "
+                    'a background start cannot satisfy an interrupted tool turn'
+                ),
+            )
         turn_tools = await resolve_tools_from_options(registry, turn_options.tools)
         assert_valid_tool_names(turn_tools)
-        request = await action_to_generate_request(turn_options, turn_tools, model)
+        request = await action_to_generate_request(turn_options, turn_tools, turn_model)
         if request.docs:
             request = _augment_with_context(request)
 
@@ -946,22 +947,23 @@ async def _generate_action_turn(
                     turn=current_turn,
                     messages=len(params.request.messages),
                 )
-            result = await model.run(
+            result = await turn_model.run(
                 input=params.request,
                 context=c.custom_context,
                 on_chunk=c.on_chunk,
                 abort_signal=c.abort_signal,
             )
             raw = result.response
-            if model.kind == ActionKind.BACKGROUND_MODEL:
+            if turn_model.kind == ActionKind.BACKGROUND_MODEL:
                 boxed_start.response = box_background_start(
                     raw=raw,
                     request=params.request,
-                    name=model.name,
+                    name=turn_model.name,
                     latency_ms=result.latency_ms,
                 )
+                boxed_start.name = turn_model.name
                 return boxed_start.response
-            return require_model_response(raw=raw, name=model.name)
+            return require_model_response(raw=raw, name=turn_model.name)
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
@@ -972,7 +974,7 @@ async def _generate_action_turn(
         assert_hook_kept_operation(
             boxed=boxed_start.response,
             after_hooks=model_response,
-            name=model.name,
+            name=boxed_start.name or turn_model.name,
         )
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
@@ -1137,7 +1139,7 @@ async def _generate_action_turn(
     assert_hook_kept_operation(
         boxed=boxed_start.response,
         after_hooks=response,
-        name=model.name,
+        name=boxed_start.name or model.name,
     )
     # The caller's output_schema is what this turn asked for. A wrap_generate
     # that hung its own request on the response is still judged against that,
@@ -1374,21 +1376,26 @@ async def resolve_tools_from_options(
     return actions
 
 
-async def resolve_parameters(
-    registry: Registry, request: GenerateActionOptions
-) -> tuple[Action, list[Action], FormatDef | None]:
-    """Resolve model, tools, and format from registry for a generation request."""
-    model = resolve_model_name(model=request.model, registry=registry)
-
-    model_action = await registry.resolve_model(model)
-    if model_action is None:
-        message = f"Failed to resolve model '{model}'."
-        if isinstance(model, str) and '/' not in model:
+async def resolve_model_action(registry: Registry, model: str | None) -> Action:
+    """Look up the generate or start action for this model name."""
+    name = resolve_model_name(model=model, registry=registry)
+    action = await registry.resolve_model(name)
+    if action is None:
+        message = f"Failed to resolve model '{name}'."
+        if isinstance(name, str) and '/' not in name:
             message += " Ensure the model name includes the plugin namespace (e.g., 'plugin/model')."
         raise GenkitError(
             status='NOT_FOUND',
             message=message,
         )
+    return action
+
+
+async def resolve_parameters(
+    registry: Registry, request: GenerateActionOptions
+) -> tuple[Action, list[Action], FormatDef | None]:
+    """Resolve model, tools, and format from registry for a generation request."""
+    model_action = await resolve_model_action(registry, request.model)
 
     # Resolve tools up front to fail fast on invalid caller-supplied tool names or
     # duplicate short names before running side effects or middleware.

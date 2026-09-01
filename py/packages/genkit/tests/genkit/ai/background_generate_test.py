@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from genkit import ActionKind, Document, Genkit, Message
 from genkit._core._action import ActionRunContext
@@ -475,3 +476,85 @@ async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> N
     assert updated.id == 'bg-op-123'
     assert updated.done is True
     assert updated.action == '/background-model/bg-model'
+
+
+class RerouteConfig(BaseModel):
+    to: str
+
+
+class Reroute(BaseMiddleware[RerouteConfig]):
+    """Swap ``params.options.model`` before the turn runs."""
+
+    async def wrap_generate(
+        self,
+        params: GenerateHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        options = params.options.model_copy(update={'model': self.config.to})
+        return await next_fn(params.model_copy(update={'options': options}), ctx)
+
+
+def register_plain(ai: Genkit, *, name: str = 'plain', text: str = 'from-plain') -> None:
+    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]))
+
+    ai.define_model(name=name, fn=model_fn)
+
+
+@pytest.mark.asyncio
+async def test_wrap_generate_reroute_to_background_starts_the_job(ai: Genkit) -> None:
+    """A wrap_generate that sets options.model to a Veo id must actually start Veo."""
+    register_bg_model(ai)
+    register_plain(ai)
+
+    response = await ai.generate(model='plain', prompt='a cat', use=[Reroute(to='bg-model')])
+
+    assert response.operation is not None
+    assert response.operation.id == 'bg-op-123'
+    assert response.text == ''
+
+
+@pytest.mark.asyncio
+async def test_wrap_generate_reroute_from_background_runs_plain(ai: Genkit) -> None:
+    """The reverse swap must call the chat model and never start()."""
+    started = 0
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        nonlocal started
+        started += 1
+        return Operation(id='bg-op-123', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_plain(ai)
+
+    response = await ai.generate(model='bg-model', prompt='a cat', use=[Reroute(to='plain')])
+
+    assert response.text == 'from-plain'
+    assert response.operation is None
+    assert started == 0
+
+
+@pytest.mark.asyncio
+async def test_wrap_generate_reroute_same_kind_uses_the_new_model(ai: Genkit) -> None:
+    """A flash→pro swap is the same bug without a background model in the mix."""
+    register_plain(ai, name='flash', text='from-flash')
+    register_plain(ai, name='pro', text='from-pro')
+
+    response = await ai.generate(model='flash', prompt='hi', use=[Reroute(to='pro')])
+
+    assert response.text == 'from-pro'
+
+
+@pytest.mark.asyncio
+async def test_wrap_generate_reroute_to_missing_model_is_not_found(ai: Genkit) -> None:
+    """A reroute to a name that is not registered fails at resolve, not silently."""
+    register_plain(ai)
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model='plain', prompt='hi', use=[Reroute(to='no-such-model')])
+
+    assert raised.value.status == 'NOT_FOUND'
