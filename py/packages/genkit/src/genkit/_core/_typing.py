@@ -1098,14 +1098,22 @@ class Part(
 
     @classmethod
     def from_tool_request(
-        cls, name: str, input: Any = None, ref: str | None = None, metadata: Metadata | None = None
+        cls,
+        name: str,
+        input: Any = None,  # noqa: ANN401
+        ref: str | None = None,
+        metadata: Metadata | None = None,
     ) -> Part:
         """Create a tool request Part."""
         return cls(root=ToolRequestPart(tool_request=ToolRequest(name=name, input=input, ref=ref), metadata=metadata))
 
     @classmethod
     def from_tool_response(
-        cls, name: str, output: Any = None, ref: str | None = None, metadata: Metadata | None = None
+        cls,
+        name: str,
+        output: Any = None,  # noqa: ANN401
+        ref: str | None = None,
+        metadata: Metadata | None = None,
     ) -> Part:
         """Create a tool response Part."""
         return cls(
@@ -1113,7 +1121,7 @@ class Part(
         )
 
     @classmethod
-    def from_data(cls, data: Any, metadata: Metadata | None = None) -> Part:
+    def from_data(cls, data: Any, metadata: Metadata | None = None) -> Part:  # noqa: ANN401
         """Create a data Part."""
         return cls(root=DataPart(data=data, metadata=metadata))
 
@@ -1126,6 +1134,11 @@ class Part(
     def from_custom(cls, custom: Custom, metadata: Metadata | None = None) -> Part:
         """Create a custom Part."""
         return cls(root=CustomPart(custom=custom, metadata=metadata))
+
+    @classmethod
+    def from_resource(cls, resource: Resource, metadata: Metadata | None = None) -> Part:
+        """Create a resource Part."""
+        return cls(root=ResourcePart(resource=resource, metadata=metadata))
 
     @property
     def text(self) -> str | None:
@@ -1148,7 +1161,7 @@ class Part(
         return getattr(self.root, 'tool_response', None)
 
     @property
-    def data(self) -> Any | None:
+    def data(self) -> Any | None:  # noqa: ANN401
         """The data payload if this is a data part, otherwise None."""
         return getattr(self.root, 'data', None)
 
@@ -1161,11 +1174,6 @@ class Part(
     def custom(self) -> Custom | None:
         """The custom payload if this is a custom part, otherwise None."""
         return getattr(self.root, 'custom', None)
-
-    @classmethod
-    def from_resource(cls, resource: Resource, metadata: Metadata | None = None) -> Part:
-        """Create a resource Part."""
-        return cls(root=ResourcePart(resource=resource, metadata=metadata))
 
     @property
     def resource(self) -> Resource | None:
