@@ -3731,18 +3731,18 @@ func TestAgent_Heartbeat_BeatIsNoopOnTerminalSnapshot(t *testing.T) {
 }
 
 func TestAgent_Heartbeat_BeatLandsInAbortWindDownWindow(t *testing.T) {
-	// The abort flip stops the work, not the worker: while the aborted row
-	// awaits its finalize (no state yet), the worker keeps beating so readers
-	// see the finalize coming (finalizeInFlight) instead of presuming it dead
-	// the moment the flip lands. The beat must land in that window and must
-	// still no-op on a finalized aborted row.
+	// The abort flip stops the work, not the worker: while the aborting row
+	// awaits its finalize, the worker keeps beating so readers see a live
+	// wind-down instead of presuming it dead the moment the flip lands. The
+	// beat must land on that row and must still no-op on a finalized aborted
+	// row.
 	store := newTestInMemStore[testState]()
 	old := time.Now().Add(-time.Hour)
 	winding, err := store.SaveSnapshot(context.Background(), "",
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				SessionID:   "sess-winding",
-				Status:      SnapshotStatusAborted,
+				Status:      SnapshotStatusAborting,
 				CreatedAt:   old,
 				UpdatedAt:   old,
 				HeartbeatAt: &old,
@@ -3761,7 +3761,7 @@ func TestAgent_Heartbeat_BeatLandsInAbortWindDownWindow(t *testing.T) {
 	if after.HeartbeatAt == nil || !after.HeartbeatAt.After(old) {
 		t.Errorf("beat did not land in the wind-down window: HeartbeatAt=%v", after.HeartbeatAt)
 	}
-	if after.Status != SnapshotStatusAborted || !after.UpdatedAt.Equal(old) {
+	if after.Status != SnapshotStatusAborting || !after.UpdatedAt.Equal(old) {
 		t.Errorf("beat changed more than the heartbeat: status=%q updatedAt=%v", after.Status, after.UpdatedAt)
 	}
 
@@ -4072,19 +4072,20 @@ func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
-	if status != SnapshotStatusAborted {
-		t.Errorf("abortPendingSnapshot status = %q, want aborted", status)
+	if status != SnapshotStatusAborting {
+		t.Errorf("abortPendingSnapshot status = %q, want aborting", status)
 	}
 
 	// The subscriber wakes the runtime, cancels work, and the finalizer
-	// rewrites the snapshot with the aborted status.
+	// settles the aborting row as aborted, with the state stamped on.
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
 		return s.Status == SnapshotStatusAborted && s.UpdatedAt.After(s.CreatedAt)
 	})
-	// The flow only blocked on ctx — no state mutation expected. State
-	// may be nil (when abortPendingSnapshot landed before the finalizer's write
-	// could populate it) or a populated zero-value struct.
-	if finalSnap.State != nil && finalSnap.State.Custom.Counter != 0 {
+	if finalSnap.State == nil {
+		t.Fatal("aborted snapshot carries no state: the finalize did not stamp it on")
+	}
+	// The flow only blocked on ctx, so no state mutation is expected.
+	if finalSnap.State.Custom.Counter != 0 {
 		t.Errorf("unexpected counter value in aborted snapshot: %d", finalSnap.State.Custom.Counter)
 	}
 }
@@ -4399,20 +4400,20 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		}
 	})
 
-	t.Run("an aborted row still being finalized points at itself", func(t *testing.T) {
-		// The abort flips the pending row and the finalize stamps the state
-		// on, so a row caught between them carries none. What the caller does
-		// next differs by which half of that window it is, and the heartbeat
-		// the abort left running is what says.
+	t.Run("an aborting row points at itself while its worker lives", func(t *testing.T) {
+		// The abort flips the pending row to aborting and the finalize stamps
+		// the state on, so a row caught between them carries none. What the
+		// caller does next differs by whether the finalize is still coming,
+		// and the heartbeat the abort left running is what says.
 		ctx := context.Background()
 		store := newTestInMemStore[testState]()
 		af := defineCounterAgent(newTestRegistry(t), "resumeMidFinalize", WithSessionStore(store))
 
-		stateless := func(beat time.Time) string {
+		aborting := func(beat time.Time) string {
 			snap, err := store.SaveSnapshot(ctx, "",
 				func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 					return &SessionSnapshot[testState]{
-						Status:      SnapshotStatusAborted,
+						Status:      SnapshotStatusAborting,
 						HeartbeatAt: &beat,
 					}, nil
 				})
@@ -4428,12 +4429,12 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 			want string
 		}{
 			{"a live heartbeat means the write is coming", time.Now(), "retry this same snapshot ID"},
-			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "has no parent; there is nothing to resume"},
+			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "there is nothing to resume"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				_, err := af.RunText(ctx, "carry on", WithSnapshotID[testState](stateless(tc.beat)))
+				_, err := af.RunText(ctx, "carry on", WithSnapshotID[testState](aborting(tc.beat)))
 				if err == nil {
-					t.Fatal("resuming a stateless aborted row was accepted")
+					t.Fatal("resuming an aborting row was accepted")
 				}
 				if !strings.Contains(err.Error(), tc.want) {
 					t.Errorf("error %q does not contain %q", err, tc.want)
@@ -4990,15 +4991,17 @@ func TestAgent_Abort_Method(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent.Abort: %v", err)
 	}
-	if status != SnapshotStatusAborted {
-		t.Errorf("returned status = %q, want aborted", status)
+	if status != SnapshotStatusAborting {
+		t.Errorf("returned status = %q, want aborting", status)
 	}
+	// No worker is behind this seeded row, so nothing finalizes it: the raw
+	// row stays at the flip.
 	got, err := store.GetSnapshot(ctx, pending.SnapshotID)
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if got.Status != SnapshotStatusAborted {
-		t.Errorf("stored status = %q, want aborted", got.Status)
+	if got.Status != SnapshotStatusAborting {
+		t.Errorf("stored status = %q, want aborting", got.Status)
 	}
 }
 
@@ -5354,6 +5357,12 @@ func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapsho
 	return nil, nil
 }
 func (minimalStore[State]) GetLatestSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
+	return nil, nil
+}
+func (minimalStore[State]) GetSnapshotMetadata(context.Context, string) (*SessionSnapshot[State], error) {
+	return nil, nil
+}
+func (minimalStore[State]) GetLatestSnapshotMetadata(context.Context, string) (*SessionSnapshot[State], error) {
 	return nil, nil
 }
 func (minimalStore[State]) SaveSnapshot(
@@ -5994,8 +6003,8 @@ func TestAbortPendingSnapshot_AtomicAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	if status != SnapshotStatusAborted {
-		t.Errorf("status after first abort = %q, want aborted", status)
+	if status != SnapshotStatusAborting {
+		t.Errorf("status after first abort = %q, want aborting", status)
 	}
 	afterFirst, err := store.GetSnapshot(ctx, "snap-cas")
 	if err != nil {
@@ -6005,14 +6014,15 @@ func TestAbortPendingSnapshot_AtomicAndIdempotent(t *testing.T) {
 		t.Errorf("UpdatedAt did not advance: %v vs %v", afterFirst.UpdatedAt, pending.UpdatedAt)
 	}
 
-	// Idempotent: second abort returns aborted, no error, no further mutation.
+	// Idempotent: a second abort on the aborting row returns aborting, no
+	// error, no further mutation.
 	firstUpdate := afterFirst.UpdatedAt
 	status2, err := abortPendingSnapshot(ctx, store, "snap-cas")
 	if err != nil {
 		t.Fatalf("abort (second): %v", err)
 	}
-	if status2 != SnapshotStatusAborted {
-		t.Errorf("status after second abort = %q, want aborted", status2)
+	if status2 != SnapshotStatusAborting {
+		t.Errorf("status after second abort = %q, want aborting", status2)
 	}
 	afterSecond, err := store.GetSnapshot(ctx, "snap-cas")
 	if err != nil {
@@ -6141,7 +6151,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 		t.Fatal("did not receive initial status")
 	}
 
-	// Abort flips status; subscriber observes aborted.
+	// Abort flips status; subscriber observes aborting.
 	if _, err := abortPendingSnapshot(ctx, store, "snap-sub"); err != nil {
 		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
@@ -6150,8 +6160,8 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 		if !ok {
 			t.Fatal("channel closed before abort notification")
 		}
-		if status != SnapshotStatusAborted {
-			t.Errorf("status notification = %q, want aborted", status)
+		if status != SnapshotStatusAborting {
+			t.Errorf("status notification = %q, want aborting", status)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("did not receive abort notification")
@@ -7608,24 +7618,26 @@ func TestAgent_ResumeFromSnapshotID_StalePendingReportsDeadWorker(t *testing.T) 
 	}
 }
 
-func TestAgent_GetSnapshot_AbortedWindowShaping(t *testing.T) {
-	// The abort protocol writes aborted twice: the flip (no state) and the
-	// finalize (state stamped on). Reads never expose the window between
-	// them, so every aborted row a caller can observe is a resumable seam:
-	// with a live heartbeat the row reads as pending (the finalize is
-	// coming), with a stale one as expired (dead worker; the parent is the
-	// resume point), and only a finalized row reads as aborted.
+func TestAgent_GetSnapshot_AbortingShaping(t *testing.T) {
+	// The abort protocol writes twice: the flip lands aborting (no state),
+	// and the finalize lands aborted with the state stamped on. An aborting
+	// row is honest as long as its worker is alive, and the heartbeat says
+	// whether it is: a live beat reads as aborting (the finalize is coming),
+	// a stale one as expired (dead worker; the parent is the resume point).
+	// A finalized row reads as aborted whatever its beat, and so does a
+	// stateless aborted row, which only a foreign writer can leave behind:
+	// shaping keys on status and heartbeat alone, never on the state.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
-	af := defineLastGoodTestAgent(reg, "abortWindowShaping", WithSessionStore(store))
+	af := defineLastGoodTestAgent(reg, "abortingShaping", WithSessionStore(store))
 
-	save := func(state *SessionState[testState], beat time.Time) string {
+	save := func(st SnapshotStatus, state *SessionState[testState], beat time.Time) string {
 		t.Helper()
 		snap, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				SessionID:   "sess-window",
-				Status:      SnapshotStatusAborted,
+				Status:      st,
 				State:       state,
 				CreatedAt:   time.Now(),
 				UpdatedAt:   time.Now(),
@@ -7646,21 +7658,29 @@ func TestAgent_GetSnapshot_AbortedWindowShaping(t *testing.T) {
 		return snap.Status
 	}
 
-	if got := read(save(nil, time.Now())); got != SnapshotStatusPending {
-		t.Errorf("stateless aborted row with a live beat reads as %q, want %q", got, SnapshotStatusPending)
-	}
-	if got := read(save(nil, time.Now().Add(-2*defaultHeartbeatTimeout))); got != SnapshotStatusExpired {
-		t.Errorf("stateless aborted row with a stale beat reads as %q, want %q", got, SnapshotStatusExpired)
-	}
+	live, stale := time.Now(), time.Now().Add(-2*defaultHeartbeatTimeout)
 	finalized := &SessionState[testState]{Messages: []*ai.Message{ai.NewUserTextMessage("kept")}}
-	if got := read(save(finalized, time.Now().Add(-2*defaultHeartbeatTimeout))); got != SnapshotStatusAborted {
-		t.Errorf("finalized aborted row reads as %q, want %q", got, SnapshotStatusAborted)
+	for _, tc := range []struct {
+		name  string
+		st    SnapshotStatus
+		state *SessionState[testState]
+		beat  time.Time
+		want  SnapshotStatus
+	}{
+		{"aborting with a live beat", SnapshotStatusAborting, nil, live, SnapshotStatusAborting},
+		{"aborting with a stale beat", SnapshotStatusAborting, nil, stale, SnapshotStatusExpired},
+		{"finalized aborted with a stale beat", SnapshotStatusAborted, finalized, stale, SnapshotStatusAborted},
+		{"stateless aborted with a stale beat", SnapshotStatusAborted, nil, stale, SnapshotStatusAborted},
+	} {
+		if got := read(save(tc.st, tc.state, tc.beat)); got != tc.want {
+			t.Errorf("%s reads as %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
 func TestAgent_WaitForSnapshot_RidesAbortFinalizeWindow(t *testing.T) {
 	// The abort flip notifies a subscribed wait, but the row it finds then is
-	// stateless and reads as pending, so the wait keeps waiting and settles
+	// aborting, which is not terminal, so the wait keeps waiting and settles
 	// on the finalized, resumable row rather than the mid-window one.
 	ctx := context.Background()
 	restore := snapshotWaitPollInterval
@@ -7695,11 +7715,11 @@ func TestAgent_WaitForSnapshot_RidesAbortFinalizeWindow(t *testing.T) {
 		done <- result{snap, err}
 	}()
 
-	// The flip: aborted, no state, heartbeat still live (the worker is
+	// The flip: aborting, no state, heartbeat still live (the worker is
 	// between the two writes).
 	beat := time.Now()
 	if _, err := store.SaveSnapshot(ctx, pending.SnapshotID, func(snap *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
-		snap.Status = SnapshotStatusAborted
+		snap.Status = SnapshotStatusAborting
 		snap.HeartbeatAt = &beat
 		return snap, nil
 	}); err != nil {
@@ -7708,12 +7728,13 @@ func TestAgent_WaitForSnapshot_RidesAbortFinalizeWindow(t *testing.T) {
 
 	select {
 	case res := <-done:
-		t.Fatalf("wait settled on the stateless mid-window row: snap=%+v err=%v", res.snap, res.err)
+		t.Fatalf("wait settled on the aborting mid-window row: snap=%+v err=%v", res.snap, res.err)
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	// The finalize: state stamped on, heartbeat cleared.
+	// The finalize: aborted, state stamped on, heartbeat cleared.
 	if _, err := store.SaveSnapshot(ctx, pending.SnapshotID, func(snap *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		snap.Status = SnapshotStatusAborted
 		snap.State = &SessionState[testState]{Messages: []*ai.Message{ai.NewUserTextMessage("kept")}}
 		snap.HeartbeatAt = nil
 		return snap, nil
@@ -8489,11 +8510,11 @@ func TestPromptAgent_FailedTurnReasonIsNotTheModelReason(t *testing.T) {
 	}
 }
 
-// TestAgent_ResumeRejectsAbortedRowWithNoState covers the window between the
-// two writes an aborted detached row takes: abort flips the status, and the
-// finalize that follows stamps the state. A row still between them holds no
-// conversation, so resuming it must fail rather than hand back an empty
-// session in place of the one the caller asked to continue.
+// TestAgent_ResumeRejectsAbortedRowWithNoState covers an aborted row that
+// carries no state. The runtime's finalize lands the state with the status,
+// so only a foreign writer leaves one, but it holds no conversation either
+// way: resuming it must fail rather than hand back an empty session in place
+// of the one the caller asked to continue.
 func TestAgent_ResumeRejectsAbortedRowWithNoState(t *testing.T) {
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
@@ -8506,8 +8527,9 @@ func TestAgent_ResumeRejectsAbortedRowWithNoState(t *testing.T) {
 		},
 		WithSessionStore(store))
 
-	// The shape abortPendingSnapshot leaves behind before finalizePendingSnapshot
-	// stamps the state: aborted, and carrying nothing.
+	// The runtime's finalize lands an aborted row together with its state,
+	// so a stateless one is a foreign writer's; it must still be refused
+	// rather than resumed as an empty session.
 	snap, err := store.SaveSnapshot(ctx, "",
 		func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
@@ -8523,5 +8545,58 @@ func TestAgent_ResumeRejectsAbortedRowWithNoState(t *testing.T) {
 		t.Fatal("resume from a stateless aborted snapshot succeeded, want FAILED_PRECONDITION")
 	} else if !errors.Is(err, status.ErrFailedPrecondition) {
 		t.Errorf("resume error = %v, want FAILED_PRECONDITION", err)
+	}
+}
+
+func TestAgent_ResumeRejectsAbortingRow(t *testing.T) {
+	// An aborting row sits between the flip that stopped its work and the
+	// finalize that stamps the state on, so it is never a resume point. The
+	// heartbeat decides what the caller is told: a live beat means the
+	// finalize is coming and this same ID is the thing to retry; a stale one
+	// means the worker died, and the parent is the resume point.
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	af := DefineCustomAgent(newTestRegistry(t), "abortingRow",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store))
+
+	for _, tc := range []struct {
+		name string
+		beat time.Time
+		want string
+	}{
+		{"live beat", time.Now(), "retry this same snapshot ID"},
+		{"stale beat", time.Now().Add(-2 * defaultHeartbeatTimeout), "resume from its parent snapshot \"parent-1\""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			beat := tc.beat
+			snap, err := store.SaveSnapshot(ctx, "",
+				func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+					return &SessionSnapshot[testState]{
+						SessionID:   "sess-aborting",
+						ParentID:    "parent-1",
+						Status:      SnapshotStatusAborting,
+						HeartbeatAt: &beat,
+					}, nil
+				})
+			if err != nil {
+				t.Fatalf("SaveSnapshot: %v", err)
+			}
+			_, err = af.RunText(ctx, "continue", WithSnapshotID[testState](snap.SnapshotID))
+			if err == nil {
+				t.Fatal("resume from an aborting snapshot succeeded, want FAILED_PRECONDITION")
+			}
+			if !errors.Is(err, status.ErrFailedPrecondition) {
+				t.Errorf("resume error = %v, want FAILED_PRECONDITION", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("resume error = %q, want it to say %q", err.Error(), tc.want)
+			}
+		})
 	}
 }

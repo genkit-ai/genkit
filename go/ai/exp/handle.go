@@ -296,8 +296,8 @@ func nilHandleError(method string) error {
 // companion action, so the read is shaped exactly as remote callers see it:
 // the configured [WithStateTransform] applies and a stale-heartbeat pending
 // row surfaces as [SnapshotStatusExpired]. It is [Agent.GetSnapshot] with
-// custom state as raw JSON. Pass [WithOmitState] to read the shaped metadata
-// without the state payload.
+// custom state as raw JSON. Pass [WithMetadataOnly] to read the shaped
+// metadata without loading the state.
 //
 // It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
 // agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
@@ -351,10 +351,12 @@ func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string, o
 
 // Abort asks the background work behind a pending snapshot to stop, through
 // the agent's abort companion action, and returns the snapshot's status after
-// the attempt: [SnapshotStatusAborted] when the row was pending, or the
-// existing terminal status (the abort was a no-op) when it had already
-// settled. A missing snapshot is NOT_FOUND, matching the companion action
-// remote callers use (unlike [Agent.Abort], which reports it as "").
+// the attempt: [SnapshotStatusAborting] when the row was pending (the stop
+// landed, and the row settles as [SnapshotStatusAborted] once the worker's
+// finalize stamps the state on) or already aborting, or the existing terminal
+// status (the abort was a no-op) when it had already settled. A missing
+// snapshot is NOT_FOUND, matching the companion action remote callers use
+// (unlike [Agent.Abort], which reports it as "").
 //
 // It returns FAILED_PRECONDITION when the agent has no session store
 // ([ErrSessionStoreNotConfigured]) or the store cannot observe aborts (no

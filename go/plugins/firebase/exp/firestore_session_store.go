@@ -374,21 +374,98 @@ func (s *FirestoreSessionStore[State]) GetLatestSnapshot(ctx context.Context, se
 // segment path, then materializes its state. Returns ok=false when the snapshot
 // does not exist.
 func (s *FirestoreSessionStore[State]) reconstruct(tx *firestore.Transaction, prefix, id string) (snapshotDoc, any, bool, error) {
+	doc, ok, err := s.readDoc(tx, prefix, id)
+	if err != nil || !ok {
+		return snapshotDoc{}, nil, false, err
+	}
+	return s.reconstructFrom(tx, prefix, doc.CheckpointID, doc.CheckpointShardCount, doc.SegmentPath, id)
+}
+
+// readDoc reads one snapshot document without materializing its state.
+// Returns ok=false when the document does not exist.
+func (s *FirestoreSessionStore[State]) readDoc(tx *firestore.Transaction, prefix, id string) (snapshotDoc, bool, error) {
 	snap, err := tx.Get(s.snapshotRef(prefix, id))
 	if err != nil {
 		if isNotFound(err) {
-			return snapshotDoc{}, nil, false, nil
+			return snapshotDoc{}, false, nil
 		}
-		return snapshotDoc{}, nil, false, err
+		return snapshotDoc{}, false, err
 	}
 	if !snap.Exists() {
-		return snapshotDoc{}, nil, false, nil
+		return snapshotDoc{}, false, nil
 	}
 	var doc snapshotDoc
 	if err := snap.DataTo(&doc); err != nil {
-		return snapshotDoc{}, nil, false, fmt.Errorf("decode snapshot %q: %w", id, err)
+		return snapshotDoc{}, false, fmt.Errorf("decode snapshot %q: %w", id, err)
 	}
-	return s.reconstructFrom(tx, prefix, doc.CheckpointID, doc.CheckpointShardCount, doc.SegmentPath, id)
+	return doc, true, nil
+}
+
+// GetSnapshotMetadata retrieves a snapshot's document without reconstructing
+// its state, per [aix.SnapshotReader.GetSnapshotMetadata]: one document read
+// in place of the checkpoint shards and diff chain a full read materializes.
+// Returns nil if not found.
+func (s *FirestoreSessionStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[State], error) {
+	if snapshotID == "" {
+		return nil, nil
+	}
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshotMetadata: %w", err)
+	}
+	var result *aix.SessionSnapshot[State]
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		result = nil
+		doc, ok, err := s.readDoc(tx, prefix, snapshotID)
+		if err != nil || !ok {
+			return err
+		}
+		snap, err := s.toSnapshot(doc, nil)
+		if err != nil {
+			return err
+		}
+		result = snap
+		return nil
+	}, firestore.ReadOnly)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshotMetadata: %w", err)
+	}
+	return result, nil
+}
+
+// GetLatestSnapshotMetadata resolves the session's latest row through its
+// pointer and reads that row's document without reconstructing its state,
+// per [aix.SnapshotReader.GetLatestSnapshotMetadata].
+func (s *FirestoreSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*aix.SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: session ID is empty")
+	}
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: %w", err)
+	}
+	var result *aix.SessionSnapshot[State]
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		result = nil
+		pointer, err := s.readPointer(tx, prefix, sessionID)
+		if err != nil || pointer == nil {
+			return err
+		}
+		doc, ok, err := s.readDoc(tx, prefix, pointer.CurrentSnapshotID)
+		if err != nil || !ok {
+			return err
+		}
+		snap, err := s.toSnapshot(doc, nil)
+		if err != nil {
+			return err
+		}
+		result = snap
+		return nil
+	}, firestore.ReadOnly)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: %w", err)
+	}
+	return result, nil
 }
 
 // reconstructFrom materializes the state of targetID from a known checkpoint

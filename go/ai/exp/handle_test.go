@@ -448,8 +448,8 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Abort: %v", err)
 	}
-	if got != SnapshotStatusAborted {
-		t.Fatalf("Abort status = %q, want %q", got, SnapshotStatusAborted)
+	if got != SnapshotStatusAborting {
+		t.Fatalf("Abort status = %q, want %q: the stop landed and the row settles on the finalize", got, SnapshotStatusAborting)
 	}
 
 	final, err := task.Wait(context.Background())
@@ -476,7 +476,7 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 	}
 }
 
-func TestAgentHandle_GetSnapshotOmitState(t *testing.T) {
+func TestAgentHandle_GetSnapshotMetadataOnly(t *testing.T) {
 	// The metadata read shapes exactly as the full read and drops only the
 	// state payload: a settled row reports its status with a nil State, and a
 	// row inside the abort wind-down window reads as pending through both.
@@ -497,9 +497,9 @@ func TestAgentHandle_GetSnapshotOmitState(t *testing.T) {
 	if full.State == nil {
 		t.Fatal("full read returned no state")
 	}
-	meta, err := h.GetSnapshot(context.Background(), out.SnapshotID, WithOmitState())
+	meta, err := h.GetSnapshot(context.Background(), out.SnapshotID, WithMetadataOnly())
 	if err != nil {
-		t.Fatalf("GetSnapshot(WithOmitState): %v", err)
+		t.Fatalf("GetSnapshot(WithMetadataOnly): %v", err)
 	}
 	if meta.State != nil {
 		t.Errorf("meta read returned state: %+v", meta.State)
@@ -509,43 +509,62 @@ func TestAgentHandle_GetSnapshotOmitState(t *testing.T) {
 	}
 
 	// The option rides every read surface: latest-by-session, and a task poll.
-	latestMeta, err := h.GetLatestSnapshot(context.Background(), out.SessionID, WithOmitState())
+	latestMeta, err := h.GetLatestSnapshot(context.Background(), out.SessionID, WithMetadataOnly())
 	if err != nil {
-		t.Fatalf("GetLatestSnapshot(WithOmitState): %v", err)
+		t.Fatalf("GetLatestSnapshot(WithMetadataOnly): %v", err)
 	}
 	if latestMeta.State != nil {
 		t.Errorf("latest meta read returned state: %+v", latestMeta.State)
 	}
-	polled, err := h.Task(out.SnapshotID).Poll(context.Background(), WithOmitState())
+	polled, err := h.Task(out.SnapshotID).Poll(context.Background(), WithMetadataOnly())
 	if err != nil {
-		t.Fatalf("Poll(WithOmitState): %v", err)
+		t.Fatalf("Poll(WithMetadataOnly): %v", err)
 	}
 	if polled.State != nil {
 		t.Errorf("meta poll returned state: %+v", polled.State)
 	}
 
-	// The abort-window shaping consults the stored state before dropping it,
-	// so the two reads tell the same status story for a winding-down row.
+	// Shaping needs only the metadata, so a winding-down row tells the same
+	// status story through both reads: aborting while its beat is live, and
+	// expired once the beat is stale.
 	beat := time.Now()
-	winding, err := store.SaveSnapshot(context.Background(), "",
-		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
-			return &SessionSnapshot[testState]{
-				SessionID:   "sess-window",
-				Status:      SnapshotStatusAborted,
-				CreatedAt:   beat,
-				UpdatedAt:   beat,
-				HeartbeatAt: &beat,
-			}, nil
-		})
-	if err != nil {
-		t.Fatalf("SaveSnapshot winding row: %v", err)
+	saveAborting := func(beat time.Time) string {
+		t.Helper()
+		row, err := store.SaveSnapshot(context.Background(), "",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{
+					SessionID:   "sess-window",
+					Status:      SnapshotStatusAborting,
+					CreatedAt:   beat,
+					UpdatedAt:   beat,
+					HeartbeatAt: &beat,
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot aborting row: %v", err)
+		}
+		return row.SnapshotID
 	}
-	windingMeta, err := h.GetSnapshot(context.Background(), winding.SnapshotID, WithOmitState())
-	if err != nil {
-		t.Fatalf("GetSnapshot(winding, WithOmitState): %v", err)
-	}
-	if windingMeta.Status != SnapshotStatusPending {
-		t.Errorf("winding-down row meta status = %q, want %q", windingMeta.Status, SnapshotStatusPending)
+	for _, tc := range []struct {
+		name string
+		beat time.Time
+		want SnapshotStatus
+	}{
+		{"live beat", beat, SnapshotStatusAborting},
+		{"stale beat", beat.Add(-2 * defaultHeartbeatTimeout), SnapshotStatusExpired},
+	} {
+		id := saveAborting(tc.beat)
+		metaRow, err := h.GetSnapshot(context.Background(), id, WithMetadataOnly())
+		if err != nil {
+			t.Fatalf("GetSnapshot(%s, WithMetadataOnly): %v", tc.name, err)
+		}
+		fullRow, err := h.GetSnapshot(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetSnapshot(%s): %v", tc.name, err)
+		}
+		if metaRow.Status != tc.want || fullRow.Status != tc.want {
+			t.Errorf("%s: meta status = %q, full status = %q, want both %q", tc.name, metaRow.Status, fullRow.Status, tc.want)
+		}
 	}
 }
 

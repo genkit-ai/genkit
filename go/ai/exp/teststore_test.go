@@ -68,6 +68,26 @@ func (s *testInMemStore[State]) GetSnapshot(_ context.Context, snapshotID string
 	return testCopySnapshot(snap)
 }
 
+// GetSnapshotMetadata is the full read with the state dropped: correct by
+// construction, which is what a test store needs.
+func (s *testInMemStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+	return withoutState(s.GetSnapshot(ctx, snapshotID))
+}
+
+// GetLatestSnapshotMetadata is the full latest read with the state dropped.
+func (s *testInMemStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	return withoutState(s.GetLatestSnapshot(ctx, sessionID))
+}
+
+// withoutState drops the state from a read's result, passing a miss or an
+// error through unchanged.
+func withoutState[State any](snap *SessionSnapshot[State], err error) (*SessionSnapshot[State], error) {
+	if snap != nil {
+		snap.State = nil
+	}
+	return snap, err
+}
+
 func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("testInMemStore: session ID is empty")
@@ -103,12 +123,17 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	}
 
 	var existing *SessionSnapshot[State]
+	var prevStatus SnapshotStatus
 	if stored, ok := s.snapshots[id]; ok {
 		copied, err := testCopySnapshot(stored)
 		if err != nil {
 			return nil, err
 		}
 		existing = copied
+		// Captured before fn runs: a mutator that edits existing in place
+		// and returns it would otherwise hide the status change from the
+		// notification below.
+		prevStatus = existing.Status
 	}
 
 	next, err := fn(existing)
@@ -134,7 +159,7 @@ func (s *testInMemStore[State]) SaveSnapshot(
 		return nil, err
 	}
 	s.snapshots[id] = copied
-	if existing == nil || existing.Status != next.Status {
+	if existing == nil || prevStatus != next.Status {
 		s.notifyLocked(id, next.Status)
 	}
 	return next, nil

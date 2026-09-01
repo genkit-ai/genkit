@@ -177,6 +177,12 @@ func TestInMemorySessionStore_Heartbeat(t *testing.T) {
 	})
 }
 
+func TestInMemorySessionStore_Metadata(t *testing.T) {
+	runMetadataStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		return NewInMemorySessionStore[testState]()
+	})
+}
+
 func TestInMemorySessionStore_SessionIDs(t *testing.T) {
 	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
 		return NewInMemorySessionStore[testState]()
@@ -211,4 +217,41 @@ func TestInMemorySessionStore_SessionIDs(t *testing.T) {
 			t.Errorf("expected isolated copy with counter=1, got %+v", second)
 		}
 	})
+}
+
+func TestInMemorySessionStore_NotifiesInPlaceStatusChange(t *testing.T) {
+	// A mutator may edit the row it is handed and return it. The status
+	// change must still reach subscribers: the abort protocol's flip is
+	// exactly such a change, and a subscriber that missed it would never
+	// cancel the work.
+	ctx := context.Background()
+	store := NewInMemorySessionStore[testState]()
+	now := time.Now()
+	if _, err := store.SaveSnapshot(ctx, "row",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := store.OnSnapshotStatusChange(subCtx, "row")
+	if first := <-ch; first != exp.SnapshotStatusPending {
+		t.Fatalf("initial status = %q, want pending", first)
+	}
+	if _, err := store.SaveSnapshot(ctx, "row",
+		func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			existing.Status = exp.SnapshotStatusAborting
+			return existing, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot flip: %v", err)
+	}
+	select {
+	case got := <-ch:
+		if got != exp.SnapshotStatusAborting {
+			t.Errorf("notified status = %q, want aborting", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-place status change was not delivered to the subscriber")
+	}
 }

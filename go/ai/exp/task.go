@@ -106,7 +106,7 @@ func (t *DetachedTask[State]) SnapshotID() string { return t.snapshotID }
 // including [SnapshotStatusExpired] when the worker stopped heartbeating and
 // is presumed dead. A terminal snapshot carries the cumulative session state;
 // a poll that only dispatches on where the task stands can pass
-// [WithOmitState] to skip that payload.
+// [WithMetadataOnly] to skip that payload.
 func (t *DetachedTask[State]) Poll(ctx context.Context, opts ...SnapshotReadOption) (*SessionSnapshot[State], error) {
 	return t.ops.GetSnapshot(ctx, t.snapshotID, opts...)
 }

@@ -26,6 +26,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/google/uuid"
@@ -521,6 +522,95 @@ func TestGetSnapshotNotFound(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("expected nil for missing snapshot, got %+v", got)
+	}
+}
+
+// TestSnapshotMetadataReads pins the metadata-only reads against their full
+// counterparts across a diff chain: the same row resolves, every field but the
+// state matches, and the state is absent without the shards or diffs having
+// been read.
+func TestSnapshotMetadataReads(t *testing.T) {
+	// A checkpoint interval of 2 puts row c on a diff, so its metadata read is
+	// answered by a document that carries no state of its own.
+	store := newEmulatorStore(t, WithCheckpointInterval(2))
+	ctx := context.Background()
+
+	saveRow(t, store, "a", "sess-1", "", aix.SnapshotStatusCompleted, 1)
+	tick()
+	saveRow(t, store, "b", "sess-1", "a", aix.SnapshotStatusCompleted, 2)
+	tick()
+	beat := time.Now()
+	if _, err := store.SaveSnapshot(ctx, "c",
+		func(_ *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+			return &aix.SessionSnapshot[testState]{
+				SessionID:    "sess-1",
+				ParentID:     "b",
+				Status:       aix.SnapshotStatusFailed,
+				FinishReason: aix.AgentFinishReasonFailed,
+				Error:        &status.Error{Status: status.Internal, Message: "boom"},
+				State:        &aix.SessionState[testState]{Custom: testState{Counter: 3}},
+				CreatedAt:    beat,
+				UpdatedAt:    beat,
+				HeartbeatAt:  &beat,
+			}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot(c): %v", err)
+	}
+
+	assertMetadataOf := func(t *testing.T, meta, full *aix.SessionSnapshot[testState]) {
+		t.Helper()
+		if meta == nil {
+			t.Fatal("metadata read returned nil for an existing row")
+		}
+		if meta.State != nil {
+			t.Errorf("metadata read carried state: %+v", meta.State)
+		}
+		if meta.SnapshotID != full.SnapshotID || meta.SessionID != full.SessionID || meta.ParentID != full.ParentID ||
+			meta.Status != full.Status || meta.FinishReason != full.FinishReason ||
+			!meta.CreatedAt.Equal(full.CreatedAt) || !meta.UpdatedAt.Equal(full.UpdatedAt) {
+			t.Errorf("metadata read differs from the full read:\n meta=%+v\n full=%+v", meta, full)
+		}
+		if (meta.HeartbeatAt == nil) != (full.HeartbeatAt == nil) || (meta.HeartbeatAt != nil && !meta.HeartbeatAt.Equal(*full.HeartbeatAt)) {
+			t.Errorf("HeartbeatAt: meta=%v full=%v", meta.HeartbeatAt, full.HeartbeatAt)
+		}
+		if (meta.Error == nil) != (full.Error == nil) || (meta.Error != nil && meta.Error.Message != full.Error.Message) {
+			t.Errorf("Error: meta=%+v full=%+v", meta.Error, full.Error)
+		}
+	}
+
+	for _, id := range []string{"a", "b", "c"} {
+		full, err := store.GetSnapshot(ctx, id)
+		if err != nil {
+			t.Fatalf("GetSnapshot(%s): %v", id, err)
+		}
+		meta, err := store.GetSnapshotMetadata(ctx, id)
+		if err != nil {
+			t.Fatalf("GetSnapshotMetadata(%s): %v", id, err)
+		}
+		assertMetadataOf(t, meta, full)
+	}
+
+	full, err := store.GetLatestSnapshot(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	meta, err := store.GetLatestSnapshotMetadata(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshotMetadata: %v", err)
+	}
+	if full == nil || full.SnapshotID != "c" {
+		t.Fatalf("GetLatestSnapshot resolved %+v, want row c", full)
+	}
+	assertMetadataOf(t, meta, full)
+
+	if got, err := store.GetSnapshotMetadata(ctx, "nope"); err != nil || got != nil {
+		t.Errorf("GetSnapshotMetadata(missing) = %+v, %v; want nil, nil", got, err)
+	}
+	if got, err := store.GetLatestSnapshotMetadata(ctx, "sess-none"); err != nil || got != nil {
+		t.Errorf("GetLatestSnapshotMetadata(unknown session) = %+v, %v; want nil, nil", got, err)
+	}
+	if _, err := store.GetLatestSnapshotMetadata(ctx, ""); err == nil {
+		t.Error("GetLatestSnapshotMetadata(\"\") succeeded, want an error")
 	}
 }
 

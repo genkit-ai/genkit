@@ -91,6 +91,7 @@ func TestSnapshotStatus_Terminal(t *testing.T) {
 		want   bool
 	}{
 		{SnapshotStatusPending, false},
+		{SnapshotStatusAborting, false},
 		{SnapshotStatusCompleted, true},
 		{SnapshotStatusAborted, true},
 		{SnapshotStatusFailed, true},
@@ -339,6 +340,16 @@ func (s *scriptedStore) GetSnapshot(ctx context.Context, snapshotID string) (*Se
 
 func (s *scriptedStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
 	return nil, errors.New("scriptedStore: GetLatestSnapshot is not scripted")
+}
+
+// GetSnapshotMetadata consumes a scripted read like GetSnapshot and drops the
+// state, so a metadata read costs the script exactly what a full read does.
+func (s *scriptedStore) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
+	return withoutState(s.GetSnapshot(ctx, snapshotID))
+}
+
+func (s *scriptedStore) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
+	return nil, errors.New("scriptedStore: GetLatestSnapshotMetadata is not scripted")
 }
 
 func (s *scriptedStore) SaveSnapshot(ctx context.Context, snapshotID string, fn func(*SessionSnapshot[any]) (*SessionSnapshot[any], error)) (*SessionSnapshot[any], error) {

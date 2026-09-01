@@ -547,7 +547,9 @@ tests:
     description: >
       Abort a detached agent that is still processing. The abort
       should return "pending" as the previous status and the snapshot
-      should be set to "aborted".
+      should settle as "aborted". A runtime whose abort stops the work
+      before it records the state passes through "aborting" first, so the
+      settled status is awaited rather than read back immediately.
     agent: customAgentBlocking
     steps:
       - type: send
@@ -563,7 +565,7 @@ tests:
         snapshotId: '{{snap1}}'
         expectPreviousStatus: pending
 
-      - type: getSnapshotData
+      - type: waitUntilCompleted
         snapshotId: '{{snap1}}'
         expectSnapshot:
           status: aborted
@@ -1168,6 +1170,9 @@ tests:
     description: >
       Abort an agent that was already aborted. The abort returns
       "aborted" as previous status and the snapshot remains "aborted".
+      The first abort is awaited to its settled row before the second,
+      since a runtime that stops the work before recording the state
+      reports "aborting" until then.
     agent: customAgentBlocking
     steps:
       - type: send
@@ -1182,6 +1187,11 @@ tests:
       - type: abort
         snapshotId: '{{snap1}}'
         expectPreviousStatus: pending
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
 
       - type: abort
         snapshotId: '{{snap1}}'

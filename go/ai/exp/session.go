@@ -45,13 +45,14 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 }
 
 // Terminal reports whether the status is settled: no further transition will
-// happen on its own. [SnapshotStatusPending] is the only non-terminal status
-// (an empty status counts as [SnapshotStatusCompleted], matching the
+// happen on its own. [SnapshotStatusPending] and [SnapshotStatusAborting] are
+// the non-terminal statuses, the two rows a live worker is still owed a write
+// for (an empty status counts as [SnapshotStatusCompleted], matching the
 // documented default), so waiters stop on completed, failed, aborted, and
-// expired alike. An expired snapshot's raw store row is still pending, but its
-// worker is presumed dead, so nothing will finalize it.
+// expired alike. An expired snapshot's raw store row is still pending or
+// aborting, but its worker is presumed dead, so nothing will finalize it.
 func (s SnapshotStatus) Terminal() bool {
-	return s != SnapshotStatusPending
+	return s != SnapshotStatusPending && s != SnapshotStatusAborting
 }
 
 // CarriesResult reports whether a turn that ended for this reason produced an
@@ -101,6 +102,20 @@ type SnapshotReader[State any] interface {
 	// ParentID is informational lineage and plays no part in resolution: when
 	// history forks, the most recently created branch wins.
 	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
+
+	// GetSnapshotMetadata retrieves a snapshot by ID without its state: the
+	// returned row carries every field [GetSnapshot] would, with State nil.
+	// Returns nil if not found. It exists so a caller that only needs to know
+	// where a snapshot stands (its status, finish reason, parent, and
+	// heartbeat) does not pay to load a conversation history; a store should
+	// answer it without reading the state at all, and one that cannot may
+	// load the row and drop the state.
+	GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
+
+	// GetLatestSnapshotMetadata is [GetLatestSnapshot] without the state:
+	// the same resolution, the same nil-if-none and empty-session-ID
+	// contract, and a row with State nil.
+	GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
 }
 
 // SnapshotWriter persists snapshots. The minimum any session store must
@@ -152,7 +167,7 @@ type SnapshotWriter[State any] interface {
 // lets the agent runtime observe a snapshot's status changes without polling.
 // It is what makes a detached invocation abortable: aborting is an ordinary
 // [SnapshotWriter.SaveSnapshot] that flips a pending row to
-// [SnapshotStatusAborted], and the runtime reacts to that flip through this
+// [SnapshotStatusAborting], and the runtime reacts to that flip through this
 // subscription, promptly cancelling the background work context.
 //
 // A store that does not implement it cannot support detach (there is no way to
@@ -216,12 +231,10 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // readSnapshot resolves a snapshot by ID, or by the session's latest when
 // snapshotID is empty, and returns a normalized copy shaped for a client:
 // the documented defaults are applied (empty status means completed, zero
-// UpdatedAt means CreatedAt), a pending row whose heartbeat has gone stale is
-// surfaced as [SnapshotStatusExpired] (computed on read, never written back),
-// an aborted row not yet finalized reads as pending while its worker winds
-// down and as expired once the worker is presumed dead (so a visible aborted
-// row always carries resumable state), and transform shapes the outbound
-// state. It backs the getSnapshot and
+// UpdatedAt means CreatedAt), an in-flight row (pending, or aborting while
+// its worker winds down) whose heartbeat has gone stale is surfaced as
+// [SnapshotStatusExpired] (computed on read, never written back), and
+// transform shapes the outbound state. It backs the getSnapshot and
 // waitForSnapshot companion actions and the typed [Agent.GetSnapshot] /
 // [Agent.GetLatestSnapshot], so Go callers, the Dev UI, and non-Go clients all
 // observe identically shaped snapshots. At least one of snapshotID / sessionID
@@ -239,18 +252,24 @@ func readSnapshot[State any](
 	store SnapshotReader[State],
 	transform StateTransform[State],
 	op, snapshotID, sessionID string,
-	omitState bool,
+	metadataOnly bool,
 ) (*SessionSnapshot[State], error) {
 	// Resolve the snapshot. A snapshot ID fetches that exact row; a session ID
 	// alone fetches the session's latest row (whatever its status). When both
 	// are present the snapshot ID picks the row and the session ID asserts it
-	// belongs to that session, mirroring AgentInit's combined-ID check.
+	// belongs to that session, mirroring AgentInit's combined-ID check. A
+	// metadata-only read takes the store's metadata path, which answers
+	// without loading the state.
 	var (
 		snap *SessionSnapshot[State]
 		err  error
 	)
 	if snapshotID != "" {
-		snap, err = store.GetSnapshot(ctx, snapshotID)
+		if metadataOnly {
+			snap, err = store.GetSnapshotMetadata(ctx, snapshotID)
+		} else {
+			snap, err = store.GetSnapshot(ctx, snapshotID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
 		}
@@ -262,7 +281,11 @@ func readSnapshot[State any](
 				"%s: snapshot %q does not belong to session %q (snapshot's session: %q)", op, snapshotID, sessionID, snap.SessionID)
 		}
 	} else {
-		snap, err = store.GetLatestSnapshot(ctx, sessionID)
+		if metadataOnly {
+			snap, err = store.GetLatestSnapshotMetadata(ctx, sessionID)
+		} else {
+			snap, err = store.GetLatestSnapshot(ctx, sessionID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
 		}
@@ -277,32 +300,16 @@ func readSnapshot[State any](
 	// the server. A failed snapshot's state is what its turn committed, so it
 	// is returned like any other row's.
 	resp := *snap
-	// Surface a pending snapshot whose heartbeat has gone stale as expired: its
-	// detached background worker is presumed dead, so report the orphan rather
-	// than leaving it pending forever. Computed on read only, never written back
-	// to the store, so the raw row stays pending. Checked before the empty-status
-	// default below, which applies only to a row carrying no status at all.
+	// Surface an in-flight row (pending, or aborting while its worker drains
+	// toward the finalize) whose heartbeat has gone stale as expired: its
+	// detached background worker is presumed dead, so report the orphan
+	// rather than leaving it in flight forever. Computed on read only, never
+	// written back to the store, so the raw row keeps its status, which is
+	// what the worker's abort subscription and resumeSessionFrom key on.
+	// Checked before the empty-status default below, which applies only to a
+	// row carrying no status at all.
 	if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
 		resp.Status = SnapshotStatusExpired
-	}
-	// An aborted row with no state is caught between the abort protocol's two
-	// writes: the flip that stopped the work and the finalize that stamps the
-	// state on. Callers never observe that window, so every status they can
-	// see on an aborted row is a resumable seam: while the heartbeat says the
-	// finalize is coming the row reads as pending (the invocation really is
-	// still winding down, and a wait keeps waiting for the finalized row
-	// instead of returning a stateless one), and once the beat is stale the
-	// finalize is never coming and the row reads as expired, the same
-	// dead-worker story as a stale pending row, whose resume point is the
-	// parent snapshot. Computed on read only, like the expiry above; the raw
-	// row stays aborted, which is what the worker's abort subscription and
-	// the resume path's own window logic (resumeSessionFrom) key on.
-	if snap.Status == SnapshotStatusAborted && snap.State == nil {
-		if finalizeInFlight(snap, defaultHeartbeatTimeout) {
-			resp.Status = SnapshotStatusPending
-		} else {
-			resp.Status = SnapshotStatusExpired
-		}
 	}
 	if resp.Status == "" {
 		resp.Status = SnapshotStatusCompleted
@@ -310,9 +317,10 @@ func readSnapshot[State any](
 	if resp.UpdatedAt.IsZero() {
 		resp.UpdatedAt = resp.CreatedAt
 	}
-	// A metadata-only read is done: shaping is complete, and the copied state
-	// pointer must not ride out on it.
-	if omitState {
+	// A metadata-only read is done: shaping needed only the metadata, and the
+	// store read the row without its state. State is cleared regardless, so a
+	// store that returned one anyway cannot leak it past the contract.
+	if metadataOnly {
 		resp.State = nil
 		return &resp, nil
 	}
@@ -572,7 +580,7 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.OmitState)
+			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
 		})
 
 	// waitForSnapshot takes getSnapshot's request, so a caller switching from

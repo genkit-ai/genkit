@@ -63,15 +63,15 @@ const (
 	// It is comfortably larger than defaultHeartbeatInterval so a single missed
 	// beat does not trip expiry.
 	defaultHeartbeatTimeout = 60 * time.Second
-	// windDownHeartbeatBudget bounds how long an aborted invocation keeps
+	// windDownHeartbeatBudget bounds how long an aborting invocation keeps
 	// heartbeating while its worker drains toward the finalize write. The
 	// beats are what keep a live, winding-down worker's row reading as
-	// pending (see finalizeInFlight) instead of expired the moment the abort
-	// flip lands: the flip stops the work, not the worker, and a drain
-	// through a slow tool call can outlast defaultHeartbeatTimeout. A worker
-	// that has not finalized within the budget is presumed wedged; its beats
-	// stop, the row goes stale and reads as expired, and the task stays
-	// recoverable instead of winding down forever.
+	// aborting instead of expired the moment the abort flip lands: the flip
+	// stops the work, not the worker, and a drain through a slow tool call
+	// can outlast defaultHeartbeatTimeout. A worker that has not finalized
+	// within the budget is presumed wedged; its beats stop, the row goes
+	// stale and reads as expired, and the task stays recoverable instead of
+	// winding down forever.
 	windDownHeartbeatBudget = 5 * time.Minute
 )
 
@@ -83,25 +83,16 @@ const (
 // back however long the wait, so the grace expires and the caller escapes.
 const settleGrace = 2 * time.Second
 
-// isHeartbeatExpired reports whether snap is a pending (detached, in-flight)
-// snapshot whose heartbeat is older than timeout, i.e. its background worker is
-// presumed dead. A pending snapshot that has not yet written a first heartbeat
-// is not considered expired (the beat may simply not have fired yet).
+// isHeartbeatExpired reports whether snap is an in-flight detached snapshot
+// (pending, or aborting while its worker drains toward the finalize) whose
+// heartbeat is older than timeout, i.e. its background worker is presumed
+// dead. A row that has not yet written a first heartbeat is not considered
+// expired (the beat may simply not have fired yet).
 func isHeartbeatExpired[State any](snap *SessionSnapshot[State], timeout time.Duration) bool {
-	if snap.Status != SnapshotStatusPending || snap.HeartbeatAt == nil {
+	if snap.Status.Terminal() || snap.HeartbeatAt == nil {
 		return false
 	}
 	return time.Since(*snap.HeartbeatAt) > timeout
-}
-
-// finalizeInFlight reports whether an aborted snapshot carrying no state is
-// still waiting for the write that stamps one on. The abort flips the pending
-// row's status and leaves its heartbeat where the worker left it; only the
-// finalize writes the state, and it clears the heartbeat as it lands. A beat
-// inside timeout therefore says a live worker is between the two writes, and a
-// stale or absent one says it died there.
-func finalizeInFlight[State any](snap *SessionSnapshot[State], timeout time.Duration) bool {
-	return snap.HeartbeatAt != nil && time.Since(*snap.HeartbeatAt) <= timeout
 }
 
 // --- SessionRunner ---
@@ -772,7 +763,7 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // while its worker winds down, or expired once the worker is presumed dead;
 // an empty status or zero UpdatedAt is defaulted).
 // Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
-// state. Pass [WithOmitState] to read the shaped metadata without the state.
+// state. Pass [WithMetadataOnly] to read the shaped metadata without the state.
 //
 // It returns FAILED_PRECONDITION on a client-managed agent (no store) and
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
@@ -784,7 +775,7 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string, opts 
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
 	}
 	req := resolveSnapshotRead(&GetSnapshotRequest{SnapshotID: snapshotID}, opts)
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "", req.OmitState)
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "", req.MetadataOnly)
 }
 
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
@@ -827,15 +818,16 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string, 
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
 	}
 	req := resolveSnapshotRead(&GetSnapshotRequest{SessionID: sessionID}, opts)
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID, req.OmitState)
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID, req.MetadataOnly)
 }
 
 // Abort aborts the detached invocation behind a pending snapshot by
-// flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
-// cancels the background work. A caller that has only a store (no agent) aborts
-// through the abort companion action instead. It is a no-op on a missing
-// snapshot (returns "") or an already-terminal one (returns the existing
-// status).
+// flipping it to [SnapshotStatusAborting]; the runtime observes the flip,
+// cancels the background work, and lands the row as [SnapshotStatusAborted]
+// with its state once the work drains. A caller that has only a store (no
+// agent) aborts through the abort companion action instead. It is a no-op on
+// a missing snapshot (returns "") or an already-settled one (returns the
+// existing status), and idempotent on a row already aborting.
 //
 // It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
 // when snapshotID is empty.
@@ -1846,22 +1838,24 @@ func (rt *agentRuntime[State]) handleDetach(
 	statusCh := subscriber.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
 	go func() {
 		for status := range statusCh {
-			if status == SnapshotStatusAborted {
-				abortedByUser.Store(true)
-				// The flip stops the work, not the worker: the run is winding
-				// down toward its finalize write now, and the heartbeat keeps
-				// running so readers see that finalize coming
-				// (finalizeInFlight) instead of presuming the worker dead the
-				// moment the flip lands. The fnDone goroutine below stops the
-				// beats right before the finalize; the budget bounds a worker
-				// whose fn never observes the cancellation, so a truly wedged
-				// run still goes stale and reads as expired. A timer firing
-				// after the fnDone stop re-cancels an already-cancelled
-				// context, which is a no-op.
-				time.AfterFunc(windDownHeartbeatBudget, stopHeartbeat)
-				cancelWork()
-				return
+			// The runtime's own abort flips the row to aborting; a foreign
+			// writer that lands aborted directly still means stop.
+			if status != SnapshotStatusAborting && status != SnapshotStatusAborted {
+				continue
 			}
+			abortedByUser.Store(true)
+			// The flip stops the work, not the worker: the run is winding
+			// down toward its finalize write now, and the heartbeat keeps
+			// running so readers see a live aborting row instead of presuming
+			// the worker dead the moment the flip lands. The fnDone goroutine
+			// below stops the beats right before the finalize; the budget
+			// bounds a worker whose fn never observes the cancellation, so a
+			// truly wedged run still goes stale and reads as expired. A timer
+			// firing after the fnDone stop re-cancels an already-cancelled
+			// context, which is a no-op.
+			time.AfterFunc(windDownHeartbeatBudget, stopHeartbeat)
+			cancelWork()
+			return
 		}
 	}()
 
@@ -1915,22 +1909,18 @@ func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID stri
 // SaveSnapshot: the mutator carries the existing row through unchanged but for
 // HeartbeatAt, so the caller-managed CreatedAt/UpdatedAt are preserved and a
 // beat does not register as a state change - no dedicated store method needed.
-// A beat lands in the two windows where a live worker is still owed a write:
-// while the detached turn runs (pending) and while an aborted turn drains
-// toward its finalize (aborted with no state yet - the window finalizeInFlight
-// reads by this very heartbeat). Any other row is settled, and the beat no-ops
-// rather than resurrect it; a beat racing the finalize is safe in either order
-// (SaveSnapshot is atomic, and a beat after the finalize sees the state and
-// no-ops). Shared by runHeartbeat and exercised directly in tests.
+// A beat lands on the two rows a live worker is still owed a write for: a
+// pending one while the detached turn runs, and an aborting one while the
+// stopped turn drains toward its finalize. Any other row is settled, and the
+// beat no-ops rather than resurrect it; a beat racing the finalize is safe in
+// either order (SaveSnapshot is atomic, and a beat after the finalize sees a
+// settled row and no-ops). Shared by runHeartbeat and exercised directly in
+// tests.
 func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) error {
 	now := time.Now()
 	_, err := store.SaveSnapshot(ctx, snapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			if existing == nil {
-				return nil, nil
-			}
-			windingDown := existing.Status == SnapshotStatusAborted && existing.State == nil
-			if existing.Status != SnapshotStatusPending && !windingDown {
+			if existing == nil || existing.Status.Terminal() {
 				return nil, nil
 			}
 			updated := *existing
@@ -1940,15 +1930,18 @@ func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], 
 	return err
 }
 
-// abortPendingSnapshot flips a pending snapshot to aborted via an ordinary
-// SaveSnapshot and returns the resulting status: aborted when the row was
-// pending, the existing terminal status when it was already settled (a no-op
-// verbatim rewrite), or "" when the snapshot does not exist. SaveSnapshot's
-// atomic read-mutate-write makes the flip safe against a racing terminal write,
-// and the status change drives the runtime's
+// abortPendingSnapshot flips a pending snapshot to aborting via an ordinary
+// SaveSnapshot and returns the resulting status: aborting when the row was
+// pending (or already aborting, since a second abort is an idempotent verbatim
+// rewrite), the existing terminal status when the row had settled, or "" when
+// the snapshot does not exist. The flip leaves HeartbeatAt where the worker
+// left it: the beat is the worker's liveness signal, and a dead worker's row
+// must read as expired at once rather than a heartbeat timeout later.
+// SaveSnapshot's atomic read-mutate-write makes the flip safe against a racing
+// finalize, and the status change drives the runtime's
 // [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
-// no dedicated abort method. It backs [Agent.Abort] and the abort
-// companion action.
+// no dedicated abort method. It backs [Agent.Abort] and the abort companion
+// action.
 func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
 	now := time.Now()
 	saved, err := store.SaveSnapshot(ctx, snapshotID,
@@ -1957,10 +1950,10 @@ func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[S
 				return nil, nil // not found
 			}
 			if existing.Status != SnapshotStatusPending {
-				return existing, nil // already terminal: re-persist so the return carries its status
+				return existing, nil // settled or already aborting: re-persist so the return carries its status
 			}
 			updated := *existing
-			updated.Status = SnapshotStatusAborted
+			updated.Status = SnapshotStatusAborting
 			updated.UpdatedAt = now
 			return &updated, nil
 		})
@@ -1977,9 +1970,10 @@ func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[S
 // terminal state and status. abortedByUser distinguishes a context
 // cancellation from abort (status=aborted) from an internal
 // failure (status=failed). The write is funneled through SaveSnapshot
-// so the read-and-rewrite is one atomic step: if the row has already
-// transitioned to aborted (a late abort racing this finalize),
-// SaveSnapshot sees it inside fn and we leave the row untouched.
+// so the read-and-rewrite is one atomic step: the row's status inside fn
+// decides the write, so an abort flip that landed first (the row reads
+// aborting) settles as aborted with the state, and a row that has already
+// settled is left untouched.
 func (rt *agentRuntime[State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
@@ -1999,25 +1993,32 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			// Late abort wins over the terminal we were about to land: keep
-			// the aborted status, but stamp the aborted finish reason and the
-			// state so the snapshot is self-describing and resumable. (The
-			// abort write only flips status on a pending row that carries
-			// none; the runtime owns the semantic reason and the state.) Skip
-			// the write once already stamped.
-			if existing != nil && existing.Status == SnapshotStatusAborted {
-				if existing.FinishReason == AgentFinishReasonAborted {
+			if existing != nil {
+				switch {
+				case existing.Status == SnapshotStatusAborting:
+					// The abort flip landed first: keep the stop, and settle
+					// the row as aborted by stamping the finish reason and
+					// the state, so the snapshot is self-describing and
+					// resumable. (The flip only changes the status of a
+					// pending row that carries no state; the runtime owns the
+					// semantic reason and the state.)
+					annotated := *existing
+					annotated.Status = SnapshotStatusAborted
+					annotated.FinishReason = AgentFinishReasonAborted
+					annotated.State = &finalState
+					annotated.UpdatedAt = now
+					// The row is terminal now; drop the liveness heartbeat so
+					// it does not linger on a settled snapshot. CreatedAt is
+					// preserved from the copy, so recency ordering is
+					// unaffected.
+					annotated.HeartbeatAt = nil
+					return &annotated, nil
+				case existing.Status.Terminal():
+					// Already settled (a retried finalize, or a writer that
+					// landed a terminal status directly): the row describes
+					// itself, so leave it.
 					return nil, nil
 				}
-				annotated := *existing
-				annotated.FinishReason = AgentFinishReasonAborted
-				annotated.State = &finalState
-				annotated.UpdatedAt = now
-				// The row is terminal now; drop the liveness heartbeat so it
-				// does not linger on a settled snapshot. CreatedAt is preserved
-				// from the copy, so recency ordering is unaffected.
-				annotated.HeartbeatAt = nil
-				return &annotated, nil
 			}
 
 			snapStatus := SnapshotStatusCompleted
@@ -2165,48 +2166,45 @@ func loadSession[State any](
 // snapshot explicitly via SnapshotID.
 func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State]) (*Session[State], *SessionSnapshot[State], error) {
 	switch snap.Status {
-	case SnapshotStatusPending:
-		// A pending row normally means the detached invocation is still
-		// running, but the heartbeat can say otherwise: a stale beat means
-		// the worker died without finalizing, and telling that caller to
-		// wait would have them wait forever. The same staleness rule the
-		// read shaping applies (isHeartbeatExpired) decides which story the
-		// error tells; either way the row itself is not resumable, since a
-		// pending row carries no state. The resume point behind it is its
-		// parent: the last snapshot committed before the detach, which the
-		// error names so the caller is not sent hunting for it. A pending
-		// row with no parent belongs to a run that detached before
-		// committing anything, and there is genuinely nothing to resume.
+	case SnapshotStatusPending, SnapshotStatusAborting:
+		// Neither row is resumable: a pending row carries no state, and an
+		// aborting one sits between the flip that stopped its work and the
+		// finalize that stamps the state on. What the caller should do next
+		// depends on whether the worker is alive, and the heartbeat says, by
+		// the same staleness rule the read shaping applies
+		// (isHeartbeatExpired). A live beat means the row is still being
+		// written and this same ID is the thing to wait on; sending that
+		// caller to an earlier snapshot would fork the run away from the work
+		// about to be committed. A stale beat means the write is never coming
+		// (the process died, or the write failed), and the resume point is
+		// the parent: the last snapshot committed before the detach, which
+		// the error names so the caller is not sent hunting for it. A row
+		// with no parent belongs to a run that detached before committing
+		// anything, and there is genuinely nothing to resume.
 		if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
+			fence := "abort it, then "
+			if snap.Status == SnapshotStatusAborting {
+				fence = ""
+			}
 			if snap.ParentID != "" {
 				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
-					"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it, then resume from its parent snapshot %q", snap.SnapshotID, snap.ParentID)
+					"snapshot %q is still %s but its worker stopped heartbeating and is presumed dead; %sresume from its parent snapshot %q", snap.SnapshotID, snap.Status, fence, snap.ParentID)
 			}
 			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
-				"snapshot %q is still pending but its worker stopped heartbeating and is presumed dead; abort it. It recorded no progress, so there is nothing to resume", snap.SnapshotID)
+				"snapshot %q is still %s but its worker stopped heartbeating and is presumed dead. It recorded no progress, so there is nothing to resume", snap.SnapshotID, snap.Status)
+		}
+		if snap.Status == SnapshotStatusAborting {
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+				"snapshot %q is still being finalized: its invocation was aborted and has not recorded the state yet; retry this same snapshot ID", snap.SnapshotID)
 		}
 		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
 	case SnapshotStatusAborted:
-		// An aborted row is the one terminal shape written twice: the abort
-		// flips the pending row, which carries no state, and the finalize
-		// that follows stamps the state onto it. A row still between the two
-		// holds nothing, and resuming it would silently hand back an empty
-		// session in place of the conversation the caller asked to continue.
-		//
-		// Which half of that window this is decides what the caller should do
-		// next, and the heartbeat says: the abort leaves it running and the
-		// finalize clears it, so a live beat means the state is one write
-		// away and this same ID is the thing to wait on. Sending that caller
-		// to an earlier snapshot would fork the run away from the work the
-		// finalize is about to commit. Only a quiet beat means the write is
-		// never coming (the process died, or the write failed), and the
-		// earlier snapshot really is the resume point.
+		// The runtime lands an aborted row together with its state, so one
+		// without state was written by something else. Resuming it would
+		// silently hand back an empty session in place of the conversation
+		// the caller asked to continue; the parent is the resume point.
 		if snap.State == nil {
-			if finalizeInFlight(snap, defaultHeartbeatTimeout) {
-				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
-					"snapshot %q is still being finalized: its invocation was aborted and has not recorded the state yet; retry this same snapshot ID", snap.SnapshotID)
-			}
 			if snap.ParentID != "" {
 				return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 					"snapshot %q was aborted before its invocation recorded any state; resume from its parent snapshot %q", snap.SnapshotID, snap.ParentID)

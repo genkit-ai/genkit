@@ -65,6 +65,7 @@ class SnapshotStatus(StrEnum):
     """SnapshotStatus data type class."""
 
     PENDING = 'pending'
+    ABORTING = 'aborting'
     COMPLETED = 'completed'
     ABORTED = 'aborted'
     FAILED = 'failed'
@@ -199,7 +200,7 @@ class GetSnapshotRequest(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = None
     session_id: str | None = None
-    omit_state: bool | None = None
+    metadata_only: bool | None = None
 
 
 class JsonPatchOperation(GenkitModel):

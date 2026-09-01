@@ -211,7 +211,7 @@
         "sessionId": {
           "type": "string"
         },
-        "omitState": {
+        "metadataOnly": {
           "type": "boolean"
         }
       },
@@ -320,6 +320,7 @@
       "type": "string",
       "enum": [
         "pending",
+        "aborting",
         "completed",
         "aborted",
         "failed",

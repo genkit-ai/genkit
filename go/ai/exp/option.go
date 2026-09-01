@@ -383,25 +383,25 @@ type SnapshotReadOption interface {
 }
 
 type snapshotReadOptions struct {
-	omitState bool
+	metadataOnly bool
 }
 
 func (o snapshotReadOptions) applySnapshotRead(req *GetSnapshotRequest) {
-	if o.omitState {
-		req.OmitState = true
+	if o.metadataOnly {
+		req.MetadataOnly = true
 	}
 }
 
-// WithOmitState omits the state payload from a snapshot read: the returned
-// snapshot carries the shaped metadata only (status, finish reason, parent,
-// session, timestamps, error) and its State is nil. The shaping is identical
-// to a full read - the abort-window and expiry rules consult the stored state
-// before it is dropped - so the status story cannot differ between the two
-// reads. Use it to dispatch on where a task stands without serializing a
+// WithMetadataOnly reads a snapshot's metadata only: the returned snapshot
+// carries the shaped status, finish reason, parent, session, timestamps, and
+// error, and its State is nil. The shaping is identical to a full read (status
+// defaulting and heartbeat expiry need only the metadata), and the store reads
+// the row without loading its state ([SnapshotReader.GetSnapshotMetadata]).
+// Use it to dispatch on where a task stands without loading or serializing a
 // potentially large conversation history; the state transform does not run,
 // exactly as on a full read of a stateless row.
-func WithOmitState() SnapshotReadOption {
-	return snapshotReadOptions{omitState: true}
+func WithMetadataOnly() SnapshotReadOption {
+	return snapshotReadOptions{metadataOnly: true}
 }
 
 // resolveSnapshotRead applies opts to req and returns it, for the handle
