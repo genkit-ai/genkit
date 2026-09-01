@@ -38,16 +38,8 @@ from genkit_amazon_bedrock.converters import (
     usage_from_response,
 )
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
+from genkit import FinishReason, Message, Part, Role
+from genkit.model import ModelRequest, ReasoningPart, TextPart, ToolDefinition
 from genkit.plugin_api import GenkitError, ModelConfig
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfakeimagedata'

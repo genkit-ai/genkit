@@ -30,17 +30,9 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import (
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._model import OutputConfig
+from genkit.model import ModelRequest, TextPart
 from genkit.plugin_api import ActionRunContext, ModelConfig
 
 

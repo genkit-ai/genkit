@@ -12,16 +12,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit import (
-    Document,
-    Genkit,
-    Interrupt,
-    Message,
-    MiddlewareRef,
-    ModelResponse,
-    ModelResponseChunk,
-    respond_to_interrupt,
-)
+from genkit import Document, Genkit, Interrupt, Message, ModelResponse, ModelResponseChunk, respond_to_interrupt
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
 from genkit._ai._testing import (
@@ -54,7 +45,7 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]

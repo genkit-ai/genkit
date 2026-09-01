@@ -27,18 +27,8 @@ from typing import Any
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 
-from genkit import (
-    Media,
-    MediaPart,
-    Message,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    Supports,
-)
-from genkit.model import FinishReason
+from genkit import Media, Message, ModelResponse, Part, Role
+from genkit.model import FinishReason, MediaPart, ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import ActionRunContext
 from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
 

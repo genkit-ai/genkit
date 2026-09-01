@@ -22,14 +22,9 @@ from unittest.mock import AsyncMock, MagicMock
 import ollama as ollama_api
 from genkit_ollama.embedders import EmbeddingDefinition, OllamaEmbedder
 
-from genkit import (
-    Document,
-    DocumentPart,
-    Embedding,
-    EmbedRequest,
-    EmbedResponse,
-    TextPart,
-)
+from genkit import Document, Embedding
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.model import DocumentPart, TextPart
 
 
 class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):

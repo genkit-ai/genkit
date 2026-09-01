@@ -36,21 +36,8 @@ from genkit_openai.models.utils import (
 from openai import APIStatusError
 from pydantic import BaseModel
 
-from genkit import (
-    GenkitError,
-    Media,
-    MediaPart,
-    Message,
-    ModelRequest,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
-)
+from genkit import GenkitError, Media, Message, Part, Role, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+from genkit.model import MediaPart, ModelRequest, ReasoningPart, TextPart
 
 
 class TestParseDataUriContentType:

@@ -42,8 +42,6 @@ from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import MediaPart, TextPart
-
 # DocumentData has no public re-export yet; the embedder protocol is built on it.
 from genkit._core._typing import DocumentData
 from genkit.embedder import (
@@ -53,6 +51,7 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
+from genkit.model import MediaPart, TextPart
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error

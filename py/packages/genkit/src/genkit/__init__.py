@@ -38,11 +38,10 @@ Example:
         ai.run_main(my_flow('Weather in Paris?'))
 """
 
-from genkit._ai._aio import ActionKind, Genkit
+from genkit._ai._aio import Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
-    PromptGenerateOptions,
 )
 from genkit._ai._tools import (
     Interrupt,
@@ -53,117 +52,67 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import Action, ActionRunContext, StreamResponse
-from genkit._core._error import ErrorResponseMetadata, GenkitError, PublicError
+from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
-from genkit._core._plugin import Plugin
 from genkit._core._typing import (
-    CustomPart,
-    DocumentPart,
     Media,
-    MediaPart,
-    Metadata,
-    MiddlewareRef,
-    MultipartToolResponse,
     Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolChoice,
     ToolRequest,
     ToolRequestPart,
     ToolResponse,
     ToolResponsePart,
 )
-
-# Import embedder-related types from the embedder namespace
-from genkit.embedder import (
-    EmbedderOptions,
-    EmbedderRef,
-    Embedding,
-    EmbedRequest,
-    EmbedResponse,
-)
-
-# Import model-related types from the model namespace.
+from genkit.embedder import Embedding
 from genkit.model import (
-    Constrained,
     FinishReason,
     Message,
     ModelConfigDict,
-    ModelInfo,
-    ModelRequest,
     ModelResponse,
     ModelResponseChunk,
     ModelUsage,
-    Stage,
-    Supports,
-    ToolDefinition,
 )
 
 # Flow is an alias for Action (used in samples for flow type hints)
 Flow = Action
 
 __all__ = [
-    # Main class
+    # Main class & flows
     'Genkit',
-    'Flow',
-    # Response types
     'Action',
+    'ActionRunContext',
+    'Flow',
     'StreamResponse',
-    'EmbedRequest',
-    'EmbedResponse',
-    'EmbedderOptions',
-    'EmbedderRef',
-    'ModelConfigDict',
-    'ModelInfo',
+    # Model generation & streaming
+    'ModelResponse',
+    'ModelResponseChunk',
     'ModelStreamResponse',
-    # Errors
-    'ErrorResponseMetadata',
-    'GenkitError',
-    'PublicError',
-    # Tools
-    'Interrupt',
+    'ModelConfigDict',
+    'ModelUsage',
+    'FinishReason',
+    'ToolChoice',
+    # Content & Messaging
+    'Message',
+    'Part',
+    'Role',
+    'Media',
+    'Document',
+    # Tools & HITL
     'Tool',
+    'ToolRunContext',
+    'Interrupt',
+    'ToolRequest',
+    'ToolResponse',
+    'ToolRequestPart',
+    'ToolResponsePart',
     'respond_to_interrupt',
     'restart_tool',
     'tool',
-    # Content types
-    'Constrained',
-    'CustomPart',
+    # Embeddings & Prompts
     'Embedding',
-    'Metadata',
-    'ReasoningPart',
-    'FinishReason',
-    'ModelUsage',
-    'Media',
-    'MediaPart',
-    'Message',
-    'MultipartToolResponse',
-    'Part',
-    'Role',
-    'Stage',
-    'Supports',
-    'TextPart',
-    'ToolChoice',
-    'ToolDefinition',
-    'ToolRequest',
-    'ToolRequestPart',
-    'ToolResponse',
-    'ToolResponsePart',
-    # Domain types
-    'Document',
-    'DocumentPart',
-    # Plugin interface
-    'Plugin',
-    # Middleware references (wire form for use= parameter)
-    'MiddlewareRef',
-    # AI runtime
-    'ActionKind',
-    'ActionRunContext',
     'ExecutablePrompt',
-    'PromptGenerateOptions',
-    'ToolRunContext',
-    'ModelRequest',
-    'ModelResponse',
-    'ModelResponseChunk',
+    # Errors
+    'GenkitError',
+    'PublicError',
 ]

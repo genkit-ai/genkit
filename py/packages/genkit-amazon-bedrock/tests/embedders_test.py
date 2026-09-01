@@ -35,9 +35,10 @@ from genkit_amazon_bedrock.embedders import (
 )
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 
-from genkit import DocumentPart, Media, MediaPart, TextPart
+from genkit import Media
 from genkit._core._typing import DocumentData
 from genkit.embedder import EmbedRequest
+from genkit.model import DocumentPart, MediaPart, TextPart
 from genkit.plugin_api import GenkitError
 
 TITAN_TEXT = 'amazon.titan-embed-text-v2:0'

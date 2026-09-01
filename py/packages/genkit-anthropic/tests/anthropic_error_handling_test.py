@@ -24,7 +24,8 @@ import pytest
 from anthropic import APIConnectionError, APIError, APIStatusError
 from genkit_anthropic.models import AnthropicModel
 
-from genkit import GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, TextPart
 from genkit.plugin_api import StatusName
 
 _ERROR_MESSAGE = 'Anthropic request failed'

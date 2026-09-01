@@ -20,7 +20,8 @@ from pathlib import Path
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, Message, Role, TextPart
+from genkit import Genkit, Message, Role
+from genkit.model import TextPart
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-3-flash-preview'))
 

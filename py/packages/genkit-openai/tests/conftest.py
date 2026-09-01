@@ -20,13 +20,8 @@
 import pytest
 from genkit_openai.typing import OpenAIConfig
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest, TextPart
 
 
 @pytest.fixture

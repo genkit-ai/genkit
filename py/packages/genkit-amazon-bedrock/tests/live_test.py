@@ -41,21 +41,10 @@ from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
 from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit import (
-    DocumentPart,
-    FinishReason,
-    Media,
-    MediaPart,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
+from genkit import FinishReason, Media, Message, ModelResponse, Part, Role
 from genkit._core._typing import DocumentData
 from genkit.embedder import EmbedRequest
+from genkit.model import DocumentPart, MediaPart, ModelRequest, TextPart, ToolDefinition
 from genkit.plugin_api import ActionRunContext, GenkitError
 
 pytestmark = [

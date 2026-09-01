@@ -21,9 +21,10 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import ModelRequest, ModelResponse
+from genkit import ModelResponse
 from genkit._core._error import GenkitError
 from genkit.middleware import ModelHookParams
+from genkit.model import ModelRequest
 
 
 def _make_params() -> ModelHookParams:

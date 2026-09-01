@@ -34,7 +34,8 @@ from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
 
-from genkit import GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, TextPart
 
 US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'

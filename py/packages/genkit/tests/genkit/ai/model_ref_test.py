@@ -207,7 +207,8 @@ def test_model_config_dict_keys_match_generation_common_config() -> None:
 
 def test_public_config_import_contract() -> None:
     """App code gets ModelConfigDict; ModelConfig lives on plugin_api."""
-    from genkit import ModelConfigDict as VeneerModelConfigDict, PromptGenerateOptions
+    from genkit import ModelConfigDict as VeneerModelConfigDict
+    from genkit._ai._prompt import PromptGenerateOptions
     from genkit.plugin_api import ModelConfig as PluginModelConfig
 
     assert VeneerModelConfigDict is ModelConfigDict

@@ -27,26 +27,20 @@ from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thi
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
-from genkit import (
+from genkit import FinishReason, Media, Message, ModelResponseChunk, Part, Role, ToolRequestPart
+from genkit._core._model import OutputConfig
+from genkit.model import (
     Constrained,
     CustomPart,
-    FinishReason,
-    Media,
     MediaPart,
-    Message,
     Metadata,
     ModelInfo,
     ModelRequest,
-    ModelResponseChunk,
-    Part,
     ReasoningPart,
-    Role,
     Supports,
     TextPart,
     ToolDefinition,
-    ToolRequestPart,
 )
-from genkit._core._model import OutputConfig
 from genkit.plugin_api import ModelConfig
 
 

@@ -32,7 +32,8 @@ import pytest
 from anthropic import BadRequestError
 from genkit_anthropic import Anthropic
 
-from genkit import Genkit, GenkitError, Message, ReasoningPart
+from genkit import Genkit, GenkitError, Message
+from genkit.model import ReasoningPart
 
 pytestmark = [
     pytest.mark.asyncio,

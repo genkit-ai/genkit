@@ -27,20 +27,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelUsage,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolDefinition,
-    ToolRequest,
-    ToolRequestPart,
-)
+from genkit import FinishReason, Message, ModelResponse, ModelUsage, Part, Role, ToolRequest, ToolRequestPart
+from genkit.model import ModelRequest, ReasoningPart, TextPart, ToolDefinition
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.config import BedrockConfig
 

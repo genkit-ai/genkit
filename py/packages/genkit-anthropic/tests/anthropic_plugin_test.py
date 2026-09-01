@@ -30,16 +30,9 @@ from genkit_anthropic.model_info import (
     get_model_info,
 )
 
-from genkit import (
-    ActionKind,
-    Constrained,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
+from genkit import Message, Part, Role
+from genkit.model import Constrained, ModelRequest, TextPart, ToolDefinition
+from genkit.plugin_api import ActionKind
 
 
 def test_anthropic_name() -> None:

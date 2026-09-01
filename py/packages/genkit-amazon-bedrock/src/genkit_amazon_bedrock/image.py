@@ -33,17 +33,8 @@ from typing import Any, Literal, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import (
-    FinishReason,
-    Media,
-    MediaPart,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import FinishReason, Media, Message, ModelResponse, Part, Role
+from genkit.model import MediaPart, ModelRequest, TextPart
 from genkit.plugin_api import ActionRunContext, GenkitError, ModelConfig
 from genkit_amazon_bedrock.embedders import InvokeModelTransport
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix

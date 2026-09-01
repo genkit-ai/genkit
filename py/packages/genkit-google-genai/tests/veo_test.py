@@ -34,8 +34,8 @@ from genkit_google_genai.models.veo import (
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
-from genkit import ActionRunContext, GenkitError, Message, ModelRequest, Part, Role, TextPart
-from genkit.model import Operation
+from genkit import ActionRunContext, GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, Operation, TextPart
 
 
 def _text_request(*, config: object | None = None) -> ModelRequest:

@@ -14,7 +14,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, TypeAdapter
 
-from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk
+from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk
 from genkit._ai._generate import ChunkAccumulator, _augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._testing import (
@@ -41,11 +41,12 @@ from genkit.middleware import (
     GenerateHookParams,
     GenerateMiddleware,
     GenerateMiddlewareContext,
+    MiddlewareRef,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
 )
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.plugin_api import ActionKind, MiddlewarePlugin, new_middleware
 
 
 def _to_dict(obj: object) -> object:

@@ -25,7 +25,7 @@ from collections.abc import Callable
 if typing.TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    from genkit import ModelRequest, ModelResponse
+    from genkit.model import ModelRequest, ModelResponse
     from genkit.plugin_api import ActionRunContext
 
 from genkit_openai.models import (
