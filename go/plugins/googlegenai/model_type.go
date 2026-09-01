@@ -20,6 +20,7 @@ const (
 	ModelTypeImagen             // Image generation (imagen-*)
 	ModelTypeVeo                // Video generation (veo-*), long-running
 	ModelTypeEmbedder           // Embedding models (*embedding*)
+	ModelTypeLyria              // Music generation (lyria-*)
 )
 
 // ClassifyModel determines the model type from its name.
@@ -30,6 +31,8 @@ func ClassifyModel(name string) ModelType {
 		return ModelTypeVeo
 	case strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "image"):
 		return ModelTypeImagen
+	case strings.HasPrefix(name, "lyria"):
+		return ModelTypeLyria
 	case strings.Contains(name, "embedding"):
 		// Covers: text-embedding-*, embedding-*, textembedding-*,
 		// multimodalembedding, gemini-embedding-*. Checked before the gemini
@@ -83,6 +86,8 @@ func (mt ModelType) DefaultSupports() *ai.ModelSupports {
 		return &Media
 	case ModelTypeVeo:
 		return &VeoSupports
+	case ModelTypeLyria:
+		return &Media
 	default:
 		return nil
 	}
@@ -98,6 +103,8 @@ func (mt ModelType) configSchema() map[string]any {
 		return imagenConfigSchema
 	case ModelTypeVeo:
 		return veoConfigSchema
+	case ModelTypeLyria:
+		return lyriaConfigSchema
 	default:
 		// Gemini models and unrecognized names speak generateContent, and so
 		// does an embedding-classified name defined as a model. Embedder
@@ -118,6 +125,8 @@ func (mt ModelType) DefaultConfig() any {
 		return &genai.GenerateVideosConfig{}
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
+	case ModelTypeLyria:
+		return &LyriaConfig{}
 	default:
 		return nil
 	}
