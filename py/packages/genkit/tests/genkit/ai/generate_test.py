@@ -35,6 +35,7 @@ from genkit._core._typing import (
     TextPart,
     ToolRequest,
     ToolRequestPart,
+    ToolResponsePart,
 )
 from genkit.middleware import (
     BaseMiddleware,
@@ -2486,6 +2487,108 @@ async def test_generate_returns_error_finish_when_output_does_not_match_schema()
     assert response.output is None
     assert response.finish_message is not None
     assert 'not valid JSON' in response.finish_message
+
+
+def _model_calls_tool(*, name: str, ref: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name=name, input={}, ref=ref)))],
+        ),
+    )
+
+
+def _tool_output(message: Message) -> object:
+    part = message.content[0].root
+    assert isinstance(part, ToolResponsePart)
+    assert part.tool_response is not None
+    return part.tool_response.output
+
+
+@pytest.mark.asyncio
+async def test_leftover_after_tool_turn_keeps_intermediate_messages() -> None:
+    """A leftover after a tool turn still has that tool request and reply on .messages."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='not json'))]),
+        ),
+    ]
+
+    response = await ai.generate(
+        prompt='give me a recipe',
+        output_schema=Recipe,
+        output_instructions=False,
+        tools=['lookup'],
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == 'not json'
+    assert response.output is None
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[3].text == 'not json'
+
+
+@pytest.mark.asyncio
+async def test_max_turns_after_tool_turn_keeps_intermediate_messages() -> None:
+    """Hitting max tool turns keeps closed rounds and drops the unanswered leftover call."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        _model_calls_tool(name='lookup', ref='r2'),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'], max_turns=1)
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message is not None
+    assert 'maximum tool call iterations' in response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
+    assert _tool_output(response.messages[2]) == '72F'
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_after_tool_turn_keeps_intermediate_messages() -> None:
+    """An unknown tool name after a successful turn still keeps the earlier tool request and reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        _model_calls_tool(name='ghost', ref='r2'),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'])
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'Tool ghost not found'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[3].tool_requests[0].tool_request.name == 'ghost'
 
 
 @pytest.mark.asyncio

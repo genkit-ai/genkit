@@ -1057,6 +1057,9 @@ async def _generate_action_turn(
             response.finish_reason = FinishReason.ABORTED
             response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
             log_responded()
+            # This model call opened a tool round we will not run. Only
+            # closed rounds are history, so the unanswered request is dropped.
+            response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
 
         raise_if_aborted(ctx.abort_signal)
