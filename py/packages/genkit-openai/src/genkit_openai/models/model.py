@@ -46,6 +46,7 @@ from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    extract_response_metadata,
     reraise_openai_error,
     strip_markdown_fences,
 )
@@ -382,6 +383,7 @@ class OpenAIModel:
                 latency_ms=response.latency_ms,
                 usage=response.usage,
                 custom=response.custom,
+                raw=response.raw,
             )
         return response
 
@@ -481,12 +483,15 @@ class OpenAIModel:
             failure_message=_failure_message(choice.model_extra),
         )
 
+        metadata = extract_response_metadata(response)
         result = ModelResponse(
             request=request,
             message=MessageConverter.to_genkit(message),
             finish_reason=finish_reason,
             finish_message=finish_message,
             usage=_usage_from_completion(response.usage),
+            custom=metadata or None,
+            raw=metadata or None,
         )
         return self._clean_json_response(result, request)
 
@@ -513,12 +518,14 @@ class OpenAIModel:
 
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
+        metadata: dict[str, Any] = {}
         usage: CompletionUsage | None = None
         saw_choice = False
         raw_finish_reason: str | None = None
         refusal_fragments: list[str] = []
         failure_message: str | None = None
         async for chunk in stream:  # type: ignore
+            metadata.update(extract_response_metadata(chunk))
             # Usage rides on a final chunk that carries no choices.
             if chunk.usage is not None:
                 usage = chunk.usage
@@ -603,6 +610,8 @@ class OpenAIModel:
             finish_reason=finish_reason,
             finish_message=finish_message,
             usage=_usage_from_completion(usage),
+            custom=metadata or None,
+            raw=metadata or None,
         )
         return self._clean_json_response(result, request)
 
