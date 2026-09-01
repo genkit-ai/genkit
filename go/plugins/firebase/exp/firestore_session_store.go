@@ -402,7 +402,7 @@ func (s *FirestoreSessionStore[State]) readDoc(tx *firestore.Transaction, prefix
 }
 
 // GetSnapshotMetadata retrieves a snapshot's document without reconstructing
-// its state, per [aix.SnapshotReader.GetSnapshotMetadata]: one document read
+// its state, per [aix.SnapshotMetadataReader]: one document read
 // in place of the checkpoint shards and diff chain a full read materializes.
 // Returns nil if not found.
 func (s *FirestoreSessionStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[State], error) {
@@ -435,7 +435,7 @@ func (s *FirestoreSessionStore[State]) GetSnapshotMetadata(ctx context.Context, 
 
 // GetLatestSnapshotMetadata resolves the session's latest row through its
 // pointer and reads that row's document without reconstructing its state,
-// per [aix.SnapshotReader.GetLatestSnapshotMetadata].
+// per [aix.SnapshotMetadataReader].
 func (s *FirestoreSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*aix.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: session ID is empty")

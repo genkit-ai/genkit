@@ -275,14 +275,25 @@ func abortViaSave(t *testing.T, store exp.SessionStore[testState], id string) ex
 	return saved.Status
 }
 
-// runMetadataStoreTests exercises the metadata-only reads
-// ([exp.SnapshotReader.GetSnapshotMetadata] and
-// [exp.SnapshotReader.GetLatestSnapshotMetadata]) against any store: they
-// resolve the same row as their full counterparts, carry every field but the
-// state, and share the full reads' miss and empty-session-ID contract.
+// runMetadataStoreTests exercises the optional metadata-only reads
+// ([exp.SnapshotMetadataReader]) against any store: they resolve the same row
+// as their full counterparts, carry every field but the state, and share the
+// full reads' miss and empty-session-ID contract.
 func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.SessionStore[testState]) {
 	ctx := context.Background()
 	tick := func() { time.Sleep(2 * time.Millisecond) }
+
+	// Both bundled stores implement the optional capability; a store that
+	// lost it would silently fall back to full reads, so the suite asserts
+	// the capability rather than reading through the runtime's fallback.
+	metadataReader := func(t *testing.T, store exp.SessionStore[testState]) exp.SnapshotMetadataReader[testState] {
+		t.Helper()
+		mr, ok := store.(exp.SnapshotMetadataReader[testState])
+		if !ok {
+			t.Fatalf("%T does not implement exp.SnapshotMetadataReader", store)
+		}
+		return mr
+	}
 
 	saveRow := func(t *testing.T, store exp.SessionStore[testState], id, sessionID, parentID string, st exp.SnapshotStatus) *exp.SessionSnapshot[testState] {
 		t.Helper()
@@ -338,7 +349,7 @@ func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.Session
 		if err != nil {
 			t.Fatalf("GetSnapshot: %v", err)
 		}
-		meta, err := store.GetSnapshotMetadata(ctx, "a")
+		meta, err := metadataReader(t, store).GetSnapshotMetadata(ctx, "a")
 		if err != nil {
 			t.Fatalf("GetSnapshotMetadata: %v", err)
 		}
@@ -347,7 +358,7 @@ func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.Session
 
 	t.Run("GetSnapshotMetadataUnknownIsNil", func(t *testing.T) {
 		store := newStore(t)
-		meta, err := store.GetSnapshotMetadata(ctx, "nope")
+		meta, err := metadataReader(t, store).GetSnapshotMetadata(ctx, "nope")
 		if err != nil {
 			t.Fatalf("GetSnapshotMetadata: %v", err)
 		}
@@ -367,7 +378,7 @@ func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.Session
 		if err != nil {
 			t.Fatalf("GetLatestSnapshot: %v", err)
 		}
-		meta, err := store.GetLatestSnapshotMetadata(ctx, "sess-1")
+		meta, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, "sess-1")
 		if err != nil {
 			t.Fatalf("GetLatestSnapshotMetadata: %v", err)
 		}
@@ -379,7 +390,7 @@ func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.Session
 
 	t.Run("GetLatestSnapshotMetadataUnknownSessionIsNil", func(t *testing.T) {
 		store := newStore(t)
-		meta, err := store.GetLatestSnapshotMetadata(ctx, "sess-none")
+		meta, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, "sess-none")
 		if err != nil {
 			t.Fatalf("GetLatestSnapshotMetadata: %v", err)
 		}
@@ -390,7 +401,7 @@ func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.Session
 
 	t.Run("GetLatestSnapshotMetadataEmptySessionID", func(t *testing.T) {
 		store := newStore(t)
-		if _, err := store.GetLatestSnapshotMetadata(ctx, ""); err == nil {
+		if _, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, ""); err == nil {
 			t.Error("expected an error for an empty session ID")
 		}
 	})

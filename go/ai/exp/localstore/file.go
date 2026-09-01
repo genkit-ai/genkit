@@ -175,7 +175,7 @@ func (s *FileSessionStore[State]) GetSnapshot(ctx context.Context, snapshotID st
 }
 
 // GetSnapshotMetadata retrieves a snapshot by ID without its state, per
-// [exp.SnapshotReader.GetSnapshotMetadata]. The file is still read whole,
+// [exp.SnapshotMetadataReader]. The file is still read whole,
 // but its state payload is skipped rather than decoded into messages.
 // Returns nil if not found.
 func (s *FileSessionStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*exp.SessionSnapshot[State], error) {
@@ -317,7 +317,7 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 }
 
 // GetLatestSnapshotMetadata is [FileSessionStore.GetLatestSnapshot] without
-// the state, per [exp.SnapshotReader.GetLatestSnapshotMetadata]: the same
+// the state, per [exp.SnapshotMetadataReader]: the same
 // resolution, with the winning row decoded the way
 // [FileSessionStore.GetSnapshotMetadata] decodes one.
 func (s *FileSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {

@@ -437,7 +437,7 @@ case aix.SnapshotStatusExpired:   // the worker stopped heartbeating
 chatAgent.Abort(ctx, snapshotID)
 ```
 
-Detach requires a store that implements `SnapshotSubscriber` (both bundled local stores do). A detached turn refreshes a heartbeat while it runs and while it winds down after an abort, so a crashed worker surfaces as `expired` instead of orphaning the conversation forever. Reads that only need to know where a snapshot stands can skip its state: `GetSnapshot(ctx, id, WithMetadataOnly())` returns the status, finish reason, parent, and timestamps, and a session store answers it without loading the conversation (`SnapshotReader.GetSnapshotMetadata`).
+Detach requires a store that implements `SnapshotSubscriber` (both bundled local stores do). A detached turn refreshes a heartbeat while it runs and while it winds down after an abort, so a crashed worker surfaces as `expired` instead of orphaning the conversation forever. Reads that only need to know where a snapshot stands can skip its state: `GetSnapshot(ctx, id, WithMetadataOnly())` returns the status, finish reason, parent, and timestamps. A session store that implements the optional `SnapshotMetadataReader` (the bundled stores and the Firestore store do) answers it without loading the conversation; any other store is read in full and the state dropped.
 
 [See full example](samples/basic-agents)
 

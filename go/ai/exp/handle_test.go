@@ -854,3 +854,75 @@ func TestAgentHandle_MetadataKeepsEagerValue(t *testing.T) {
 		}
 	}
 }
+
+// metadataCountingStore layers [SnapshotMetadataReader] on the test store and
+// counts which read path answers, so a test can tell the capability from the
+// fallback.
+type metadataCountingStore struct {
+	*testInMemStore[testState]
+	fullReads, metadataReads, latestFullReads, latestMetadataReads int
+}
+
+func (s *metadataCountingStore) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[testState], error) {
+	s.fullReads++
+	return s.testInMemStore.GetSnapshot(ctx, snapshotID)
+}
+
+func (s *metadataCountingStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[testState], error) {
+	s.latestFullReads++
+	return s.testInMemStore.GetLatestSnapshot(ctx, sessionID)
+}
+
+func (s *metadataCountingStore) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[testState], error) {
+	s.metadataReads++
+	snap, err := s.testInMemStore.GetSnapshot(ctx, snapshotID)
+	if snap != nil {
+		snap.State = nil
+	}
+	return snap, err
+}
+
+func (s *metadataCountingStore) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[testState], error) {
+	s.latestMetadataReads++
+	snap, err := s.testInMemStore.GetLatestSnapshot(ctx, sessionID)
+	if snap != nil {
+		snap.State = nil
+	}
+	return snap, err
+}
+
+func TestAgentHandle_MetadataOnlyPrefersTheStoreCapability(t *testing.T) {
+	// A metadata-only read takes SnapshotMetadataReader when the store offers
+	// it, for both addressings, and never touches the full read. The
+	// fallback, a full read with the state dropped, is what every other test
+	// in this package exercises through testInMemStore, which lacks the
+	// capability (see TestAgentHandle_GetSnapshotMetadataOnly).
+	reg := newTestRegistry(t)
+	store := &metadataCountingStore{testInMemStore: newTestInMemStore[testState]()}
+	af := defineLastGoodTestAgent(reg, "metaCapability", WithSessionStore(store))
+	out, err := af.RunText(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	store.fullReads, store.metadataReads, store.latestFullReads, store.latestMetadataReads = 0, 0, 0, 0
+
+	h := LookupAgent(reg, "metaCapability")
+	meta, err := h.GetSnapshot(context.Background(), out.SnapshotID, WithMetadataOnly())
+	if err != nil {
+		t.Fatalf("GetSnapshot(WithMetadataOnly): %v", err)
+	}
+	if meta.State != nil || meta.Status != SnapshotStatusCompleted {
+		t.Errorf("metadata read = status %q state %v, want completed with no state", meta.Status, meta.State)
+	}
+	latest, err := h.GetLatestSnapshot(context.Background(), out.SessionID, WithMetadataOnly())
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot(WithMetadataOnly): %v", err)
+	}
+	if latest.State != nil || latest.SnapshotID != out.SnapshotID {
+		t.Errorf("latest metadata read = %+v, want the run's snapshot with no state", latest)
+	}
+	if store.metadataReads != 1 || store.latestMetadataReads != 1 || store.fullReads != 0 || store.latestFullReads != 0 {
+		t.Errorf("reads: metadata=%d latestMetadata=%d full=%d latestFull=%d, want the capability path only (1, 1, 0, 0)",
+			store.metadataReads, store.latestMetadataReads, store.fullReads, store.latestFullReads)
+	}
+}

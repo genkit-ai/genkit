@@ -102,20 +102,47 @@ type SnapshotReader[State any] interface {
 	// ParentID is informational lineage and plays no part in resolution: when
 	// history forks, the most recently created branch wins.
 	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
+}
 
-	// GetSnapshotMetadata retrieves a snapshot by ID without its state: the
-	// returned row carries every field [GetSnapshot] would, with State nil.
-	// Returns nil if not found. It exists so a caller that only needs to know
-	// where a snapshot stands (its status, finish reason, parent, and
-	// heartbeat) does not pay to load a conversation history; a store should
-	// answer it without reading the state at all, and one that cannot may
-	// load the row and drop the state.
+// SnapshotMetadataReader is the optional capability layered on [SessionStore]
+// that answers a metadata-only read without loading the row's state. The
+// runtime takes it for every read that only needs to know where a snapshot
+// stands ([GetSnapshotRequest.MetadataOnly], [WithMetadataOnly]): its status,
+// finish reason, parent, session, timestamps, error, and heartbeat. A store
+// that does not implement it is still correct, since the runtime reads the
+// row in full and drops the state, but it pays to load a conversation history
+// it will not use. Both bundled local stores and the Firestore store implement
+// it. Implement both methods or neither: the capability is detected as a
+// whole.
+type SnapshotMetadataReader[State any] interface {
+	// GetSnapshotMetadata is [SnapshotReader.GetSnapshot] without the state:
+	// the returned row carries every other field as stored, with State nil,
+	// and the same nil-if-not-found contract.
 	GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
 
-	// GetLatestSnapshotMetadata is [GetLatestSnapshot] without the state:
-	// the same resolution, the same nil-if-none and empty-session-ID
-	// contract, and a row with State nil.
+	// GetLatestSnapshotMetadata is [SnapshotReader.GetLatestSnapshot] without
+	// the state: the same resolution, the same nil-if-none and
+	// empty-session-ID contract, and a row with State nil.
 	GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
+}
+
+// getSnapshotMetadata reads a snapshot for a metadata-only caller: through
+// [SnapshotMetadataReader] when the store offers it, and as a full read
+// otherwise. The caller drops the state either way, so the two paths differ
+// only in what the store had to load.
+func getSnapshotMetadata[State any](ctx context.Context, store SnapshotReader[State], snapshotID string) (*SessionSnapshot[State], error) {
+	if mr, ok := store.(SnapshotMetadataReader[State]); ok {
+		return mr.GetSnapshotMetadata(ctx, snapshotID)
+	}
+	return store.GetSnapshot(ctx, snapshotID)
+}
+
+// getLatestSnapshotMetadata is getSnapshotMetadata for a session's latest row.
+func getLatestSnapshotMetadata[State any](ctx context.Context, store SnapshotReader[State], sessionID string) (*SessionSnapshot[State], error) {
+	if mr, ok := store.(SnapshotMetadataReader[State]); ok {
+		return mr.GetLatestSnapshotMetadata(ctx, sessionID)
+	}
+	return store.GetLatestSnapshot(ctx, sessionID)
 }
 
 // SnapshotWriter persists snapshots. The minimum any session store must
@@ -258,15 +285,16 @@ func readSnapshot[State any](
 	// alone fetches the session's latest row (whatever its status). When both
 	// are present the snapshot ID picks the row and the session ID asserts it
 	// belongs to that session, mirroring AgentInit's combined-ID check. A
-	// metadata-only read takes the store's metadata path, which answers
-	// without loading the state.
+	// metadata-only read takes the store's metadata path when it has one
+	// ([SnapshotMetadataReader]) and a full read otherwise; the state is
+	// dropped below either way.
 	var (
 		snap *SessionSnapshot[State]
 		err  error
 	)
 	if snapshotID != "" {
 		if metadataOnly {
-			snap, err = store.GetSnapshotMetadata(ctx, snapshotID)
+			snap, err = getSnapshotMetadata(ctx, store, snapshotID)
 		} else {
 			snap, err = store.GetSnapshot(ctx, snapshotID)
 		}
@@ -282,7 +310,7 @@ func readSnapshot[State any](
 		}
 	} else {
 		if metadataOnly {
-			snap, err = store.GetLatestSnapshotMetadata(ctx, sessionID)
+			snap, err = getLatestSnapshotMetadata(ctx, store, sessionID)
 		} else {
 			snap, err = store.GetLatestSnapshot(ctx, sessionID)
 		}
@@ -317,9 +345,10 @@ func readSnapshot[State any](
 	if resp.UpdatedAt.IsZero() {
 		resp.UpdatedAt = resp.CreatedAt
 	}
-	// A metadata-only read is done: shaping needed only the metadata, and the
-	// store read the row without its state. State is cleared regardless, so a
-	// store that returned one anyway cannot leak it past the contract.
+	// A metadata-only read is done: shaping needed only the metadata. The
+	// state is dropped here for both read paths, the capability's (which
+	// never loaded it) and the fallback's (which did), on the copy rather
+	// than the store's row.
 	if metadataOnly {
 		resp.State = nil
 		return &resp, nil

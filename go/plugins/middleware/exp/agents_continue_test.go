@@ -79,7 +79,9 @@ func (s *flakyStore) SaveSnapshot(ctx context.Context, snapshotID string, fn fun
 }
 
 // GetSnapshotMetadata routes through GetSnapshot so the hook shapes metadata
-// reads exactly as it shapes full ones, then drops the state.
+// reads exactly as it shapes full ones, then drops the state. The embedded
+// store's own capability is promoted and would otherwise answer the
+// runtime's metadata-only reads around the hook.
 func (s *flakyStore) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[any], error) {
 	snap, err := s.GetSnapshot(ctx, snapshotID)
 	if snap != nil {

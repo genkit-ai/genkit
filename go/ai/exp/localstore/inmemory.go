@@ -68,7 +68,7 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 }
 
 // GetSnapshotMetadata retrieves a snapshot by ID without its state, per
-// [exp.SnapshotReader.GetSnapshotMetadata]. Returns nil if not found. The
+// [exp.SnapshotMetadataReader]. Returns nil if not found. The
 // returned row is a copy with State nil; unlike a full read it is not a deep
 // copy, so its Error shares memory with the store's row, which the reader
 // contract permits. Treat it as read-only.
@@ -100,7 +100,7 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 }
 
 // GetLatestSnapshotMetadata is [InMemorySessionStore.GetLatestSnapshot]
-// without the state, per [exp.SnapshotReader.GetLatestSnapshotMetadata]: the
+// without the state, per [exp.SnapshotMetadataReader]: the
 // same resolution, and a row copied the way
 // [InMemorySessionStore.GetSnapshotMetadata] copies one.
 func (s *InMemorySessionStore[State]) GetLatestSnapshotMetadata(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {

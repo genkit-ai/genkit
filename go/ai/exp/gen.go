@@ -286,10 +286,10 @@ type GetSnapshotRequest struct {
 	// MetadataOnly returns the snapshot's metadata only: status, finish reason,
 	// parent, session, timestamps, and error, with no state payload. The read is
 	// shaped exactly as a full read (status defaulting and heartbeat expiry need
-	// only the metadata), and the store reads the row without loading its state
-	// ([SnapshotReader.GetSnapshotMetadata]). For callers that dispatch on where
-	// a task stands, this skips loading and serializing a potentially large
-	// conversation history.
+	// only the metadata), and a store that implements [SnapshotMetadataReader]
+	// answers without loading the state at all; any other store is read in full
+	// and the state dropped. For callers that dispatch on where a task stands,
+	// this skips serializing a potentially large conversation history.
 	MetadataOnly bool `json:"metadataOnly,omitempty"`
 	// SessionID identifies the session whose latest snapshot to fetch.
 	// Optional when SnapshotID is given. The latest snapshot is the session's

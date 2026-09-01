@@ -5359,12 +5359,6 @@ func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapsho
 func (minimalStore[State]) GetLatestSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
 	return nil, nil
 }
-func (minimalStore[State]) GetSnapshotMetadata(context.Context, string) (*SessionSnapshot[State], error) {
-	return nil, nil
-}
-func (minimalStore[State]) GetLatestSnapshotMetadata(context.Context, string) (*SessionSnapshot[State], error) {
-	return nil, nil
-}
 func (minimalStore[State]) SaveSnapshot(
 	context.Context, string,
 	func(*SessionSnapshot[State]) (*SessionSnapshot[State], error),

@@ -395,11 +395,12 @@ func (o snapshotReadOptions) applySnapshotRead(req *GetSnapshotRequest) {
 // WithMetadataOnly reads a snapshot's metadata only: the returned snapshot
 // carries the shaped status, finish reason, parent, session, timestamps, and
 // error, and its State is nil. The shaping is identical to a full read (status
-// defaulting and heartbeat expiry need only the metadata), and the store reads
-// the row without loading its state ([SnapshotReader.GetSnapshotMetadata]).
-// Use it to dispatch on where a task stands without loading or serializing a
-// potentially large conversation history; the state transform does not run,
-// exactly as on a full read of a stateless row.
+// defaulting and heartbeat expiry need only the metadata), and a store that
+// implements [SnapshotMetadataReader] answers without loading the state at
+// all; any other store is read in full and the state dropped. Use it to
+// dispatch on where a task stands without serializing a potentially large
+// conversation history; the state transform does not run, exactly as on a
+// full read of a stateless row.
 func WithMetadataOnly() SnapshotReadOption {
 	return snapshotReadOptions{metadataOnly: true}
 }

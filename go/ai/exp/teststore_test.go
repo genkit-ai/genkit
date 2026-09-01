@@ -68,25 +68,11 @@ func (s *testInMemStore[State]) GetSnapshot(_ context.Context, snapshotID string
 	return testCopySnapshot(snap)
 }
 
-// GetSnapshotMetadata is the full read with the state dropped: correct by
-// construction, which is what a test store needs.
-func (s *testInMemStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
-	return withoutState(s.GetSnapshot(ctx, snapshotID))
-}
-
-// GetLatestSnapshotMetadata is the full latest read with the state dropped.
-func (s *testInMemStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
-	return withoutState(s.GetLatestSnapshot(ctx, sessionID))
-}
-
-// withoutState drops the state from a read's result, passing a miss or an
-// error through unchanged.
-func withoutState[State any](snap *SessionSnapshot[State], err error) (*SessionSnapshot[State], error) {
-	if snap != nil {
-		snap.State = nil
-	}
-	return snap, err
-}
+// testInMemStore deliberately implements no [SnapshotMetadataReader], so the
+// package's metadata-only reads exercise the fallback (a full read with the
+// state dropped); metadataCountingStore layers the capability on for the
+// tests that pin the fast path.
+var _ SessionStore[testState] = (*testInMemStore[testState])(nil)
 
 func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if sessionID == "" {
