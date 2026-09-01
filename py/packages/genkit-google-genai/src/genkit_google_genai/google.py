@@ -60,7 +60,7 @@ from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
 
 import genkit_google_genai.constants as const
-from genkit import ModelInfo
+from genkit import GenkitError, ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit.embedder import EmbedderRef, embedder_action_metadata
@@ -620,14 +620,16 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         cls, name: str, *, config: DeepResearchConfig | None = None
     ) -> ModelRef[DeepResearchConfig]:
         """Typed ref for a Deep Research agent. Pass to generate_operation()."""
-        local = strip_ref_prefixes(name) if isinstance(name, str) else name
-        if not isinstance(name, str) or not local:
-            raise wrong_family_error(
-                plugin_class=cls.__name__,
-                method='deep_research_model',
-                family='deep-research',
-                local=str(name),
-                actual='unknown',
+        if not isinstance(name, str):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{cls.__name__}.deep_research_model: model name must be a string.',
+            )
+        local = strip_ref_prefixes(name)
+        if not local:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{cls.__name__}.deep_research_model: model name is required.',
             )
         if classify_family(local) != 'deep-research':
             raise wrong_family_error(

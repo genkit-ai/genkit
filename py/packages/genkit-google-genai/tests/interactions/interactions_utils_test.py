@@ -18,59 +18,22 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from genkit_google_genai._interactions.options import ClientOptions
 from genkit_google_genai.models.interactions_utils import (
     client_options_for_operation,
-    map_genai_error,
+    extract_version,
     partition_keys,
     require_interaction_steps,
 )
-from google.genai.errors import APIError
 
 from genkit import GenkitError
 
 
-def test_map_genai_error_maps_rate_limit_and_retry_after() -> None:
-    response = SimpleNamespace(headers={'retry-after': '1.5'})
-    error = APIError(429, {'error': {'message': 'slow down', 'status': 'RESOURCE_EXHAUSTED'}}, response=response)
-
-    mapped = map_genai_error(error)
-
-    assert isinstance(mapped, GenkitError)
-    assert mapped.status == 'RESOURCE_EXHAUSTED'
-    assert mapped.original_message == 'slow down'
-    assert mapped.response_metadata is not None
-    assert mapped.response_metadata.get('retry_after_ms') == 1500.0
-
-
-def test_map_genai_error_maps_unauthenticated() -> None:
-    error = APIError(401, {'error': {'message': 'bad key'}})
-    mapped = map_genai_error(error)
-    assert mapped.status == 'UNAUTHENTICATED'
-
-
-def test_map_genai_error_maps_gaos_status_code() -> None:
-    """Interactions gaos errors aren't google.genai.errors.APIError but carry status_code."""
-    error = SimpleNamespace(status_code=400, message='Missing input.')
-    mapped = map_genai_error(error)
-    assert mapped.status == 'INVALID_ARGUMENT'
-    assert mapped.original_message == 'Missing input.'
-
-
-def test_map_genai_error_tolerates_non_numeric_code() -> None:
-    """APIError.code comes from response JSON, so it may be a non-numeric string."""
-    error = APIError('boom', {'error': {'message': 'weird proxy error', 'code': 'boom'}})
-    mapped = map_genai_error(error)
-    assert mapped.status == 'UNKNOWN'
-
-
-def test_map_genai_error_maps_gaos_not_found() -> None:
-    error = SimpleNamespace(status_code=404, message="Did you mean 'lyria-3-pro-preview'?")
-    mapped = map_genai_error(error)
-    assert mapped.status == 'NOT_FOUND'
+def test_extract_version_strips_all_pasted_prefixes() -> None:
+    assert extract_version('antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
+    assert extract_version('googleai/antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
+    assert extract_version('models/googleai/antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
 
 
 def test_partition_keys_is_non_mutating() -> None:

@@ -33,7 +33,7 @@ from genkit_google_genai.models.deep_research import (
     response_format_from_request,
 )
 from genkit_google_genai.models.interactions_lyria import LyriaConfig, create_lyria_action
-from genkit_google_genai.models.interactions_registry import deep_research_model_info
+from genkit_google_genai.models.interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
 from genkit import ActionKind, GenkitError, Message, ModelRequest, Part, Role, TextPart
@@ -420,6 +420,32 @@ async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
     assert response.response.message.content[0].root.text == 'hello'
 
 
+@pytest.mark.asyncio
+async def test_antigravity_keeps_custom_environment() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.antigravity',
+        create_result={
+            'id': 'ag-env',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'ok'}]}],
+        },
+    )
+    action = create_antigravity_action(
+        'antigravity-preview-05-2026',
+        plugin_api_key='key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(
+            ModelRequest(
+                messages=[Message(role=Role.USER, content=[Part(TextPart(text='build'))])],
+                config=AntigravityConfig(environment={'type': 'custom', 'name': 'custom-env'}),
+            )
+        )
+
+    assert create_calls[0]['environment'] == {'type': 'custom', 'name': 'custom-env'}
+
+
 def test_bare_model_request_accepts_lyria_config_instance() -> None:
     """Bare ModelRequest(config=LyriaConfig(...)) should not reject the plugin schema."""
     request = ModelRequest(
@@ -511,6 +537,28 @@ def test_googleai_family_constructors() -> None:
     ly = GoogleAI.lyria_model('lyria-3-clip-preview')
     assert ly.name == 'googleai/lyria-3-clip-preview'
     assert ly.config_schema is LyriaConfig
+    ly_supports = lyria_model_info('lyria-3-clip-preview').supports
+    assert ly_supports is not None
+    assert ly_supports.system_role is False
+    assert GoogleAI.lyria_model('lyria-002').name == 'googleai/lyria-002'
+
+    with_config = GoogleAI.deep_research_model(
+        'deep-research-preview-04-2026',
+        config=DeepResearchConfig(thinking_summaries='auto'),
+    )
+    assert isinstance(with_config.config, DeepResearchConfig)
+    assert with_config.config.thinking_summaries == 'auto'
+
+
+def test_package_root_lyria_config_is_interactions() -> None:
+    from genkit_google_genai import LyriaConfig as RootLyriaConfig
+
+    ref = GoogleAI.lyria_model(
+        'lyria-3-clip-preview',
+        config=RootLyriaConfig(response_modalities=['audio']),
+    )
+    assert ref.config_schema is LyriaConfig
+    assert isinstance(ref.config, RootLyriaConfig)
 
 
 @pytest.mark.asyncio
@@ -603,10 +651,11 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     ly = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-3-pro-preview'))
     assert ly is not None
 
-    # Legacy Vertex name must not fall through to Gemini capabilities metadata.
-    ly_legacy = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-002'))
-    assert ly_legacy is not None
-    model_meta = (ly_legacy.metadata or {}).get('model')
+    # Unknown lyria-* ids still resolve here so a version we have not
+    # catalogued is not minted as Gemini.
+    ly_passthrough = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-002'))
+    assert ly_passthrough is not None
+    model_meta = (ly_passthrough.metadata or {}).get('model')
     assert isinstance(model_meta, dict)
     supports = model_meta.get('supports')
     assert isinstance(supports, dict)
@@ -722,6 +771,55 @@ async def test_lyria_system_only_is_enough() -> None:
 
     assert create_calls[0]['system_instruction'] == 'play jazz'
     assert create_calls[0]['input'] == []
+
+
+@pytest.mark.asyncio
+async def test_lyria_rejects_empty_messages_without_system() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.interactions_lyria',
+        create_result={'id': 'ly-empty', 'status': 'completed', 'steps': []},
+    )
+    action = create_lyria_action(
+        'lyria-3-clip-preview',
+        plugin_api_key='key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        with pytest.raises(GenkitError, match='Missing input') as exc_info:
+            await action.run(ModelRequest(messages=[]))
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_lyria_keeps_system_instruction_and_user_input() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.interactions_lyria',
+        create_result={
+            'id': 'ly-both',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'ok'}]}],
+        },
+    )
+    action = create_lyria_action(
+        'lyria-3-clip-preview',
+        plugin_api_key='key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(
+            ModelRequest(
+                messages=[
+                    Message(role=Role.SYSTEM, content=[Part(TextPart(text='cinematic'))]),
+                    Message(role=Role.USER, content=[Part(TextPart(text='short sting'))]),
+                ]
+            )
+        )
+
+    assert create_calls[0]['system_instruction'] == 'cinematic'
+    assert create_calls[0]['input'] == [
+        {'type': 'user_input', 'content': [{'type': 'text', 'text': 'short sting'}]},
+    ]
 
 
 @pytest.mark.asyncio

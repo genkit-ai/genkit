@@ -16,8 +16,8 @@
 
 """Google GenAI Deep Research — start a background research job.
 
-`uv run src/main.py` only starts the job so it returns immediately. Poll
-from Dev UI (or call `deep_research` there) — a finished report takes minutes.
+`uv run src/main.py` starts the job and checks once. A finished report
+takes minutes; keep polling from Dev UI (or call `deep_research` there).
 """
 
 from genkit_google_genai import GoogleAI
@@ -43,24 +43,22 @@ class ResearchInput(BaseModel):
 
 @ai.flow(name='deep_research')
 async def deep_research_flow(input: ResearchInput) -> dict[str, str | bool | None]:
-    """Start Deep Research with generate_operation(). Poll from Dev UI."""
+    """Start Deep Research, then check_operation once so callers see the poll call."""
     operation = await ai.generate_operation(
         model=input.model,
         prompt=input.prompt,
     )
+    updated = await ai.check_operation(operation)
     return {
         'model': input.model,
-        'operation_id': operation.id,
-        'done': operation.done,
+        'operation_id': updated.id,
+        'done': updated.done,
     }
 
 
 async def main() -> None:
-    """Start one Deep Research job — does not wait for the report."""
-    try:
-        print(await deep_research_flow(ResearchInput()))  # noqa: T201
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+    """Start one Deep Research job and check it once — does not wait for the report."""
+    print(await deep_research_flow(ResearchInput()))  # noqa: T201
 
 
 if __name__ == '__main__':

@@ -96,7 +96,8 @@ from genkit_google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
-from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
+from genkit_google_genai.models.interactions_lyria import LyriaConfig
+from genkit_google_genai.models.interactions_registry import LyriaVersion
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 

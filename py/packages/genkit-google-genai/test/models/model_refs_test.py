@@ -211,6 +211,8 @@ class TestClosedRejectSet:
             GoogleAI.gemma_model('gemini-2.5-flash')
         with pytest.raises(GenkitError):
             VertexAI.gemini_image_model('imagen-3.0-generate-002')
+        with pytest.raises(GenkitError, match=r'model name must be a string'):
+            GoogleAI.deep_research_model(None)  # type: ignore[arg-type]
 
 
 class TestEmbeddingConstructor:

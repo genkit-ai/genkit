@@ -19,14 +19,11 @@
 from __future__ import annotations
 
 import os
-from typing import Any, cast
-
-from google.genai.errors import APIError
+from typing import Any
 
 from genkit import GenkitError
-from genkit._core._error import ErrorResponseMetadata, StatusName
-from genkit_google_genai._interactions.client import parse_retry_after_ms, status_for_http_code
 from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models._secrets import context_api_key
 
 # Snake_case: callers dump config with by_alias=False before we strip these.
@@ -68,10 +65,8 @@ def api_key_for_context(context: dict[str, Any], plugin_api_key: str | None) -> 
 
 
 def extract_version(model_name: str) -> str:
-    """Return the bare model version from a namespaced model name."""
-    if '/' in model_name:
-        return model_name.split('/', 1)[1]
-    return model_name
+    """Bare model id for the wire. Pasted action keys still have models/googleai/ on them."""
+    return strip_ref_prefixes(model_name)
 
 
 def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
@@ -124,25 +119,6 @@ def require_interaction_steps(steps: list[Any]) -> list[Any]:
     return steps
 
 
-def http_status_code_from_exception(exc: BaseException) -> int | None:
-    """Read an HTTP status from SDK errors that aren't google.genai.errors.APIError.
-
-    Interactions (gaos) raises its own BadRequestError hierarchy with
-    status_code, which doesn't subclass google.genai.errors.APIError.
-    """
-    for attr in ('status_code', 'code'):
-        raw = getattr(exc, attr, None)
-        if raw is None:
-            continue
-        try:
-            code = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if code > 0:
-            return code
-    return None
-
-
 def client_options_for_operation(client_options: ClientOptions) -> ClientOptions:
     """Transport knobs that may ride on a ticket. Never the key or the host.
 
@@ -167,75 +143,3 @@ def lowercase_choice_list(value: object) -> object:
     if not isinstance(value, list):
         return value
     return [item.lower() if isinstance(item, str) else item for item in value]
-
-
-def status_from_api_error(error: APIError) -> StatusName:
-    """Pick the Genkit error status for an SDK error, preferring the status it names."""
-    raw_status = error.status
-    if isinstance(raw_status, str):
-        candidate = raw_status.upper()
-        # API sometimes returns gRPC status names directly.
-        valid: set[str] = {
-            'OK',
-            'CANCELLED',
-            'UNKNOWN',
-            'INVALID_ARGUMENT',
-            'DEADLINE_EXCEEDED',
-            'NOT_FOUND',
-            'ALREADY_EXISTS',
-            'PERMISSION_DENIED',
-            'UNAUTHENTICATED',
-            'RESOURCE_EXHAUSTED',
-            'FAILED_PRECONDITION',
-            'ABORTED',
-            'OUT_OF_RANGE',
-            'UNIMPLEMENTED',
-            'INTERNAL',
-            'UNAVAILABLE',
-            'DATA_LOSS',
-        }
-        if candidate in valid:
-            return cast(StatusName, candidate)
-    # APIError.code comes straight from response JSON, so it may not be numeric.
-    try:
-        code = int(error.code or 0)
-    except (TypeError, ValueError):
-        code = 0
-    return status_for_http_code(code)
-
-
-def map_genai_error(exc: BaseException) -> GenkitError:
-    """Map a google-genai SDK error onto GenkitError for callers/poll backoff."""
-    if isinstance(exc, GenkitError):
-        return exc
-    if isinstance(exc, APIError):
-        retry_after_ms: float | None = None
-        headers: dict[str, str] = {}
-        response = getattr(exc, 'response', None)
-        raw_headers = getattr(response, 'headers', None)
-        if raw_headers is not None:
-            try:
-                headers = {str(key).lower(): str(value) for key, value in raw_headers.items()}
-            except Exception:  # noqa: BLE001 - headers shape varies by transport
-                headers = {}
-            retry_after_ms = parse_retry_after_ms(headers.get('retry-after'))
-        response_metadata: ErrorResponseMetadata | None = None
-        if retry_after_ms is not None or headers:
-            meta: ErrorResponseMetadata = {}
-            if retry_after_ms is not None:
-                meta['retry_after_ms'] = retry_after_ms
-            if headers:
-                meta['headers'] = headers
-            response_metadata = meta
-        return GenkitError(
-            status=status_from_api_error(exc),
-            message=exc.message or str(exc),
-            details=getattr(exc, 'details', None),
-            response_metadata=response_metadata,
-        )
-    # Interactions path: gaos BadRequestError etc. carry status_code but aren't APIError.
-    status_code = http_status_code_from_exception(exc)
-    if status_code is not None:
-        message = getattr(exc, 'message', None) or str(exc)
-        return GenkitError(status=status_for_http_code(status_code), message=message)
-    return GenkitError(status='UNKNOWN', message=str(exc))

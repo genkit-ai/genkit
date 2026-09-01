@@ -1,8 +1,8 @@
 # Google Deep Research
 
-Start a background Deep Research job with `generate_operation()`. Poll with
-`check_operation()` from Dev UI — `uv run src/main.py` only starts the job so
-it returns immediately.
+Start a background Deep Research job with `generate_operation()`, then
+`check_operation()` once. A finished report can take several minutes —
+keep polling from Dev UI.
 
 ```bash
 export GEMINI_API_KEY=your-api-key
@@ -10,7 +10,7 @@ uv sync
 uv run src/main.py
 ```
 
-To explore the flow (and poll) in Dev UI:
+To explore the flow (and keep polling) in Dev UI:
 
 ```bash
 genkit start -- uv run src/main.py
@@ -24,5 +24,6 @@ Supported models (set `model` in flow input):
 - `googleai/deep-research-max-preview-04-2026`
 - `googleai/deep-research-pro-preview-12-2025`
 
-This sample talks to Google AI Deep Research, not Vertex. A finished report
-can take several minutes; use Dev UI to watch `operation.done`.
+This sample talks to Google AI Deep Research, not Vertex. Antigravity and
+Lyria 3 are ordinary `generate` models on the same plugin (`GoogleAI.antigravity_model`,
+`GoogleAI.lyria_model`); they are not in this sample.

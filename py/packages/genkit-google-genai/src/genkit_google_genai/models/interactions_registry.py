@@ -73,8 +73,8 @@ KNOWN_LYRIA_MODELS: tuple[LyriaVersion, ...] = (
 
 
 def is_lyria_model_name(name: str | None) -> bool:
-    """Return True when the model name belongs to the Lyria family."""
-    return bool(name and name.startswith('lyria-'))
+    """True for any lyria-* id so a version we have not catalogued still routes here."""
+    return bool(name and name.rsplit('/', 1)[-1].startswith('lyria-'))
 
 
 def lyria_model_info(version: str) -> ModelInfo:
