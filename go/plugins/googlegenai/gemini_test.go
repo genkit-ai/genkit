@@ -18,10 +18,12 @@ package googlegenai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -1438,7 +1440,7 @@ func TestToGeminiContents(t *testing.T) {
 		},
 	}
 
-	contents, err := toGeminiContents(input)
+	contents, err := toGeminiContents(input.Messages)
 	if err != nil {
 		t.Fatalf("toGeminiContents failed: %v", err)
 	}
@@ -1793,4 +1795,337 @@ func TestGenerateStreamBlockedCandidateMidStream(t *testing.T) {
 	if got := r.Text(); got != "so far" {
 		t.Errorf("Text() = %q, want %q", got, "so far")
 	}
+}
+
+// cacheServer stands in for the Gemini backend on the calls a cached request
+// makes: scanning for a reusable cache, creating one, and generating. The scan
+// comes back empty, so every test on it takes the create path. It records the
+// generateContent body so a test can assert what actually went on the wire.
+func cacheServer(t *testing.T, cacheName string, gotBody *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+			fmt.Fprint(w, `{"cachedContents":[]}`)
+		case strings.Contains(r.URL.Path, "cachedContents"):
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode cachedContents body: %v", err)
+			}
+			fmt.Fprintf(w, `{"name":%q,"displayName":%q}`, cacheName, req["displayName"])
+		default:
+			if err := json.NewDecoder(r.Body).Decode(gotBody); err != nil {
+				t.Errorf("decode generateContent body: %v", err)
+			}
+			fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+		}
+	}))
+}
+
+// contentTexts flattens the text of every content in a decoded
+// generateContent body.
+func contentTexts(t *testing.T, body map[string]any) []string {
+	t.Helper()
+	var texts []string
+	contents, _ := body["contents"].([]any)
+	for _, c := range contents {
+		parts, _ := c.(map[string]any)["parts"].([]any)
+		for _, p := range parts {
+			if s, ok := p.(map[string]any)["text"].(string); ok {
+				texts = append(texts, s)
+			}
+		}
+	}
+	return texts
+}
+
+// TestGenerateDropsCachedPrefix is the regression test for #6137: the prefix
+// folded into the cache resource must not also travel inline, or it is billed
+// twice and the model sees it twice. It drives generate end to end because the
+// bug was in the wiring, not in either helper on its own.
+func TestGenerateDropsCachedPrefix(t *testing.T) {
+	const (
+		prefix   = "a large stable prefix that should only live in the cache"
+		followUp = "what did I just say?"
+		name     = "cachedContents/abc123"
+	)
+	var body map[string]any
+	srv := cacheServer(t, name, &body)
+	defer srv.Close()
+
+	input := &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage(prefix).WithCacheTTL(3600),
+		ai.NewUserTextMessage(followUp),
+	}}
+	r, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if got := contentTexts(t, body); len(got) != 1 || got[0] != followUp {
+		t.Errorf("inline contents = %q, want only %q; the cached prefix was sent again", got, followUp)
+	}
+	if got := body["cachedContent"]; got != name {
+		t.Errorf("cachedContent = %v, want %q", got, name)
+	}
+	// The cache name rides back on the response so the next turn can reuse it.
+	cache, _ := r.Message.Metadata["cache"].(map[string]any)
+	if cache["name"] != name {
+		t.Errorf("response cache metadata = %v, want name %q", r.Message.Metadata["cache"], name)
+	}
+	// The full history stays on the request, so resp.History() can still find
+	// the marker on the next turn.
+	if len(r.Request.Messages) != 2 {
+		t.Errorf("r.Request.Messages = %d, want 2", len(r.Request.Messages))
+	}
+}
+
+// TestGenerateCachedPrefixCoversEveryMessage covers the boundary that leaves
+// nothing to send inline, e.g. one message carrying both a document and the
+// question. Dropping the prefix must not turn a request that worked into an
+// "at least one message is required" rejection.
+func TestGenerateCachedPrefixCoversEveryMessage(t *testing.T) {
+	var body map[string]any
+	srv := cacheServer(t, "cachedContents/only", &body)
+	defer srv.Close()
+
+	input := &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage("a large document, and: summarize it").WithCacheTTL(3600),
+	}}
+	if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if got := body["cachedContent"]; got != "cachedContents/only" {
+		t.Errorf("cachedContent = %v, want the cache to carry the prefix", got)
+	}
+	if got := contentTexts(t, body); len(got) != 1 || strings.TrimSpace(got[0]) != "" {
+		t.Errorf("inline contents = %q, want a single placeholder turn", got)
+	}
+}
+
+// TestGenerateNoMessages keeps the plain empty-request rejection, which the
+// cache placeholder above must not swallow.
+func TestGenerateNoMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("generate should have failed before reaching the API")
+	}))
+	defer srv.Close()
+
+	_, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", &ai.ModelRequest{}, &genai.GenerateContentConfig{}, nil)
+	if err == nil {
+		t.Fatal("generate = nil error, want an error for a request with no messages")
+	}
+}
+
+// TestGenerateRemakesUnusableCache covers the two ways a cache name carried
+// over from an earlier turn stops being usable: the resource is gone, or it no
+// longer holds what this request holds. Both build a fresh cache instead of
+// failing, because the name came from Genkit's own response metadata and the
+// caller has no way to act on the failure.
+func TestGenerateRemakesUnusableCache(t *testing.T) {
+	tests := []struct {
+		name   string
+		lookup func(w http.ResponseWriter)
+	}{
+		{
+			name: "resource expired",
+			lookup: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"error":{"code":404,"message":"cache not found","status":"NOT_FOUND"}}`)
+			},
+		},
+		{
+			name: "contents no longer match",
+			lookup: func(w http.ResponseWriter) {
+				fmt.Fprint(w, `{"name":"cachedContents/stale","displayName":"the-hash-of-another-request"}`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var created bool
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+					// The scan for a reusable cache finds nothing.
+					fmt.Fprint(w, `{"cachedContents":[]}`)
+				case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+					tt.lookup(w)
+				case strings.Contains(r.URL.Path, "cachedContents"):
+					created = true
+					fmt.Fprint(w, `{"name":"cachedContents/fresh","displayName":"fresh"}`)
+				default:
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode generateContent body: %v", err)
+					}
+					fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+				}
+			}))
+			defer srv.Close()
+
+			// The ttl marker and the name from the previous turn ride on
+			// different messages, the way resp.History() replays them.
+			input := &ai.ModelRequest{Messages: []*ai.Message{
+				ai.NewUserTextMessage("a large stable prefix").WithCacheTTL(3600),
+				ai.NewModelTextMessage("an earlier answer").WithCacheName("cachedContents/stale"),
+				ai.NewUserTextMessage("follow up"),
+			}}
+			if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+
+			if !created {
+				t.Error("no fresh cache was created for an unusable cache name")
+			}
+			if got := body["cachedContent"]; got != "cachedContents/fresh" {
+				t.Errorf("cachedContent = %v, want the fresh cache", got)
+			}
+			if got := contentTexts(t, body); len(got) != 2 {
+				t.Errorf("inline contents = %q, want the two messages after the cache boundary", got)
+			}
+		})
+	}
+}
+
+// TestGenerateReusesCacheWithSameContents covers the caller who rebuilds the
+// same prefix rather than replaying resp.History(). The cache name only ever
+// travels back through the response metadata, so that caller arrives with no
+// name and used to mint, and pay to store, a fresh copy on every single call.
+func TestGenerateReusesCacheWithSameContents(t *testing.T) {
+	var created bool
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+			// A cache holding this exact prefix already exists. Its display
+			// name is the hash the plugin is about to compute.
+			contents, err := messagesToCache(cachedPrefixRequest().Messages, 0)
+			if err != nil {
+				t.Fatalf("messagesToCache: %v", err)
+			}
+			hash, err := calculateCacheHash(contents, "gemini-2.5-flash")
+			if err != nil {
+				t.Fatalf("calculateCacheHash: %v", err)
+			}
+			fmt.Fprintf(w, `{"cachedContents":[{"name":"cachedContents/other","displayName":"nope"},{"name":"cachedContents/existing","displayName":%q}]}`, hash)
+		case strings.Contains(r.URL.Path, "cachedContents"):
+			created = true
+			fmt.Fprint(w, `{"name":"cachedContents/wasteful","displayName":"x"}`)
+		default:
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode generateContent body: %v", err)
+			}
+			fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+		}
+	}))
+	defer srv.Close()
+
+	if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", cachedPrefixRequest(), &genai.GenerateContentConfig{}, nil); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if created {
+		t.Error("a second cache was created for contents already cached")
+	}
+	if got := body["cachedContent"]; got != "cachedContents/existing" {
+		t.Errorf("cachedContent = %v, want the cache that already held the prefix", got)
+	}
+}
+
+// cachedPrefixRequest is the canonical shape from the README: a large stable
+// message marked for caching, then the question.
+func cachedPrefixRequest() *ai.ModelRequest {
+	return &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage("a large stable prefix").WithCacheTTL(3600),
+		ai.NewUserTextMessage("what did I just say?"),
+	}}
+}
+
+// TestGenerateWithCacheNameOnly covers ai.Message.WithCacheName used on its
+// own, which the README offers alongside WithCacheTTL. It used to be a silent
+// no-op: the whole prefix went inline at full price with no cache and no
+// error, which is bug #6137 by another route.
+func TestGenerateWithCacheNameOnly(t *testing.T) {
+	prefix := ai.NewUserTextMessage("a large stable prefix")
+	request := func() *ai.ModelRequest {
+		return &ai.ModelRequest{Messages: []*ai.Message{
+			ai.NewUserTextMessage("a large stable prefix").WithCacheName("cachedContents/known"),
+			ai.NewUserTextMessage("what did I just say?"),
+		}}
+	}
+	contents, err := messagesToCache([]*ai.Message{prefix}, 0)
+	if err != nil {
+		t.Fatalf("messagesToCache: %v", err)
+	}
+	hash, err := calculateCacheHash(contents, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("calculateCacheHash: %v", err)
+	}
+
+	t.Run("named cache holds the prefix", func(t *testing.T) {
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "cachedContents"):
+				fmt.Fprintf(w, `{"name":"cachedContents/known","displayName":%q}`, hash)
+			default:
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode generateContent body: %v", err)
+				}
+				fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+			}
+		}))
+		defer srv.Close()
+
+		if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", request(), &genai.GenerateContentConfig{}, nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		if got := body["cachedContent"]; got != "cachedContents/known" {
+			t.Errorf("cachedContent = %v, want the named cache to be used", got)
+		}
+		if got := contentTexts(t, body); len(got) != 1 || got[0] != "what did I just say?" {
+			t.Errorf("inline contents = %q, want only the question", got)
+		}
+	})
+
+	t.Run("named cache is gone", func(t *testing.T) {
+		// No ttl means there is nothing to build a replacement with, so the
+		// request goes out whole rather than failing or losing the prefix.
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+				fmt.Fprint(w, `{"cachedContents":[]}`)
+			case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"error":{"code":404,"message":"cache not found","status":"NOT_FOUND"}}`)
+			case strings.Contains(r.URL.Path, "cachedContents"):
+				t.Error("no cache should be created without a ttl")
+			default:
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode generateContent body: %v", err)
+				}
+				fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+			}
+		}))
+		defer srv.Close()
+
+		if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", request(), &genai.GenerateContentConfig{}, nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		if _, ok := body["cachedContent"]; ok {
+			t.Errorf("cachedContent = %v, want no cache on the request", body["cachedContent"])
+		}
+		if got := contentTexts(t, body); len(got) != 2 {
+			t.Errorf("inline contents = %q, want the whole request", got)
+		}
+	})
 }

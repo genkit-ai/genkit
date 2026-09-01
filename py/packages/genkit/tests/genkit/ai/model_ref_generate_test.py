@@ -17,8 +17,8 @@ from genkit._ai._prompt import PromptConfig, to_generate_action_options
 from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
-from genkit._core._model import Message, ModelRequest, ModelResponse
-from genkit._core._typing import ModelInfo, Operation, Part, Role, Supports, TextPart
+from genkit._core._model import ModelRequest
+from genkit._core._typing import Operation
 from genkit.model import model_ref
 
 
@@ -214,28 +214,16 @@ async def test_define_prompt_dict_none_clear_and_extra(
 @pytest.mark.asyncio
 async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
     """generate_operation applies the ref's version and config, not just the name."""
-    expected_operation = Operation(
-        id='ref-op-123',
-        done=False,
-        action='/background-model/lro-model',
-    )
     seen: list[ModelRequest] = []
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         seen.append(request)
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+        return Operation(id='ref-op-123', done=False)
 
-    ai.define_model(
-        name='lro-model',
-        fn=model_fn,
-        info=ModelInfo(supports=Supports(long_running=True)),
-    )
+    async def check(op: Operation) -> Operation:
+        return op
+
+    ai.define_background_model(name='lro-model', start=start, check=check)
     ref = model_ref(
         'lro-model',
         config_schema=ModelConfig,

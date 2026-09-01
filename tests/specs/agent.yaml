@@ -9,6 +9,14 @@
 # See docs/agents-conformance-testing.md for harness requirements and
 # full spec format reference.
 
+# Every capability a test may name in `requires`. A harness skips a test
+# naming a capability it does not implement, so this list is what separates
+# "not adopted yet" from a misspelled name: a `requires` entry absent here
+# fails every harness instead of silently skipping in all of them.
+capabilities:
+  - resumable-failures
+  - resumable-aborts
+
 tests:
   # ---------------------------------------------------------------------------
   # Basic single-turn
@@ -1394,3 +1402,438 @@ tests:
         expectError:
           status: INVALID_ARGUMENT
           message: 'does not belong to session'
+
+  # ---------------------------------------------------------------------------
+  # Resumable failures (requires: resumable-failures)
+  # ---------------------------------------------------------------------------
+  # A failed turn commits what the generate call left at its last turn seam,
+  # persists it as a `failed` snapshot carrying the error, and resume accepts
+  # that snapshot. An input with no payload of its own re-attempts the turn on
+  # those committed messages. These cases use vocabulary gated behind the
+  # `resumable-failures` capability: model entries of the form
+  # `error: {status, message}` that fail a generate call, an empty input
+  # object, and a `failed` snapshot as a resume target. Their fixture,
+  # promptAgentWithToolsAndStore, wires testTool and flakyTool (fails its
+  # first call per test, then succeeds) behind a session store.
+
+  # ---------------------------------------------------------------------------
+  # Model failure after a completed tool round
+  # ---------------------------------------------------------------------------
+  - name: a model failure keeps the completed round and an empty input re-attempts it
+    requires: [resumable-failures]
+    description: >
+      A turn completes a tool round and then the model call fails. The output
+      reports the failure with the model's status, and the snapshot carries
+      the conversation up to the seam: the user message, the tool request, and
+      the tool response, with no fragment of the failed call. A second
+      invocation resumes the session by sessionId and sends an empty input,
+      which runs the turn again on those messages without repeating the tool.
+    agent: promptAgentWithToolsAndStore
+    steps:
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - message: { role: user, content: [{ text: do the work }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: r1 }
+          - error: { status: UNAVAILABLE, message: model melted }
+        expectOutput:
+          finishReason: failed
+          hasSnapshotId: true
+          errorContains:
+            status: UNAVAILABLE
+            message: model melted
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          finishReason: failed
+          errorContains:
+            status: UNAVAILABLE
+            message: model melted
+          stateContains:
+            sessionId: 22222222-2222-4222-8222-222222222222
+            messages:
+              - { role: user, content: [{ text: do the work }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: r1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, ref: r1, output: tool called }
+
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - {}
+        modelResponses:
+          - message: { role: model, content: [{ text: all done }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: all done }] }
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do the work }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: r1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, ref: r1, output: tool called }
+              - { role: model, content: [{ text: all done }] }
+
+  # ---------------------------------------------------------------------------
+  # Tool failure mid round
+  # ---------------------------------------------------------------------------
+  - name: a tool failure drops the round it opened and the re-attempt runs it again
+    requires: [resumable-failures]
+    description: >
+      A hard tool failure leaves the round unanswerable, so the model message
+      that opened it goes with the failed call: the snapshot's messages stop
+      at the user turn. Re-attempting calls the model again, which asks for
+      the tool a second time; it succeeds and the loop runs to the reply. A
+      tool failure is classified INTERNAL regardless of the tool's own status.
+    agent: promptAgentWithToolsAndStore
+    steps:
+      - type: send
+        init: { sessionId: 33333333-3333-4333-8333-333333333333 }
+        inputs:
+          - message: { role: user, content: [{ text: risky }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: flakyTool, input: {}, ref: f1 }
+        expectOutput:
+          finishReason: failed
+          hasSnapshotId: true
+          errorContains:
+            status: INTERNAL
+            message: flaky tool failed
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          finishReason: failed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: risky }] }
+
+      - type: send
+        init: { sessionId: 33333333-3333-4333-8333-333333333333 }
+        inputs:
+          - {}
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: flakyTool, input: {}, ref: f2 }
+          - message: { role: model, content: [{ text: recovered fine }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: recovered fine }] }
+          finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: risky }] }
+              - role: model
+                content:
+                  - toolRequest: { name: flakyTool, input: {}, ref: f2 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: flakyTool, ref: f2, output: tool recovered }
+              - { role: model, content: [{ text: recovered fine }] }
+
+  # ---------------------------------------------------------------------------
+  # The client decides
+  # ---------------------------------------------------------------------------
+  - name: a failed snapshot accepts a new message like any other resume point
+    requires: [resumable-failures]
+    description: >
+      Re-attempting is one option, not the only one. The conversation a failed
+      turn committed ends at a turn seam, so a new user message continues it
+      the way it would continue a successful turn's snapshot.
+    agent: promptAgentWithToolsAndStore
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: do the work }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: r1 }
+          - error: { status: UNAVAILABLE, message: model melted }
+        expectOutput:
+          finishReason: failed
+
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: never mind, just talk }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: happy to }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: happy to }] }
+          finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do the work }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: r1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, ref: r1, output: tool called }
+              - { role: user, content: [{ text: never mind, just talk }] }
+              - { role: model, content: [{ text: happy to }] }
+
+  # ---------------------------------------------------------------------------
+  # Guards
+  # ---------------------------------------------------------------------------
+  - name: an empty input is rejected when there is nothing to continue
+    requires: [resumable-failures]
+    description: >
+      An input with no payload runs the turn on the conversation as it stands.
+      A fresh conversation has none, so the send resolves as an
+      INVALID_ARGUMENT failure rather than calling the model on nothing.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - {}
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+
+  - name: an empty input runs a fresh turn on a conversation that did not fail
+    requires: [resumable-failures]
+    description: >
+      Nothing in the rule is specific to a failure. An input with no payload
+      runs the turn on the conversation as it stands, so a completed tip gets a
+      fresh model call on the messages already there and no new user message
+      joins them.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 66666666-6666-4666-8666-666666666666 }
+        inputs:
+          - message: { role: user, content: [{ text: hello }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hi there }] }
+            finishReason: stop
+        expectOutput:
+          finishReason: stop
+
+      - type: send
+        init: { sessionId: 66666666-6666-4666-8666-666666666666 }
+        inputs:
+          - {}
+        modelResponses:
+          - message: { role: model, content: [{ text: anything else }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: anything else }] }
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snapContinued
+
+      - type: getSnapshotData
+        snapshotId: '{{snapContinued}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hello }] }
+              - { role: model, content: [{ text: hi there }] }
+              - { role: model, content: [{ text: anything else }] }
+
+  # ---------------------------------------------------------------------------
+  # Client-managed state
+  # ---------------------------------------------------------------------------
+  - name: a client-managed failure round-trips its committed state
+    requires: [resumable-failures]
+    description: >
+      Without a store, a failed turn hands its committed state back on the
+      output, and a new invocation initialized with that state re-attempts the
+      turn to completion.
+    agent: promptAgentWithTools
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do the work }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: r1 }
+          - error: { status: UNAVAILABLE, message: model melted }
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: UNAVAILABLE
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do the work }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: r1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, ref: r1, output: tool called }
+        captureState: st1
+
+      - type: send
+        init: { state: '{{st1}}' }
+        inputs:
+          - {}
+        modelResponses:
+          - message: { role: model, content: [{ text: all done }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: all done }] }
+          finishReason: stop
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do the work }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: r1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, ref: r1, output: tool called }
+              - { role: model, content: [{ text: all done }] }
+
+  # ---------------------------------------------------------------------------
+  # Resumable aborts (requires: resumable-aborts)
+  # ---------------------------------------------------------------------------
+  # An aborted invocation keeps the turns that finished and resume accepts its
+  # snapshot, the way it accepts a failed one. The snapshot used to carry no
+  # state at all: the pending row was written without any, abort only flipped
+  # its status, and the finalize kept that row verbatim. These cases use
+  # vocabulary gated behind the `resumable-aborts` capability: an `aborted`
+  # snapshot carrying state, and one as a resume target. Their fixture,
+  # customAgentAbortable, records each turn and blocks until its context is
+  # cancelled on the turn whose message is "block".
+
+  - name: an aborted snapshot keeps the finished turns and drops the one in flight
+    requires: [resumable-aborts]
+    description: >
+      A first turn commits, a second blocks, and the client detaches and
+      aborts. The finalize writes the state through the committed turn onto
+      the aborted row: the blocked turn's message is rolled back, because it
+      returned no result to commit and detach had suspended the per-turn
+      snapshot that would otherwise hold it.
+    agent: customAgentAbortable
+    steps:
+      - type: send
+        init: { sessionId: 44444444-4444-4444-8444-444444444444 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+          - message: { role: user, content: [{ text: block }] }
+            detach: true
+        expectOutput:
+          finishReason: detached
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      # The abort flips the status; the finalize that follows writes the
+      # reason and the state.
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+          finishReason: aborted
+          stateContains:
+            sessionId: 44444444-4444-4444-8444-444444444444
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: ack }] }
+
+  - name: an aborted snapshot is a resume point
+    requires: [resumable-aborts]
+    description: >
+      Resume accepts an aborted snapshot rather than rejecting it as a dead
+      end. The continued turn runs on the conversation the abort left, so the
+      committed turn is still in front of it and the blocked one is not.
+    agent: customAgentAbortable
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+          - message: { role: user, content: [{ text: block }] }
+            detach: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: carry on }] }
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: ack }] }
+              - { role: user, content: [{ text: carry on }] }
+              - { role: model, content: [{ text: ack }] }

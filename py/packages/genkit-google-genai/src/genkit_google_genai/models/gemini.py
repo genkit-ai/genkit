@@ -42,7 +42,7 @@ from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
-from google.genai.errors import ClientError
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema
 
 from genkit import (
@@ -64,7 +64,7 @@ from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
     ModelConfig,
-    StatusName,
+    wrap_http_error,
 )
 
 
@@ -89,9 +89,18 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'LANGUAGE',
         'MALICIOUS',
         'IMAGE_SAFETY',
+        'IMAGE_PROHIBITED_CONTENT',
+        'IMAGE_RECITATION',
     ):
         return FinishReason.BLOCKED
-    if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+        'UNEXPECTED_TOOL_CALL',
+    ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN
 
@@ -1507,27 +1516,11 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
         except Exception as e:
-            # Catch any other exceptions and provide a clear error message
-            # This helps debug issues like authentication errors that might not be ClientError
+            # Auth and other SDK failures are not APIError — still fail the
+            # generate so the caller is not left with a partial reply.
             import logging
 
             logger = logging.getLogger(__name__)
@@ -1607,56 +1600,42 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
-
-        accumulated_content: list[Part] = []
-        finish_reason = FinishReason.UNKNOWN
-        usage_metadata: Any = None
-        async for response_chunk in generator:
-            content = await self._contents_from_response(response_chunk)
-            if content:  # Only process if we have content
-                accumulated_content.extend(content)
-                ctx.send_chunk(
-                    chunk=ModelResponseChunk(
-                        content=content,
-                        role=Role.MODEL,
+            # The HTTP call happens on the first iteration, not on the
+            # await that created the generator, so classify has to cover
+            # the async for as well.
+            accumulated_content: list[Part] = []
+            finish_reason = FinishReason.UNKNOWN
+            usage_metadata: Any = None
+            async for response_chunk in generator:
+                content = await self._contents_from_response(response_chunk)
+                if content:  # Only process if we have content
+                    accumulated_content.extend(content)
+                    ctx.send_chunk(
+                        chunk=ModelResponseChunk(
+                            content=content,
+                            role=Role.MODEL,
+                        )
                     )
-                )
-            # The terminating reason and cumulative token usage ride on the trailing
-            # chunks, so hold onto the latest values we see as the stream drains —
-            # otherwise a streamed turn reports no finish reason and no usage at all.
-            if response_chunk.candidates and response_chunk.candidates[0] is not None:
-                fr = response_chunk.candidates[0].finish_reason
-                if fr:
-                    finish_reason = _to_finish_reason(fr)
-            if response_chunk.usage_metadata is not None:
-                usage_metadata = response_chunk.usage_metadata
+                # The terminating reason and cumulative token usage ride on the trailing
+                # chunks, so hold onto the latest values we see as the stream drains —
+                # otherwise a streamed turn reports no finish reason and no usage at all.
+                if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    fr = response_chunk.candidates[0].finish_reason
+                    if fr:
+                        finish_reason = _to_finish_reason(fr)
+                if response_chunk.usage_metadata is not None:
+                    usage_metadata = response_chunk.usage_metadata
 
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=accumulated_content,
-            ),
-            finish_reason=finish_reason,
-            usage=_usage_from_metadata(usage_metadata),
-        )
+            return ModelResponse(
+                message=Message(
+                    role=Role.MODEL,
+                    content=accumulated_content,
+                ),
+                finish_reason=finish_reason,
+                usage=_usage_from_metadata(usage_metadata),
+            )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
 
     @cached_property
     def metadata(self) -> dict:

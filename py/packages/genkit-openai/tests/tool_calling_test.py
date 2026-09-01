@@ -43,6 +43,7 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequ
 
     first_response = MagicMock()
     first_response.choices = [MagicMock(finish_reason='tool_calls', message=first_message)]
+    first_response.usage = None
 
     # Second call is the model response
     second_message = MagicMock()
@@ -53,6 +54,7 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequ
 
     second_response = MagicMock()
     second_response.choices = [MagicMock(finish_reason='stop', message=second_message)]
+    second_response.usage = None
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(
@@ -120,7 +122,7 @@ async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> 
             choice_mock = MagicMock()
             choice_mock.delta = delta_mock
 
-            return MagicMock(choices=[choice_mock])
+            return MagicMock(choices=[choice_mock], usage=None)
 
         def __aiter__(self) -> 'MockStream':
             return self

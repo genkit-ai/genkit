@@ -60,15 +60,15 @@ func ExampleNewSystemTextMessage() {
 	// Model role: model
 }
 
-// This example demonstrates creating a data part for raw string content.
+// This example demonstrates creating a data part for structured content.
 func ExampleNewDataPart() {
-	// Create a data part with raw string content
-	part := ai.NewDataPart(`{"name": "Alice", "age": 30}`)
+	// Create a data part with structured data
+	part := ai.NewDataPart(map[string]any{"name": "Alice", "age": 30})
 	fmt.Println("Is data part:", part.IsData())
-	fmt.Println("Content:", part.Text)
+	fmt.Println("Data:", part.Data)
 	// Output:
 	// Is data part: true
-	// Content: {"name": "Alice", "age": 30}
+	// Data: map[age:30 name:Alice]
 }
 
 // This example demonstrates accessing text from a Part.

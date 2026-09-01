@@ -16,6 +16,9 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import math
+import time
+from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, TypedDict
 
@@ -87,6 +90,17 @@ _STATUS_CODE_MAP: dict[StatusName, int] = {
     'DATA_LOSS': 500,
 }
 
+# Reverse of _STATUS_CODE_MAP. A few HTTP codes are shared (400, 409, 500);
+# the overlays pick the status retry should treat as the default for that
+# code — a bad request, a conflict abort, an internal failure.
+_HTTP_CODE_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
+_HTTP_CODE_TO_STATUS.update({
+    400: 'INVALID_ARGUMENT',
+    408: 'DEADLINE_EXCEEDED',
+    409: 'ABORTED',
+    500: 'INTERNAL',
+})
+
 
 def http_status_code(status: StatusName) -> int:
     """Gets the HTTP status code for a given status name.
@@ -98,6 +112,96 @@ def http_status_code(status: StatusName) -> int:
         The corresponding HTTP status code.
     """
     return _STATUS_CODE_MAP[status]
+
+
+def http_code(code: object) -> int | None:
+    """A real HTTP status (100-599), or None if this was not a status at all.
+
+    ``-1``, ``0``, ``None``, and ``'nope'`` are missing values, not unmapped
+    4xx. Callers that wrap should leave those unclassified so retry can still
+    try again.
+    """
+    if isinstance(code, bool):
+        return None
+    resolved: int
+    if isinstance(code, int):
+        resolved = code
+    else:
+        try:
+            resolved = int(code)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+    if 100 <= resolved <= 599:
+        return resolved
+    return None
+
+
+def from_http_code(code: int) -> StatusName:
+    """Canonical status name for an HTTP status code.
+
+    Any 5xx with no explicit entry falls through to ``INTERNAL``; unmapped
+    4xx codes return ``UNKNOWN``. A 408 is ``DEADLINE_EXCEEDED`` so retry
+    can wait out a transient timeout. Plugins wrap provider HTTP errors
+    with this so retry can skip a 400 without also skipping a 503.
+    """
+    mapped = _HTTP_CODE_TO_STATUS.get(code)
+    if mapped is not None:
+        return mapped
+    if code >= 500:
+        return 'INTERNAL'
+    return 'UNKNOWN'
+
+
+def parse_retry_after_ms(value: str) -> float | None:
+    """Parse an HTTP Retry-After value into milliseconds.
+
+    Accepts delay-seconds (``60``, ``1.5``) and HTTP-date values. Retry uses
+    this as a floor so a provider that said wait 60s is not hit again in 1s.
+    """
+    value = value.strip()
+    if not value:
+        return None
+
+    try:
+        seconds = float(value)
+    except ValueError:
+        pass
+    else:
+        # Check the scaled value: a large finite input can overflow to inf.
+        retry_after_ms = seconds * 1000
+        if seconds >= 0 and math.isfinite(retry_after_ms):
+            return retry_after_ms
+
+    try:
+        retry_at_ms = parsedate_to_datetime(value).timestamp() * 1000
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    return max(0.0, retry_at_ms - time.time() * 1000)
+
+
+def retry_after_ms_from_error(error: Exception) -> float | None:
+    """Read Retry-After off a provider SDK error, if it carried one."""
+    headers = None
+    response = getattr(error, 'response', None)
+    if response is not None:
+        headers = getattr(response, 'headers', None)
+    if headers is None:
+        headers = getattr(error, 'headers', None)
+    if headers is None:
+        return None
+    try:
+        raw = headers.get('retry-after')
+    except (AttributeError, TypeError):
+        return None
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else None
+    if not isinstance(raw, str):
+        raw = str(raw) if raw is not None else None
+    if not raw:
+        return None
+    return parse_retry_after_ms(raw)
 
 
 class Status(BaseModel):
@@ -242,7 +346,7 @@ class GenkitError(Exception):
         return HttpErrorWireFormat(
             details=self.details,
             status=StatusCodes[self.status].name,
-            message=repr(self.cause) if self.cause else self.original_message,
+            message=self.original_message,
         )
 
     def to_serializable(self) -> ReflectionError:
@@ -256,6 +360,32 @@ class GenkitError(Exception):
             code=StatusCodes[self.status].value,
             message=f'{self.original_message}: {repr(self.cause)}' if self.cause else self.original_message,
         )
+
+
+def wrap_http_error(error: Exception, *, status_code: object, message: str | None = None) -> GenkitError:
+    """Classify a provider HTTP error so retry can skip a 400 without retrying a 503.
+
+    A missing or non-HTTP ``status_code`` is left unclassified — raise the
+    original error so retry still sees a raw failure. Also reads Retry-After
+    when the SDK left it on the error, so retry waits what the provider asked
+    instead of coming back in a second.
+    """
+    resolved = http_code(status_code)
+    # A 2xx/3xx on an exception is not a failure status. Leave it
+    # unclassified so retry still sees the raw error, instead of a
+    # GenkitError that claims OK.
+    if resolved is None or resolved < 400:
+        raise error
+    retry_after_ms = retry_after_ms_from_error(error)
+    response_metadata: ErrorResponseMetadata | None = None
+    if retry_after_ms is not None:
+        response_metadata = {'retry_after_ms': retry_after_ms}
+    return GenkitError(
+        status=from_http_code(resolved),
+        message=message if message is not None else str(error),
+        cause=error,
+        response_metadata=response_metadata,
+    )
 
 
 class PublicError(GenkitError):

@@ -33,6 +33,14 @@ func Data(p *ai.Part) (string, []byte, error) {
 	}
 
 	uri := p.Text
+	if uri == "" {
+		// Data parts carry their payload on Data, not Text. Read it through the
+		// shared accessor so a string payload (e.g. a "data:image/png;base64,..."
+		// URI) comes through as-is and a structured payload (map/slice) comes
+		// through as its JSON encoding, matching what the provider converters do.
+		uri = p.DataString()
+	}
+
 	if strings.HasPrefix(uri, "gs://") || strings.HasPrefix(uri, "http") {
 		if p.ContentType == "" {
 			return "", nil, errors.New("must supply contentType when using media from gs:// or http(s):// URLs")

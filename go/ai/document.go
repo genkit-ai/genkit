@@ -40,6 +40,7 @@ type Part struct {
 	Kind         PartKind       `json:"kind,omitempty"`
 	ContentType  string         `json:"contentType,omitempty"`  // valid for kind==blob
 	Text         string         `json:"text,omitempty"`         // valid for kind∈{text,blob}
+	Data         any            `json:"data,omitempty"`         // valid for kind==data
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty"`  // valid for kind==partToolRequest
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty"` // valid for kind==partToolResponse
 	Resource     *ResourcePart  `json:"resource,omitempty"`     // valid for kind==partResource
@@ -48,7 +49,12 @@ type Part struct {
 }
 
 // Clone returns a shallow copy of the Part with its own Metadata and Custom
-// maps. Callers can add or remove map keys without mutating the original.
+// maps. Callers can add or remove map keys without mutating the original. When
+// Data holds a map[string]any or []any (the common cases for data parts, e.g.
+// A2UI envelopes), the top-level container is cloned too so callers can mutate
+// its keys/elements without disturbing the original; nested values are still
+// shared by reference. Cloning both shapes (rather than only maps) keeps the
+// isolation guarantee independent of whether a payload is an object or an array.
 func (p *Part) Clone() *Part {
 	if p == nil {
 		return nil
@@ -56,6 +62,12 @@ func (p *Part) Clone() *Part {
 	cp := *p
 	cp.Custom = maps.Clone(p.Custom)
 	cp.Metadata = maps.Clone(p.Metadata)
+	switch d := p.Data.(type) {
+	case map[string]any:
+		cp.Data = maps.Clone(d)
+	case []any:
+		cp.Data = slices.Clone(d)
+	}
 	return &cp
 }
 
@@ -102,9 +114,11 @@ func NewMediaPart(mimeType, contents string) *Part {
 	return &Part{Kind: PartMedia, ContentType: mimeType, Text: contents}
 }
 
-// NewDataPart returns a Part containing raw string data.
-func NewDataPart(contents string) *Part {
-	return &Part{Kind: PartData, Text: contents}
+// NewDataPart returns a Part containing arbitrary structured data. The value is
+// serialized to the part's `data` field as-is, so it may be a string, a map, a
+// slice, or any other JSON-serializable value.
+func NewDataPart(data any) *Part {
+	return &Part{Kind: PartData, Data: data}
 }
 
 // NewToolRequestPart returns a Part containing a request from
@@ -172,6 +186,27 @@ func (p *Part) IsMedia() bool {
 // IsData reports whether the [Part] contains unstructured data.
 func (p *Part) IsData() bool {
 	return p != nil && p.Kind == PartData
+}
+
+// DataString returns a data part's payload as a string: the string as-is if
+// Data already holds one (e.g. a "data:" URI), otherwise its JSON encoding.
+// This is the single place provider converters and [github.com/firebase/genkit/go/plugins/internal/uri.Data]
+// should read a data part's payload from, so a structured Data value (a
+// map/slice, as [NewDataPart] and the A2UI middleware now produce) yields the
+// same answer everywhere instead of failing one converter and silently
+// dropping in another. Returns "" for a nil Part or nil Data.
+func (p *Part) DataString() string {
+	if p == nil || p.Data == nil {
+		return ""
+	}
+	if s, ok := p.Data.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(p.Data)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // IsToolRequest reports whether the [Part] contains a request to run a tool.
@@ -269,7 +304,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v)
 	case PartData:
 		v := dataPart{
-			Data:     p.Text,
+			Data:     p.Data,
 			Metadata: p.Metadata,
 		}
 		return json.Marshal(v)
@@ -311,7 +346,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 type partSchema struct {
 	Text         string         `json:"text,omitempty" yaml:"text,omitempty"`
 	Media        *Media         `json:"media,omitempty" yaml:"media,omitempty"`
-	Data         string         `json:"data,omitempty" yaml:"data,omitempty"`
+	Data         any            `json:"data,omitempty" yaml:"data,omitempty"`
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty" yaml:"toolRequest,omitempty"`
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty" yaml:"toolResponse,omitempty"`
 	Resource     *ResourcePart  `json:"resource,omitempty" yaml:"resource,omitempty"`
@@ -346,15 +381,14 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 		p.Kind = PartReasoning
 		p.Text = *s.Reasoning
 		p.ContentType = "plain/text"
+	case s.Data != nil:
+		p.Kind = PartData
+		p.Data = s.Data
 	default:
+		// Note: if part is completely empty, we use text by default.
 		p.Kind = PartText
 		p.Text = s.Text
 		p.ContentType = ""
-		if s.Data != "" {
-			// Note: if part is completely empty, we use text by default.
-			p.Kind = PartData
-			p.Text = s.Data
-		}
 	}
 	p.Metadata = s.Metadata
 }

@@ -116,6 +116,16 @@ test_cases_extract_json = [
         {'expected': [1, 2, 3]},
     ),
     (
+        'extracts a JSON number',
+        {'text': '42'},
+        {'expected': 42},
+    ),
+    (
+        'extracts JSON null',
+        {'text': 'null'},
+        {'expected': None},
+    ),
+    (
         'handles nested structures',
         {'text': 'text{"a":{"b":[1,2]}}more'},
         {'expected': {'a': {'b': [1, 2]}}},

@@ -296,7 +296,7 @@ class GenerateTelemetry:
     ) -> None:
         """Record metrics for a generate action.
 
-        Records all generate metrics matching JS/Go parity:
+        Records generate request, latency, and token/media usage metrics:
         - requests, latency
         - input: tokens, characters, images, videos, audio
         - output: tokens, characters, images, videos, audio
@@ -305,7 +305,7 @@ class GenerateTelemetry:
         usage = response.get('usage', {}) if response else {}
         latency_ms = response.get('latencyMs') if response else None
 
-        # Note: modelName uses 1024 char limit (matching JS/Go), other dimensions use 256
+        # modelName is capped at 1024 chars so long model ids stay intact; other dimensions use 256
         shared = {
             'modelName': model_name[:1024],
             'featureName': feature_name[:256],

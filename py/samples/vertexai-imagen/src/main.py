@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,54 +14,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vertex AI Imagen - generate an image from a prompt."""
-
-import os
+"""Vertex image generation through the same generate(). Uses ADC, not a Gemini key."""
 
 from genkit_google_genai import VertexAI
 
-from genkit import Genkit, ModelResponse
-
-if 'GCLOUD_PROJECT' not in os.environ:
-    if 'GOOGLE_CLOUD_PROJECT' in os.environ:
-        os.environ['GCLOUD_PROJECT'] = os.environ['GOOGLE_CLOUD_PROJECT']
-    else:
-        os.environ['GCLOUD_PROJECT'] = input('Please enter your GCLOUD_PROJECT_ID: ')
+from genkit import Genkit
 
 ai = Genkit(plugins=[VertexAI()])
 
 
-@ai.flow()
-async def draw_image_with_imagen() -> ModelResponse:
-    """Draw an image using Imagen model.
-
-    Returns:
-        The image.
-    """
-    config = {
-        'number_of_images': 1,
-        'language': 'en',
-        'seed': 20,
-        'add_watermark': False,
-    }
-
-    # pyrefly: ignore[no-matching-overload] - config dict is compatible with dict[str, object]
-    return await ai.generate(
-        prompt='Draw a cat in a hat',
-        model='vertexai/imagen-3.0-generate-002',
-        # optional config; check README for available fields
-        config=config,
-    )
-
-
 async def main() -> None:
-    """Run the Imagen sample once."""
-    try:
-        response = await draw_image_with_imagen()
-        print(response.model_dump_json(indent=2))  # noqa: T201
-    except Exception as error:
-        message = 'Set GOOGLE_CLOUD_PROJECT and Application Default Credentials before running this sample directly.'
-        print(f'{message}\n{error}')  # noqa: T201
+    response = await ai.generate(
+        prompt='Draw a cat in a hat',
+        model=VertexAI.gemini_image_model('gemini-2.5-flash-image'),
+    )
+    print(response.media[0].url if response.media else response.text)
 
 
 if __name__ == '__main__':

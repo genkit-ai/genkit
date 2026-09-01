@@ -27,9 +27,12 @@ from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
+from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+
+logger = get_logger(__name__)
 
 
 class Tool:
@@ -273,7 +276,7 @@ async def run_tool_request(
 def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
     """Build the FAILED_PRECONDITION error for an Interrupt raised during tool restart.
 
-    Nested interrupts during restart are not supported yet. Include the underlying
+    A tool cannot raise another interrupt while it is being restarted. Include the underlying
     interrupt reason (e.g. ToolApproval's ``Tool not in approved list: ...``) so the
     error points at missing approval metadata instead of sounding like a missing SDK feature.
     """
@@ -289,7 +292,7 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
     if isinstance(reason, str) and reason.strip():
         message = f'Tool interrupted again during restart: {reason}'
     else:
-        message = 'Tool interrupted again during a restart execution; not supported yet.'
+        message = 'Tool interrupted again during restart.'
     return GenkitError(status='FAILED_PRECONDITION', message=message, cause=interrupt)
 
 
@@ -302,7 +305,7 @@ async def run_tool_after_restart(
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
-    a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
+    a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     try:
         tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
@@ -313,6 +316,10 @@ async def run_tool_after_restart(
             else (e if isinstance(e, Interrupt) else None)
         )
         if intr is not None:
+            logger.debug(
+                'restarted tool triggered an interrupt',
+                tool=restart_trp.tool_request.name,
+            )
             raise restart_interrupt_error(intr) from e
         raise
 
@@ -436,13 +443,11 @@ def tool(
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
-    """Dynamically define a tool that can passed into a `generate` call.
+    """Define an ephemeral tool for a single ``generate`` call.
 
-    Compared to `define_tool`, the `tool` constructor doesn't register the tool.
-    The Tool instance cannot be referenced by name later.
-
-    Use when there are dynamic or ephemeral tools that need to be available
-    for a particular `generate` call.
+    Unlike ``@ai.tool()``, this does not register the tool on the app, so it
+    cannot be referenced by name later. Use for dynamic tools that exist only
+    for one call.
 
     Args:
         func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
@@ -453,6 +458,15 @@ def tool(
     Raises:
         TypeError: If ``func`` is not a coroutine function.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
+
+    Example:
+        from genkit import tool
+
+        async def lookup_price(sku: str) -> str:
+            return '12.00'
+
+        ephemeral = tool(lookup_price, name='lookup_price')
+        res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
     """
     return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 

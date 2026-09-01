@@ -19,11 +19,11 @@
 import asyncio
 import contextlib
 import copy
-import re
 import secrets
+import time
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 from typing_extensions import Never
@@ -47,6 +47,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
 )
+from genkit._core._background import _ensure_operation, missing_operation_error, stamp_operation_action
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -67,11 +68,13 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
+from genkit._core._schema import check_output_schema
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -85,6 +88,134 @@ from genkit._core._typing import (
 DEFAULT_MAX_TURNS = 5
 
 logger = get_logger(__name__)
+
+HookParamsT = TypeVar('HookParamsT')
+HookResultT = TypeVar('HookResultT')
+
+# A termination known to be abnormal carries no conforming output, so a schema
+# error here would mask the finish reason the caller needs to handle it.
+# OTHER is the providers' catch-all for unmapped stop reasons (a normal
+# pause or compaction), not a signal that parsing should be skipped.
+ABNORMAL_FINISH_REASONS = frozenset({
+    FinishReason.BLOCKED,
+    FinishReason.ABORTED,
+    FinishReason.INTERRUPTED,
+})
+
+# These parsers extract JSON. The extracted value still has to match the
+# schema. Other format parsers (enum, text, custom) return the output as-is.
+JSON_EXTRACT_FORMATS = frozenset({'json', 'array', 'jsonl'})
+
+
+def log_output_parse(
+    *,
+    model: str | None,
+    finish_reason: FinishReason | None,
+    finish_message: str | None,
+    formatter: Formatter[Any, Any] | None,
+    message: Message | None,
+) -> None:
+    """Warn on an abnormal finish; debug when the formatter cannot parse."""
+    if formatter is None:
+        return
+    if finish_reason in ABNORMAL_FINISH_REASONS:
+        logger.warning(
+            'model finished abnormally, skipping output parsing',
+            model=model,
+            finishReason=finish_reason,
+            finishMessage=finish_message,
+        )
+        return
+    if message is None or not is_debug_enabled(logger):
+        return
+    try:
+        formatter.parse_message(message)
+    except Exception as e:
+        logger.debug(
+            'model output does not match the expected schema',
+            model=model,
+            error=e,
+        )
+
+
+def middleware_name(mw: MiddlewareDef) -> str:
+    """Class name is what shows up on hook log records."""
+    return type(mw).__name__
+
+
+def hook_finished(
+    *,
+    name: str,
+    hook: str,
+    start: float,
+    next_called: bool,
+    error: str | None,
+    extra: dict[str, object],
+) -> dict[str, object]:
+    """Attributes for the ``middleware hook finished`` record."""
+    ms = max(0, round((time.monotonic() - start) * 1000))
+    out: dict[str, object] = {
+        'middleware': name,
+        'hook': hook,
+        'duration': f'{ms}ms',
+        **extra,
+    }
+    if not next_called:
+        out['short_circuited'] = True
+    if error is not None:
+        out['error'] = error
+    return out
+
+
+async def run_logged_hook(
+    *,
+    mw: MiddlewareDef,
+    hook: str,
+    params: HookParamsT,
+    ctx: GenerateMiddlewareContext,
+    wrap: Callable[
+        [
+            HookParamsT,
+            GenerateMiddlewareContext,
+            Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+        ],
+        Awaitable[HookResultT],
+    ],
+    inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+    extra: dict[str, object] | None = None,
+) -> HookResultT:
+    """Run one middleware hook, with started/finished records when debug is on."""
+    if not is_debug_enabled(logger):
+        return await wrap(params, ctx, inner)
+    attrs = extra or {}
+    name = middleware_name(mw)
+    logger.debug('middleware hook started', middleware=name, hook=hook, **attrs)
+    start = time.monotonic()
+    next_called = False
+
+    async def tracked(tp: HookParamsT, tc: GenerateMiddlewareContext) -> HookResultT:
+        nonlocal next_called
+        next_called = True
+        return await inner(tp, tc)
+
+    err: str | None = None
+    try:
+        return await wrap(params, ctx, tracked)
+    except BaseException as e:
+        err = str(e) or type(e).__name__
+        raise
+    finally:
+        logger.debug(
+            'middleware hook finished',
+            **hook_finished(
+                name=name,
+                hook=hook,
+                start=start,
+                next_called=next_called,
+                error=err,
+                extra=attrs,
+            ),
+        )
 
 
 class ScopedGenkitView:
@@ -222,7 +353,15 @@ async def dispatch_tool(
             _m: MiddlewareDef = _mw,
             _i: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]] = _inner,
         ) -> MultipartToolResponse:
-            return await _m.wrap_tool(p, c, _i)
+            return await run_logged_hook(
+                mw=_m,
+                hook='tool',
+                params=p,
+                ctx=c,
+                wrap=_m.wrap_tool,
+                inner=_i,
+                extra={'tool': p.tool.name},
+            )
 
         runner = run_next
     return await runner(params, ctx)
@@ -389,63 +528,6 @@ def _augment_with_context(
     return new_req
 
 
-# Matches data URIs: everything up to the first comma is the media-type +
-# parameters (e.g. "data:audio/L16;codec=pcm;rate=24000;base64,").
-_DATA_URI_RE = re.compile(r'data:[^,]{0,200},(?=.{100})', re.ASCII)
-
-# Longest string kept intact when serializing a response for debug logs.
-_MAX_LOGGED_STR_LEN = 8192
-
-# Tighter limit inside subtrees carrying the provider's own payload.
-_PROVIDER_STR_LEN = 1024
-_PROVIDER_FIELDS = frozenset({'custom', 'raw'})
-
-# Most list items kept when serializing a response for debug logs.
-_MAX_LOGGED_LIST_LEN = 100
-
-
-def _redact_large_values(obj: Any, limit: int = _MAX_LOGGED_STR_LEN) -> Any:  # noqa: ANN401
-    """Recursively shrink oversized values in a serialized dict/list.
-
-    Data URIs keep their media type and drop the payload
-    (``data:image/png;base64,...<12345 chars>``); other over-long strings keep
-    their leading characters; binary values collapse to their size; over-long
-    lists keep their leading items. ``custom`` and ``raw`` subtrees use
-    ``_PROVIDER_STR_LEN`` so a provider blob costs less than model output.
-
-    Args:
-        obj: Value from a ``model_dump()``, walked recursively.
-        limit: Longest string kept intact within this subtree.
-
-    Returns:
-        The value with oversized leaves replaced by a truncated form that
-        reports how much was dropped.
-    """
-    if isinstance(obj, str):
-        m = _DATA_URI_RE.match(obj)
-        if m:
-            return f'{m.group()}...<{len(obj) - m.end()} chars>'
-        if len(obj) > limit:
-            return f'{obj[:limit]}...<{len(obj) - limit} chars>'
-        return obj
-    if isinstance(obj, (bytes, bytearray, memoryview)):
-        return f'<{len(obj)} bytes>'
-    if isinstance(obj, dict):
-        return {
-            k: _redact_large_values(v, _PROVIDER_STR_LEN if k in _PROVIDER_FIELDS else limit) for k, v in obj.items()
-        }
-    if isinstance(obj, list):
-        head = [_redact_large_values(v, limit) for v in obj[:_MAX_LOGGED_LIST_LEN]]
-        dropped = len(obj) - len(head)
-        return [*head, f'...<{dropped} more items>'] if dropped else head
-    return obj
-
-
-def _loggable_response(response: ModelResponse) -> dict[str, Any]:
-    """Serialize a response for debug logging with oversized values shrunk."""
-    return _redact_large_values(response.model_dump())
-
-
 def raise_if_aborted(abort_signal: asyncio.Event) -> None:
     if abort_signal.is_set():
         raise GenkitError(status='ABORTED', message='Generation aborted.')
@@ -522,6 +604,11 @@ async def generate_with_request(
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
+    if not raw_request.messages:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='at least one message is required in generate request',
+        )
     registry = registry if registry.is_child else registry.new_child()
 
     if raw_request.tools:
@@ -556,6 +643,20 @@ async def generate_with_request(
             raw_request.tools = existing
     else:
         mw_pipeline = _GenerateMiddlewarePipeline(middleware=[], ctx=run_ctx)
+
+    if is_debug_enabled(logger):
+        resolved: dict[str, object] = {
+            'model': raw_request.model,
+            'messages': len(raw_request.messages),
+            'tools': len(raw_request.tools or []),
+            'max_turns': raw_request.max_turns,
+            'streaming': on_chunk is not None,
+        }
+        resolved['format'] = raw_request.output.format if raw_request.output else None
+        resolved['constrained'] = raw_request.output.constrained if raw_request.output else None
+        if middleware:
+            resolved['middleware'] = [middleware_name(m) for m in middleware]
+        logger.debug('generate request resolved', **resolved)
 
     return await _generate_action_turn(
         registry=registry,
@@ -643,6 +744,53 @@ class ChunkAccumulator:
             ctx.replace_on_chunk(previous)
 
 
+def box_background_start(
+    *,
+    raw: object,
+    request: ModelRequest,
+    name: str,
+    latency_ms: float | None = None,
+) -> ModelResponse:
+    """Turn a start() Operation into the ModelResponse wrap_model reads.
+
+    Timing comes from Action.run, not from the ticket.
+    """
+    op = _ensure_operation(response=raw, name=name)
+    stamp_operation_action(operation=op, name=name)
+    return ModelResponse(operation=op, request=request, latency_ms=latency_ms)
+
+
+def require_model_response(*, raw: object, name: str) -> ModelResponse:
+    """A chat model returns a ModelResponse, not a dict or a job handle."""
+    if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Model '{name}' is a regular model that returns a response immediately. "
+                'Use define_background_model for background models that return operations.'
+            ),
+        )
+    if not isinstance(raw, ModelResponse):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=f"Model '{name}' did not return a ModelResponse.",
+        )
+    return raw
+
+
+@dataclass
+class BoxedStart:
+    """The ModelResponse start() produced, before wrap_model / wrap_generate."""
+
+    response: ModelResponse | None = None
+
+
+def assert_hook_kept_operation(*, boxed: ModelResponse | None, after_hooks: ModelResponse, name: str) -> None:
+    """A hook that called start() and then dropped the ticket orphans the job."""
+    if boxed is not None and boxed.operation is not None and after_hooks.operation is None:
+        raise missing_operation_error(name=name)
+
+
 def _persist_threaded_conversation(response: ModelResponse, messages: list[Message]) -> ModelResponse:
     """Persist the threaded conversation onto the response's request.
 
@@ -669,6 +817,16 @@ async def _generate_action_turn(
     raise_if_aborted(run_ctx.abort_signal)
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
+    boxed_start = BoxedStart()
+
+    if model.kind == ActionKind.BACKGROUND_MODEL and raw_request.resume is not None:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Cannot resume background model '{model.name}'; "
+                'a background start cannot satisfy an interrupted tool turn'
+            ),
+        )
 
     raw_request, formatter = apply_format(raw_request, format_def)
 
@@ -721,7 +879,15 @@ async def _generate_action_turn(
                 _m: MiddlewareDef = _mw,
                 _i: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
-                return await _m.wrap_generate(p, c, _i)
+                return await run_logged_hook(
+                    mw=_m,
+                    hook='generate',
+                    params=p,
+                    ctx=c,
+                    wrap=_m.wrap_generate,
+                    inner=_i,
+                    extra={'iteration': p.iteration},
+                )
 
             runner = run_next
         return await runner(params, ctx)
@@ -743,7 +909,14 @@ async def _generate_action_turn(
                 _mw: MiddlewareDef = _mw,
                 _inner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
-                return await _mw.wrap_model(params, c, _inner)
+                return await run_logged_hook(
+                    mw=_mw,
+                    hook='model',
+                    params=params,
+                    ctx=c,
+                    wrap=_mw.wrap_model,
+                    inner=_inner,
+                )
 
             runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
         return await runner(params, ctx)
@@ -777,14 +950,29 @@ async def _generate_action_turn(
             request = _augment_with_context(request)
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
-            return (
-                await model.run(
-                    input=params.request,
-                    context=c.custom_context,
-                    on_chunk=c.on_chunk,
-                    abort_signal=c.abort_signal,
+            if is_debug_enabled(logger):
+                logger.debug(
+                    'calling model',
+                    model=turn_options.model,
+                    turn=current_turn,
+                    messages=len(params.request.messages),
                 )
-            ).response
+            result = await model.run(
+                input=params.request,
+                context=c.custom_context,
+                on_chunk=c.on_chunk,
+                abort_signal=c.abort_signal,
+            )
+            raw = result.response
+            if model.kind == ActionKind.BACKGROUND_MODEL:
+                boxed_start.response = box_background_start(
+                    raw=raw,
+                    request=params.request,
+                    name=model.name,
+                    latency_ms=result.latency_ms,
+                )
+                return boxed_start.response
+            return require_model_response(raw=raw, name=model.name)
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
@@ -792,6 +980,11 @@ async def _generate_action_turn(
                 ctx,
                 next_fn,
             )
+        assert_hook_kept_operation(
+            boxed=boxed_start.response,
+            after_hooks=model_response,
+            name=model.name,
+        )
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
@@ -810,13 +1003,41 @@ async def _generate_action_turn(
         if schema_type:
             response._schema_type = schema_type
 
-        if is_debug_enabled(logger):
-            logger.debug('generate response', response=_loggable_response(response))
+        generated_msg = response.message
+        tool_requests = [x for x in generated_msg.content if x.root.tool_request] if generated_msg is not None else []
+
+        def log_responded(resp: ModelResponse | None = None) -> None:
+            # After schema/loop stamps so the breadcrumb matches the
+            # finish_reason the caller actually got.
+            if not is_debug_enabled(logger):
+                return
+            stamped = resp if resp is not None else response
+            responded: dict[str, object] = {
+                'model': turn_options.model,
+                'turn': current_turn,
+                'finish_reason': stamped.finish_reason,
+                'tool_requests': len(tool_requests),
+            }
+            if stamped.usage is not None:
+                responded['input_tokens'] = stamped.usage.input_tokens
+                responded['output_tokens'] = stamped.usage.output_tokens
+            logger.debug('model responded', **responded)
+
+        log_output_parse(
+            model=turn_options.model,
+            finish_reason=response.finish_reason,
+            finish_message=response.finish_message,
+            formatter=formatter,
+            message=generated_msg,
+        )
 
         response.assert_valid()
-        generated_msg = response.message
 
-        if generated_msg is None:
+        # A ticket means generate is done. Don't run tools against a start handle.
+        if generated_msg is None or response.operation is not None:
+            if generated_msg is None:
+                response.assert_valid_schema()
+                log_responded()
             return _persist_threaded_conversation(response, turn_options.messages)
 
         # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
@@ -835,24 +1056,38 @@ async def _generate_action_turn(
             existing_meta['generate'] = generate_meta
             generated_msg.metadata = existing_meta
 
-        tool_requests = [x for x in generated_msg.content if x.root.tool_request]
-
         if turn_options.return_tool_requests or len(tool_requests) == 0:
             if len(tool_requests) == 0:
                 response.assert_valid_schema()
+            log_responded()
             return _persist_threaded_conversation(response, turn_options.messages)
 
         max_iters = turn_options.max_turns if turn_options.max_turns is not None else DEFAULT_MAX_TURNS
 
         if current_turn + 1 > max_iters:
-            raise GenerationResponseError(
-                response=response,
-                message=f'Exceeded maximum tool call iterations ({max_iters})',
-                status='ABORTED',
-                details={'request': request},
-            )
+            response.finish_reason = FinishReason.ABORTED
+            response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
+            log_responded()
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         raise_if_aborted(ctx.abort_signal)
+
+        known_tools = {t.name for t in turn_tools}
+        if turn_options.tools:
+            known_tools.update(turn_options.tools)
+        missing_tool = next(
+            (
+                p.root.tool_request.name
+                for p in tool_requests
+                if isinstance(p.root, ToolRequestPart) and p.root.tool_request.name not in known_tools
+            ),
+            None,
+        )
+        if missing_tool is not None:
+            response.finish_reason = FinishReason.FAILED
+            response.finish_message = f'Tool {missing_tool} not found'
+            log_responded()
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         revised_model_msg, tool_msg = await resolve_tool_requests(
             registry=registry,
@@ -865,12 +1100,19 @@ async def _generate_action_turn(
         # if an interrupt message is returned, stop the tool loop and return a
         # response.
         if revised_model_msg:
+            logger.debug(
+                'generation paused by tool interrupts',
+                model=turn_options.model,
+                turn=current_turn,
+            )
             interrupted_resp = response.model_copy(deep=False)
             interrupted_resp.finish_reason = FinishReason.INTERRUPTED
             interrupted_resp.finish_message = 'One or more tool calls resulted in interrupts.'
             interrupted_resp.message = Message(revised_model_msg)
+            log_responded(interrupted_resp)
             return _persist_threaded_conversation(interrupted_resp, turn_options.messages)
 
+        log_responded()
         # If the loop will continue, stream out the tool response message...
         if tool_msg:
             chunks.stream_chunk(
@@ -902,7 +1144,37 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    assert_hook_kept_operation(
+        boxed=boxed_start.response,
+        after_hooks=response,
+        name=model.name,
+    )
+    # The caller's output_schema is what this turn asked for. A wrap_generate
+    # that hung its own request on the response is still judged against that,
+    # not whatever leftover output config it copied.
+    out = raw_request.output
+    output = OutputConfig(
+        format=out.format if out else None,
+        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
+        json_schema=out.json_schema if out else None,
+        constrained=out.constrained if out else None,
+        content_type=out.content_type if out else None,
+    )
+    if response.request is None:
+        response.request = ModelRequest(
+            messages=list(raw_request.messages or []),
+            output=output,
+        )
+    else:
+        response.request = response.request.model_copy(update={'output': output})
+    if formatter and response._message_parser is None:
+        response._message_parser = lambda msg: formatter.parse_message(msg)
+    if out and out.schema_type:
+        response._schema_type = out.schema_type
+    response.assert_valid()
+    response.assert_valid_schema()
+    return response
 
 
 def apply_format(
@@ -1137,8 +1409,18 @@ async def resolve_parameters(
     if request.output and request.output.format:
         looked_up_format = registry.lookup_value('format', request.output.format)
         if looked_up_format is None:
-            raise ValueError(f'Unable to resolve format {request.output.format}')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Unable to resolve format {request.output.format}',
+            )
         format_def = cast(FormatDef, looked_up_format)
+
+    if request.output and request.output.json_schema is not None:
+        json_schema = request.output.json_schema
+        if hasattr(json_schema, 'model_dump'):
+            json_schema = json_schema.model_dump()
+        if isinstance(json_schema, dict):
+            check_output_schema(json_schema)
 
     return (model_action, tools, format_def)
 
@@ -1227,12 +1509,21 @@ async def resolve_tool_requests(
         tool_request = tool_req_root.tool_request
 
         if tool_request.name not in tool_dict:
-            raise RuntimeError(f'failed {tool_request.name} not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'Tool {tool_request.name} not found',
+            )
         tool = tool_dict[tool_request.name]
         work.append((i, tool, tool_req_root))
 
     if not work:
         return (None, Message(role=Role.TOOL, content=[]))
+
+    if is_debug_enabled(logger):
+        logger.debug(
+            'executing tool requests',
+            tools=[trp.tool_request.name for _, _, trp in work],
+        )
 
     async def _resolve_one_tool(
         tool: Action, trp: ToolRequestPart
@@ -1270,6 +1561,7 @@ async def resolve_tool_requests(
             intr = _interrupt_from_tool_exc(e)
             if intr is None:
                 raise
+            logger.debug('tool triggered an interrupt', tool=trp.tool_request.name)
             return (None, _interrupt_request_part(trp, intr))
 
     outs = await asyncio.gather(*[_resolve_one_tool(tool, trp) for _, tool, trp in work])
@@ -1602,6 +1894,13 @@ async def _run_restart_through_middleware(
     except Exception as e:
         intr = _interrupt_from_tool_exc(e)
         if intr is not None:
+            # run_tool_after_restart already logged when the tool body interrupted.
+            # wrap_tool can raise Interrupt itself; that's the only leftover case.
+            if not isinstance(e, GenkitError):
+                logger.debug(
+                    'restarted tool triggered an interrupt',
+                    tool=restart_trp.tool_request.name,
+                )
             # Re-interrupting during restart is a hard error — same as the legacy
             # run_tool_after_restart path, which raises FAILED_PRECONDITION when
             # the inner tool throws an Interrupt during restart. Surface the
@@ -1642,23 +1941,3 @@ def _find_corresponding_tool_response(
         if p.tool_response.name == request.tool_request.name and p.tool_response.ref == request.tool_request.ref:
             return p
     return None
-
-
-# TODO(#4336): extend GenkitError
-class GenerationResponseError(Exception):
-    # TODO(#4337): use status enum
-    """Error raised when a generation request fails."""
-
-    def __init__(
-        self,
-        response: ModelResponse,
-        message: str,
-        status: str,
-        details: dict[str, Any],
-    ) -> None:
-        """Initialize with the failed response and error details."""
-        super().__init__(message)
-        self.response: ModelResponse = response
-        self.message: str = message
-        self.status: str = status
-        self.details: dict[str, Any] = details

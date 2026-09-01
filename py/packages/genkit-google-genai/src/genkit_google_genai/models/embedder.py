@@ -209,7 +209,7 @@ class Embedder:
         ``multimodalembedding@001`` accepts only one instance per ``:predict``
         call, so multi-document requests (e.g. ``embed_many``) are rejected
         rather than sent as an invalid multi-instance payload. Batching multiple
-        documents is not supported yet.
+        documents is rejected; send one document per request.
 
         Args:
             request: Genkit embed request.
@@ -308,9 +308,9 @@ class Embedder:
     def _media_reference(url: str, content_type: str, include_mime_type: bool = True) -> dict[str, Any]:
         """Map a media URL to a Vertex image/video reference (gcsUri or base64).
 
-        Unlike the JS plugin, http(s) URLs raise instead of being forwarded as a
-        ``gcsUri``: Vertex only accepts ``gs://`` URIs there, so passing an
-        http(s) URL produces an opaque API error. Failing fast is clearer.
+        http(s) URLs raise instead of being forwarded as a ``gcsUri``: Vertex
+        only accepts ``gs://`` URIs there, so passing an http(s) URL produces an
+        opaque API error. Failing fast is clearer.
         """
         if url.startswith('gs://'):
             ref: dict[str, Any] = {'gcsUri': url}

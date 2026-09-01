@@ -32,8 +32,10 @@ from genkit_google_genai.models.veo import (
     is_veo_model,
 )
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit.model import Operation
 
 
 def _text_request(*, config: object | None = None) -> ModelRequest:
@@ -271,3 +273,15 @@ class TestFromVeoOperation:
         })
         assert op.done is True
         assert op.output is None
+
+
+@pytest.mark.asyncio
+async def test_check_classifies_503_as_unavailable() -> None:
+    """A 503 on the poll must stay retryable, not collapse to INTERNAL."""
+    client = MagicMock()
+    client.aio.operations.get = AsyncMock(side_effect=APIError(503, {'error': {'message': 'overloaded'}}))
+    model = VeoModel('veo-3.0-generate-001', client)
+
+    with pytest.raises(GenkitError) as raised:
+        await model.check(Operation(id='operations/abc'))
+    assert raised.value.status == 'UNAVAILABLE'

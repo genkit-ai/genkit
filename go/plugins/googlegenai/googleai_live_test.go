@@ -678,6 +678,9 @@ func TestCacheHelper(t *testing.T) {
 			t.Fatalf("expecting to be bar but got: %q", bar)
 		}
 
+		// A name and a ttl say different things: which cache an earlier turn
+		// built, and how long to keep the one this turn builds. Setting one
+		// leaves the other in place.
 		m.WithCacheName("dummy-name")
 		metadata = m.Metadata
 		cache, ok = metadata["cache"].(map[string]any)
@@ -685,12 +688,12 @@ func TestCacheHelper(t *testing.T) {
 			t.Fatalf("cache should be a map, got: %T", cache)
 		}
 		ttl, ok := cache["ttlSeconds"].(int)
-		if ok {
-			t.Fatalf("cache should have been overwriten, expecting cache name, not ttl: %d", ttl)
+		if !ok || ttl != 50 {
+			t.Fatalf("ttlSeconds should have survived setting the cache name, got: %v", cache["ttlSeconds"])
 		}
 		name, ok := cache["name"].(string)
 		if !ok {
-			t.Fatalf("cache should have been overwriten, expecting cache name, got: %v", name)
+			t.Fatalf("expecting a cache name, got: %v", cache["name"])
 		}
 		if name != "dummy-name" {
 			t.Fatalf("cache name mismatch, want dummy-name, got: %s", name)

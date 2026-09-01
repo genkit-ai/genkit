@@ -10,15 +10,25 @@ import warnings
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
+from genkit import (
+    FinishReason,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    ModelUsage,
+    Role,
+)
 from genkit._ai._model import text_from_content
-from genkit._core._schema import to_json_schema
+from genkit._core._model import OutputConfig
+from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
     DocumentPart,
     Media,
     MediaPart,
     Part,
+    ReasoningPart,
     TextPart,
     ToolRequest,
     ToolRequestPart,
@@ -388,6 +398,165 @@ def test_text_from_content_with_none_text() -> None:
         Part(root=TextPart(text=' world')),
     ]
     assert text_from_content(content) == 'hello world'
+
+
+def test_text_from_content_skips_thoughts() -> None:
+    """Thoughts are scratch work — they do not show up on ``.text``."""
+    content = [
+        Part(root=ReasoningPart(reasoning='let me think', text='secret thought')),
+        Part(root=TextPart(text='hello')),
+    ]
+    assert text_from_content(content) == 'hello'
+
+
+def test_assert_valid_schema_marks_failed_when_output_does_not_conform() -> None:
+    """Structured output that is the wrong shape stays on the response as error."""
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"name": "John", "age": "30"}'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(
+        messages=[],
+        output=OutputConfig(json_schema=Person.model_json_schema()),
+    )
+    response._schema_type = Person
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.output is None
+    assert response.text == '{"name": "John", "age": "30"}'
+
+
+def test_assert_valid_schema_passes_when_output_conforms() -> None:
+    """Structured output that matches the schema is a usable reply."""
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    response = ModelResponse[Person](
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"name": "John", "age": 30}'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(
+        messages=[],
+        output=OutputConfig(json_schema=Person.model_json_schema()),
+    )
+    response._schema_type = Person
+
+    response.assert_valid_schema()
+    assert response.output is not None
+    assert response.output.name == 'John'
+    assert response.output.age == 30
+
+
+def test_assert_valid_schema_names_non_json_output() -> None:
+    """A leftover echo string is a schema miss, not a json5 column error."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='[ECHO] hi'))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.output is None
+    assert 'not valid JSON' in (response.finish_message or '')
+
+
+def test_assert_valid_schema_keeps_blocked_finish() -> None:
+    """A safety refusal keeps finish_reason=blocked; leftover is on .text."""
+    response = ModelResponse(
+        finish_reason=FinishReason.BLOCKED,
+        finish_message='Content was blocked',
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.text == 'nope'
+    assert response.output is None
+
+
+def test_assert_valid_schema_marks_failed_on_truncated_json() -> None:
+    """Hit the token cap — non-conforming json becomes FAILED."""
+    response = ModelResponse(
+        finish_reason=FinishReason.LENGTH,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='The recipe starts with'))]),
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == 'The recipe starts with'
+    assert response.output is None
+
+
+def test_length_finish_still_parses_complete_json() -> None:
+    """A full Recipe that also hit the token cap is still a Recipe."""
+
+    class Recipe(BaseModel):
+        title: str
+
+    response = ModelResponse[Recipe](
+        finish_reason=FinishReason.LENGTH,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema=Recipe.model_json_schema()))
+    response._schema_type = Recipe
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.output is not None
+    assert response.output.title == 'Soup'
+
+
+def test_assert_valid_schema_marks_failed_when_output_is_empty() -> None:
+    """An empty reply is a miss when a schema was requested."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=''))]),
+        finish_reason=FinishReason.STOP,
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.output is None
+
+
+def test_assert_valid_schema_keeps_other_finish() -> None:
+    """No-image / unspecified image stop is other, not a schema miss."""
+    response = ModelResponse(
+        finish_reason=FinishReason.OTHER,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+    )
+    response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
+
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.OTHER
+    assert response.output is None
+
+
+def test_assert_valid_schema_broken_schema_still_throws() -> None:
+    """A caller-broken schema is not stamped as a model miss."""
+    response = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+    )
+    response.request = ModelRequest(
+        messages=[],
+        output=OutputConfig(json_schema={'type': 'not-a-json-type'}),
+    )
+
+    with pytest.raises(InvalidOutputSchemaError):
+        response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.STOP
 
 
 def test_bare_model_request_accepts_plugin_config_instance() -> None:

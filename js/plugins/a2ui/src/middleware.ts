@@ -331,27 +331,72 @@ function transformResponse(
     surfaceId: () => string;
   }
 ): GenerateResponseData {
-  const message = response.message;
+  // Real models (e.g. google-genai) return the candidates shape, not a
+  // top-level `message`; only the GenerateResponse constructor later collapses
+  // `message ?? candidates[0].message`. Read from whichever the model used so
+  // the transform runs on the real path, not just when a caller hands us a
+  // pre-collapsed `message`.
+  const message = response.message ?? response.candidates?.[0]?.message;
   if (!message?.content) return response;
 
   const parser = new A2uiStreamParser(opts);
+
   const newContent: Part[] = [];
+
+  // Drains whatever the parser is still holding (a withheld prose tail, or an
+  // unterminated trailing block) and appends it. Called at every non-text
+  // boundary and once at the end.
+  const flushHeld = () => {
+    const tail = parser.flush();
+    newContent.push(...partsFromParse(tail));
+  };
+
   for (const part of message.content) {
-    if (isTextPart(part)) {
-      // Combine the streamed-push and final-flush segments so ordering (prose
-      // before/after a block) is preserved in the aggregated message too.
-      const pushed = parser.push(part.text);
-      const flushed = parser.flush();
-      const segments = [...pushed.segments, ...flushed.segments];
-      newContent.push(...partsFromParse({ segments } as ParseResult));
+    if (isTextPart(part) && part.text !== '') {
+      // Push WITHOUT flushing between consecutive text parts so an a2ui block
+      // that spans several adjacent text parts is stitched back together. The
+      // model's final message is not guaranteed to coalesce adjacent text: the
+      // Gemini plugin, for instance, aggregates a turn into many separate text
+      // parts (fence, JSON body split many ways, close fence, then a trailing
+      // empty-text part carrying the thought signature), so a per-part flush
+      // would reset the parser mid-block and leak the whole surface back out as
+      // raw prose. This mirrors the streaming path, which shares one parser
+      // across all chunks and flushes only once at the end.
+      newContent.push(...partsFromParse(parser.push(part.text)));
     } else {
+      // A non-text part (e.g. a toolRequest) or an empty-text part (e.g. the
+      // trailing thought-signature carrier) is a boundary: flush any held tail
+      // so it lands before this part, preserving order. This is what a
+      // tool-calling turn [text("Checking the weather."), toolRequest] relies
+      // on so the prose is not reordered behind the toolRequest. Then carry the
+      // part through untouched so its metadata survives.
+      flushHeld();
       newContent.push(part);
     }
   }
-  return {
-    ...response,
-    message: { ...message, content: newContent },
-  };
+  flushHeld();
+
+  const newMessage = { ...message, content: newContent };
+
+  // Write the transformed message back to WHICHEVER shape(s) the response
+  // carries, so no consumer sees the raw prose. Real providers (e.g.
+  // google-genai) use the candidates shape, but a response could carry a
+  // top-level `message` and a `candidates` array at once (e.g. a prior
+  // middleware pre-populated `message` while keeping `candidates`); updating
+  // only one would leave the other holding the untransformed fence text. Only
+  // candidate 0 is transformed: the framework collapses to
+  // `candidates[0].message` and candidateCount defaults to 1, and each
+  // candidate would otherwise consume the shared surface-id replay state.
+  const result = { ...response };
+  if (result.message) {
+    result.message = newMessage;
+  }
+  if (result.candidates?.[0]) {
+    result.candidates = result.candidates.map((c, i) =>
+      i === 0 ? { ...c, message: newMessage } : c
+    );
+  }
+  return result;
 }
 
 /**
@@ -366,8 +411,12 @@ function transformResponse(
  */
 function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
   let changed = false;
-  const messages = req.messages.map((message) => {
-    if (!Array.isArray(message.content)) return message;
+  const messages: MessageData[] = [];
+  for (const message of req.messages) {
+    if (!Array.isArray(message.content)) {
+      messages.push(message);
+      continue;
+    }
     let msgChanged = false;
     const content: Part[] = [];
     for (const part of message.content) {
@@ -379,36 +428,90 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
         content.push(part as Part);
       }
     }
-    if (!msgChanged) return message;
+    if (!msgChanged) {
+      messages.push(message);
+      continue;
+    }
     changed = true;
-    return { ...message, content };
-  });
+    // Drop a message that sanitizing emptied out. This happens when its only
+    // content was an a2ui part whose envelopes all summarized to nothing (e.g.
+    // an empty or all-unrecognized envelope array). Sending `content: []`
+    // downstream would make providers like Gemini and Vertex reject the
+    // request, so skip the message entirely instead.
+    if (content.length === 0) continue;
+    messages.push({ ...message, content });
+  }
   return changed ? { ...req, messages } : req;
 }
 
-/** Summarizes an array of a2ui envelopes / actions into a short text string. */
+/**
+ * Converts an array of a2ui envelopes from an inbound message part back into
+ * model-readable text — the inverse of the outbound block-to-part transform.
+ *
+ * The two envelope kinds are handled differently on purpose:
+ *
+ * - Assistant-authored surface envelopes (`createSurface`, `updateComponents`,
+ *   `updateDataModel`, `deleteSurface`) are reconstructed as the canonical
+ *   `a2ui` fenced block the model originally emitted. Replaying a prior turn's
+ *   surface as history therefore shows the model its own UI output in the exact
+ *   format it is asked to produce, reinforcing correct behavior. (Summarizing it
+ *   to a sentinel like `[rendered UI surface]` instead taught the model to emit
+ *   that literal string in place of a real block.)
+ * - Client-synthesized `action` envelopes never had a block form, so they
+ *   become a short text summary the model can reason about.
+ *
+ * Consecutive surface envelopes are grouped into a single block (one surface is
+ * usually several envelopes: create + update(s)). Unknown envelope shapes are
+ * dropped, so an all-unrecognized (or empty) envelope array summarizes to an
+ * empty string; {@link sanitizeInboundA2ui} then drops the emptied message
+ * rather than sending empty content downstream.
+ */
 function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
-  const lines: string[] = [];
+  const out: string[] = [];
+  let pendingSurface: A2uiEnvelope[] = [];
+
+  const flushSurface = () => {
+    if (pendingSurface.length === 0) return;
+    // Keep the real surface ids verbatim. The model may not reuse them for a
+    // NEW surface: the parser forces a fresh id onto every `createSurface`
+    // block (see `finalizeBlock`), so a copied id can't overwrite a prior
+    // surface. Keeping the real ids lets the model correlate a replayed action
+    // (`[UI action ... on surface <id>]`) with the surface it targeted — which
+    // matters when several surfaces are on screen at once.
+    //
+    // Encode compactly (not pretty-printed): fewer tokens, and it collapses the
+    // payload to a single line so the block is exactly three lines (open fence,
+    // JSON, close fence). Because JSON escapes any newline inside a string as
+    // `\n`, an A2UI `Text` value containing a fenced code sample can't put a
+    // literal ``` at the start of a line, so it can never prematurely close this
+    // block (the parser's close fence is line-anchored). The block text can
+    // still contain ``` characters mid-line; a fully robust emitter would use a
+    // variable-length fence, but that also requires the parser's fixed
+    // three-backtick open fence to become count-aware, so it is deferred.
+    out.push('```a2ui\n' + JSON.stringify(pendingSurface) + '\n```');
+    pendingSurface = [];
+  };
+
   for (const env of envelopes) {
     if (!env || typeof env !== 'object') continue;
     if ('action' in env && env.action) {
+      // Emit any buffered surface block before the action, preserving order.
+      flushSurface();
       const a = env.action;
       const ctx =
         a.context && Object.keys(a.context).length
           ? ` context=${JSON.stringify(a.context)}`
           : '';
-      lines.push(`[UI action "${a.name}" on surface ${a.surfaceId}${ctx}]`);
-    } else if ('createSurface' in env && env.createSurface) {
-      lines.push(`[UI surface ${env.createSurface.surfaceId} created]`);
+      out.push(`[UI action "${a.name}" on surface ${a.surfaceId}${ctx}]`);
     } else if (
+      ('createSurface' in env && env.createSurface) ||
       ('updateComponents' in env && env.updateComponents) ||
       ('updateDataModel' in env && env.updateDataModel) ||
       ('deleteSurface' in env && env.deleteSurface)
     ) {
-      // Prior assistant surface content — summarize as a rendered surface.
-      lines.push('[rendered UI surface]');
+      pendingSurface.push(env);
     }
   }
-  // Collapse repeated "[rendered UI surface]" lines from one assistant turn.
-  return [...new Set(lines)].join(' ');
+  flushSurface();
+  return out.join('\n');
 }

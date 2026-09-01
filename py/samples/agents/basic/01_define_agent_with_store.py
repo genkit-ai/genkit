@@ -15,16 +15,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persist a session, then resume it later from just a snapshot id.
+"""The store is the source of truth. Your app holds a snapshot id.
 
-Run a turn, save the snapshot id, and drop the chat. Later — after a client
-reconnect or a server restart — rehydrate the whole conversation from that id and
-keep going; the agent still remembers turn 1. The store is the source of truth, so
-your app only has to hold onto a string.
+Run a turn, keep ``snapshot_id``, drop the chat. After a reconnect or a process
+restart, ``load_chat(snapshot_id=...)`` rehydrates the conversation and the
+agent still remembers turn 1.
 
-With a store, session_id and snapshot_id are minted server-side and arrive when
-the first turn completes. To resume the exact conversation state later,
-you just need the snapshot_id. Requires GEMINI_API_KEY.
+These samples use ``InMemorySessionStore`` so they run tonight. The same
+``store=`` slot takes ``FirestoreSessionStore`` from ``genkit-google-cloud``
+when you ship. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -48,6 +47,8 @@ class WeatherOutput(BaseModel):
 
 
 ai = Genkit(plugins=[GoogleAI()])
+# In-memory so this file runs without GCP. Swap in FirestoreSessionStore from
+# genkit-google-cloud when the session has to survive a deploy.
 store = InMemorySessionStore()
 
 
@@ -59,9 +60,10 @@ async def get_weather(input: WeatherInput) -> WeatherOutput:
     )
 
 
+# Same object you mount with serve_agent(agent) under /api/weatherAgent.
 agent = ai.define_agent(
     name='weatherAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='Weather assistant. Use getWeather for weather questions.',
     tools=[get_weather],
     store=store,
@@ -72,12 +74,11 @@ async def main() -> None:
     chat = agent.chat()
     turn = chat.send_stream('Weather in Paris?')
 
-    # Two ways to consume a turn:
-    #   await chat.send(msg)                          output only
-    #   turn = chat.send_stream(msg); async for ...   stream, then await turn.response
+    # await chat.send(msg) when you only need the final text.
+    # send_stream when the UI should paint tokens (then await turn.response).
     async for chunk in turn.stream:
         for call in chunk.tool_requests:
-            print(f'  → {call.tool_request.name}')  # tools light up as they're called
+            print(f'  → {call.tool_request.name}')
         if chunk.text:
             print(chunk.accumulated_text, end='\r', flush=True)
 
@@ -85,15 +86,14 @@ async def main() -> None:
     assert res.text
     print(f'\n{res.text}\n')
 
-    # With a store the server mints these, and they arrive on the settled turn.
+    # The store mints these; they show up on the settled turn.
     assert res.session_id and res.snapshot_id
 
-    # Hold onto snapshot_id — it's the resume handle after disconnect/restart.
+    # Persist snapshot_id with the user. That string is the resume handle.
     checkpoint = res.snapshot_id
 
-    # Rehydrate chat directly from that snapshot string.
     resumed = await agent.load_chat(snapshot_id=checkpoint)
-    # → answers "Paris" — the resumed session still has turn 1's context
+    # Follow-up, not a new chat: turn 1 is still in the store.
     res2 = await resumed.send('What city did I ask about? One word.')
     print(f'{res2.text}\n')
 

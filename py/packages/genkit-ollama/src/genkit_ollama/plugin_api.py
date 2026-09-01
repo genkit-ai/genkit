@@ -216,12 +216,12 @@ class Ollama(Plugin):
 
         Static (or absent) headers are baked into a per-event-loop cached client that
         is shared across requests and left open. A header *callable* is resolved on
-        every call — receiving the server address plus any model/request context (JS
-        parity) — and applied to a *fresh* client, so expiring auth tokens or
+        every call — receiving the server address plus any model/request context —
+        and applied to a *fresh* client, so expiring auth tokens or
         request-specific headers take effect. Because the Ollama SDK bakes headers in
-        at construction (it has no per-request header hook, unlike the JS ``fetch`` and
-        Go ``http.Request`` paths), that fresh client owns its own httpx connection
-        pool; it is closed on exit so long-running callers don't accumulate pools.
+        at construction (it has no per-request header hook), that fresh client owns
+        its own httpx connection pool; it is closed on exit so long-running callers
+        don't accumulate pools.
 
         Args:
             model: The model/embedder definition this request targets, if any.

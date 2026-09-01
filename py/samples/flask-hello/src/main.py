@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,58 +14,32 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flask + Genkit - Serve flows as HTTP endpoints. See README.md."""
-
-from typing import cast
+"""Hang a flow on the Flask app you already have."""
 
 from flask import Flask
 from genkit_flask import genkit_flask_handler
 from genkit_google_genai import GoogleAI
-from pydantic import BaseModel, Field
 
-from genkit import Genkit, ModelResponse
-from genkit._core._action import ActionRunContext
-from genkit._core._context import RequestData
+from genkit import ActionRunContext, Genkit
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
 )
-
 app = Flask(__name__)
 
 
-class SayHiInput(BaseModel):
-    """Input for say_hi flow."""
-
-    name: str = Field(default='Mittens', description='Name to greet')
-
-
-async def my_context_provider(request: RequestData[dict[str, object]]) -> dict[str, object]:
-    """Provide a context for the flow."""
-    headers_raw = request.request.get('headers') if isinstance(request.request, dict) else None
-    headers = cast(dict[str, str], headers_raw) if isinstance(headers_raw, dict) else {}
-    auth_header = headers.get('authorization')
-    return {'username': auth_header}
-
-
-@app.post('/chat')
-@genkit_flask_handler(ai, context_provider=my_context_provider)
+@app.post('/say_hi')
+@genkit_flask_handler(ai)
 @ai.flow()
-async def say_hi(
-    input: SayHiInput,
-    ctx: ActionRunContext | None = None,
-) -> ModelResponse:
-    """Say hi to the user."""
-    username = ctx.context.get('username') if ctx is not None else 'unknown'
-    stream_response = ai.generate_stream(
-        prompt=f'tell a medium sized joke about {input.name} for user {username}',
-    )
-    async for chunk in stream_response.stream:
-        if ctx is not None and chunk.text:
+async def say_hi(name: str, ctx: ActionRunContext) -> str:
+    # generate_stream + send_chunk is how the Flask handler streams tokens.
+    stream = ai.generate_stream(prompt=f'tell a short joke about {name}')
+    async for chunk in stream.stream:
+        if chunk.text:
             ctx.send_chunk(chunk.text)
-    return await stream_response.response
+    return (await stream.response).text
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)  # noqa: S104
+    app.run(host='127.0.0.1', port=8080)

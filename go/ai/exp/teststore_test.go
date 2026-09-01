@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 )
@@ -189,6 +190,30 @@ func (s *testInMemStore[State]) notifyLocked(snapshotID string, status SnapshotS
 		default:
 		}
 	}
+}
+
+// ctxHonoringStore wraps a store and rejects a write whose context has been
+// cancelled, the way a store doing real I/O does. testInMemStore and
+// localstore.InMemorySessionStore both ignore their context, so a write made
+// on a dead context succeeds there and hides the defect; this is what a test
+// needs to see it.
+type ctxHonoringStore[State any] struct {
+	SessionStore[State]
+	// rejected counts the writes turned away, so a test can tell a write
+	// that landed on a live context from one that was never attempted.
+	rejected atomic.Int32
+}
+
+func (s *ctxHonoringStore[State]) SaveSnapshot(
+	ctx context.Context,
+	id string,
+	fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
+	if err := ctx.Err(); err != nil {
+		s.rejected.Add(1)
+		return nil, err
+	}
+	return s.SessionStore.SaveSnapshot(ctx, id, fn)
 }
 
 func testCopySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[State], error) {

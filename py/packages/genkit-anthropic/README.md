@@ -1,9 +1,4 @@
-# Genkit Anthropic Plugin (Community)
-
-> **Community Plugin** — This plugin is community-maintained and is not an
-> official Google or Anthropic product. It is provided on an "as-is" basis.
->
-> **Preview** — This plugin is in preview and may have API changes in future releases.
+# Genkit Anthropic Plugin
 
 Anthropic Claude model provider for Genkit.
 
@@ -22,7 +17,7 @@ from genkit_anthropic import Anthropic
 ai = Genkit(plugins=[Anthropic()])
 
 res = await ai.generate(
-    model='anthropic/claude-sonnet-4-6',
+    model=Anthropic.claude_model('claude-sonnet-4-6'),
     prompt='Explain recursion in 10 words.',
 )
 print(res.text)
@@ -32,8 +27,7 @@ Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
 
 ## Disclaimer
 
-This is a **community-maintained** plugin and is not officially supported by
-Google or Anthropic. Use of Anthropic's API is subject to
+Use of Anthropic's API is subject to
 [Anthropic's Terms of Service](https://www.anthropic.com/terms) and
 [Privacy Policy](https://www.anthropic.com/privacy). You are responsible for
 complying with all applicable terms when using this plugin.

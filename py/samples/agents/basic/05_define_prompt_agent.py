@@ -34,7 +34,7 @@ store = InMemorySessionStore()
 
 ai.define_prompt(
     name='greeterPrompt',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='You are a greeter. Be warm and brief.',
 )
 agent = ai.define_prompt_agent(name='greeterPrompt', store=store)

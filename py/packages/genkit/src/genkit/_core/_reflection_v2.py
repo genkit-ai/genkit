@@ -54,6 +54,7 @@ from genkit._core._model import ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
+from genkit._core._trace._log_exporter import enable_log_export
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
     AgentInput,
@@ -161,6 +162,7 @@ class ReflectionServerV2:
         self.reflection_handshake_telemetry_applied = True
         # Register HTTP export to this URL on the global OTel provider.
         add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
+        enable_log_export(url=url)
         logger.debug('reflection V2: connected to telemetry server', url=url)
 
     async def run_forever(self) -> None:
