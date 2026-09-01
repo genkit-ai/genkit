@@ -438,8 +438,11 @@ class OpenAIModel:
             reraise_openai_error(e)
 
     @staticmethod
-    def normalize_config(config: object) -> OpenAIConfig:
+    def normalize_config(config: object | None) -> OpenAIConfig:
         """Ensures the config is an OpenAIConfig instance."""
+        if config is None:
+            return OpenAIConfig()
+
         if isinstance(config, OpenAIConfig):
             return config
 
