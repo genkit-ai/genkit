@@ -177,7 +177,13 @@ async def test_cancel_interaction_normalizes_success_as_cancelled(http_client: M
 
 
 @pytest.mark.asyncio
-async def test_cancel_interaction_rethrows_non_cancelled_errors(http_client: MagicMock) -> None:
+async def test_cancel_interaction_empty_success_body_is_cancelled(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(content=b'')
+    with patch.object(interactions_client, 'get_cached_client', return_value=http_client):
+        result = await cancel_interaction('key', 'ix-cancel')
+
+    assert result.id == 'ix-cancel'
+    assert result.status == 'cancelled'
     http_client.request.return_value = mock_response(
         status_code=404,
         json_body={'error': {'message': 'missing'}},
@@ -260,3 +266,9 @@ def test_from_metadata_drops_untrusted_base_url() -> None:
     assert loaded.base_url is None
     assert loaded.api_version == 'v1alpha'
     assert loaded.timeout == 1000
+
+
+def test_from_metadata_accepts_snake_case_wrapper() -> None:
+    loaded = ClientOptions.from_metadata({'client_options': {'timeout': 5000, 'api_version': 'v1beta'}})
+    assert loaded.timeout == 5000
+    assert loaded.api_version == 'v1beta'

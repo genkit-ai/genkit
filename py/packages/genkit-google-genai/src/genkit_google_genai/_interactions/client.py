@@ -131,13 +131,15 @@ async def create_interaction(
 ) -> Interaction:
     """POST /interactions and return the parsed Interaction."""
     url = google_ai_url('interactions', client_options=client_options)
-    return await request(
+    created = await request(
         method='POST',
         url=url,
         api_key=api_key,
         client_options=client_options,
         json_body=body,
     )
+    assert created is not None
+    return created
 
 
 async def get_interaction(
@@ -147,12 +149,14 @@ async def get_interaction(
 ) -> Interaction:
     """GET /interactions/{id} and return the parsed Interaction."""
     url = google_ai_url(f'interactions/{quote(interaction_id, safe="")}', client_options=client_options)
-    return await request(
+    found = await request(
         method='GET',
         url=url,
         api_key=api_key,
         client_options=client_options,
     )
+    assert found is not None
+    return found
 
 
 async def cancel_interaction(
@@ -163,18 +167,20 @@ async def cancel_interaction(
     """POST /interactions/{id}/cancel and return a cancelled Interaction."""
     url = google_ai_url(f'interactions/{quote(interaction_id, safe="")}/cancel', client_options=client_options)
     try:
-        await request(
+        interaction = await request(
             method='POST',
             url=url,
             api_key=api_key,
             client_options=client_options,
+            allow_empty=True,
         )
-        # Successful cancel often surfaces as CANCELLED; normalize both paths.
-        raise GenkitError(status='CANCELLED', message='successfully cancelled')
     except GenkitError as error:
         if error.status == 'CANCELLED':
             return Interaction.model_validate({'id': interaction_id, 'status': 'cancelled'})
         raise
+    if interaction is None:
+        return Interaction.model_validate({'id': interaction_id, 'status': 'cancelled'})
+    return interaction.model_copy(update={'status': 'cancelled'})
 
 
 async def request(
@@ -184,7 +190,8 @@ async def request(
     api_key: str,
     client_options: ClientOptions | None,
     json_body: dict[str, object] | None = None,
-) -> Interaction:
+    allow_empty: bool = False,
+) -> Interaction | None:
     """Issue one Interactions HTTP call and parse the Interaction body."""
     # Auth/key headers are per-request; the loop-local client is just the transport.
     client = get_cached_client(cache_key=CACHE_KEY, timeout=NO_TIMEOUT)
@@ -223,6 +230,8 @@ async def request(
 
     if response.is_success:
         if not response.content:
+            if allow_empty:
+                return None
             raise GenkitError(
                 status='INTERNAL',
                 message=f'Received an empty response from {url}',

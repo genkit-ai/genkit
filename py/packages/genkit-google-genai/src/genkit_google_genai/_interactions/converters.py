@@ -98,6 +98,8 @@ CONTENT_BLOCK_TYPES = frozenset({'text', 'image'})
 CODE_LANGUAGE: Literal['python'] = 'python'
 
 FAILED_MESSAGE = 'Interaction failed'
+# Chat generate can pause for a tool; a background job cannot.
+BACKGROUND_INTERRUPT_UNSUPPORTED = 'Background models do not support interrupts'
 
 # Interactions splits media into typed content blocks, chosen by mime prefix.
 MEDIA_CONTENT_TYPES: tuple[tuple[str, str], ...] = (
@@ -123,7 +125,18 @@ PARTIAL_TERMINAL_STATUSES: dict[str, tuple[FinishReason, str]] = {
 
 
 def interaction_error_message(interaction: Interaction) -> str | None:
-    """Read the failure message a failed Interaction reports on its output step."""
+    """Read the failure message a failed Interaction reports.
+
+    Prefer the top-level errors list when the job died before any output
+    step, then fall back to a step error so callers see the server's reason
+    instead of a generic 'Interaction failed'.
+    """
+    for err in interaction.errors or []:
+        message = getattr(err, 'message', None)
+        if message:
+            return str(message)
+        if isinstance(err, dict) and err.get('message'):
+            return str(err['message'])
     for step in interaction.steps or []:
         if isinstance(step, ModelOutputStep) and step.error is not None and step.error.message:
             return step.error.message
@@ -150,7 +163,7 @@ def clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 def ensure_tool_ids(messages: list[Message]) -> list[Message]:
     """Assign stable tool call IDs so wire payloads stay pairable."""
-    generated_ids: list[str] = []
+    request_ids: list[str] = []
     next_id_counter = 0
 
     new_messages = [message.model_copy(deep=True) for message in messages]
@@ -158,20 +171,30 @@ def ensure_tool_ids(messages: list[Message]) -> list[Message]:
     for message in new_messages:
         for part in message.content:
             root = part.root
-            if isinstance(root, ToolRequestPart) and root.tool_request and not root.tool_request.ref:
-                new_id = f'genkit-auto-id-{next_id_counter}'
-                next_id_counter += 1
-                root.tool_request.ref = new_id
-                generated_ids.append(new_id)
+            if isinstance(root, ToolRequestPart) and root.tool_request:
+                if not root.tool_request.ref:
+                    new_id = f'genkit-auto-id-{next_id_counter}'
+                    next_id_counter += 1
+                    root.tool_request.ref = new_id
+                request_ids.append(root.tool_request.ref)
 
-    # Responses without refs reuse request IDs in order; unmatched ones get orphan IDs.
+    # A response that already named its call isn't in the pairing pool.
+    claimed = {
+        part.root.tool_response.ref
+        for message in new_messages
+        for part in message.content
+        if isinstance(part.root, ToolResponsePart) and part.root.tool_response and part.root.tool_response.ref
+    }
+    available = [ref for ref in request_ids if ref not in claimed]
+
+    # Responses without refs reuse leftover request IDs in order; unmatched
+    # ones get orphan IDs so the wire never sends an empty call_id.
     for message in new_messages:
         for part in message.content:
             root = part.root
             if isinstance(root, ToolResponsePart) and root.tool_response and not root.tool_response.ref:
-                matched_id = generated_ids.pop(0) if generated_ids else None
-                if matched_id:
-                    root.tool_response.ref = matched_id
+                if available:
+                    root.tool_response.ref = available.pop(0)
                 else:
                     root.tool_response.ref = f'genkit-orphan-id-{next_id_counter}'
                     next_id_counter += 1
@@ -272,18 +295,20 @@ def to_function_call_step(request: ToolRequest) -> FunctionCallStepParam:
     silently become ``{}`` and the model would see a different call than the
     one the caller made.
     """
-    args = request.input
-    if args is None:
-        args = {}
-    elif not isinstance(args, dict):
+    dumped = plain(request.input)
+    if dumped is None:
+        args: dict[str, Any] = {}
+    elif not isinstance(dumped, dict):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
                 'Tool request input must be a JSON object (got '
-                f'{type(args).__name__}). Wrap scalars as '
+                f'{type(dumped).__name__}). Wrap scalars as '
                 "{'city': 'Paris'} rather than passing a bare string."
             ),
         )
+    else:
+        args = cast(dict[str, Any], dumped)
     return {
         'type': 'function_call',
         'name': request.name,
@@ -325,7 +350,7 @@ def to_function_result_step(
     have to be boxed. Only a list of text/image blocks goes on the wire as
     content. A failed result keeps ``is_error`` so the model sees the miss.
     """
-    output = response.output
+    output = plain(response.output)
     if isinstance(output, (str, dict)):
         result = cast(FunctionResultStepResultUnionParam, output)
     elif is_content_block_list(output):
@@ -502,7 +527,9 @@ def plain(value: object) -> object:
     """Unwrap SDK models into plain data so parts stay JSON-serializable."""
     if isinstance(value, BaseModel):
         return value.model_dump(mode='python')
-    if isinstance(value, list):
+    if isinstance(value, dict):
+        return {key: plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
         return [plain(item) for item in value]
     return value
 
@@ -610,7 +637,7 @@ def from_text_content(content: TextContent) -> Part:
     return Part(
         TextPart(
             text=content.text or '',
-            metadata={'annotations': content.annotations},
+            metadata={'annotations': plain(content.annotations)},
         )
     )
 
@@ -702,6 +729,8 @@ def usage_from_interaction(usage: Usage) -> ModelUsage:
                 response_usage.input_images = modality_token.tokens
             case 'audio':
                 response_usage.input_audio_files = modality_token.tokens
+            case 'video':
+                response_usage.input_videos = modality_token.tokens
             case _:
                 pass
     for modality_token in usage.output_tokens_by_modality or []:
@@ -712,6 +741,8 @@ def usage_from_interaction(usage: Usage) -> ModelUsage:
                 response_usage.output_images = modality_token.tokens
             case 'audio':
                 response_usage.output_audio_files = modality_token.tokens
+            case 'video':
+                response_usage.output_videos = modality_token.tokens
             case _:
                 pass
     return response_usage
@@ -781,12 +812,30 @@ def completed_response(interaction: Interaction) -> ModelResponse | None:
 
 
 def from_interaction_sync(interaction: Interaction) -> ModelResponse:
-    """Convert a completed interaction to a synchronous model response."""
-    if interaction.status == 'failed':
+    """Convert a finished interaction to a synchronous model response.
+
+    Truncated or over-budget turns keep their real finish reason so a
+    generate that ran out of tokens does not look like a clean stop.
+    In-flight statuses raise — this helper is not a poll loop.
+    """
+    status = interaction.status
+    if status == 'failed':
         raise ValueError(interaction_error_message(interaction) or FAILED_MESSAGE)
-    if interaction.status == 'cancelled':
+    if status == 'cancelled':
         return cancelled_response(interaction)
-    return completed_response(interaction) or model_response(interaction, content=[], finish_reason=FinishReason.STOP)
+    if status in ('in_progress', 'queued', 'requires_action'):
+        raise ValueError(f'Interaction is still running (status={status!r})')
+    if partial := PARTIAL_TERMINAL_STATUSES.get(cast(str, status)):
+        finish_reason, message = partial
+        response = steps_response(interaction, finish_reason=finish_reason, finish_message=message)
+        if response is None:
+            raise ValueError(message)
+        return response
+    if status == 'completed' or status is None:
+        return completed_response(interaction) or model_response(
+            interaction, content=[], finish_reason=FinishReason.STOP
+        )
+    raise ValueError(f'Unknown interaction status: {status!r}')
 
 
 def from_interaction(
@@ -809,7 +858,9 @@ def from_interaction(
         op.output = cancelled_response(interaction)
     elif status == 'completed':
         op.done = True
-        op.output = completed_response(interaction)
+        op.output = completed_response(interaction) or model_response(
+            interaction, content=[], finish_reason=FinishReason.STOP
+        )
     elif partial := PARTIAL_TERMINAL_STATUSES.get(cast(str, status)):
         # Halted for length or budget. Prefer whatever landed over a bare error.
         finish_reason, message = partial
@@ -821,6 +872,14 @@ def from_interaction(
         # Always exit the poll loop on failure; leaving done unset hangs forever.
         op.done = True
         op.error = Error(message=interaction_error_message(interaction) or FAILED_MESSAGE)
-    # requires_action: leave done unset. Resuming that turn is a separate product
-    # decision; we don't invent interrupt/resume here.
+    elif status == 'requires_action':
+        # Chat generate can pause for a tool. A background job cannot — there
+        # is no interrupt/resume on generate_operation — so end the poll
+        # instead of hanging `while not op.done` or inventing a resume handle.
+        op.done = True
+        op.error = Error(message=BACKGROUND_INTERRUPT_UNSUPPORTED)
+    else:
+        # A status we do not map still has to exit `while not op.done`.
+        op.done = True
+        op.error = Error(message=f'Unknown interaction status: {status!r}')
     return op

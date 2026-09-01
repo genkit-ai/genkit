@@ -29,13 +29,15 @@ from genkit_google_genai._interactions.converters import (
     from_interaction_sync,
     from_thought_step,
     parts_from_steps,
+    split_system_instruction,
     to_interaction_content,
     to_interaction_role,
     to_interaction_steps,
     to_interaction_tool,
+    usage_from_interaction,
 )
 from genkit_google_genai._interactions.options import ClientOptions
-from google.genai.interactions import Content, Interaction, Step, ThoughtStep
+from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
 from pydantic import BaseModel, TypeAdapter
 
 from genkit import (
@@ -125,6 +127,55 @@ class TestEnsureToolIds:
         result = ensure_tool_ids(messages)
         req1 = result[0].content[0].root.tool_request
         assert req1 and req1.ref == 'existing-id'
+
+    def test_pairs_unreffed_responses_to_existing_request_refs(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='a', input={}, ref='existing'))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='b', input={}))),
+                ],
+            ),
+            Message(
+                role='tool',
+                content=[
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='a', output={}))),
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='b', output={}))),
+                ],
+            ),
+        ]
+        result = ensure_tool_ids(messages)
+        req_a = result[0].content[0].root.tool_request
+        req_b = result[0].content[1].root.tool_request
+        res_a = result[1].content[0].root.tool_response
+        res_b = result[1].content[1].root.tool_response
+        assert req_a and req_a.ref == 'existing'
+        assert req_b and req_b.ref and req_b.ref.startswith('genkit-auto-id-')
+        assert res_a and res_a.ref == 'existing'
+        assert res_b and res_b.ref == req_b.ref
+
+    def test_skips_claimed_request_ids_when_pairing(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='a', input={}, ref='existing'))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='b', input={}))),
+                ],
+            ),
+            Message(
+                role='tool',
+                content=[
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='a', output={}, ref='existing'))),
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='b', output={}))),
+                ],
+            ),
+        ]
+        result = ensure_tool_ids(messages)
+        req_b = result[0].content[1].root.tool_request
+        res_b = result[1].content[1].root.tool_response
+        assert req_b and res_b and res_b.ref == req_b.ref
 
 
 class TestToInteractionRole:
@@ -458,6 +509,56 @@ class TestToInteractionSteps:
             to_interaction_steps(messages)
         assert exc_info.value.status == 'INVALID_ARGUMENT'
 
+    def test_pydantic_tool_request_input_dumps(self) -> None:
+        class City(BaseModel):
+            city: str = 'Paris'
+
+        messages = [
+            Message(
+                role='model',
+                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='lookup', input=City(), ref='c1')))],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {'type': 'function_call', 'name': 'lookup', 'arguments': {'city': 'Paris'}, 'id': 'c1'}
+        ]
+
+    def test_pydantic_tool_response_output_dumps(self) -> None:
+        class Weather(BaseModel):
+            temp: int = 72
+
+        messages = [
+            Message(
+                role='tool',
+                content=[
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='weather', output=Weather(), ref='r1')))
+                ],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {'type': 'function_result', 'name': 'weather', 'result': {'temp': 72}, 'call_id': 'r1'}
+        ]
+
+    def test_nested_pydantic_tool_output_dumps(self) -> None:
+        class Weather(BaseModel):
+            temp: int = 72
+
+        messages = [
+            Message(
+                role='tool',
+                content=[
+                    Part(
+                        ToolResponsePart(
+                            tool_response=ToolResponse(name='weather', output={'report': Weather()}, ref='r1')
+                        )
+                    )
+                ],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {'type': 'function_result', 'name': 'weather', 'result': {'report': {'temp': 72}}, 'call_id': 'r1'}
+        ]
+
 
 class TestFromInteractionContent:
     def test_text(self) -> None:
@@ -519,6 +620,27 @@ class TestFromInteractionStep:
         assert root.text == 'Hello'
         assert root.metadata is not None
         assert 'annotations' in root.metadata
+
+    def test_text_annotations_are_plain_data(self) -> None:
+        result = from_interaction_step(
+            StepAdapter.validate_python({
+                'type': 'model_output',
+                'content': [
+                    {
+                        'type': 'text',
+                        'text': 'hi',
+                        'annotations': [{'type': 'url_citation', 'url': 'https://x.example'}],
+                    }
+                ],
+            })
+        )
+        root = result[0].root
+        assert isinstance(root, TextPart)
+        anns = (root.metadata or {}).get('annotations')
+        assert isinstance(anns, list) and anns
+        assert isinstance(anns[0], dict)
+        assert anns[0].get('type') == 'url_citation'
+        assert anns[0].get('url') == 'https://x.example'
 
     def test_user_input_dropped(self) -> None:
         result = from_interaction_step(
@@ -795,7 +917,19 @@ class TestFromInteractionStatusMapping:
         assert result.error is not None
         assert result.error.message == 'Interaction failed'
 
-    def test_requires_action_leaves_done_unset(self) -> None:
+    def test_failed_uses_top_level_errors(self) -> None:
+        result = from_interaction(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'failed',
+                'errors': [{'code': '400', 'message': 'Invalid prompt format'}],
+            })
+        )
+        assert result.done is True
+        assert result.error is not None
+        assert result.error.message == 'Invalid prompt format'
+
+    def test_requires_action_exits_poll_loop(self) -> None:
         interaction = Interaction.model_validate({
             'id': '123',
             'status': 'requires_action',
@@ -803,9 +937,10 @@ class TestFromInteractionStatusMapping:
         })
         result = from_interaction(interaction)
         assert result.id == '123'
-        assert result.done is None
+        assert result.done is True
         assert result.output is None
-        assert not (result.metadata or {}).get('interaction_status')
+        assert result.error is not None
+        assert result.error.message == 'Background models do not support interrupts'
 
     def test_in_progress(self) -> None:
         result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
@@ -814,6 +949,22 @@ class TestFromInteractionStatusMapping:
     def test_queued_keeps_polling(self) -> None:
         result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'queued'}))
         assert result.done is False
+
+    def test_completed_empty_steps_still_has_output(self) -> None:
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'completed', 'steps': []}))
+        assert result.done is True
+        assert result.error is None
+        assert result.output is not None
+        assert result.output.finish_reason == 'stop'
+        assert result.output.message is not None
+        assert result.output.message.content == []
+
+    def test_unknown_status_exits_poll_loop(self) -> None:
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'expired'}))
+        assert result.done is True
+        assert result.output is None
+        assert result.error is not None
+        assert 'expired' in (result.error.message or '')
 
     def test_incomplete_surfaces_partial_steps(self) -> None:
         result = from_interaction(
@@ -869,3 +1020,84 @@ class TestFromInteractionSync:
     def test_failed_raises(self) -> None:
         with pytest.raises(ValueError, match='Interaction failed'):
             from_interaction_sync(Interaction.model_validate({'status': 'failed'}))
+
+    def test_cancelled(self) -> None:
+        result = from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'cancelled'}))
+        assert result.finish_reason == 'aborted'
+        assert result.finish_message == 'Operation cancelled'
+
+    def test_incomplete_surfaces_partial_steps(self) -> None:
+        result = from_interaction_sync(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'incomplete',
+                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'partial'}]}],
+            })
+        )
+        assert result.finish_reason == 'length'
+        assert result.finish_message == 'Interaction incomplete (truncated output)'
+        assert result.message is not None
+        assert result.message.content[0].root.text == 'partial'
+
+    def test_incomplete_without_steps_raises(self) -> None:
+        with pytest.raises(ValueError, match='incomplete'):
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'incomplete'}))
+
+    def test_budget_exceeded_surfaces_partial_steps(self) -> None:
+        result = from_interaction_sync(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'budget_exceeded',
+                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'draft'}]}],
+            })
+        )
+        assert result.finish_reason == 'aborted'
+        assert result.finish_message == 'Interaction exceeded its budget'
+
+    def test_in_progress_raises(self) -> None:
+        with pytest.raises(ValueError, match='still running'):
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
+
+    def test_unknown_status_raises(self) -> None:
+        with pytest.raises(ValueError, match='Unknown interaction status'):
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'expired'}))
+
+
+class TestSplitSystemInstruction:
+    def test_lifts_system_turns(self) -> None:
+        instruction, turns = split_system_instruction([
+            Message(role='system', content=[Part(TextPart(text='be terse'))]),
+            Message(role='user', content=[Part(TextPart(text='hi'))]),
+        ])
+        assert instruction == 'be terse'
+        assert len(turns) == 1
+        assert turns[0].role == 'user'
+
+    def test_joins_multiple_system_turns(self) -> None:
+        instruction, turns = split_system_instruction([
+            Message(role='system', content=[Part(TextPart(text='one'))]),
+            Message(role='system', content=[Part(TextPart(text='two'))]),
+        ])
+        assert instruction == 'one\n\ntwo'
+        assert turns == []
+
+
+class TestUsageFromInteraction:
+    def test_maps_totals_and_video_modality(self) -> None:
+        usage = Usage.model_validate({
+            'total_input_tokens': 10,
+            'total_output_tokens': 4,
+            'total_tokens': 14,
+            'total_cached_tokens': 2,
+            'total_thought_tokens': 1,
+            'input_tokens_by_modality': [{'modality': 'video', 'tokens': 3}],
+            'output_tokens_by_modality': [{'modality': 'video', 'tokens': 1}],
+        })
+        mapped = usage_from_interaction(usage)
+        assert mapped.input_tokens == 10
+        assert mapped.output_tokens == 4
+        assert mapped.total_tokens == 14
+        assert mapped.cached_content_tokens == 2
+        assert mapped.thoughts_tokens == 1
+        assert mapped.input_videos == 3
+        assert mapped.output_videos == 1

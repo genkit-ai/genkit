@@ -63,6 +63,8 @@ class ClientOptions(BaseModel):
         The key is re-supplied on the run; a ticket must not pick the host.
         """
         raw = (metadata or {}).get('clientOptions')
+        if raw is None:
+            raw = (metadata or {}).get('client_options')
         parsed: Self
         if isinstance(raw, cls):
             parsed = raw
