@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vertex Imagen through the same generate(). Uses ADC, not a Gemini key."""
+"""Vertex image generation through the same generate(). Uses ADC, not a Gemini key."""
 
 from genkit_google_genai import VertexAI
 
@@ -26,8 +26,7 @@ ai = Genkit(plugins=[VertexAI()])
 async def main() -> None:
     response = await ai.generate(
         prompt='Draw a cat in a hat',
-        model=VertexAI.imagen_model('imagen-3.0-generate-002'),
-        config={'number_of_images': 1},
+        model=VertexAI.gemini_image_model('gemini-2.5-flash-image'),
     )
     print(response.media[0].url if response.media else response.text)
 

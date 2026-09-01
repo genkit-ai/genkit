@@ -1,6 +1,6 @@
-# Imagen
+# Vertex AI Image Generation
 
-Vertex Imagen through the same `generate()`. Uses Application Default
+Vertex image generation through the same `generate()`. Uses Application Default
 Credentials, not a Gemini API key.
 
 ```bash
