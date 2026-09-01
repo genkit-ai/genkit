@@ -476,7 +476,7 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 	}
 }
 
-func TestAgentHandle_GetSnapshotMeta(t *testing.T) {
+func TestAgentHandle_GetSnapshotOmitState(t *testing.T) {
 	// The metadata read shapes exactly as the full read and drops only the
 	// state payload: a settled row reports its status with a nil State, and a
 	// row inside the abort wind-down window reads as pending through both.
@@ -497,15 +497,31 @@ func TestAgentHandle_GetSnapshotMeta(t *testing.T) {
 	if full.State == nil {
 		t.Fatal("full read returned no state")
 	}
-	meta, err := h.GetSnapshotMeta(context.Background(), out.SnapshotID)
+	meta, err := h.GetSnapshot(context.Background(), out.SnapshotID, WithOmitState())
 	if err != nil {
-		t.Fatalf("GetSnapshotMeta: %v", err)
+		t.Fatalf("GetSnapshot(WithOmitState): %v", err)
 	}
 	if meta.State != nil {
 		t.Errorf("meta read returned state: %+v", meta.State)
 	}
 	if meta.Status != full.Status || meta.SessionID != full.SessionID || meta.FinishReason != full.FinishReason {
 		t.Errorf("meta read shaped differently from the full read: meta=%+v full=%+v", meta, full)
+	}
+
+	// The option rides every read surface: latest-by-session, and a task poll.
+	latestMeta, err := h.GetLatestSnapshot(context.Background(), out.SessionID, WithOmitState())
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot(WithOmitState): %v", err)
+	}
+	if latestMeta.State != nil {
+		t.Errorf("latest meta read returned state: %+v", latestMeta.State)
+	}
+	polled, err := h.Task(out.SnapshotID).Poll(context.Background(), WithOmitState())
+	if err != nil {
+		t.Fatalf("Poll(WithOmitState): %v", err)
+	}
+	if polled.State != nil {
+		t.Errorf("meta poll returned state: %+v", polled.State)
 	}
 
 	// The abort-window shaping consults the stored state before dropping it,
@@ -524,9 +540,9 @@ func TestAgentHandle_GetSnapshotMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveSnapshot winding row: %v", err)
 	}
-	windingMeta, err := h.GetSnapshotMeta(context.Background(), winding.SnapshotID)
+	windingMeta, err := h.GetSnapshot(context.Background(), winding.SnapshotID, WithOmitState())
 	if err != nil {
-		t.Fatalf("GetSnapshotMeta(winding): %v", err)
+		t.Fatalf("GetSnapshot(winding, WithOmitState): %v", err)
 	}
 	if windingMeta.Status != SnapshotStatusPending {
 		t.Errorf("winding-down row meta status = %q, want %q", windingMeta.Status, SnapshotStatusPending)
@@ -540,9 +556,6 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 		h := LookupAgent(reg, "bare")
 		if _, err := h.GetSnapshot(context.Background(), "any"); !errors.Is(err, ErrSessionStoreNotConfigured) {
 			t.Fatalf("GetSnapshot error = %v, want ErrSessionStoreNotConfigured", err)
-		}
-		if _, err := h.GetSnapshotMeta(context.Background(), "any"); !errors.Is(err, ErrSessionStoreNotConfigured) {
-			t.Fatalf("GetSnapshotMeta error = %v, want ErrSessionStoreNotConfigured", err)
 		}
 		if _, err := h.GetLatestSnapshot(context.Background(), "sess"); !errors.Is(err, ErrSessionStoreNotConfigured) {
 			t.Fatalf("GetLatestSnapshot error = %v, want ErrSessionStoreNotConfigured", err)

@@ -772,18 +772,19 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // while its worker winds down, or expired once the worker is presumed dead;
 // an empty status or zero UpdatedAt is defaulted).
 // Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
-// state.
+// state. Pass [WithOmitState] to read the shaped metadata without the state.
 //
 // It returns FAILED_PRECONDITION on a client-managed agent (no store) and
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
-func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string, opts ...SnapshotReadOption) (*SessionSnapshot[State], error) {
 	if a.store == nil {
 		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetSnapshot requires a session store", a.Name())
 	}
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
 	}
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "", false)
+	req := resolveSnapshotRead(&GetSnapshotRequest{SnapshotID: snapshotID}, opts)
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", snapshotID, "", req.OmitState)
 }
 
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
@@ -811,20 +812,22 @@ func (a *Agent[State]) WaitForSnapshot(ctx context.Context, snapshotID string) (
 }
 
 // GetLatestSnapshot fetches a session's most recently created snapshot (whatever
-// its status) through the agent, with the same transform and shaping as
-// [Agent.GetSnapshot]. It is the transform-applying counterpart to
-// [SnapshotReader.GetLatestSnapshot] and backs resume-by-session lookups.
+// its status) through the agent, with the same transform, shaping, and
+// [SnapshotReadOption] projections as [Agent.GetSnapshot]. It is the
+// transform-applying counterpart to [SnapshotReader.GetLatestSnapshot] and
+// backs resume-by-session lookups.
 //
 // It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
 // when sessionID is empty; an unknown session is NOT_FOUND.
-func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string, opts ...SnapshotReadOption) (*SessionSnapshot[State], error) {
 	if a.store == nil {
 		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetLatestSnapshot requires a session store", a.Name())
 	}
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
 	}
-	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID, false)
+	req := resolveSnapshotRead(&GetSnapshotRequest{SessionID: sessionID}, opts)
+	return readSnapshot(ctx, a.store, a.transform, "getSnapshot", "", sessionID, req.OmitState)
 }
 
 // Abort aborts the detached invocation behind a pending snapshot by

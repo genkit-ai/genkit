@@ -129,11 +129,11 @@ func (a *Agents) runResume(ctx context.Context, st *agentsState, in resumeInput,
 // handle. The read goes through the sub-agent's companion action, so the
 // runtime's shaping applies: a pending row whose heartbeat went stale reads
 // as expired here rather than as forever-running. Every pre-read on this
-// path is metadata-only ([aix.AgentHandle.GetSnapshotMeta]): the flow
+// path is metadata-only ([aix.WithOmitState]): the flow
 // dispatches on status and finish reason alone, and the run itself loads the
 // state it resumes, so nothing here needs the conversation serialized.
 func (a *Agents) resumeFromStore(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in resumeInput, snapshotID string, background bool) (delegationResult, error) {
-	snap, err := agent.GetSnapshotMeta(ctx, snapshotID)
+	snap, err := agent.GetSnapshot(ctx, snapshotID, aix.WithOmitState())
 	if err != nil {
 		logger.Debug(ctx, "resume read failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
 		switch {
@@ -213,7 +213,7 @@ func (a *Agents) resumeExpired(ctx context.Context, ref aix.AgentRef, st *agents
 		return delegationResult{Response: fmt.Sprintf(
 			"Error: could not fence task %q before recovering it (%v). Try again later.", in.TaskID, err)}, nil
 	}
-	cur, err := agent.GetSnapshotMeta(ctx, snapshotID)
+	cur, err := agent.GetSnapshot(ctx, snapshotID, aix.WithOmitState())
 	if err != nil {
 		logger.Debug(ctx, "resume fence re-read failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
 		a.releaseDelegation(st)
@@ -273,7 +273,7 @@ func (a *Agents) resumeFromParent(ctx context.Context, ref aix.AgentRef, st *age
 		return delegationResult{Response: fmt.Sprintf(
 			"Error: task %q saved no resumable progress (it detached at the start of the run, and its worker died before finalizing). Delegate the task again if the work is still needed.", in.TaskID)}, nil
 	}
-	parent, err := agent.GetSnapshotMeta(ctx, parentID)
+	parent, err := agent.GetSnapshot(ctx, parentID, aix.WithOmitState())
 	if err != nil {
 		if !errors.Is(err, status.ErrNotFound) && !errors.Is(err, status.ErrFailedPrecondition) && !errors.Is(err, status.ErrInvalidArgument) {
 			// Transient, and the refusal names a retry that can succeed, so

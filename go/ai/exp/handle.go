@@ -296,36 +296,17 @@ func nilHandleError(method string) error {
 // companion action, so the read is shaped exactly as remote callers see it:
 // the configured [WithStateTransform] applies and a stale-heartbeat pending
 // row surfaces as [SnapshotStatusExpired]. It is [Agent.GetSnapshot] with
-// custom state as raw JSON.
+// custom state as raw JSON. Pass [WithOmitState] to read the shaped metadata
+// without the state payload.
 //
 // It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
 // agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
 // missing snapshot is NOT_FOUND.
-func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts ...SnapshotReadOption) (*SessionSnapshot[json.RawMessage], error) {
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", h.name)
 	}
-	return h.transport.GetSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID})
-}
-
-// GetSnapshotMeta fetches a session snapshot like [AgentHandle.GetSnapshot]
-// but omits the state payload: the returned snapshot carries the shaped
-// metadata only (status, finish reason, parent, session, timestamps, error)
-// and its State is nil. The shaping is identical to a full read - the
-// abort-window and expiry rules consult the stored state before it is
-// dropped - so the status story cannot differ between the two reads. Use it
-// to dispatch on where a task stands without serializing a potentially large
-// conversation history; the state transform does not run, exactly as on a
-// full read of a stateless row.
-//
-// It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
-// agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
-// missing snapshot is NOT_FOUND.
-func (h *AgentHandle) GetSnapshotMeta(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
-	if snapshotID == "" {
-		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshotMeta: snapshotID is required", h.name)
-	}
-	return h.transport.GetSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID, OmitState: true})
+	return h.transport.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SnapshotID: snapshotID}, opts))
 }
 
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
@@ -354,17 +335,18 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 
 // GetLatestSnapshot fetches a session's most recently created snapshot
 // (whatever its status) through the agent's getSnapshot companion action, with
-// the same shaping as [AgentHandle.GetSnapshot]. It is
-// [Agent.GetLatestSnapshot] with custom state as raw JSON.
+// the same shaping and the same [SnapshotReadOption] projections as
+// [AgentHandle.GetSnapshot]. It is [Agent.GetLatestSnapshot] with custom state
+// as raw JSON.
 //
 // It returns FAILED_PRECONDITION ([ErrSessionStoreNotConfigured]) when the
 // agent has no session store and INVALID_ARGUMENT when sessionID is empty; an
 // unknown session is NOT_FOUND.
-func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[json.RawMessage], error) {
+func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string, opts ...SnapshotReadOption) (*SessionSnapshot[json.RawMessage], error) {
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", h.name)
 	}
-	return h.transport.GetSnapshot(ctx, &GetSnapshotRequest{SessionID: sessionID})
+	return h.transport.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SessionID: sessionID}, opts))
 }
 
 // Abort asks the background work behind a pending snapshot to stop, through

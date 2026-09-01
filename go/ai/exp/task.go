@@ -42,7 +42,7 @@ type DetachedTask[State any] struct {
 // included: through a handle, aborting a missing snapshot is NOT_FOUND, where
 // [Agent.Abort] reports "".
 type snapshotOps[State any] interface {
-	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
+	GetSnapshot(ctx context.Context, snapshotID string, opts ...SnapshotReadOption) (*SessionSnapshot[State], error)
 	WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
 	Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error)
 }
@@ -104,9 +104,11 @@ func (t *DetachedTask[State]) SnapshotID() string { return t.snapshotID }
 // Status says where the task stands: [SnapshotStatusPending] while the work
 // runs, a terminal status once it settles (see [SnapshotStatus.Terminal]),
 // including [SnapshotStatusExpired] when the worker stopped heartbeating and
-// is presumed dead. A terminal snapshot carries the cumulative session state.
-func (t *DetachedTask[State]) Poll(ctx context.Context) (*SessionSnapshot[State], error) {
-	return t.ops.GetSnapshot(ctx, t.snapshotID)
+// is presumed dead. A terminal snapshot carries the cumulative session state;
+// a poll that only dispatches on where the task stands can pass
+// [WithOmitState] to skip that payload.
+func (t *DetachedTask[State]) Poll(ctx context.Context, opts ...SnapshotReadOption) (*SessionSnapshot[State], error) {
+	return t.ops.GetSnapshot(ctx, t.snapshotID, opts...)
 }
 
 // Wait blocks until the task settles and returns its terminal snapshot: the

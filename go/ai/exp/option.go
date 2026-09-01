@@ -372,3 +372,43 @@ func resolveInvocationInit[State any](name string, opts []InvocationOption[State
 		State:      invOpts.state,
 	}, nil
 }
+
+// --- SnapshotReadOption ---
+
+// SnapshotReadOption configures how a snapshot read projects its result. It
+// applies to the reads that answer at once: [Agent.GetSnapshot],
+// [Agent.GetLatestSnapshot], their [AgentHandle] twins, and [DetachedTask.Poll].
+type SnapshotReadOption interface {
+	applySnapshotRead(*GetSnapshotRequest)
+}
+
+type snapshotReadOptions struct {
+	omitState bool
+}
+
+func (o snapshotReadOptions) applySnapshotRead(req *GetSnapshotRequest) {
+	if o.omitState {
+		req.OmitState = true
+	}
+}
+
+// WithOmitState omits the state payload from a snapshot read: the returned
+// snapshot carries the shaped metadata only (status, finish reason, parent,
+// session, timestamps, error) and its State is nil. The shaping is identical
+// to a full read - the abort-window and expiry rules consult the stored state
+// before it is dropped - so the status story cannot differ between the two
+// reads. Use it to dispatch on where a task stands without serializing a
+// potentially large conversation history; the state transform does not run,
+// exactly as on a full read of a stateless row.
+func WithOmitState() SnapshotReadOption {
+	return snapshotReadOptions{omitState: true}
+}
+
+// resolveSnapshotRead applies opts to req and returns it, for the handle
+// methods that answer a read with one wire request.
+func resolveSnapshotRead(req *GetSnapshotRequest, opts []SnapshotReadOption) *GetSnapshotRequest {
+	for _, opt := range opts {
+		opt.applySnapshotRead(req)
+	}
+	return req
+}
