@@ -14,42 +14,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Synthesize an all-optional Pydantic model for streaming chunks.
+"""Fill a Pydantic model from a half-arrived JSON object.
 
-``output_schema=Recipe`` cannot construct a real ``Recipe`` until every
-required field has arrived. Streaming chunks get a sibling class
-(``RecipePartial``) where every field is ``T | None = None``. The final
-``ModelResponse.output`` still validates into the original type.
-
-The values below are runtime type objects being assembled dynamically, so
-they are deliberately typed ``Any``: the type expressions this module
-builds (``Union[X, None]``, ``list[X]``) only exist at runtime.
+``output_schema=Recipe`` cannot run full validation until every required
+field has arrived. Streaming chunks still want ``chunk.output.title`` the
+moment that key exists, so missing fields are set to ``None`` and
+constraints are skipped. The finished ``ModelResponse.output`` is what
+validates into the real type.
 """
 
 from __future__ import annotations
 
-from collections.abc import (
-    Iterable,
-    Mapping,
-    MutableMapping,
-    MutableSequence,
-    MutableSet,
-    Sequence,
-    Set as AbstractSet,
-)
+from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from types import UnionType
-from typing import Annotated, Any, ForwardRef, TypeGuard, Union, cast, get_args, get_origin
+from typing import Annotated, Any, TypeGuard, Union, get_args, get_origin, get_type_hints
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
+from pydantic import AliasChoices, BaseModel, RootModel
+from pydantic.fields import FieldInfo
 
-_partials: dict[type[BaseModel], type[BaseModel]] = {}
-
-_SEQUENCE_ORIGINS = (list, Sequence, MutableSequence, Iterable)
-_SET_ORIGINS = (set, frozenset, AbstractSet, MutableSet)
-_MAPPING_ORIGINS = (dict, Mapping, MutableMapping)
+SEQUENCE_ORIGINS = (list, tuple, Sequence, MutableSequence)
+MAPPING_ORIGINS = (dict, Mapping, MutableMapping)
 
 
-def _is_base_model(annotation: Any) -> TypeGuard[type[BaseModel]]:  # noqa: ANN401
+def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:  # noqa: ANN401
     return (
         isinstance(annotation, type)
         and issubclass(annotation, BaseModel)
@@ -58,150 +45,118 @@ def _is_base_model(annotation: Any) -> TypeGuard[type[BaseModel]]:  # noqa: ANN4
     )
 
 
-def _referenced_models(schema_type: type[BaseModel]) -> dict[str, type[BaseModel]]:
-    """Collect model classes reachable from ``schema_type``'s compiled schema.
-
-    A model rebuilt inside a function body can keep referring to sibling
-    models by bare name in its field annotations; the actual classes are
-    only reachable through the validator pydantic already compiled, so we
-    recover them from there to resolve those names.
-    """
-    found: dict[str, type[BaseModel]] = {}
-
-    def walk(node: Any) -> None:  # noqa: ANN401
-        if isinstance(node, dict):
-            cls = node.get('cls')
-            if _is_base_model(cls):
-                found.setdefault(cls.__name__, cls)
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, (list, tuple)):
-            for value in node:
-                walk(value)
-
-    walk(getattr(schema_type, '__pydantic_core_schema__', None))
-    return found
-
-
-def _rewrite_annotation(
-    annotation: Any,  # noqa: ANN401
-    building: dict[type[BaseModel], type[BaseModel] | None],
-    refs: dict[str, type[BaseModel]],
-) -> Any:  # noqa: ANN401
-    """Rewrite nested model types into their synthesized partials."""
-    if isinstance(annotation, (str, ForwardRef)):
-        name = annotation if isinstance(annotation, str) else annotation.__forward_arg__
-        target = refs.get(name)
-        return _partial_for(target, building) if target is not None else annotation
-    origin = get_origin(annotation)
-    if origin is Annotated:
+def unwrap_annotated(*, annotation: Any) -> Any:  # noqa: ANN401
+    while get_origin(annotation) is Annotated:
         args = get_args(annotation)
-        return _rewrite_annotation(args[0], building, refs) if args else annotation
-    if origin in (Union, UnionType):
-        # Union is rebuilt member by member so models nested anywhere in it
-        # get partial treatment; typing.Union also tolerates forward refs,
-        # which the | operator rejects on Python 3.10.
-        rewritten = cast('Any', tuple(_rewrite_annotation(arg, building, refs) for arg in get_args(annotation)))
-        return Union[rewritten]  # noqa: UP007
-    if origin in _SEQUENCE_ORIGINS:
-        args = get_args(annotation)
-        if not args:
-            return annotation
-        inner = _rewrite_annotation(args[0], building, refs)
-        return list[inner]
-    if origin in _SET_ORIGINS:
-        args = get_args(annotation)
-        if not args:
-            return annotation
-        inner = _rewrite_annotation(args[0], building, refs)
-        if origin is frozenset:
-            return frozenset[inner]
-        return set[inner]
-    if origin in _MAPPING_ORIGINS:
-        args = get_args(annotation)
-        if len(args) != 2:
-            return annotation
-        key_annotation = args[0]
-        value_annotation = _rewrite_annotation(args[1], building, refs)
-        return dict[key_annotation, value_annotation]
-    if origin is tuple:
-        args = get_args(annotation)
-        if not args:
-            return annotation
-        rewritten = cast('Any', tuple(_rewrite_annotation(arg, building, refs) for arg in args))
-        return tuple[rewritten]
-    if _is_base_model(annotation):
-        return _partial_for(annotation, building)
+        annotation = args[0] if args else annotation
     return annotation
 
 
-def _partial_for(
-    schema_type: type[BaseModel],
-    building: dict[type[BaseModel], type[BaseModel] | None],
-) -> Any:  # noqa: ANN401
-    """Return the partial for ``schema_type``, tolerating recursive schemas."""
-    cached = _partials.get(schema_type)
-    if cached is not None:
-        return cached
-    if schema_type in building:
-        started = building[schema_type]
-        if started is not None:
-            return started
-        # We looped back into a model whose partial is still being assembled
-        # (e.g. a tree node whose children are nodes). Reference it by name
-        # now; partial_model resolves the name once the whole graph exists.
-        return ForwardRef(f'{schema_type.__name__}Partial')
-    building[schema_type] = None
-    refs = _referenced_models(schema_type)
-    fields: dict[str, Any] = {}
+def union_members(*, annotation: Any) -> tuple[Any, ...]:  # noqa: ANN401
+    annotation = unwrap_annotated(annotation=annotation)
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        return get_args(annotation)
+    return (annotation,)
+
+
+def field_annotation(*, schema_type: type[BaseModel], name: str, info: FieldInfo) -> Any:  # noqa: ANN401
+    annotation = info.annotation
+    if annotation is None:
+        return object
+    try:
+        hints = get_type_hints(schema_type, include_extras=True)
+    except Exception:
+        return annotation
+    return hints.get(name, annotation)
+
+
+def field_keys(*, name: str, info: FieldInfo) -> tuple[str, ...]:
+    keys: list[str] = [name]
+    if info.alias is not None:
+        keys.append(info.alias)
+    validation_alias = info.validation_alias
+    if isinstance(validation_alias, str):
+        keys.append(validation_alias)
+    elif isinstance(validation_alias, AliasChoices):
+        keys.extend(choice for choice in validation_alias.choices if isinstance(choice, str))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return tuple(unique)
+
+
+def lookup(*, data: dict[str, Any], name: str, info: FieldInfo) -> tuple[Any, bool]:
+    for key in field_keys(name=name, info=info):
+        if key in data:
+            return data[key], True
+    return None, False
+
+
+def overlap(*, schema_type: type[BaseModel], data: dict[str, Any]) -> int:
+    keys: set[str] = set()
     for name, info in schema_type.model_fields.items():
-        annotation: Any = (
-            _rewrite_annotation(info.annotation, building, refs) if info.annotation is not None else object
-        )
-        # Types and wire names are carried over so streamed camelCase (or
-        # Field aliases) still populate the same attributes the user reads.
-        # Constraints (Field(gt=0), Annotated metadata) and validators are
-        # dropped: a half-streamed value legitimately violates them, and
-        # the final response still validates against the real model.
-        field_kwargs: dict[str, Any] = {'default': None}
-        if info.alias is not None:
-            field_kwargs['alias'] = info.alias
-        if info.validation_alias is not None:
-            field_kwargs['validation_alias'] = info.validation_alias
-        fields[name] = (Union[annotation, None], Field(**field_kwargs))  # noqa: UP007
-    config = ConfigDict(extra='ignore', populate_by_name=True)
-    alias_generator = schema_type.model_config.get('alias_generator')
-    if alias_generator is not None:
-        config['alias_generator'] = alias_generator
-    model = create_model(
-        f'{schema_type.__name__}Partial',
-        __module__=schema_type.__module__,
-        __config__=config,
-        **fields,
-    )
-    building[schema_type] = model
-    return model
+        keys.update(field_keys(name=name, info=info))
+    return len(keys & data.keys())
 
 
-def partial_model(schema_type: type[BaseModel]) -> type[BaseModel]:
-    """Return a cached sibling model with every field optional.
+def pick_model(*, annotation: Any, data: dict[str, Any]) -> type[BaseModel] | None:  # noqa: ANN401
+    candidates = [member for member in union_members(annotation=annotation) if is_model(member)]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    return max(candidates, key=lambda model: overlap(schema_type=model, data=data))
 
-    The result is not a subclass of ``schema_type``. ``isinstance(chunk.output,
-    Recipe)`` is false; ``type(chunk.output).__name__`` is ``RecipePartial``.
 
-    ``RootModel`` schemas are returned unchanged: there is no object-shaped
-    partial to synthesize, so chunks keep the extracted JSON.
+def coerce(*, annotation: Any, raw: Any) -> Any:  # noqa: ANN401
+    if raw is None:
+        return None
+    annotation = unwrap_annotated(annotation=annotation)
+    if isinstance(raw, dict):
+        model = pick_model(annotation=annotation, data=raw)
+        if model is not None:
+            return construct_partial(schema_type=model, data=raw)
+        origin = get_origin(annotation)
+        if origin in MAPPING_ORIGINS:
+            args = get_args(annotation)
+            if len(args) == 2:
+                return {key: coerce(annotation=args[1], raw=value) for key, value in raw.items()}
+        return raw
+    if isinstance(raw, list):
+        origin = get_origin(annotation)
+        if origin in SEQUENCE_ORIGINS:
+            inners = tuple(arg for arg in get_args(annotation) if arg is not Ellipsis)
+            if len(inners) == 1:
+                return [coerce(annotation=inners[0], raw=item) for item in raw]
+            if inners:
+                return [
+                    coerce(annotation=inners[index] if index < len(inners) else inners[-1], raw=item)
+                    for index, item in enumerate(raw)
+                ]
+        return raw
+    return raw
+
+
+def construct_partial(*, schema_type: type[BaseModel], data: dict[str, Any]) -> BaseModel:
+    """Build ``schema_type`` from streamed JSON without running validation.
+
+    Missing fields are ``None`` so a caller can read ``chunk.output.title``
+    as soon as that key exists. Nested objects become the same class with
+    the same holes. ``(await sr.response).output`` is the only fully
+    validated value.
     """
-    if issubclass(schema_type, RootModel):
-        return schema_type
-    cached = _partials.get(schema_type)
-    if cached is not None:
-        return cached
-    building: dict[type[BaseModel], type[BaseModel] | None] = {}
-    result = _partial_for(schema_type, building)
-    built = {source: partial for source, partial in building.items() if partial is not None}
-    namespace: dict[str, Any] = {partial.__name__: partial for partial in built.values()}
-    for partial in built.values():
-        partial.model_rebuild(force=True, _types_namespace=namespace)
-    _partials.update(built)
-    return result
+    values: dict[str, Any] = {}
+    for name, info in schema_type.model_fields.items():
+        raw, found = lookup(data=data, name=name, info=info)
+        if not found:
+            values[name] = None
+            continue
+        values[name] = coerce(
+            annotation=field_annotation(schema_type=schema_type, name=name, info=info),
+            raw=raw,
+        )
+    return schema_type.model_construct(**values)

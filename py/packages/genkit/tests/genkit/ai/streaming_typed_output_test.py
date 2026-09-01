@@ -6,14 +6,14 @@
 """Tests for typed streaming output (issue #6007).
 
 Covers:
-- ModelResponseChunk.output wrapping extracted JSON in a synthesized
-  all-optional partial of the output schema type
+- ModelResponseChunk.output constructing the output schema from extracted JSON
+  with missing fields set to None
 - ActionRunContext genericity over the chunk type
-- End-to-end generate_stream with output_schema producing partial chunks
+- End-to-end generate_stream with output_schema producing typed chunks
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, TypeVar, cast, overload
+from typing import Annotated, Any, TypeVar, overload
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
@@ -22,7 +22,6 @@ from pydantic.alias_generators import to_camel
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionRunContext
-from genkit._core._partial import partial_model
 from genkit._core._typing import Part, Role, TextPart
 
 OutputT = TypeVar('OutputT', bound=BaseModel)
@@ -49,52 +48,45 @@ def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelRespon
 
 
 class TestChunkPartialOutput:
-    """chunk.output with a schema type wraps extracted JSON in a partial."""
+    """chunk.output with a schema type constructs that class from extracted JSON."""
 
     def test_preamble_returns_none(self) -> None:
         # No JSON object has started yet.
         assert _chunk('Here is the JSON:', schema_type=Recipe).output is None
         assert _chunk('Here is the JSON:').output is None
 
-    def test_prefix_with_no_fields_is_empty_partial(self) -> None:
+    def test_prefix_with_no_fields_is_empty_instance(self) -> None:
         # The object has started but no key has finished; all fields None.
         out = _chunk('{"ti', schema_type=Recipe).output
-        assert out is not None
-        assert not isinstance(out, Recipe)
+        assert isinstance(out, Recipe)
         assert out.title is None
         assert out.steps is None
 
     def test_first_field_is_available_immediately(self) -> None:
-        # title present but steps has not started streaming yet:
-        # the partial carries title, steps stays None. Not None overall.
         out = _chunk('{"title": "Chocolate C', schema_type=Recipe).output
-        assert out is not None
-        assert not isinstance(out, Recipe)
+        assert isinstance(out, Recipe)
         assert out.title == 'Chocolate C'
         assert out.steps is None
 
     def test_partial_trailing_value(self) -> None:
         out = _chunk('{"title": "Chocolate Cake", "steps": ["mi', schema_type=Recipe).output
-        assert out is not None
+        assert isinstance(out, Recipe)
         assert out.title == 'Chocolate Cake'
         assert out.steps == ['mi']
 
-    def test_complete_json_is_still_the_partial_type(self) -> None:
-        # Chunks never hand back the real model; only ModelResponse.output does.
+    def test_complete_json_is_still_unvalidated(self) -> None:
+        # A complete-looking chunk is still constructed, not validated.
+        # Only ModelResponse.output runs the real model.
         out = _chunk('{"title": "Cake", "steps": ["mix", "bake"]}', schema_type=Recipe).output
-        assert out is not None
-        assert not isinstance(out, Recipe)
-        assert type(out).__name__ == 'RecipePartial'
+        assert isinstance(out, Recipe)
         assert out.steps == ['mix', 'bake']
 
     def test_no_schema_type_preserves_raw_json_behavior(self) -> None:
-        # Backward compat: without a schema type, output is the raw extracted JSON
         out = _chunk('{"title": "Cake", "steps": ["mix"]}').output
         assert out == {'title': 'Cake', 'steps': ['mix']}
         assert not isinstance(out, Recipe)
 
-    def test_partial_wraps_chunk_parser_result(self) -> None:
-        # chunk_parser output (used by format definitions) is also wrapped
+    def test_constructs_chunk_parser_result(self) -> None:
         wrapper: ModelResponseChunk[Recipe] = ModelResponseChunk(
             role='model',
             content=[Part(TextPart(text='ignored'))],
@@ -102,20 +94,22 @@ class TestChunkPartialOutput:
             schema_type=Recipe,
         )
         out = wrapper.output
-        assert out is not None
-        assert not isinstance(out, Recipe)
+        assert isinstance(out, Recipe)
         assert out.title == 'Parsed'
 
     def test_non_dict_parse_result_passes_through(self) -> None:
-        # A scalar/array payload can't be validated into an object schema;
+        # A scalar/array payload can't be constructed into an object schema;
         # it is returned as-is rather than silently dropped.
         assert _chunk('[1, 2, 3]', schema_type=Recipe).output == [1, 2, 3]
 
-    def test_wrong_typed_value_yields_none_instead_of_raising(self) -> None:
-        # A wrong-typed value (title as a number) can't fit even the partial.
-        # The chunk degrades to None instead of crashing the caller's loop;
-        # the final response is where the real ValidationError surfaces.
-        assert _chunk('{"title": 123}', schema_type=Recipe).output is None
+    def test_wrong_typed_value_does_not_raise(self) -> None:
+        # Chunks skip validation, so a wrong-typed field is stored as-is
+        # instead of crashing the caller's loop. The final response is
+        # where the real ValidationError surfaces.
+        out = _chunk('{"title": 123}', schema_type=Recipe).output
+        assert isinstance(out, Recipe)
+        assert out.title == 123
+        assert out.steps is None
 
     def test_camel_case_alias_populates_python_field(self) -> None:
         class UserProfile(BaseModel):
@@ -124,7 +118,7 @@ class TestChunkPartialOutput:
             last_name: str
 
         out = _chunk('{"firstName": "Ada"', schema_type=UserProfile).output
-        assert out is not None
+        assert isinstance(out, UserProfile)
         assert out.first_name == 'Ada'
         assert out.last_name is None
 
@@ -133,7 +127,7 @@ class TestChunkPartialOutput:
             first_name: str = Field(alias='firstName')
 
         out = _chunk('{"firstName": "Ada"}', schema_type=User).output
-        assert out is not None
+        assert isinstance(out, User)
         assert out.first_name == 'Ada'
 
     def test_root_model_dict_stays_extracted_json(self) -> None:
@@ -144,14 +138,10 @@ class TestChunkPartialOutput:
         assert out == {'a': 1, 'b': 2}
 
 
-class TestPartialModelSynthesis:
-    """partial_model rewrites nested annotations and drops constraints."""
+class TestNestedAndConstrainedOutput:
+    """Nested models and dropped constraints on a streaming chunk."""
 
-    def test_constraints_and_validators_are_dropped(self) -> None:
-        # A half-streamed value legitimately violates constraints (a streamed
-        # int passes through 0, a capitalized string starts mid-word), so the
-        # partial keeps only the types. The real model still enforces
-        # everything on the final response.
+    def test_constraints_and_validators_are_skipped(self) -> None:
         class Strict(BaseModel):
             servings: int = Field(gt=0)
             rating: Annotated[int, Field(ge=1, le=5)]
@@ -164,14 +154,16 @@ class TestPartialModelSynthesis:
                     raise ValueError('must be capitalized')
                 return v
 
-        out = cast('Any', partial_model(Strict).model_validate({'servings': -5, 'rating': 99, 'title': 'lowercase'}))
+        out = _chunk(
+            '{"servings": -5, "rating": 99, "title": "lowercase"}',
+            schema_type=Strict,
+        ).output
+        assert isinstance(out, Strict)
         assert out.servings == -5
         assert out.rating == 99
         assert out.title == 'lowercase'
 
-    def test_union_members_become_partials(self) -> None:
-        # A mid-stream nested object under a multi-member union must validate
-        # against partial members, not the real models (which require fields).
+    def test_union_member_is_the_matching_class(self) -> None:
         class Cat(BaseModel):
             meow: str
 
@@ -182,12 +174,13 @@ class TestPartialModelSynthesis:
         class Pet(BaseModel):
             animal: Cat | Dog
 
-        out = cast('Any', partial_model(Pet).model_validate({'animal': {'bark': 'woof'}}))
-        assert out.animal is not None
+        out = _chunk('{"animal": {"bark": "woof"}}', schema_type=Pet).output
+        assert isinstance(out, Pet)
+        assert isinstance(out.animal, Dog)
         assert out.animal.bark == 'woof'
         assert out.animal.volume is None
 
-    def test_sequence_and_mapping_values_become_partials(self) -> None:
+    def test_sequence_and_mapping_values_are_constructed(self) -> None:
         class Step(BaseModel):
             title: str
             duration: int
@@ -200,19 +193,19 @@ class TestPartialModelSynthesis:
             steps: Sequence[Step]
             by_id: Mapping[str, Item]
 
-        out = cast(
-            'Any',
-            partial_model(Plan).model_validate({
-                'steps': [{'title': 'mix'}],
-                'by_id': {'a': {'name': 'axe'}},
-            }),
-        )
+        out = _chunk(
+            '{"steps": [{"title": "mix"}], "by_id": {"a": {"name": "axe"}}}',
+            schema_type=Plan,
+        ).output
+        assert isinstance(out, Plan)
+        assert isinstance(out.steps[0], Step)
         assert out.steps[0].title == 'mix'
         assert out.steps[0].duration is None
+        assert isinstance(out.by_id['a'], Item)
         assert out.by_id['a'].name == 'axe'
         assert out.by_id['a'].qty is None
 
-    def test_dict_and_tuple_values_become_partials(self) -> None:
+    def test_dict_and_tuple_values_are_constructed(self) -> None:
         class Item(BaseModel):
             name: str
             qty: int
@@ -221,13 +214,11 @@ class TestPartialModelSynthesis:
             by_id: dict[str, Item]
             featured: tuple[Item, ...]
 
-        out = cast(
-            'Any',
-            partial_model(Inventory).model_validate({
-                'by_id': {'a': {'name': 'axe'}},
-                'featured': [{'qty': 2}],
-            }),
-        )
+        out = _chunk(
+            '{"by_id": {"a": {"name": "axe"}}, "featured": [{"qty": 2}]}',
+            schema_type=Inventory,
+        ).output
+        assert isinstance(out, Inventory)
         assert out.by_id['a'].name == 'axe'
         assert out.by_id['a'].qty is None
         assert out.featured[0].qty == 2
@@ -238,12 +229,16 @@ class TestPartialModelSynthesis:
             name: str
             child: 'Node | None' = None
 
-        partial = partial_model(Node)
-        out = cast('Any', partial.model_validate({'name': 'root', 'child': {'child': {'name': 'leaf'}}}))
+        out = _chunk(
+            '{"name": "root", "child": {"child": {"name": "leaf"}}}',
+            schema_type=Node,
+        ).output
+        assert isinstance(out, Node)
         assert out.name == 'root'
+        assert isinstance(out.child, Node)
         assert out.child.name is None
+        assert isinstance(out.child.child, Node)
         assert out.child.child.name == 'leaf'
-        assert type(out.child).__name__ == 'NodePartial'
 
     def test_mutually_recursive_models(self) -> None:
         class Author(BaseModel):
@@ -255,18 +250,15 @@ class TestPartialModelSynthesis:
             author: Author | None = None
 
         Author.model_rebuild()
-        out = cast('Any', partial_model(Author).model_validate({'name': 'a', 'posts': [{'author': {'posts': []}}]}))
+        out = _chunk(
+            '{"name": "a", "posts": [{"author": {"posts": []}}]}',
+            schema_type=Author,
+        ).output
+        assert isinstance(out, Author)
+        assert isinstance(out.posts[0], Post)
         assert out.posts[0].title is None
+        assert isinstance(out.posts[0].author, Author)
         assert out.posts[0].author.name is None
-
-    def test_partial_is_cached_per_class(self) -> None:
-        assert partial_model(Recipe) is partial_model(Recipe)
-
-    def test_root_model_is_not_rewritten(self) -> None:
-        class DictRoot(RootModel[dict[str, int]]):
-            pass
-
-        assert partial_model(DictRoot) is DictRoot
 
 
 class TestActionRunContextGenerics:
@@ -285,13 +277,11 @@ class TestActionRunContextGenerics:
         assert received[0].title == 't'
 
     def test_class_is_subscriptable(self) -> None:
-        # Generic alias construction must not raise
         assert ActionRunContext[Recipe] is not None
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_with_output_schema_yields_partial_chunks() -> None:
-    """End to end: generate_stream(output_schema=...) chunks are partials of the schema."""
+async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 
@@ -315,18 +305,15 @@ async def test_generate_stream_with_output_schema_yields_partial_chunks() -> Non
     async for chunk in stream_result.stream:
         outputs.append(chunk.output)
 
-    # First chunk: title is already usable; steps has not started -> None.
-    assert outputs[0] is not None
-    assert not isinstance(outputs[0], Recipe)
+    assert isinstance(outputs[0], Recipe)
     assert outputs[0].title == 'Chocolate C'
     assert outputs[0].steps is None
-    # Later chunks fill in as keys arrive; still partials, never the real model.
+    assert isinstance(outputs[1], Recipe)
     assert outputs[1].title == 'Chocolate Cake'
     assert outputs[1].steps == ['mi']
+    assert isinstance(outputs[2], Recipe)
     assert outputs[2].steps == ['mix', 'bake']
-    assert not isinstance(outputs[2], Recipe)
 
-    # Final response is fully validated, as before.
     response = await stream_result.response
     assert isinstance(response.output, Recipe)
     assert response.output.title == 'Chocolate Cake'
@@ -335,7 +322,6 @@ async def test_generate_stream_with_output_schema_yields_partial_chunks() -> Non
 
 @pytest.mark.asyncio
 async def test_generate_stream_without_schema_chunks_unchanged() -> None:
-    """Backward compat: no output_schema keeps raw JSON chunk output."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 
@@ -351,7 +337,7 @@ async def test_generate_stream_without_schema_chunks_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_camel_case_alias_fills_partial_fields() -> None:
+async def test_generate_stream_camel_case_alias_fills_fields() -> None:
     class UserProfile(BaseModel):
         model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
         first_name: str
@@ -375,7 +361,7 @@ async def test_generate_stream_camel_case_alias_fills_partial_fields() -> None:
     async for chunk in stream_result.stream:
         outputs.append(chunk.output)
 
-    assert outputs[0] is not None
+    assert isinstance(outputs[0], UserProfile)
     assert outputs[0].first_name == 'Ada'
     assert outputs[0].last_name is None
     assert outputs[1].first_name == 'Ada'

@@ -130,8 +130,8 @@ async def stream_country_info_json(input: CountryInput) -> CountryInfo:
         output_schema=CountryInfo,
     )
     async for chunk in sr:
-        # Mid-stream is a partial: same fields as CountryInfo, any of them
-        # may still be None or a prefix. The finished object is only at the end.
+        # Mid-stream is a CountryInfo; any field may still be None or a
+        # prefix. The finished, validated object is only at the end.
         if chunk.output and chunk.output.name:
             print(f'streaming name: {chunk.output.name}')  # noqa: T201
     return (await sr.response).output
