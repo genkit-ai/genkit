@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from genkit import ActionKind, Genkit
 from genkit._ai._tools import Interrupt, ToolRunContext
-from genkit._core._action import Action
+from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
@@ -370,7 +370,7 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
     # We pass a context dictionary with both serializable and unserializable values,
     # including nested dictionaries and lists.
     complex_context: dict[str, object] = {
-        'auth': {
+        'session': {
             'user_id': 123,
             'token': 'secret_token',
             'raw_connection': UnserializableObject(),  # should be dropped
@@ -392,13 +392,51 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
     context_json = json.loads(context_attr)
 
     # Assertions
-    assert context_json['auth']['user_id'] == 123
-    assert context_json['auth']['token'] == 'secret_token'
-    assert context_json['auth']['raw_connection'] == 'Unserializable'
+    assert context_json['session']['user_id'] == 123
+    assert context_json['session']['token'] == 'secret_token'
+    assert context_json['session']['raw_connection'] == 'Unserializable'
 
     assert context_json['serializable_list'] == [1, 'two', {'nested_key': 'nested_val'}]
     assert context_json['unserializable_list'] == [1, 'Unserializable', 3]
     assert context_json['top_level_unserializable'] == 'Unserializable'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_redacts_auth_and_secrets(exporter: InMemorySpanExporter) -> None:
+    """The Context panel hides identity and keys. The live action still sees them."""
+    seen: dict[str, object] = {}
+
+    async def peek(_input: object, ctx: ActionRunContext) -> str:
+        seen['secrets'] = ctx.context['secrets']
+        seen['auth'] = ctx.context['auth']
+        return 'ok'
+
+    action = Action(
+        name='redactContext',
+        kind=ActionKind.CUSTOM,
+        fn=peek,
+    )
+
+    await action.run(
+        context={
+            'auth': {'token': 'ya29'},
+            'secrets': {'api_key': 'sk-live'},
+            'locale': 'en-US',
+            'nested': {'auth': 'this stays'},
+        }
+    )
+
+    assert seen['secrets'] == {'api_key': 'sk-live'}
+    assert seen['auth'] == {'token': 'ya29'}
+
+    span = _by_name(exporter.get_finished_spans(), 'redactContext')
+    attrs = dict(span.attributes or {})
+    context_json = json.loads(attrs['genkit:metadata:context'])
+
+    assert context_json['auth'] == '<redacted>'
+    assert context_json['secrets'] == '<redacted>'
+    assert context_json['locale'] == 'en-US'
+    assert context_json['nested']['auth'] == 'this stays'
 
 
 @pytest.mark.asyncio

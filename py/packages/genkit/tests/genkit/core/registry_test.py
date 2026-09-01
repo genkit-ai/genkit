@@ -445,7 +445,7 @@ async def _bg_start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation
     return Operation(id='bg-op', done=False)
 
 
-async def _bg_check(op: Operation) -> Operation:
+async def _bg_check(op: Operation, _ctx: ActionRunContext) -> Operation:
     return op
 
 
