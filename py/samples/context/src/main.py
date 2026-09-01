@@ -14,103 +14,45 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Context - pass request data through `generate()`, flows, and tools."""
+"""Per-request user/tenant on generate() and tools — not in the prompt."""
 
 from genkit_google_genai import GoogleAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
-USERS: dict[int, dict[str, str]] = {
-    42: {'name': 'Arthur Dent', 'plan': 'premium'},
-    123: {'name': 'Jane Doe', 'plan': 'enterprise'},
-    999: {'name': 'Guest User', 'plan': 'free'},
+# What your auth middleware would have already resolved for this request.
+ACCOUNTS = {
+    ('user-42', 'acme'): 'Ada at Acme (enterprise)',
+    ('user-99', 'globex'): 'Ben at Globex (starter)',
 }
 
 
-class ContextInput(BaseModel):
-    """Input for context flows."""
-
-    user_id: int = Field(default=42, description='Try 42, 123, or 999')
-
-
-def _current_user() -> dict[str, str]:
-    """Read the current user record from execution context."""
-
-    context = Genkit.current_context() or {}
-    raw_user = context.get('user')
-    if not isinstance(raw_user, dict):
-        return {'name': 'Unknown', 'plan': 'none'}
-    user_id = int(raw_user.get('id', 0))  # type: ignore[arg-type]
-    return USERS.get(user_id, {'name': 'Unknown', 'plan': 'none'})
+class AccountNeed(BaseModel):
+    need: str
 
 
 @ai.tool()
-async def get_user_info() -> str:
-    """Read user info from `Genkit.current_context()`."""
-
-    user = _current_user()
-    return f'{user["name"]} ({user["plan"]} plan)'
-
-
-@ai.tool()
-async def get_user_permissions() -> str:
-    """Read plan-based permissions from execution context."""
-
-    plan = _current_user()['plan']
-    permissions = {
-        'free': 'read-only access',
-        'premium': 'read-write access',
-        'enterprise': 'admin access',
-        'none': 'no access',
-    }
-    return permissions.get(plan, 'unknown access')
-
-
-@ai.flow()
-async def context_in_generate(input: ContextInput) -> str:
-    """Pass context into `ai.generate()` and let a tool read it."""
-
-    response = await ai.generate(
-        prompt='Look up the current user.',
-        tools=['get_user_info'],
-        context={'user': {'id': input.user_id}},
-    )
-    return response.text
-
-
-@ai.flow()
-async def context_in_flow(input: ContextInput, ctx: ActionRunContext) -> str:
-    """Access request context directly inside a flow."""
-
-    return f'Flow context: {ctx.context}. Requested user: {input.user_id}.'
-
-
-@ai.flow()
-async def context_propagation_chain(input: ContextInput) -> str:
-    """Show that nested `generate()` calls inherit context automatically."""
-
-    first_response = await ai.generate(
-        prompt='Look up the current user.',
-        tools=['get_user_info'],
-        context={'user': {'id': input.user_id}},
-    )
-    second_response = await ai.generate(
-        prompt=f'The user is {first_response.text}. What permissions do they have?',
-        tools=['get_user_permissions'],
-    )
-    return f'User: {first_response.text}\nPermissions: {second_response.text}'
+async def account_record(input: AccountNeed, ctx: ActionRunContext) -> str:
+    # Tenant is not a tool argument, so a prompt cannot hop to another customer.
+    key = (str(ctx.context.get('user_id', '')), str(ctx.context.get('tenant_id', '')))
+    account = ACCOUNTS.get(key, 'unknown')
+    return f'{account}; asked for {input.need}'
 
 
 async def main() -> None:
-    """Run the context demos once."""
-    try:
-        print(await context_in_generate(ContextInput()))  # noqa: T201
-        print(await context_propagation_chain(ContextInput()))  # noqa: T201
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+    for user_id, tenant_id in (('user-42', 'acme'), ('user-99', 'globex')):
+        # context= is the same dict your auth middleware puts on the request.
+        # generate() and every tool call inherit it.
+        response = await ai.generate(
+            prompt='What is included in my plan?',
+            system='Call account_record for the signed-in user. You cannot choose a tenant.',
+            tools=['account_record'],
+            context={'user_id': user_id, 'tenant_id': tenant_id},
+        )
+        print(f'{tenant_id}/{user_id}: {response.text}')
 
 
 if __name__ == '__main__':

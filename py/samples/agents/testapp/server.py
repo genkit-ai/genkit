@@ -14,14 +14,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""One FastAPI server that puts every agent behind an HTTP endpoint.
+"""One FastAPI process that serves every agent in this folder over HTTP.
 
-This is the Python port of the JS testapp's ``index.ts``. Each agent is mounted
-with ``serve_agent`` — one ``include_router`` call gives you the turn route plus
-its ``/getSnapshot`` and ``/abort`` companions — and plain flows go through
-``serve_flow``. The ``prefix='/api'`` at the mount is what puts everything under
-``/api/<name>``, so the same web frontend that talks to the Node server talks to
-this one unchanged.
+Each agent is mounted with ``serve_agent``: one ``include_router`` gives you the
+turn route plus ``/getSnapshot`` and ``/abort``. Plain flows go through
+``serve_flow``. The ``prefix='/api'`` mount puts everything at ``/api/<name>``,
+so a small team can swap this in as the Python agent backend without changing
+frontend paths.
 
     genkit start -- uv run testapp/server.py   # Dev UI (:4000) + API (:8080)
 
@@ -52,8 +51,8 @@ from workspace_agent import workspace_agent
 
 app = FastAPI(title='Genkit Agents (Python)')
 
-# The web app runs on a different origin (Vite dev server), so let it in and
-# expose the streaming header the client reads to correlate chunks.
+# The frontend is a different origin, so let it in and expose the streaming
+# header the client reads to correlate chunks.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -80,11 +79,11 @@ for agent in (
 ):
     app.include_router(serve_agent(agent), prefix='/api')
 
-# The coding-agent web page browses the workspace through these two flows. Their
-# URLs are fixed by the frontend, so we pin base_path instead of using the flow name.
+# The coding-agent file browser hits these two paths. Pin base_path so the
+# URLs stay stable instead of following the flow name.
 app.include_router(serve_flow(list_workspace_files, base_path='/workspace/files'), prefix='/api')
 app.include_router(serve_flow(read_workspace_file, base_path='/workspace/file'), prefix='/api')
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8080)  # noqa: S104
+    uvicorn.run(app, host='127.0.0.1', port=8080)

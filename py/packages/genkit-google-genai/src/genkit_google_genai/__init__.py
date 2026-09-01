@@ -33,7 +33,7 @@ Example:
 
     # 2. Generate content using dynamic model discovery
     res = await ai.generate(
-        model='googleai/gemini-flash-latest',
+        model=GoogleAI.gemini_model('gemini-flash-latest'),
         prompt='Suggest 2 catchy names for a space coffee shop.',
     )
 
@@ -54,7 +54,7 @@ Example:
 
     # 2. Generate content with Gemini Pro on Vertex AI
     res = await ai.generate(
-        model='vertexai/gemini-pro-latest',
+        model=VertexAI.gemini_model('gemini-pro-latest'),
         prompt='Explain quantum entanglement in one sentence.',
     )
 

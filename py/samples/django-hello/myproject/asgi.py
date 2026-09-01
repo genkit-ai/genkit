@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ASGI entrypoint for the django-hello sample."""
+"""ASGI entrypoint. Django 4.1+ async views need this, not WSGI."""
 
 import os
 

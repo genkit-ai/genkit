@@ -62,7 +62,7 @@ store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='Banking assistant. Call transferMoney when the user asks to transfer money.',
     tools=[transfer_money],
     use=[tool_approval],

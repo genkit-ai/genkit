@@ -36,7 +36,7 @@ Example:
     @ai.flow()
     async def chat(prompt: str) -> str:
         res = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             prompt=f'Answer concisely: {prompt}',
         )
         return res.text

@@ -96,19 +96,19 @@ async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> Agent
         brief_content += f'- **Added in Turn**: {turn_num}\n'
         brief_content += f'- **Status**: Briefing compiled for *{topic}*\n\n---\n\n'
 
-        await sess.add_artifacts(
+        await sess.add_artifacts([
             Artifact(
                 name='research_brief.md',
                 parts=[Part(TextPart(text=brief_content))],
             )
-        )
+        ])
 
         # 3. Stream model response
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
 
         stream_resp = ai.generate_stream(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             system=(
                 'You are a Senior Research Analyst. Provide concise, clear, '
                 'and structured research insights for the user prompt.'

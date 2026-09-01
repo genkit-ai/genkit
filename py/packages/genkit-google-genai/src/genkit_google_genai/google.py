@@ -34,7 +34,7 @@ Example:
 
     # 2. Generate content using any discovered Gemini model
     response = await ai.generate(
-        model='googleai/gemini-flash-latest',
+        model=GoogleAI.gemini_model('gemini-flash-latest'),
         prompt='Suggest 3 names for a space-themed coffee shop.',
     )
 
@@ -555,8 +555,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         |---|---|---|
         | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
         | Imagen | MODEL | ``googleai/imagen-3.0-generate-002`` |
-        | Embedders | EMBEDDER | ``googleai/text-embedding-004`` |
-        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-2.0-generate-001`` |
+        | Embedders | EMBEDDER | ``googleai/gemini-embedding-001`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-preview`` |
 
     Example:
         ```python
@@ -568,7 +568,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # 2. Generate text using Gemini Flash
         res = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             prompt='Explain quantum computing in one sentence.',
         )
 
@@ -893,7 +893,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         |---|---|---|
         | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
         | Imagen | MODEL | ``vertexai/imagen-3.0-generate-002`` |
-        | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-2.0-generate-001`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-3.1-generate-preview`` |
         | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
@@ -906,7 +906,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         # 2. Generate text using Gemini on Vertex AI
         res = await ai.generate(
-            model='vertexai/gemini-flash-latest',
+            model=VertexAI.gemini_model('gemini-flash-latest'),
             prompt='Explain quantum computing in one sentence.',
         )
 

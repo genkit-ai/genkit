@@ -28,9 +28,9 @@ Example:
     # 1. Initialize Genkit with the Anthropic plugin
     ai = Genkit(plugins=[Anthropic()])
 
-    # 2. Generate content using Claude Sonnet 4.5
+    # 2. Generate content using Claude Sonnet 4.6
     res = await ai.generate(
-        model='anthropic/claude-sonnet-4-5',
+        model=Anthropic.claude_model('claude-sonnet-4-6'),
         prompt='Explain recursion in 10 words.',
     )
 

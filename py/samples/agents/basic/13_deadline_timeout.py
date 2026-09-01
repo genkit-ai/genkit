@@ -37,7 +37,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 agent = ai.define_agent(
     name='essayist',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='You are a helpful assistant. When asked to write something long, write many paragraphs.',
 )
 
