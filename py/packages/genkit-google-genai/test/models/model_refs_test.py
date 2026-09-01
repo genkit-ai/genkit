@@ -184,12 +184,16 @@ class TestClosedRejectSet:
             GoogleAI.gemini_model('gemini-embedding-001')
         with pytest.raises(GenkitError, match=r'background model and has no ref constructor'):
             GoogleAI.gemini_model('veo-3.0-generate-001')
-        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+        with pytest.raises(GenkitError, match=r'lyria_model'):
             GoogleAI.gemini_model('lyria-002')
-        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+        with pytest.raises(GenkitError, match=r'deep_research_model'):
             GoogleAI.gemini_model('deep-research-pro-preview')
-        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+        with pytest.raises(GenkitError, match=r'antigravity_model'):
             GoogleAI.gemini_model('antigravity-code-1')
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+            VertexAI.gemini_model('lyria-002')
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
+            VertexAI.gemini_model('deep-research-pro-preview')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
             GoogleAI.gemini_model('imagegeneration@006')
         with pytest.raises(GenkitError, match=r'is not a supported model'):

@@ -76,6 +76,8 @@ from genkit_google_genai.google import (
     GoogleAI,
     VertexAI,
 )
+from genkit_google_genai.models.antigravity import AntigravityConfig
+from genkit_google_genai.models.deep_research import DeepResearchConfig
 from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
     GeminiEmbeddingModels,
@@ -114,6 +116,8 @@ __all__ = [
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
     'GemmaConfigSchema',
+    'AntigravityConfig',
+    'DeepResearchConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenConfigSchema',

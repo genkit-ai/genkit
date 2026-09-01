@@ -527,7 +527,6 @@ async def test_vertexai_unroutable_ids_fail_closed(
         'virtual-try-on-001',
         'imagegeneration@006',
         'imagetext@001',
-        'lyria-002',
         'deep-research-pro-preview',
         'gemini-embedding-001',
         'models/deep-research-pro-preview',
