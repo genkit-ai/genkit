@@ -58,7 +58,6 @@ from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
     CustomPart,
-    DocumentPart,
     Media,
     MediaPart,
     Metadata,
@@ -152,7 +151,6 @@ __all__ = [
     'ToolResponsePart',
     # Domain types
     'Document',
-    'DocumentPart',
     # Plugin interface
     'Plugin',
     # Middleware references (wire form for use= parameter)

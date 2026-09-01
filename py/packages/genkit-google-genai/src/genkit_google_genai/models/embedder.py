@@ -28,7 +28,7 @@ else:
 from google import genai
 from google.genai import types as genai_types
 
-from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
+from genkit import Embedding, EmbedRequest, EmbedResponse, Part
 from genkit._core._typing import DocumentData, MediaPart, TextPart
 from genkit.embedder import EmbedderOptions, EmbedderSupports
 from genkit_google_genai.models._routing import strip_ref_prefixes
@@ -273,7 +273,7 @@ class Embedder:
         instance: dict[str, Any] = {}
         text_parts: list[str] = []
         for p in doc.content:
-            part = p if isinstance(p, DocumentPart) else DocumentPart.model_validate(p)
+            part = p if isinstance(p, Part) else Part.model_validate(p)
             root = part.root
             if isinstance(root, TextPart):
                 if root.text:
@@ -375,7 +375,7 @@ class Embedder:
                 doc = DocumentData.model_validate(doc)
             content_parts: list[genai.types.Part] = []
             for p in doc.content:
-                part = p if isinstance(p, DocumentPart) else DocumentPart.model_validate(p)
+                part = p if isinstance(p, Part) else Part.model_validate(p)
                 converted = await PartConverter.to_gemini(part)
                 if isinstance(converted, list):
                     content_parts.extend(converted)

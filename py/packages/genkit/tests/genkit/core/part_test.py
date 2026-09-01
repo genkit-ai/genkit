@@ -14,9 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for Part and DocumentPart ergonomic factory methods and property getters."""
+"""Unit tests for Part factory methods and property getters."""
 
-from genkit._core._typing import DocumentPart, MediaPart, Part, TextPart
+from genkit._core._typing import MediaPart, Part, TextPart
 
 
 def test_part_from_text() -> None:
@@ -79,20 +79,3 @@ def test_part_from_custom() -> None:
     p = Part.from_custom({'vendor_field': True})
     assert p.custom == {'vendor_field': True}
     assert p.text is None
-
-
-def test_document_part_from_text() -> None:
-    """DocumentPart.from_text creates a text document part."""
-    dp = DocumentPart.from_text('sample doc text', metadata={'page': 1})
-    assert dp.text == 'sample doc text'
-    assert dp.media is None
-    assert dp.metadata == {'page': 1}
-
-
-def test_document_part_from_media() -> None:
-    """DocumentPart.from_media creates a media document part."""
-    dp = DocumentPart.from_media('https://example.com/doc.pdf', content_type='application/pdf')
-    assert dp.media is not None
-    assert dp.media.url == 'https://example.com/doc.pdf'
-    assert dp.media.content_type == 'application/pdf'
-    assert dp.text is None

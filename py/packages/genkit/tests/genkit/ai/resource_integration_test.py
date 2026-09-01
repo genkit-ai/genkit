@@ -49,7 +49,7 @@ async def test_generate_with_resources() -> None:
     async def mock_model(input: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         # Verify docs are EMPTY (not auto-populated)
         assert not input.docs
-        # Access via root because DocumentPart is a RootModel
+        # Access via root because Part is a RootModel
         # Verify the message content was hydrated (replaced resource part with text part)
         assert input.messages[0].content[0].root.text == 'Resource content for test://foo'
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))

@@ -44,7 +44,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import DocumentPart
+from genkit import Part
 
 # DocumentData has no public re-export yet; the reranker types are built on it.
 from genkit._core._typing import DocumentData
@@ -88,7 +88,7 @@ class RankedDocumentData(BaseModel):
 
     model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
-    content: list[DocumentPart]
+    content: list[Part]
     """The ranked document's parts, taken verbatim from the input document."""
 
     metadata: RankedDocumentMetadata

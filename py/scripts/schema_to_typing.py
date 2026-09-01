@@ -44,6 +44,9 @@ TRANSFORMATIONS = {
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
     # RuntimeError would shadow Python's builtin exception.
     'RuntimeError': {'output_name': 'GenkitRuntimeError'},
+    # Documents take the same Part as messages. The schema names a
+    # text|media subset; we do not emit a second type for that.
+    'DocumentPart': {'output_name': 'Part'},
 }
 
 
@@ -62,7 +65,7 @@ def _output_name(name: str) -> str:
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
 PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
-ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
+ROOT_MODEL_UNIONS = frozenset({'Part', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -390,8 +393,8 @@ def generate(schema_path: Path, _out: Path) -> str:
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)
-    # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
-    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
+    # Part needs RootModel so Part(root=TextPart(...)) works; others get type aliases
+    ROOT_MODEL_UNIONS = frozenset({'Part'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
@@ -405,40 +408,12 @@ def generate(schema_path: Path, _out: Path) -> str:
             class_name = _output_name(name)
             union_str = ' | '.join(_output_name(r) for r in refs)
             if name == 'DocumentPart':
-                out.extend([
-                    f'class {class_name}(RootModel[{union_str}]):',
-                    f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
-                    '',
-                    '    @classmethod',
-                    '    def from_text(cls, text: str, metadata: Metadata | None = None) -> DocumentPart:',
-                    '        """Create a text DocumentPart."""',
-                    '        return cls(root=TextPart(text=text, metadata=metadata))',
-                    '',
-                    '    @classmethod',
-                    '    def from_media(cls, url: str, content_type: str | None = None, metadata: Metadata | None = None) -> DocumentPart:',
-                    '        """Create a media DocumentPart."""',
-                    '        return cls(root=MediaPart(media=Media(url=url, content_type=content_type), metadata=metadata))',
-                    '',
-                    '    @property',
-                    '    def text(self) -> str | None:',
-                    '        """The text content if this is a text part, otherwise None."""',
-                    "        return getattr(self.root, 'text', None)",
-                    '',
-                    '    @property',
-                    '    def media(self) -> Media | None:',
-                    '        """The media content if this is a media part, otherwise None."""',
-                    "        return getattr(self.root, 'media', None)",
-                    '',
-                    '    @property',
-                    '    def metadata(self) -> Metadata | None:',
-                    '        """Metadata associated with the document part."""',
-                    "        return getattr(self.root, 'metadata', None)",
-                    '',
-                ])
+                emitted.add(name)
+                break
             elif name == 'Part':
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
-                    f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
+                    f'    """Root model for {name} union (Part(root=X))."""',
                     '',
                     '    @classmethod',
                     '    def from_text(cls, text: str, metadata: Metadata | None = None) -> Part:',
@@ -487,11 +462,6 @@ def generate(schema_path: Path, _out: Path) -> str:
                     '        """Create a custom Part."""',
                     '        return cls(root=CustomPart(custom=custom, metadata=metadata))',
                     '',
-                    '    @classmethod',
-                    '    def from_resource(cls, resource: Resource, metadata: Metadata | None = None) -> Part:',
-                    '        """Create a resource Part."""',
-                    '        return cls(root=ResourcePart(resource=resource, metadata=metadata))',
-                    '',
                     '    @property',
                     '    def text(self) -> str | None:',
                     '        """The text content if this is a text part, otherwise None."""',
@@ -528,11 +498,6 @@ def generate(schema_path: Path, _out: Path) -> str:
                     "        return getattr(self.root, 'custom', None)",
                     '',
                     '    @property',
-                    '    def resource(self) -> Resource | None:',
-                    '        """The resource reference if this is a resource part, otherwise None."""',
-                    "        return getattr(self.root, 'resource', None)",
-                    '',
-                    '    @property',
                     '    def metadata(self) -> Metadata | None:',
                     '        """Metadata associated with the part."""',
                     "        return getattr(self.root, 'metadata', None)",
@@ -541,7 +506,7 @@ def generate(schema_path: Path, _out: Path) -> str:
             elif name in ROOT_MODEL_UNIONS:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
-                    f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
+                    f'    """Root model for {name} union (Part(root=X))."""',
                     '',
                 ])
             else:

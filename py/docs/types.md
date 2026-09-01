@@ -66,8 +66,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.Document
 
-::: genkit.DocumentPart
-
 ::: genkit.EmbedderRef
 
 ::: genkit.EmbedderOptions
