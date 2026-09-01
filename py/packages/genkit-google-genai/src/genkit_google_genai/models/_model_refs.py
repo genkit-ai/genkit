@@ -42,6 +42,7 @@ FAMILY_METHOD = {
     'image': 'gemini_image_model',
     'gemma': 'gemma_model',
     'imagen': 'imagen_model',
+    'veo': 'veo_model',
     'embedder': 'embedding',
 }
 
@@ -50,8 +51,6 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
     """Build the INVALID_ARGUMENT error naming the id and the way out."""
     if actual == 'embedder':
         hint = f"'{local}' is an embedder; use {plugin_class}.embedding()."
-    elif actual == 'veo':
-        hint = f"'{local}' is a Veo video model; it runs as a background model and has no ref constructor."
     elif actual in ('lyria', 'deep-research', 'antigravity'):
         hint = f"'{local}' has no ref constructor in this plugin."
     elif actual == 'unsupported':

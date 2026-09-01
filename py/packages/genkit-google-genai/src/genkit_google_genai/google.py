@@ -117,6 +117,7 @@ from genkit_google_genai.models.imagen import (
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.veo import (
+    KnownVeo,
     VeoConfigSchema,
     VeoModel,
     is_veo_model,
@@ -505,6 +506,19 @@ class GoogleFamilyRefs:
             family='imagen',
             method='imagen_model',
             config_schema=ImagenConfigSchema,
+            config=config,
+        )
+
+    @classmethod
+    def veo_model(cls, name: KnownVeo | str, *, config: VeoConfigSchema | None = None) -> ModelRef[VeoConfigSchema]:
+        """Typed ref for a Veo video model (``veo-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='veo',
+            method='veo_model',
+            config_schema=VeoConfigSchema,
             config=config,
         )
 

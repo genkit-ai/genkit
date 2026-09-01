@@ -16,9 +16,8 @@
 
 """Tests for Veo video generation model helpers.
 
-Verifies _from_veo_operation handles both dict-based responses (from the
-start path) and Pydantic GenerateVideosResponse objects (from the check
-path where the SDK returns a model instance).
+``_from_veo_operation`` reads a ``GenerateVideosOperation`` and puts a
+``ModelResponse`` on the ticket so callers can follow ``media.url``.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -34,13 +33,43 @@ from genkit_google_genai.models.veo import (
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
-from genkit import ActionRunContext, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    GenkitError,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Part,
+    Role,
+    TextPart,
+)
 from genkit.model import Operation
+
+
+def _sdk_op(
+    *,
+    name: str,
+    done: bool = False,
+    error: dict[str, object] | None = None,
+    response: genai_types.GenerateVideosResponse | None = None,
+) -> genai_types.GenerateVideosOperation:
+    op = genai_types.GenerateVideosOperation(response=response)
+    op.name = name
+    op.done = done
+    op.error = error
+    return op
+
+
+def _media(output: object) -> list:
+    assert isinstance(output, ModelResponse)
+    assert output.finish_reason == FinishReason.STOP
+    return output.media
 
 
 def _text_request(*, config: object | None = None) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat walking'))])],
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat walking'))])],
         config=config,  # type: ignore[arg-type]
     )
 
@@ -90,10 +119,7 @@ class TestVeoVersion:
 async def test_veo_start_dumps_aspect_ratio_and_duration() -> None:
     """A typed Veo config dumps aspectRatio / durationSeconds onto the SDK request."""
     client = MagicMock()
-    op = MagicMock()
-    op.name = 'operations/1'
-    op.done = False
-    client.aio.models.generate_videos = AsyncMock(return_value=op)
+    client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
     veo = VeoModel('veo-3.0-generate-001', client)
     request = _text_request(
         config=VeoConfigSchema.model_validate({'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1}),
@@ -114,10 +140,7 @@ async def test_veo_start_dumps_aspect_ratio_and_duration() -> None:
 async def test_veo_start_no_config_sends_none() -> None:
     """No config is a valid start; generate_videos gets no knobs."""
     client = MagicMock()
-    op = MagicMock()
-    op.name = 'operations/1'
-    op.done = False
-    client.aio.models.generate_videos = AsyncMock(return_value=op)
+    client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
     veo = VeoModel('veo-3.0-generate-001', client)
 
     await veo.start(_text_request(), ActionRunContext())
@@ -151,25 +174,11 @@ def test_veo_invalid_sdk_field_is_invalid_argument() -> None:
 
 
 class TestFromVeoOperation:
-    """Tests for _from_veo_operation.
-
-    This function must handle two shapes for the 'response' value:
-
-    1. A plain dict — returned by the start() path or legacy REST.
-    2. A GenerateVideosResponse Pydantic model — returned by the check()
-       path where the SDK object is stored directly.
-
-    Regression: before the fix, case 2 raised
-    ``AttributeError: 'GenerateVideosResponse' object has no attribute 'get'``
-    because the code unconditionally called ``.get()`` on the response.
-    """
+    """``_from_veo_operation`` reads the SDK operation, not a REST dump."""
 
     def test_pending_operation(self) -> None:
         """An in-progress operation has no response — output stays None."""
-        op = _from_veo_operation({
-            'name': 'operations/123',
-            'done': False,
-        })
+        op = _from_veo_operation(api_op=_sdk_op(name='operations/123', done=False))
         assert op.id == 'operations/123'
         assert op.done is False
         assert op.output is None
@@ -177,102 +186,106 @@ class TestFromVeoOperation:
 
     def test_error_operation(self) -> None:
         """An operation with an error populates op.error."""
-        op = _from_veo_operation({
-            'name': 'operations/456',
-            'done': True,
-            'error': {'message': 'Quota exceeded'},
-        })
+        op = _from_veo_operation(
+            api_op=_sdk_op(name='operations/456', done=True, error={'message': 'Quota exceeded'}),
+        )
         assert op.id == 'operations/456'
         assert op.done is True
         assert op.error is not None
         assert op.error.message == 'Quota exceeded'
         assert op.output is None
 
-    def test_dict_response_with_videos(self) -> None:
-        """Dict-shaped response extracts video URIs (start path)."""
-        op = _from_veo_operation({
-            'name': 'operations/789',
-            'done': True,
-            'response': {
-                'generateVideoResponse': {
-                    'generatedSamples': [
-                        {'video': {'uri': 'https://example.com/v1.mp4'}},
-                        {'video': {'uri': 'https://example.com/v2.mp4'}},
-                    ]
-                }
-            },
-        })
-        assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
-        assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/v1.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/v2.mp4'
-
-    def test_pydantic_response_with_videos(self) -> None:
-        """Pydantic GenerateVideosResponse extracts video URIs (check path).
-
-        This is the regression case — previously this raised AttributeError.
-        """
-        pydantic_response = genai_types.GenerateVideosResponse(
-            generated_videos=[
-                genai_types.GeneratedVideo(
-                    video=genai_types.Video(
-                        uri='https://example.com/video_a.mp4',
-                    ),
+    def test_response_with_videos(self) -> None:
+        """A finished operation puts a ModelResponse with media urls on output."""
+        op = _from_veo_operation(
+            api_op=_sdk_op(
+                name='operations/789',
+                done=True,
+                response=genai_types.GenerateVideosResponse(
+                    generated_videos=[
+                        genai_types.GeneratedVideo(video=genai_types.Video(uri='https://example.com/v1.mp4')),
+                        genai_types.GeneratedVideo(video=genai_types.Video(uri='https://example.com/v2.mp4')),
+                    ],
                 ),
-                genai_types.GeneratedVideo(
-                    video=genai_types.Video(
-                        uri='https://example.com/video_b.mp4',
-                    ),
+            ),
+        )
+        assert op.done is True
+        assert [part.url for part in _media(op.output)] == [
+            'https://example.com/v1.mp4',
+            'https://example.com/v2.mp4',
+        ]
+
+    def test_empty_videos(self) -> None:
+        """A finished response with no generated_videos produces no output."""
+        op = _from_veo_operation(
+            api_op=_sdk_op(
+                name='operations/empty',
+                done=True,
+                response=genai_types.GenerateVideosResponse(generated_videos=[]),
+            ),
+        )
+        assert op.done is True
+        assert op.output is None
+
+    def test_response_none(self) -> None:
+        """No response yet is a pending ticket, not a crash."""
+        op = _from_veo_operation(api_op=_sdk_op(name='operations/null', done=False, response=None))
+        assert op.output is None
+
+    def test_inline_video_bytes(self) -> None:
+        """Vertex often returns inline bytes and no download URL."""
+        op = _from_veo_operation(
+            api_op=_sdk_op(
+                name='operations/bytes',
+                done=True,
+                response=genai_types.GenerateVideosResponse(
+                    generated_videos=[
+                        genai_types.GeneratedVideo(
+                            video=genai_types.Video(video_bytes=b'\x00\x00', mime_type='video/mp4'),
+                        ),
+                    ],
                 ),
-            ],
+            ),
         )
-        op = _from_veo_operation({
-            'name': 'models/veo-2.0-generate-001/operations/abc',
-            'done': True,
-            'response': pydantic_response,
-        })
-        assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
-        assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/video_a.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/video_b.mp4'
+        media = _media(op.output)[0]
+        assert media.content_type == 'video/mp4'
+        assert media.url == 'data:video/mp4;base64,AAA='
 
-    def test_pydantic_response_empty_videos(self) -> None:
-        """Pydantic response with no generated_videos produces no output."""
-        pydantic_response = genai_types.GenerateVideosResponse(
-            generated_videos=[],
+    def test_gcs_uri(self) -> None:
+        """Vertex can leave the clip on GCS in ``Video.uri``."""
+        op = _from_veo_operation(
+            api_op=_sdk_op(
+                name='operations/gcs',
+                done=True,
+                response=genai_types.GenerateVideosResponse(
+                    generated_videos=[
+                        genai_types.GeneratedVideo(
+                            video=genai_types.Video(uri='gs://bucket/clip.mp4', mime_type='video/mp4'),
+                        ),
+                    ],
+                ),
+            ),
         )
-        op = _from_veo_operation({
-            'name': 'operations/empty',
-            'done': True,
-            'response': pydantic_response,
-        })
-        assert op.done is True
-        assert op.output is None
+        media = _media(op.output)[0]
+        assert media.url == 'gs://bucket/clip.mp4'
+        assert media.content_type == 'video/mp4'
 
-    def test_response_none_explicit(self) -> None:
-        """Explicit None response is handled (no crash)."""
-        op = _from_veo_operation({
-            'name': 'operations/null',
-            'done': False,
-            'response': None,
-        })
+    def test_done_with_rai_filter_is_an_error(self) -> None:
+        """A finished job with no videos and a RAI count is not a success."""
+        op = _from_veo_operation(
+            api_op=_sdk_op(
+                name='operations/rai',
+                done=True,
+                response=genai_types.GenerateVideosResponse(
+                    generated_videos=[],
+                    rai_media_filtered_count=1,
+                    rai_media_filtered_reasons=['1 videos were filtered out.'],
+                ),
+            ),
+        )
         assert op.output is None
-
-    def test_dict_response_no_videos(self) -> None:
-        """Dict response with empty generatedSamples produces no output."""
-        op = _from_veo_operation({
-            'name': 'operations/empty-dict',
-            'done': True,
-            'response': {'generateVideoResponse': {'generatedSamples': []}},
-        })
-        assert op.done is True
-        assert op.output is None
+        assert op.error is not None
+        assert op.error.message == '1 videos were filtered out.'
 
 
 @pytest.mark.asyncio
