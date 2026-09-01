@@ -27,6 +27,7 @@ from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import (
+    FinishReason,
     GenkitError,
     Message,
     ModelRequest,
@@ -146,6 +147,71 @@ def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
         ),
         custom=custom or None,
     )
+
+
+def _failure_message(extras: dict[str, Any] | None) -> str | None:
+    """The message of an error object a provider attached to a choice.
+
+    A gateway whose upstream fails part-way through a generation answers with
+    a 200 — status and headers are already committed — and reports the failure
+    as an ``error`` object on the choice, beside whatever text was produced
+    before it.
+
+    Args:
+        extras: The fields a choice carried that are not in OpenAI's schema.
+
+    Returns:
+        The failure message, or None when the choice carries no error object.
+    """
+    failure = extras.get('error') if extras else None
+    if not isinstance(failure, dict):
+        return None
+    message = failure.get('message')
+    return message if isinstance(message, str) and message else None
+
+
+# Includes the reasons no OpenAI model sends: end_turn and
+# model_context_window_exceeded are xAI's, insufficient_system_resource DeepSeek's.
+_FINISH_REASONS: dict[str, FinishReason] = {
+    'content_filter': FinishReason.BLOCKED,
+    'end_turn': FinishReason.STOP,
+    'error': FinishReason.OTHER,
+    'function_call': FinishReason.OTHER,
+    'insufficient_system_resource': FinishReason.OTHER,
+    'length': FinishReason.LENGTH,
+    'model_context_window_exceeded': FinishReason.LENGTH,
+    'network_error': FinishReason.OTHER,
+    'sensitive': FinishReason.BLOCKED,
+    'stop': FinishReason.STOP,
+    'tool_calls': FinishReason.STOP,
+}
+
+
+def _finish_state(
+    reason: str | None, *, refusal: str | None, failure_message: str | None
+) -> tuple[FinishReason, str | None]:
+    """The finish reason and finish message to report for a choice.
+
+    A refusal is the more specific answer and wins over a failure message: the
+    model replied, having declined. A choice that stopped cleanly reports no
+    finish message even when an error-shaped extra rides beside it.
+
+    Args:
+        reason: The ``finish_reason`` the provider sent, or None when it sent
+            none.
+        refusal: The refusal the model replied with, or None.
+        failure_message: The message of an error object on the choice, or None.
+
+    Returns:
+        The mapped finish reason, UNKNOWN when the reason is unrecognized or
+        absent, and the finish message, None when there is none to report.
+    """
+    if refusal:
+        return FinishReason.BLOCKED, refusal
+    finish_reason = _FINISH_REASONS.get(reason, FinishReason.UNKNOWN) if reason else FinishReason.UNKNOWN
+    if finish_reason is FinishReason.STOP:
+        return finish_reason, None
+    return finish_reason, failure_message
 
 
 class OpenAIModel:
@@ -407,9 +473,19 @@ class OpenAIModel:
         if not response.choices:
             raise GenkitError(status='INTERNAL', message='No choices in completion.')
 
+        choice = response.choices[0]
+        message = MessageAdapter(choice.message)
+        finish_reason, finish_message = _finish_state(
+            choice.finish_reason,
+            refusal=message.refusal,
+            failure_message=_failure_message(choice.model_extra),
+        )
+
         result = ModelResponse(
             request=request,
-            message=MessageConverter.to_genkit(MessageAdapter(response.choices[0].message)),
+            message=MessageConverter.to_genkit(message),
+            finish_reason=finish_reason,
+            finish_message=finish_message,
             usage=_usage_from_completion(response.usage),
         )
         return self._clean_json_response(result, request)
@@ -439,6 +515,9 @@ class OpenAIModel:
         accumulated_content: list[Part] = []
         usage: CompletionUsage | None = None
         saw_choice = False
+        raw_finish_reason: str | None = None
+        refusal_fragments: list[str] = []
+        failure_message: str | None = None
         async for chunk in stream:  # type: ignore
             # Usage rides on a final chunk that carries no choices.
             if chunk.usage is not None:
@@ -447,7 +526,18 @@ class OpenAIModel:
                 continue
 
             saw_choice = True
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            # The reason rides on the last chunk and is null on the rest.
+            if choice.finish_reason:
+                raw_finish_reason = choice.finish_reason
+            if failure := _failure_message(choice.model_extra):
+                failure_message = failure
+
+            delta = choice.delta
+
+            # A refusal streams in fragments and is reported as the finish message, not content.
+            if delta.refusal:
+                refusal_fragments.append(delta.refusal)
 
             # Text content chunk
             if delta.content:
@@ -501,9 +591,17 @@ class OpenAIModel:
             )
             accumulated_content.extend(message.content)
 
+        finish_reason, finish_message = _finish_state(
+            raw_finish_reason,
+            refusal=''.join(refusal_fragments),
+            failure_message=failure_message,
+        )
+
         result = ModelResponse(
             request=request,
             message=Message(role=Role.MODEL, content=accumulated_content),
+            finish_reason=finish_reason,
+            finish_message=finish_message,
             usage=_usage_from_completion(usage),
         )
         return self._clean_json_response(result, request)
