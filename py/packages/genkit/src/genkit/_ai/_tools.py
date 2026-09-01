@@ -462,7 +462,9 @@ def _define_tool(
         model_name = f'{clean_name.capitalize()}Input'
         generated_model = create_model(model_name, **fields)
 
-        return_ann = resolved_hints.get('return', sig.return_annotation if sig.return_annotation != inspect.Parameter.empty else Any)
+        return_ann = resolved_hints.get(
+            'return', sig.return_annotation if sig.return_annotation != inspect.Parameter.empty else Any
+        )
 
         async def _synthetic_metadata_fn(input: generated_model) -> return_ann:  # type: ignore[valid-type] # noqa: ANN401
             pass
