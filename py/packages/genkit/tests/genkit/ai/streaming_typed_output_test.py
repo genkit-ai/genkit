@@ -12,10 +12,12 @@ Covers:
 - End-to-end generate_stream with output_schema producing partial chunks
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, TypeVar, cast, overload
 
 import pytest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk
 from genkit._ai._testing import define_programmable_model
@@ -115,6 +117,32 @@ class TestChunkPartialOutput:
         # the final response is where the real ValidationError surfaces.
         assert _chunk('{"title": 123}', schema_type=Recipe).output is None
 
+    def test_camel_case_alias_populates_python_field(self) -> None:
+        class UserProfile(BaseModel):
+            model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+            first_name: str
+            last_name: str
+
+        out = _chunk('{"firstName": "Ada"', schema_type=UserProfile).output
+        assert out is not None
+        assert out.first_name == 'Ada'
+        assert out.last_name is None
+
+    def test_explicit_field_alias_populates_python_field(self) -> None:
+        class User(BaseModel):
+            first_name: str = Field(alias='firstName')
+
+        out = _chunk('{"firstName": "Ada"}', schema_type=User).output
+        assert out is not None
+        assert out.first_name == 'Ada'
+
+    def test_root_model_dict_stays_extracted_json(self) -> None:
+        class DictRoot(RootModel[dict[str, int]]):
+            pass
+
+        out = _chunk('{"a": 1, "b": 2}', schema_type=DictRoot).output
+        assert out == {'a': 1, 'b': 2}
+
 
 class TestPartialModelSynthesis:
     """partial_model rewrites nested annotations and drops constraints."""
@@ -158,6 +186,31 @@ class TestPartialModelSynthesis:
         assert out.animal is not None
         assert out.animal.bark == 'woof'
         assert out.animal.volume is None
+
+    def test_sequence_and_mapping_values_become_partials(self) -> None:
+        class Step(BaseModel):
+            title: str
+            duration: int
+
+        class Item(BaseModel):
+            name: str
+            qty: int
+
+        class Plan(BaseModel):
+            steps: Sequence[Step]
+            by_id: Mapping[str, Item]
+
+        out = cast(
+            'Any',
+            partial_model(Plan).model_validate({
+                'steps': [{'title': 'mix'}],
+                'by_id': {'a': {'name': 'axe'}},
+            }),
+        )
+        assert out.steps[0].title == 'mix'
+        assert out.steps[0].duration is None
+        assert out.by_id['a'].name == 'axe'
+        assert out.by_id['a'].qty is None
 
     def test_dict_and_tuple_values_become_partials(self) -> None:
         class Item(BaseModel):
@@ -208,6 +261,12 @@ class TestPartialModelSynthesis:
 
     def test_partial_is_cached_per_class(self) -> None:
         assert partial_model(Recipe) is partial_model(Recipe)
+
+    def test_root_model_is_not_rewritten(self) -> None:
+        class DictRoot(RootModel[dict[str, int]]):
+            pass
+
+        assert partial_model(DictRoot) is DictRoot
 
 
 class TestActionRunContextGenerics:
@@ -289,3 +348,40 @@ async def test_generate_stream_without_schema_chunks_unchanged() -> None:
     async for chunk in stream_result.stream:
         assert chunk.output == {'a': 1}
     await stream_result.response
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_camel_case_alias_fills_partial_fields() -> None:
+    class UserProfile(BaseModel):
+        model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+        first_name: str
+        last_name: str
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    final_text = '{"firstName": "Ada", "lastName": "Lovelace"}'
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='{"firstName": "Ada"'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text=', "lastName": "Lovelace"}'))]),
+        ]
+    ]
+    pm.responses = [
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=final_text))])),
+    ]
+
+    stream_result = ai.generate_stream(prompt='hi', output_schema=UserProfile)
+    outputs: list[Any] = []
+    async for chunk in stream_result.stream:
+        outputs.append(chunk.output)
+
+    assert outputs[0] is not None
+    assert outputs[0].first_name == 'Ada'
+    assert outputs[0].last_name is None
+    assert outputs[1].first_name == 'Ada'
+    assert outputs[1].last_name == 'Lovelace'
+
+    response = await stream_result.response
+    assert isinstance(response.output, UserProfile)
+    assert response.output.first_name == 'Ada'
+    assert response.output.last_name == 'Lovelace'

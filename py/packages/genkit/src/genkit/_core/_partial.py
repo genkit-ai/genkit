@@ -28,16 +28,34 @@ builds (``Union[X, None]``, ``list[X]``) only exist at runtime.
 
 from __future__ import annotations
 
+from collections.abc import (
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Sequence,
+    Set as AbstractSet,
+)
 from types import UnionType
 from typing import Annotated, Any, ForwardRef, TypeGuard, Union, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
 _partials: dict[type[BaseModel], type[BaseModel]] = {}
 
+_SEQUENCE_ORIGINS = (list, Sequence, MutableSequence, Iterable)
+_SET_ORIGINS = (set, frozenset, AbstractSet, MutableSet)
+_MAPPING_ORIGINS = (dict, Mapping, MutableMapping)
+
 
 def _is_base_model(annotation: Any) -> TypeGuard[type[BaseModel]]:  # noqa: ANN401
-    return isinstance(annotation, type) and issubclass(annotation, BaseModel) and annotation is not BaseModel
+    return (
+        isinstance(annotation, type)
+        and issubclass(annotation, BaseModel)
+        and annotation is not BaseModel
+        and not issubclass(annotation, RootModel)
+    )
 
 
 def _referenced_models(schema_type: type[BaseModel]) -> dict[str, type[BaseModel]]:
@@ -85,17 +103,21 @@ def _rewrite_annotation(
         # which the | operator rejects on Python 3.10.
         rewritten = cast('Any', tuple(_rewrite_annotation(arg, building, refs) for arg in get_args(annotation)))
         return Union[rewritten]  # noqa: UP007
-    if origin in (list, set, frozenset):
+    if origin in _SEQUENCE_ORIGINS:
         args = get_args(annotation)
         if not args:
             return annotation
         inner = _rewrite_annotation(args[0], building, refs)
-        if origin is list:
-            return list[inner]
-        if origin is set:
-            return set[inner]
-        return frozenset[inner]
-    if origin is dict:
+        return list[inner]
+    if origin in _SET_ORIGINS:
+        args = get_args(annotation)
+        if not args:
+            return annotation
+        inner = _rewrite_annotation(args[0], building, refs)
+        if origin is frozenset:
+            return frozenset[inner]
+        return set[inner]
+    if origin in _MAPPING_ORIGINS:
         args = get_args(annotation)
         if len(args) != 2:
             return annotation
@@ -136,16 +158,25 @@ def _partial_for(
         annotation: Any = (
             _rewrite_annotation(info.annotation, building, refs) if info.annotation is not None else object
         )
-        # Only the type is carried over. Constraints (Field(gt=0), Annotated
-        # metadata) and validators are dropped on purpose: a half-streamed
-        # value legitimately violates them, and enforcing them mid-stream
-        # would reject data the user can already display. The final response
-        # validates against the real model with everything intact.
-        fields[name] = (Union[annotation, None], None)  # noqa: UP007
+        # Types and wire names are carried over so streamed camelCase (or
+        # Field aliases) still populate the same attributes the user reads.
+        # Constraints (Field(gt=0), Annotated metadata) and validators are
+        # dropped: a half-streamed value legitimately violates them, and
+        # the final response still validates against the real model.
+        field_kwargs: dict[str, Any] = {'default': None}
+        if info.alias is not None:
+            field_kwargs['alias'] = info.alias
+        if info.validation_alias is not None:
+            field_kwargs['validation_alias'] = info.validation_alias
+        fields[name] = (Union[annotation, None], Field(**field_kwargs))  # noqa: UP007
+    config = ConfigDict(extra='ignore', populate_by_name=True)
+    alias_generator = schema_type.model_config.get('alias_generator')
+    if alias_generator is not None:
+        config['alias_generator'] = alias_generator
     model = create_model(
         f'{schema_type.__name__}Partial',
         __module__=schema_type.__module__,
-        __config__=ConfigDict(extra='ignore', populate_by_name=True),
+        __config__=config,
         **fields,
     )
     building[schema_type] = model
@@ -157,7 +188,12 @@ def partial_model(schema_type: type[BaseModel]) -> type[BaseModel]:
 
     The result is not a subclass of ``schema_type``. ``isinstance(chunk.output,
     Recipe)`` is false; ``type(chunk.output).__name__`` is ``RecipePartial``.
+
+    ``RootModel`` schemas are returned unchanged: there is no object-shaped
+    partial to synthesize, so chunks keep the extracted JSON.
     """
+    if issubclass(schema_type, RootModel):
+        return schema_type
     cached = _partials.get(schema_type)
     if cached is not None:
         return cached

@@ -121,6 +121,23 @@ async def get_country_info_json(input: CountryInput) -> CountryInfo:
 
 
 @ai.flow()
+async def stream_country_info_json(input: CountryInput) -> CountryInfo:
+    """Stream a partial CountryInfo, then return the finished object."""
+
+    sr = ai.generate_stream(
+        prompt=f'Give quick facts about {input.country}.',
+        output_format='json',
+        output_schema=CountryInfo,
+    )
+    async for chunk in sr:
+        # Mid-stream is a partial: same fields as CountryInfo, any of them
+        # may still be None or a prefix. The finished object is only at the end.
+        if chunk.output and chunk.output.name:
+            print(f'streaming name: {chunk.output.name}')  # noqa: T201
+    return (await sr.response).output
+
+
+@ai.flow()
 async def recommend_books_array(input: GenreInput):
     """Return an array of objects."""
 
@@ -150,6 +167,7 @@ async def main() -> None:
         print(await generate_haiku_text(HaikuInput()))  # noqa: T201
         print(await classify_sentiment_enum(ReviewInput()))  # noqa: T201
         print(await get_country_info_json(CountryInput()))  # noqa: T201
+        print(await stream_country_info_json(CountryInput()))  # noqa: T201
         print(await recommend_books_array(GenreInput()))  # noqa: T201
         print(await create_story_characters_jsonl(ThemeInput()))  # noqa: T201
     except Exception as error:

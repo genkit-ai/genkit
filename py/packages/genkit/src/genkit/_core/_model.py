@@ -29,7 +29,7 @@ from functools import cached_property
 from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, RootModel, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
@@ -669,23 +669,22 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         With no ``output_schema`` class, this is the extracted JSON value
         (a dict, list, scalar, or ``None`` if an object has not started).
 
-        When ``output_schema`` is a Pydantic model, the extracted dict is
-        validated into a synthesized all-optional sibling (``RecipePartial``),
-        so fields that have not arrived yet are ``None``. This is **not** the
-        original model: ``isinstance(chunk.output, Recipe)`` is false, and a
-        type checker still sees ``Recipe | None``. The final
-        ``ModelResponse.output`` validates into the real type.
+        When ``output_schema`` is a Pydantic model, this is a **partial** of
+        that type: same field names, missing fields are ``None``, values may
+        still be prefixes. It is not a finished instance — ``isinstance``
+        against the original class is false. Guard each field you use.
+        ``(await sr.response).output`` is the only fully validated value.
 
-        A chunk whose accumulated JSON does not fit the schema even loosely
-        (e.g. the model emitted a wrong-typed value) yields ``None`` rather
-        than raising, so one bad intermediate state cannot crash the stream.
+        A chunk whose accumulated JSON does not fit even as a partial (e.g.
+        a wrong-typed value) yields ``None`` rather than raising, so one
+        bad intermediate state cannot crash the stream.
         """
         parsed = (
             self.chunk_parser(self)
             if self.chunk_parser
             else extract_json(self.accumulated_text, throw_on_bad_json=False)
         )
-        if self.schema_type is not None and isinstance(parsed, dict):
+        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
             try:
                 return cast('OutputT | None', partial_model(self.schema_type).model_validate(parsed))
             except ValidationError:

@@ -1436,7 +1436,13 @@ class Genkit:
         docs: list[Document] | None = None,
         timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
-        """Stream generated text, returning a ModelStreamResponse with .stream and .response."""
+        """Stream generated text, returning a ModelStreamResponse with .stream and .response.
+
+        With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
+        that type: same attributes, any field may still be ``None`` or a
+        prefix. Guard the field you are about to use. The finished
+        ``Recipe`` is only ``(await sr.response).output``.
+        """
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
 
         async def _run_generate() -> ModelResponse[Any]:
