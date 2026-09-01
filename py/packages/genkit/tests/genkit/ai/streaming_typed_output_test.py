@@ -43,7 +43,7 @@ def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelRespon
     """Build a chunk whose accumulated text is exactly ``text``."""
     return ModelResponseChunk(
         role='model',
-        content=[Part(root=TextPart(text=text))],
+        content=[Part(TextPart(text=text))],
         schema_type=schema_type,
     )
 
@@ -97,7 +97,7 @@ class TestChunkPartialOutput:
         # chunk_parser output (used by format definitions) is also wrapped
         wrapper: ModelResponseChunk[Recipe] = ModelResponseChunk(
             role='model',
-            content=[Part(root=TextPart(text='ignored'))],
+            content=[Part(TextPart(text='ignored'))],
             chunk_parser=lambda _c: {'title': 'Parsed', 'steps': ['a']},
             schema_type=Recipe,
         )
@@ -298,14 +298,14 @@ async def test_generate_stream_with_output_schema_yields_partial_chunks() -> Non
     final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Chocolate C'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='ake", "steps": ["mi'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='x", "bake"]}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake", "steps": ["mi'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='x", "bake"]}'))]),
         ]
     ]
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=final_text))]),
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))]),
         )
     ]
 
@@ -339,9 +339,9 @@ async def test_generate_stream_without_schema_chunks_unchanged() -> None:
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 
-    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='{"a": 1}'))])]]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"a": 1}'))])]]
     pm.responses = [
-        ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"a": 1}'))])),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"a": 1}'))])),
     ]
 
     stream_result = ai.generate_stream(prompt='hi')
@@ -362,12 +362,12 @@ async def test_generate_stream_camel_case_alias_fills_partial_fields() -> None:
     final_text = '{"firstName": "Ada", "lastName": "Lovelace"}'
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='{"firstName": "Ada"'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text=', "lastName": "Lovelace"}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"firstName": "Ada"'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text=', "lastName": "Lovelace"}'))]),
         ]
     ]
     pm.responses = [
-        ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=final_text))])),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))])),
     ]
 
     stream_result = ai.generate_stream(prompt='hi', output_schema=UserProfile)
