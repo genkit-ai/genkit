@@ -6,13 +6,16 @@
 """What a plugin handler sees after ai.embed: typed options, extras, errors."""
 
 import pytest
-from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit._core._error import GenkitError
 from genkit._core._model import EmbedRequest
 from genkit._core._typing import Embedding, EmbedResponse
+
+
+class ForeignCfg(BaseModel):
+    temperature: float | None = None
 
 
 class ConformingCfg(BaseModel):
@@ -158,5 +161,5 @@ async def test_strict_options_rejects_unknown_keys_as_genkit_error(ai_and_seen: 
 async def test_foreign_options_class_normalizes_to_conforming(ai_and_seen: tuple[Genkit, dict]) -> None:
     """Without config_schema= on the action, a foreign instance dumps and coerces."""
     ai, seen = ai_and_seen
-    await ai.embed(embedder='conforming', content='hi', options=OpenAIConfig(temperature=0.7))
+    await ai.embed(embedder='conforming', content='hi', options=ForeignCfg(temperature=0.7))
     assert type(seen['options']) is ConformingCfg
