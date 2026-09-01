@@ -2998,8 +2998,9 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil, err
 				}
 				actionOpts.Resume = &ai.GenerateActionResume{
-					Respond: input.Resume.Respond,
-					Restart: input.Resume.Restart,
+					Respond:  input.Resume.Respond,
+					Restart:  input.Resume.Restart,
+					Metadata: input.Resume.Metadata,
 				}
 			}
 
