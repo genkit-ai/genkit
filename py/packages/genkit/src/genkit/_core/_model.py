@@ -366,6 +366,21 @@ class OutputConfig(OutputConfigData):
     """
 
 
+def _wrap_document_list(v: Sequence[DocumentData | dict[str, Any]] | None) -> list[Document]:
+    """Wrap DocumentData or dicts into Document veneer instances."""
+    if not v:
+        return []
+    wrapped: list[Document] = []
+    for d in v:
+        if isinstance(d, Document):
+            wrapped.append(d)
+        elif isinstance(d, dict):
+            wrapped.append(Document(d.get('content') or [], d.get('metadata')))
+        else:
+            wrapped.append(Document(d.content, d.metadata))
+    return wrapped
+
+
 class EmbedRequest(GenkitModel, Generic[EmbedRequestOptionsT]):
     """Hand-written embed request. ``options`` is the plugin's config class.
 
@@ -405,17 +420,7 @@ class EmbedRequest(GenkitModel, Generic[EmbedRequestOptionsT]):
     @classmethod
     def _wrap_input(cls, v: list[DocumentData] | None) -> list[Document]:
         """Wrap DocumentData in Document veneer. A dumped request sends dicts."""
-        if v is None:
-            return []
-        wrapped: list[Document] = []
-        for d in v:
-            if isinstance(d, Document):
-                wrapped.append(d)
-            elif isinstance(d, dict):
-                wrapped.append(Document(d.get('content') or [], d.get('metadata')))
-            else:
-                wrapped.append(Document(d.content, d.metadata))
-        return wrapped
+        return _wrap_document_list(v)
 
 
 class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
@@ -493,17 +498,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         this wrap has to as well or a bad config plus docs= never reaches the
         GenkitError for the config.
         """
-        if v is None:
-            return None
-        wrapped: list[Document] = []
-        for d in v:
-            if isinstance(d, Document):
-                wrapped.append(d)
-            elif isinstance(d, dict):
-                wrapped.append(Document(d.get('content') or [], d.get('metadata')))
-            else:
-                wrapped.append(Document(d.content, d.metadata))
-        return wrapped
+        return _wrap_document_list(v) if v is not None else None
 
     # Flat accessors: the plugin-author convenience surface over nested output.
 
