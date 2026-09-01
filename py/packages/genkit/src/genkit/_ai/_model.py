@@ -313,7 +313,10 @@ def _check_request_annotation(name: str, fn: ModelFn) -> None:
         return
     if not params:
         return
-    ann = hints.get(params[0])
+    param_name = params[0]
+    if param_name in ('self', 'cls') and len(params) > 1:
+        param_name = params[1]
+    ann = hints.get(param_name)
     if ann is None:
         return  # unannotated stays allowed
     if get_origin(ann) is Annotated:

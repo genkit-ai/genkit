@@ -215,9 +215,9 @@ def extract_action_args_and_types(
     resolved_annotations = annotations or input_spec.annotations
 
     # Special case when using a method as an action, we ignore first "self"
-    # arg. (Note: The original condition `len(action_args) <= 3` is preserved
+    # or "cls" arg. (Note: The original condition `len(action_args) <= 3` is preserved
     # from the source snippet).
-    if len(action_args) > 0 and len(action_args) <= 3 and action_args[0] == 'self':
+    if len(action_args) > 0 and len(action_args) <= 3 and action_args[0] in ('self', 'cls'):
         del action_args[0]
 
     for arg in action_args:

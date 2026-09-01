@@ -120,3 +120,35 @@ def test_arbitrary_class_rejected(ai: Genkit) -> None:
 
     with pytest.raises(GenkitError, match='must be annotated as EmbedRequest'):
         ai.define_embedder(name='arbitrary', fn=fn)
+
+
+def test_method_and_classmethod_annotations_allowed(ai: Genkit) -> None:
+    """Methods on classes (unbound, bound, or @classmethod) inspect the request parameter, not self/cls."""
+
+    class EmbedderHost:
+        async def unbound_method(self, request: EmbedRequest[Cfg]) -> EmbedResponse:
+            return OK
+
+        async def annotated_self_method(self: 'EmbedderHost', request: EmbedRequest[Cfg]) -> EmbedResponse:
+            return OK
+
+        @classmethod
+        async def class_method(cls, request: EmbedRequest[Cfg]) -> EmbedResponse:
+            return OK
+
+    host = EmbedderHost()
+    ai.define_embedder(name='bound', fn=host.unbound_method)
+    ai.define_embedder(name='unbound', fn=EmbedderHost.unbound_method)
+    ai.define_embedder(name='annotated_self', fn=EmbedderHost.annotated_self_method)
+    ai.define_embedder(name='classmethod', fn=EmbedderHost.class_method)
+
+
+def test_unbound_method_wrong_annotation_rejected(ai: Genkit) -> None:
+    """An unbound method with an invalid request annotation is still rejected."""
+
+    class EmbedderHost:
+        async def bad_method(self, request: dict) -> EmbedResponse:
+            return OK
+
+    with pytest.raises(GenkitError, match='must be annotated as EmbedRequest'):
+        ai.define_embedder(name='bad_unbound', fn=EmbedderHost.bad_method)

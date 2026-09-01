@@ -127,3 +127,37 @@ def test_arbitrary_class_rejected(ai: Genkit) -> None:
 
     with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):
         ai.define_model(name='arbitrary', fn=fn)
+
+
+def test_method_and_classmethod_annotations_allowed(ai: Genkit) -> None:
+    """Methods on classes (unbound, bound, or @classmethod) inspect the request parameter, not self/cls."""
+
+    class ModelHost:
+        async def unbound_method(self, request: ModelRequest[Cfg], ctx: ActionRunContext) -> ModelResponse:
+            return OK
+
+        async def annotated_self_method(
+            self: 'ModelHost', request: ModelRequest[Cfg], ctx: ActionRunContext
+        ) -> ModelResponse:
+            return OK
+
+        @classmethod
+        async def class_method(cls, request: ModelRequest[Cfg], ctx: ActionRunContext) -> ModelResponse:
+            return OK
+
+    host = ModelHost()
+    ai.define_model(name='bound', fn=host.unbound_method)
+    ai.define_model(name='unbound', fn=ModelHost.unbound_method)
+    ai.define_model(name='annotated_self', fn=ModelHost.annotated_self_method)
+    ai.define_model(name='classmethod', fn=ModelHost.class_method)
+
+
+def test_unbound_method_wrong_annotation_rejected(ai: Genkit) -> None:
+    """An unbound method with an invalid request annotation is still rejected."""
+
+    class ModelHost:
+        async def bad_method(self, request: dict, ctx: ActionRunContext) -> ModelResponse:
+            return OK
+
+    with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):
+        ai.define_model(name='bad_unbound', fn=ModelHost.bad_method)
