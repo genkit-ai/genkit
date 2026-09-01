@@ -1053,6 +1053,31 @@ Spans = dict[str, SpanData]  # type alias for spans (typed string map)
 class DocumentPart(RootModel[TextPart | MediaPart]):
     """Root model for DocumentPart union (Part(root=X), DocumentPart(root=X))."""
 
+    @classmethod
+    def from_text(cls, text: str, metadata: Metadata | None = None) -> DocumentPart:
+        """Create a text DocumentPart."""
+        return cls(root=TextPart(text=text, metadata=metadata))
+
+    @classmethod
+    def from_media(cls, url: str, content_type: str | None = None, metadata: Metadata | None = None) -> DocumentPart:
+        """Create a media DocumentPart."""
+        return cls(root=MediaPart(media=Media(url=url, content_type=content_type), metadata=metadata))
+
+    @property
+    def text(self) -> str | None:
+        """The text content if this is a text part, otherwise None."""
+        return getattr(self.root, 'text', None)
+
+    @property
+    def media(self) -> Media | None:
+        """The media content if this is a media part, otherwise None."""
+        return getattr(self.root, 'media', None)
+
+    @property
+    def metadata(self) -> Metadata | None:
+        """Metadata associated with the document part."""
+        return getattr(self.root, 'metadata', None)
+
 
 class Part(
     RootModel[
@@ -1060,6 +1085,97 @@ class Part(
     ]
 ):
     """Root model for Part union (Part(root=X), DocumentPart(root=X))."""
+
+    @classmethod
+    def from_text(cls, text: str, metadata: Metadata | None = None) -> Part:
+        """Create a text Part."""
+        return cls(root=TextPart(text=text, metadata=metadata))
+
+    @classmethod
+    def from_media(cls, url: str, content_type: str | None = None, metadata: Metadata | None = None) -> Part:
+        """Create a media Part."""
+        return cls(root=MediaPart(media=Media(url=url, content_type=content_type), metadata=metadata))
+
+    @classmethod
+    def from_tool_request(
+        cls, name: str, input: Any = None, ref: str | None = None, metadata: Metadata | None = None
+    ) -> Part:
+        """Create a tool request Part."""
+        return cls(root=ToolRequestPart(tool_request=ToolRequest(name=name, input=input, ref=ref), metadata=metadata))
+
+    @classmethod
+    def from_tool_response(
+        cls, name: str, output: Any = None, ref: str | None = None, metadata: Metadata | None = None
+    ) -> Part:
+        """Create a tool response Part."""
+        return cls(
+            root=ToolResponsePart(tool_response=ToolResponse(name=name, output=output, ref=ref), metadata=metadata)
+        )
+
+    @classmethod
+    def from_data(cls, data: Any, metadata: Metadata | None = None) -> Part:
+        """Create a data Part."""
+        return cls(root=DataPart(data=data, metadata=metadata))
+
+    @classmethod
+    def from_reasoning(cls, reasoning: str, metadata: Metadata | None = None) -> Part:
+        """Create a reasoning Part."""
+        return cls(root=ReasoningPart(reasoning=reasoning, metadata=metadata))
+
+    @classmethod
+    def from_custom(cls, custom: Custom, metadata: Metadata | None = None) -> Part:
+        """Create a custom Part."""
+        return cls(root=CustomPart(custom=custom, metadata=metadata))
+
+    @property
+    def text(self) -> str | None:
+        """The text content if this is a text part, otherwise None."""
+        return getattr(self.root, 'text', None)
+
+    @property
+    def media(self) -> Media | None:
+        """The media content if this is a media part, otherwise None."""
+        return getattr(self.root, 'media', None)
+
+    @property
+    def tool_request(self) -> ToolRequest | None:
+        """The tool request if this is a tool request part, otherwise None."""
+        return getattr(self.root, 'tool_request', None)
+
+    @property
+    def tool_response(self) -> ToolResponse | None:
+        """The tool response if this is a tool response part, otherwise None."""
+        return getattr(self.root, 'tool_response', None)
+
+    @property
+    def data(self) -> Any | None:
+        """The data payload if this is a data part, otherwise None."""
+        return getattr(self.root, 'data', None)
+
+    @property
+    def reasoning(self) -> str | None:
+        """The reasoning string if this is a reasoning part, otherwise None."""
+        return getattr(self.root, 'reasoning', None)
+
+    @property
+    def custom(self) -> Custom | None:
+        """The custom payload if this is a custom part, otherwise None."""
+        return getattr(self.root, 'custom', None)
+
+    @classmethod
+    def from_resource(cls, resource: Resource, metadata: Metadata | None = None) -> Part:
+        """Create a resource Part."""
+        return cls(root=ResourcePart(resource=resource, metadata=metadata))
+
+    @property
+    def resource(self) -> Resource | None:
+        """The resource reference if this is a resource part, otherwise None."""
+        return getattr(self.root, 'resource', None)
+
+    @property
+    def metadata(self) -> Metadata | None:
+        """Metadata associated with the part."""
+        return getattr(self.root, 'metadata', None)
 
 
 TraceEvent = SpanStartEvent | SpanEndEvent
