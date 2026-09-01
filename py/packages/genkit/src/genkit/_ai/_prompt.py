@@ -366,7 +366,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             child_registry,
             gen_options,
             on_chunk=on_chunk,
-            context=context if context else get_current_context(),
+            context=context if context is not None else get_current_context(),
         )
         return cast(ModelResponse[OutputT], result)
 
