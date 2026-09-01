@@ -469,12 +469,11 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))}
 	}
 
+	subArtifacts := namedArtifacts(out.Artifacts)
 	result := delegationResult{Response: messageText(out.Message)}
 	if result.Response == "" {
-		result.Response = "(no response)"
+		result.Response = noFinalMessageResponse(len(subArtifacts))
 	}
-
-	subArtifacts := namedArtifacts(out.Artifacts)
 	if len(subArtifacts) > 0 {
 		// Merge into the parent session under both strategies (no-op if there
 		// is no active session, e.g. a plain genkit.Generate call).
@@ -482,6 +481,23 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 		result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
 	}
 	return result
+}
+
+// noFinalMessageResponse is the tool text reported for a run that settled on a
+// result-carrying reason without a final model text: a custom agent that
+// returned no message, or a model whose last message holds only tool requests.
+// It says outright that the run succeeded and where its result is, so the
+// orchestrator neither mistakes the silence for a failure nor repeats finished
+// work.
+func noFinalMessageResponse(artifacts int) string {
+	switch artifacts {
+	case 0:
+		return "The task completed, but the agent gave no final message and produced no artifacts."
+	case 1:
+		return "The task completed, but the agent gave no final message; its result is in the one artifact it produced."
+	default:
+		return fmt.Sprintf("The task completed, but the agent gave no final message; its result is in the %d artifacts it produced.", artifacts)
+	}
 }
 
 // interruptedResponse is the tool text reported when a sub-agent interrupted

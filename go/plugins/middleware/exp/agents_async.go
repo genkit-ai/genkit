@@ -623,12 +623,12 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		// artifacts whether it ran in the background or not, with one caveat:
 		// this reads the snapshot through the agent's own companion action, so
 		// a sub-agent configured WithStateTransform has already shaped what is
-		// read here, while the synchronous path sees the output unshaped. The response is
-		// the persisted conversation's tip, which is the literal final message
-		// the sub-agent returned (SessionRunner.Result), rather than older text
-		// it spoke mid-tool-loop; an interrupt carries the same limitation as
-		// the synchronous path, since it cannot be resumed from here.
-		tip := snapshotTip(snap)
+		// read here, while the synchronous path sees the output unshaped. The
+		// response is the conversation's last model message, what the sub-agent
+		// last said, rather than whatever the transcript happens to end on; an
+		// interrupt carries the same limitation as the synchronous path, since
+		// it cannot be resumed from here.
+		tip := lastModelMessage(snap)
 		var arts []*aix.Artifact
 		if snap.State != nil {
 			arts = snap.State.Artifacts
@@ -655,7 +655,7 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 			report.Error = folded.Response
 		}
 	case aix.SnapshotStatusFailed:
-		report.Error = subAgentFailureMessage(snap.FinishReason, snap.Error, snapshotTip(snap))
+		report.Error = subAgentFailureMessage(snap.FinishReason, snap.Error, lastModelMessage(snap))
 	case aix.SnapshotStatusAborted:
 		report.Error = "The task was aborted before it finished."
 	case aix.SnapshotStatusExpired:
@@ -673,20 +673,25 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 	return report, nil
 }
 
-// snapshotTip returns the persisted conversation's last message, which is the
-// literal final message the sub-agent returned (SessionRunner.Result) rather
-// than older text it spoke mid-tool-loop. Nil when the row carries no state or
-// no messages.
+// lastModelMessage returns the persisted conversation's final model message:
+// what the sub-agent last said. The transcript's tip is not that for every
+// agent; a custom agent can end its turn on a tool response, or on input it
+// appended itself, and reporting either as the answer would put someone else's
+// words in the sub-agent's mouth. Nil when the row carries no state or no
+// model message.
 //
 // It serves both the completed and failed arms. A failed detach-finalize
-// writes the full final state, so the tip is there too, and for a row whose
-// Error is empty it is the only account of what the agent managed to do.
-func snapshotTip(snap *aix.SessionSnapshot[json.RawMessage]) *ai.Message {
+// writes the full final state, so the message is there too, and for a row
+// whose Error is empty it is the only account of what the agent managed to do.
+func lastModelMessage(snap *aix.SessionSnapshot[json.RawMessage]) *ai.Message {
 	if snap.State == nil {
 		return nil
 	}
-	if n := len(snap.State.Messages); n > 0 {
-		return snap.State.Messages[n-1]
+	msgs := snap.State.Messages
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i] != nil && msgs[i].Role == ai.RoleModel {
+			return msgs[i]
+		}
 	}
 	return nil
 }

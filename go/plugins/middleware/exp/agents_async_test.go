@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -905,6 +906,171 @@ func TestFoldDelegationNonAnswerReasons(t *testing.T) {
 		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: tip}, "researcher_x")
 	if got.Response != "partial notes: found 3 of 5 sources" {
 		t.Errorf("Response = %q, want the message reported as the answer", got.Response)
+	}
+}
+
+func TestFoldDelegationNoFinalMessage(t *testing.T) {
+	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}}
+	ref := aix.AgentRef{Name: "researcher"}
+	toolOnly := &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
+		ai.NewToolRequestPart(&ai.ToolRequest{Name: "search", Input: map[string]any{"q": "x"}}),
+	}}
+	arts := func(n int) []*aix.Artifact {
+		var out []*aix.Artifact
+		for i := range n {
+			out = append(out, &aix.Artifact{Name: fmt.Sprintf("a%d.md", i), Parts: []*ai.Part{ai.NewTextPart("body")}})
+		}
+		return out
+	}
+
+	// A silent success must read as a success, and say where the result is.
+	got := a.foldDelegationOutput(t.Context(), ref,
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop}, "researcher_x")
+	if !strings.Contains(got.Response, "completed") || !strings.Contains(got.Response, "no final message") || !strings.Contains(got.Response, "no artifacts") {
+		t.Errorf("Response = %q, want a completed-without-message notice naming the missing artifacts", got.Response)
+	}
+	got = a.foldDelegationOutput(t.Context(), ref,
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: toolOnly, Artifacts: arts(2)}, "researcher_x")
+	if !strings.Contains(got.Response, "no final message") || !strings.Contains(got.Response, "2 artifacts") {
+		t.Errorf("Response = %q, want the notice to point at the 2 artifacts", got.Response)
+	}
+	if len(got.Artifacts) != 2 {
+		t.Errorf("Artifacts = %d, want 2 surfaced alongside the notice", len(got.Artifacts))
+	}
+	got = a.foldDelegationOutput(t.Context(), ref,
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Artifacts: arts(1)}, "researcher_x")
+	if !strings.Contains(got.Response, "one artifact") {
+		t.Errorf("Response = %q, want the notice to point at the one artifact", got.Response)
+	}
+}
+
+func TestLastModelMessage(t *testing.T) {
+	said := ai.NewModelTextMessage("working on it")
+	toolMsg := &ai.Message{Role: ai.RoleTool, Content: []*ai.Part{
+		ai.NewToolResponsePart(&ai.ToolResponse{Name: "search", Output: "raw results"}),
+	}}
+	snap := func(msgs ...*ai.Message) *aix.SessionSnapshot[json.RawMessage] {
+		return &aix.SessionSnapshot[json.RawMessage]{State: &aix.SessionState[json.RawMessage]{Messages: msgs}}
+	}
+
+	// The transcript's tip is a tool response; the answer is what the model
+	// said before it.
+	if got := lastModelMessage(snap(ai.NewUserTextMessage("go"), said, toolMsg)); got != said {
+		t.Errorf("lastModelMessage = %+v, want the model message before the tool response", got)
+	}
+	if got := lastModelMessage(snap(ai.NewUserTextMessage("go"), toolMsg)); got != nil {
+		t.Errorf("lastModelMessage = %+v, want nil when no model message exists", got)
+	}
+	if got := lastModelMessage(&aix.SessionSnapshot[json.RawMessage]{}); got != nil {
+		t.Errorf("lastModelMessage = %+v, want nil for a stateless row", got)
+	}
+}
+
+// TestAgentsBackgroundReportUsesLastModelMessage pins the report's answer to
+// what the sub-agent said, through a run whose transcript ends on something
+// else. The first case ends on a tool response after the model spoke, so the
+// report carries the model's words, not the tool's; the second ends on a model
+// message holding only a tool request, so there is nothing the model said and
+// the report says so, pointing at the artifact that holds the result.
+func TestAgentsBackgroundReportUsesLastModelMessage(t *testing.T) {
+	toolMsg := &ai.Message{Role: ai.RoleTool, Content: []*ai.Part{
+		ai.NewToolResponsePart(&ai.ToolResponse{Name: "search", Output: "raw results"}),
+	}}
+	toolOnly := &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
+		ai.NewToolRequestPart(&ai.ToolRequest{Name: "search", Input: map[string]any{"q": "x"}}),
+	}}
+	cases := []struct {
+		name         string
+		turn         func(resp aix.Responder, sess *aix.SessionRunner[any])
+		wantResponse string
+	}{
+		{
+			name: "tool response ends the transcript",
+			turn: func(_ aix.Responder, sess *aix.SessionRunner[any]) {
+				sess.AddMessages(ai.NewModelTextMessage("working on it"), toolMsg)
+			},
+			wantResponse: "working on it",
+		},
+		{
+			name: "model ends on a bare tool request",
+			turn: func(resp aix.Responder, sess *aix.SessionRunner[any]) {
+				resp.SendArtifact(&aix.Artifact{Name: "report.md", Parts: []*ai.Part{ai.NewTextPart("the report body")}})
+				sess.AddMessages(toolOnly)
+			},
+			wantResponse: noFinalMessageResponse(1),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTestGenkit(t)
+			gate := make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(gate) }) }
+			t.Cleanup(release)
+
+			genkitx.DefineCustomAgent[any](g, "researcher",
+				func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+					err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+						select {
+						case <-gate:
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+						tc.turn(resp, sess)
+						return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+					})
+					if err != nil {
+						return nil, err
+					}
+					return &aix.AgentResult{Artifacts: sess.Artifacts()}, nil
+				},
+				aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+			)
+
+			orch := toolModel(t, g, "test/orch-last-model-"+tc.name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				launches := toolOutputs(req.Messages, "delegate_to_researcher")
+				waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+				switch {
+				case len(launches) == 0:
+					return toolReqResp(req, &ai.ToolRequest{
+						Name:  "delegate_to_researcher",
+						Input: map[string]any{"task": "dig into X", "background": true},
+					}), nil
+				case len(waits) == 0:
+					release()
+					return toolReqResp(req, &ai.ToolRequest{
+						Name:  waitBackgroundTasksToolName,
+						Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+					}), nil
+				default:
+					return textResp(req, "done"), nil
+				}
+			})
+
+			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+				ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+			if len(waitOuts) != 1 {
+				t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+			}
+			res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+			if len(res.Tasks) != 1 {
+				t.Fatalf("expected 1 task report, got %+v", res.Tasks)
+			}
+			got := res.Tasks[0]
+			if got.Status != string(aix.SnapshotStatusCompleted) {
+				t.Errorf("Status = %q, want %q", got.Status, aix.SnapshotStatusCompleted)
+			}
+			if got.Response != tc.wantResponse {
+				t.Errorf("Response = %q, want %q", got.Response, tc.wantResponse)
+			}
+			if got.Error != "" {
+				t.Errorf("Error = %q, want empty: the task succeeded", got.Error)
+			}
+		})
 	}
 }
 
