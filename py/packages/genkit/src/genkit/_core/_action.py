@@ -33,7 +33,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
-from genkit._core._model import config_type_path, declared_config_type
+from genkit._core._model import EmbedRequest, ModelRequest, config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -717,12 +717,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             try:
                 return self._input_type.validate_python(input)
             except ValidationError:
-                typed_bag = getattr(input, 'config', None)
-                field = 'config'
-                if not isinstance(typed_bag, BaseModel):
-                    typed_bag = getattr(input, 'options', None)
+                field: str | None = None
+                typed_bag: object = None
+                if isinstance(input, ModelRequest):
+                    field = 'config'
+                    typed_bag = input.config
+                elif isinstance(input, EmbedRequest):
                     field = 'options'
-                if isinstance(typed_bag, BaseModel):
+                    typed_bag = input.options
+                if field and isinstance(typed_bag, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
                     raise GenkitError(
