@@ -20,10 +20,11 @@ import inspect
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Any, cast
+import typing
+from typing import Any, cast, get_type_hints
 
 from opentelemetry import trace as trace_api
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
@@ -80,7 +81,15 @@ class Tool:
 
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         """Run the tool and return the unwrapped response value."""
-        return (await self._action.run(*args, **kwargs)).response
+        if kwargs and not args:
+            return (await self._action.run(kwargs)).response
+        if len(args) == 1 and not kwargs:
+            return (await self._action.run(args[0])).response
+        if args and not kwargs:
+            return (await self._action.run(args[0] if len(args) == 1 else args)).response
+        if args and kwargs:
+            return (await self._action.run(kwargs)).response
+        return (await self._action.run(None)).response
 
 
 # Context variables for propagating resumed metadata to tools
@@ -94,7 +103,7 @@ class ToolRunContext(ActionRunContext):
 
     def __init__(
         self,
-        ctx: ActionRunContext,
+        ctx: ActionRunContext | None = None,
         resumed_metadata: dict[str, Any] | None = None,
         original_input: Any = None,  # noqa: ANN401 - prior tool_request.input when replacing on restart
     ) -> None:
@@ -105,11 +114,14 @@ class ToolRunContext(ActionRunContext):
             resumed_metadata: Metadata from previous interrupt (if resumed)
             original_input: Original tool input before replacement (if resumed)
         """
-        super().__init__(
-            context=ctx.context,
-            streaming_callback=ctx.streaming_callback,
-            abort_signal=ctx.abort_signal,
-        )
+        if ctx is not None:
+            super().__init__(
+                context=ctx.context,
+                streaming_callback=ctx.streaming_callback,
+                abort_signal=ctx.abort_signal,
+            )
+        else:
+            super().__init__()
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
 
@@ -332,6 +344,49 @@ async def run_tool_after_restart(
     )
 
 
+def _extract_param_descriptions(docstring: str | None) -> dict[str, str]:
+    """Extract parameter descriptions from Google/Sphinx style docstrings."""
+    if not docstring:
+        return {}
+    descriptions: dict[str, str] = {}
+    lines = docstring.splitlines()
+    in_args_section = False
+    current_param: str | None = None
+    current_desc: list[str] = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.lower().startswith(('args:', 'parameters:', 'params:', 'arguments:')):
+            in_args_section = True
+            continue
+        if in_args_section:
+            if line.lower().startswith((
+                'returns:',
+                'raises:',
+                'yields:',
+                'example:',
+                'examples:',
+                'note:',
+                'see also:',
+            )):
+                break
+            if ':' in line and not line.startswith('*'):
+                parts = line.split(':', 1)
+                first_word = parts[0].strip().split()[-1].strip('`*()')
+                if first_word and first_word.isidentifier():
+                    if current_param:
+                        descriptions[current_param] = ' '.join(current_desc).strip()
+                    current_param = first_word
+                    current_desc = [parts[1].strip()] if len(parts) > 1 and parts[1].strip() else []
+                    continue
+            if current_param and line:
+                current_desc.append(line)
+
+    if current_param:
+        descriptions[current_param] = ' '.join(current_desc).strip()
+    return descriptions
+
+
 def _get_func_description(func: Callable[..., Any], description: str | None = None) -> str:
     """Return description if provided, otherwise use the function's docstring."""
     if description is not None:
@@ -351,12 +406,8 @@ def _define_tool(
 ) -> Tool:
     """Register a function as a tool.
 
-    Normally, the input_schema and output_schema are inferred from func. However,
-    in some cases, like define_interrupt, the app developer doesn't have a way to
-    express the input schema in the func signature.
-
-    In that case, the app developer can pass in an input_schema to override the inferred schema.
-    This will ensure that the model requesting the tool will see the correct input shape.
+    Tool input/output JSON Schemas are inferred from func parameters and return type.
+    Supports both single-model signatures and multi-parameter native keyword arguments.
     """
     if not inspect.iscoroutinefunction(func):
         raise TypeError(f'Tool function must be async. Got sync function: {getattr(func, "__name__", repr(func))}')
@@ -366,9 +417,59 @@ def _define_tool(
         raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
     tool_description = _get_func_description(func, description)
 
-    input_spec = inspect.getfullargspec(func)
+    try:
+        resolved_hints = typing.get_type_hints(func)
+    except Exception:
+        resolved_hints = {}
 
-    async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+
+    ctx_param_name: str | None = None
+    data_params: list[inspect.Parameter] = []
+
+    for param in params:
+        ann = resolved_hints.get(param.name, param.annotation)
+        is_ctx = (
+            ann is ToolRunContext
+            or ann is ActionRunContext
+            or ann in ('ToolRunContext', 'ActionRunContext')
+            or getattr(ann, '__name__', None) in ('ToolRunContext', 'ActionRunContext')
+            or str(ann).endswith(('ToolRunContext', 'ActionRunContext'))
+            or (param.name in ('ctx', 'context') and (ann is inspect.Parameter.empty or ann is Any))
+        )
+        if is_ctx and ctx_param_name is None:
+            ctx_param_name = param.name
+        else:
+            data_params.append(param)
+
+    is_multi_param = len(data_params) > 1
+
+    metadata_fn: Callable[..., Any] = func
+
+    if is_multi_param and input_schema is None and len(data_params) > 0:
+        doc_descriptions = _extract_param_descriptions(func.__doc__)
+        fields: dict[str, Any] = {}
+        for p in data_params:
+            ann = resolved_hints.get(p.name, p.annotation if p.annotation != inspect.Parameter.empty else Any)
+            desc = doc_descriptions.get(p.name)
+            if p.default != inspect.Parameter.empty:
+                fields[p.name] = (ann, Field(default=p.default, description=desc) if desc else p.default)
+            else:
+                fields[p.name] = (ann, Field(..., description=desc) if desc else ...)
+
+        clean_name = tool_name.replace('-', '_')
+        model_name = f'{clean_name.capitalize()}Input'
+        generated_model = create_model(model_name, **fields)
+
+        return_ann = resolved_hints.get('return', sig.return_annotation if sig.return_annotation != inspect.Parameter.empty else Any)
+
+        async def _synthetic_metadata_fn(input: generated_model) -> return_ann:  # type: ignore[valid-type] # noqa: ANN401
+            pass
+
+        metadata_fn = _synthetic_metadata_fn
+
+    async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - dynamic dispatch across signatures
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
         if resumed_meta:
@@ -379,31 +480,58 @@ def _define_tool(
                 except Exception:
                     span.set_attribute('genkit:metadata:resumed', str(resumed_meta))
 
-        # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
-        match len(input_spec.args):
+        original_input = _tool_original_input.get()
+        parent_ctx = args[1] if len(args) > 1 and isinstance(args[1], ActionRunContext) else None
+        tool_ctx = (
+            ToolRunContext(
+                parent_ctx,
+                resumed_metadata=resumed_meta,
+                original_input=original_input,
+            )
+            if (ctx_param_name is not None or len(params) == 2)
+            else None
+        )
+
+        if is_multi_param:
+            raw_input = args[0] if args else {}
+            if isinstance(raw_input, BaseModel):
+                call_kwargs = raw_input.model_dump()
+            elif isinstance(raw_input, dict):
+                call_kwargs = dict(raw_input)
+            elif raw_input is not None and len(data_params) == 1:
+                call_kwargs = {data_params[0].name: raw_input}
+            else:
+                call_kwargs = {}
+
+            if ctx_param_name is not None and tool_ctx is not None:
+                call_kwargs[ctx_param_name] = tool_ctx
+
+            return await func(**call_kwargs)
+
+        # Traditional single-arg or zero-arg dispatch
+        match len(params):
             case 0:
                 return await func()
             case 1:
-                return await func(args[0])
+                if ctx_param_name is not None:
+                    return await func(tool_ctx)
+                return await func(args[0] if args else None)
             case 2:
-                original_input = _tool_original_input.get()
-                return await func(
-                    args[0],
-                    ToolRunContext(
-                        cast(ActionRunContext, args[1]),
-                        resumed_metadata=resumed_meta,
-                        original_input=original_input,
-                    ),
-                )
+                if ctx_param_name is not None:
+                    first_arg = args[0] if args else None
+                    if ctx_param_name == params[0].name:
+                        return await func(tool_ctx, first_arg)
+                    return await func(first_arg, tool_ctx)
+                return await func(args[0] if args else None, tool_ctx)
             case _:
-                raise ValueError('tool must have 0-2 args...')
+                return await func(*args)
 
     action = registry.register_action(
         name=tool_name,
         kind=ActionKind.TOOL,
         description=tool_description,
         fn=tool_fn_wrapper,
-        metadata_fn=func,
+        metadata_fn=metadata_fn,
     )
     if input_schema is not None:
         action._override_input_schema(input_schema)
