@@ -216,14 +216,14 @@ class PromptConfig(BaseModel):
     model: str | ModelRef[BaseModel] | None = None
     config: Mapping[str, Any] | BaseModel | None = None
     description: str | None = None
-    input_schema: type | dict[str, Any] | str | None = None
+    input_schema: Any | None = None
     system: str | list[Part] | None = None
     prompt: str | list[Part] | None = None
     messages: str | list[Message] | None = None
     output_format: str | None = None
     output_content_type: str | None = None
     output_instructions: bool | str | None = None
-    output_schema: type | dict[str, Any] | str | None = None
+    output_schema: Any | None = None
     output_constrained: bool | None = None
     max_turns: int | None = None
     return_tool_requests: bool | None = None
@@ -248,14 +248,14 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         model: ModelArg | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         description: str | None = None,
-        input_schema: type | dict[str, Any] | str | None = None,
+        input_schema: Any | None = None,  # noqa: ANN401
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
-        output_schema: type | dict[str, Any] | str | None = None,
+        output_schema: Any | None = None,  # noqa: ANN401
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -324,8 +324,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._output_format = resolved._output_format
         self._output_content_type = resolved._output_content_type
         self._output_instructions = resolved._output_instructions
-        # Keep original Pydantic type if provided, otherwise use resolved (dict) schema
-        if isinstance(original_output_schema, type) and issubclass(original_output_schema, BaseModel):
+        # Keep original schema type if provided, otherwise use resolved (dict) schema
+        if original_output_schema is not None and not isinstance(original_output_schema, (dict, str)):
             self._output_schema = original_output_schema
         else:
             self._output_schema = resolved._output_schema
@@ -553,19 +553,19 @@ def register_prompt_actions(
 
 def _resolve_output_schema(
     registry: Registry,
-    output_schema: type | dict[str, Any] | str | None,
+    output_schema: Any | None,  # noqa: ANN401
     output: GenerateActionOutputConfig,
 ) -> None:
     """Resolve output schema and populate the output config.
 
     Handles three types of output_schema:
     - str: Schema name - look up JSON schema and type from registry
-    - Pydantic type: Store both JSON schema and type for runtime validation
     - dict: Raw JSON schema - convert directly
+    - type / container / schema: Store both JSON schema and type for runtime validation
 
     Args:
         registry: The registry to use for schema lookups.
-        output_schema: The schema to resolve (string name, Pydantic type, or dict).
+        output_schema: The schema to resolve (string name, type/container, or dict).
         output: The output config to populate with json_schema and schema_type.
     """
     if output_schema is None:
@@ -580,13 +580,13 @@ def _resolve_output_schema(
         schema_type = registry.lookup_schema_type(output_schema)
         if schema_type:
             output.schema_type = schema_type
-    elif isinstance(output_schema, type) and issubclass(output_schema, BaseModel):
-        # Pydantic type - store both JSON schema and type
+    elif isinstance(output_schema, dict):
+        # Raw JSON schema dictionary
+        output.json_schema = to_json_schema(output_schema)
+    else:
+        # Pydantic BaseModel, container (e.g. list[T]), Enum, primitive, etc.
         output.json_schema = to_json_schema(output_schema)
         output.schema_type = output_schema
-    else:
-        # dict (raw JSON schema)
-        output.json_schema = to_json_schema(output_schema)
 
 
 async def _prepare(

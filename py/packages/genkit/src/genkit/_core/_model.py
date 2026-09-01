@@ -29,7 +29,7 @@ from functools import cached_property
 from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
@@ -503,7 +503,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # _message_parser and _schema_type are set by the framework after construction
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
-    _schema_type: type[BaseModel] | None = PrivateAttr(None)
+    _schema_type: Any | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
     finish_reason: FinishReason | None = None
@@ -574,7 +574,10 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         if self._schema_type is None:
             return
         try:
-            _ = self._schema_type.model_validate(parsed)
+            if isinstance(self._schema_type, type) and issubclass(self._schema_type, BaseModel):
+                _ = self._schema_type.model_validate(parsed)
+            else:
+                _ = TypeAdapter(self._schema_type).validate_python(parsed)
         except ValidationError:
             self.finish_reason = FinishReason.FAILED
             self.finish_message = 'Model output did not match the requested schema.'
@@ -645,7 +648,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 return cast(OutputT, None)
         if self._schema_type is not None and parsed is not None:
             try:
-                return cast(OutputT, self._schema_type.model_validate(parsed))
+                if isinstance(self._schema_type, type) and issubclass(self._schema_type, BaseModel):
+                    return cast(OutputT, self._schema_type.model_validate(parsed))
+                return cast(OutputT, TypeAdapter(self._schema_type).validate_python(parsed))
             except ValidationError:
                 return cast(OutputT, None)
         return cast(OutputT, parsed)

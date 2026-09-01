@@ -22,10 +22,9 @@ import asyncio
 import threading
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
 
 from dotpromptz.dotprompt import Dotprompt
-from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 
 from genkit._core._action import (
@@ -130,7 +129,7 @@ class Registry:
         self._entries: ActionStore = {}
         self._value_by_kind_and_name: dict[str, dict[str, object]] = {}
         self._schemas_by_name: dict[str, dict[str, object]] = {}
-        self._schema_types_by_name: dict[str, type[BaseModel]] = {}
+        self._schema_types_by_name: dict[str, Any] = {}
         self._lock: threading.RLock = threading.RLock()
 
         # Re-entrancy guard for _trigger_lazy_loading.  Prevents infinite
@@ -684,7 +683,12 @@ class Registry:
                 return resolved
         return await self.resolve_action(kind, name)
 
-    def register_schema(self, name: str, schema: dict[str, object], schema_type: type[BaseModel] | None = None) -> None:
+    def register_schema(
+        self,
+        name: str,
+        schema: dict[str, object],
+        schema_type: Any | None = None,  # noqa: ANN401
+    ) -> None:
         """Registers a schema by name.
 
         Schemas registered with this method can be referenced by name in
@@ -693,7 +697,7 @@ class Registry:
         Args:
             name: The name of the schema.
             schema: The schema data (JSON schema format).
-            schema_type: Optional Pydantic model class for runtime validation.
+            schema_type: Optional Pydantic model class or container type for runtime validation.
 
         Raises:
             ValueError: If a schema with the given name is already registered.
@@ -721,14 +725,14 @@ class Registry:
             return local
         return self._parent.lookup_schema(name) if self._parent is not None else None
 
-    def lookup_schema_type(self, name: str) -> type[BaseModel] | None:
-        """Looks up a schema's Pydantic type by name.
+    def lookup_schema_type(self, name: str) -> Any | None:  # noqa: ANN401
+        """Looks up a schema's type by name.
 
         Args:
             name: The name of the schema to look up.
 
         Returns:
-            The Pydantic model class if found, None otherwise.  Falls back to parent.
+            The schema type if found, None otherwise.  Falls back to parent.
         """
         with self._lock:
             local = self._schema_types_by_name.get(name)
