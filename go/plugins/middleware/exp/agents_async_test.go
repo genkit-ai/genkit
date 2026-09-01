@@ -782,7 +782,7 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	// The flip's own return decides the report, so stopping a live task
 	// answers "aborting" deterministically: no re-read races the worker's
 	// finalize, and the raw mid-flip window is never exposed.
-	if got := aborted.Tasks[0]; got.Status != taskStatusAborting || got.Error == "" {
+	if got := aborted.Tasks[0]; got.Status != string(aix.SnapshotStatusAborting) || got.Error == "" {
 		t.Errorf("unexpected abort report: %+v", got)
 	}
 
@@ -802,7 +802,7 @@ func TestAgentsAbortBackgroundTask(t *testing.T) {
 	if len(waited.Tasks) != 1 || waited.Tasks[0].Status != string(aix.SnapshotStatusAborted) {
 		t.Fatalf("wait after abort: want 1 settled aborted task, got %+v", waited.Tasks)
 	}
-	if got := waited.Tasks[0].Error; !strings.Contains(got, resumeSubagentToolName) {
+	if got := waited.Tasks[0].Error; !strings.Contains(got, continueTaskToolName) {
 		t.Errorf("settled aborted report should carry the resume hint, got %q", got)
 	}
 }
@@ -916,8 +916,8 @@ func TestAgentsAbortReportsAbortingWhileWindingDown(t *testing.T) {
 		t.Fatalf("expected 1 abort response, got %d", len(abortOuts))
 	}
 	aborted := decodeToolOutput[backgroundTasksResult](t, abortOuts[0])
-	if len(aborted.Tasks) != 1 || aborted.Tasks[0].Status != taskStatusAborting {
-		t.Errorf("abort of an unfinalized task: want an %q report, got %+v", taskStatusAborting, aborted.Tasks)
+	if len(aborted.Tasks) != 1 || aborted.Tasks[0].Status != string(aix.SnapshotStatusAborting) {
+		t.Errorf("abort of an unfinalized task: want an %q report, got %+v", string(aix.SnapshotStatusAborting), aborted.Tasks)
 	} else if got := aborted.Tasks[0].Error; !strings.Contains(got, waitBackgroundTasksToolName) {
 		t.Errorf("the aborting report should point at the wait tool, got %q", got)
 	}

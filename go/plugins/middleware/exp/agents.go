@@ -167,7 +167,7 @@ type Agents struct {
 	// the empty string uses bare agent names. An explicitly set, non-empty
 	// prefix also namespaces the shared tools: the [Agents.Async]
 	// background-task tools (e.g. research_check_background_tasks) and the
-	// resume tool (registered whenever any configured sub-agent may be
+	// continue tool (registered whenever any configured sub-agent may be
 	// server-managed). Two instances in one generate call that both register
 	// shared tools therefore need distinct, explicitly set prefixes: left at
 	// the default they emit the same bare names, and the generate call is
@@ -196,7 +196,7 @@ type Agents struct {
 	// implement [aix.SnapshotSubscriber].
 	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks / abort_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
 
-	// TODO: add a knob to disable or scope the resume tool (per agent, or
+	// TODO: add a knob to disable or scope the continue tool (per agent, or
 	// retries vs follow-ups) once real-world usage shows which control
 	// matters.
 }
@@ -297,26 +297,26 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		}
 		tools = append(tools, a.backgroundTaskTools(st)...)
 	}
-	// The resume tool is registered only where it can ever succeed: a
+	// The continue tool is registered only where it can ever succeed: a
 	// server-managed sub-agent leaves durable "<agent>:<snapshotId>" handles
 	// behind, and those handles are the currency the tool spends. A
 	// configuration whose sub-agents are all provably client-managed gets no
-	// resume tool (and no mention of it in the system prompt), which also
+	// continue tool (and no mention of it in the system prompt), which also
 	// keeps two default-configured instances of this middleware from
-	// colliding on the shared bare name when neither has anything to resume.
+	// colliding on the shared bare name when neither has anything to continue.
 	// Like the delegation tools, its input schema depends on whether
 	// background execution exists.
 	g := genkit.FromContext(ctx)
-	resumable := a.anyResumableAgent(g)
-	if resumable {
-		resumeName := a.resumeToolName()
-		if err := claimName(resumeName, "the resume tool"); err != nil {
+	continuable := a.anyContinuableAgent(g)
+	if continuable {
+		continueName := a.continueToolName()
+		if err := claimName(continueName, "the continue tool"); err != nil {
 			return nil, err
 		}
 		if a.Async {
-			tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resumeAsync(st)))
+			tools = append(tools, aix.NewTool(continueName, continueToolDescription(), a.continueTaskAsync(st)))
 		} else {
-			tools = append(tools, aix.NewTool(resumeName, resumeToolDescription(), a.resume(st)))
+			tools = append(tools, aix.NewTool(continueName, continueToolDescription(), a.continueTask(st)))
 		}
 	}
 
@@ -325,7 +325,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	// tool-loop turn: New already runs exactly once per generate call, and
 	// re-rendering cost a registry lookup and a descriptor copy per agent per
 	// turn to produce a string the injector then dropped as identical.
-	instructions := a.buildInstructions(g, resumable)
+	instructions := a.buildInstructions(g, continuable)
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		// Capture the latest messages for optional history forwarding. The
@@ -377,7 +377,7 @@ type delegationResult struct {
 	// delegation that carries a handle. Empty whenever TaskID is.
 	Status string `json:"status,omitempty"`
 	// Name echoes the caller-chosen label for this delegation, when one was
-	// given (see delegateInput.Name). A resumed task keeps its label.
+	// given (see delegateInput.Name). A continued task keeps its label.
 	Name string `json:"name,omitempty"`
 }
 
@@ -506,7 +506,7 @@ func (a *Agents) releaseDelegation(st *agentsState) {
 // settled result but an interrupt is stamped with the same
 // "<agent>:<snapshotId>" handle background delegations mint, plus the outcome
 // it settled in. The handle is what makes a delegation addressable after the
-// fact: the background-task tools accept it, and it is the currency a resume
+// fact: the background-task tools accept it, and it is the currency a continuation
 // spends.
 func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationID string) delegationResult {
 	// Interrupted first: it is one of the reasons that carry no result, and it
@@ -532,7 +532,7 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 			ref.Name, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))
 		if result.TaskID != "" {
 			result.Response += fmt.Sprintf(
-				" The run's progress up to that point is saved; call %s with this taskId to resume it, optionally with instructions.", a.resumeToolName())
+				" The run's progress up to that point is saved; call %s with this taskId to continue it, optionally with instructions.", a.continueToolName())
 		}
 		return result
 	}
@@ -667,15 +667,15 @@ func runSubAgent(ctx context.Context, agent *aix.AgentHandle, task string, histo
 	return agent.Run(ctx, &aix.AgentInput{Detach: detach, Message: ai.NewUserTextMessage(task)}, opts...)
 }
 
-// anyResumableAgent reports whether any configured sub-agent can leave a
-// resumable task handle behind, which is what justifies registering the
-// shared resume tool: only server-managed sub-agents (those with a session
+// anyContinuableAgent reports whether any configured sub-agent can leave a
+// continuable task handle behind, which is what justifies registering the
+// shared continue tool: only server-managed sub-agents (those with a session
 // store) commit durable snapshots. An agent that cannot be resolved here, or
-// that publishes no metadata, counts as resumable, the same safe default
+// that publishes no metadata, counts as continuable, the same safe default
 // isClientManaged applies: the tool stays available for an agent that may
 // well have a store, and a wrong guess costs a refusal at call time rather
 // than a silently missing tool.
-func (a *Agents) anyResumableAgent(g *genkit.Genkit) bool {
+func (a *Agents) anyContinuableAgent(g *genkit.Genkit) bool {
 	for _, ref := range a.Agents {
 		if g == nil {
 			return true
@@ -794,9 +794,9 @@ func makeToolName(prefix, agentName string) string {
 // nil (e.g. outside an agent/Generate context), in which case only configured
 // descriptions are used. With [Agents.Async] set, the block also explains
 // background delegation and names this configuration's background-task tools;
-// with resumable set (the resume tool is registered) it explains task handles
-// and the resume tool.
-func (a *Agents) buildInstructions(g *genkit.Genkit, resumable bool) string {
+// with continuable set (the continue tool is registered) it explains task handles
+// and the continue tool.
+func (a *Agents) buildInstructions(g *genkit.Genkit, continuable bool) string {
 	prefix := a.prefix()
 	var b strings.Builder
 	b.WriteString("<sub-agents>\n")
@@ -827,16 +827,18 @@ func (a *Agents) buildInstructions(g *genkit.Genkit, resumable bool) string {
 		b.WriteString("running across turns, and task IDs from earlier tool results stay ")
 		b.WriteString("valid: check them before delegating the same work again.\n")
 	}
-	if resumable {
+	if continuable {
 		b.WriteString("\n")
 		b.WriteString("Results of delegations to sub-agents that keep sessions carry a taskId ")
 		b.WriteString("where the sub-agent's progress is addressable. If such a delegation ")
 		b.WriteString("fails or is aborted, its saved progress is not lost: call ")
-		b.WriteString(a.resumeToolName() + " with the taskId to resume it from where it ")
+		b.WriteString(a.continueToolName() + " with the taskId to continue it from where it ")
 		b.WriteString("stopped, either as-is or steered with instructions. A completed task ")
 		b.WriteString("accepts follow-up instructions in its own session the same way, ")
-		b.WriteString("without repeating the finished work. A result without a taskId is not ")
-		b.WriteString("resumable; delegate again to redo that work.\n")
+		b.WriteString("without repeating the finished work. A task that stopped on an ")
+		b.WriteString("interrupt cannot be continued; delegate a more self-contained task ")
+		b.WriteString("instead. A result without a taskId is not continuable; delegate again ")
+		b.WriteString("to redo that work.\n")
 	}
 	b.WriteString("</sub-agents>")
 	return b.String()

@@ -68,26 +68,14 @@ const (
 // classified unhelpable.
 const taskStatusUnknown = "unknown"
 
-// taskStatusAborting is the report status of a task whose stop was delivered
-// but whose row has not settled yet: the abort flipped the row, and the worker
-// is winding down toward the settled, resumable "aborted". Only the abort tool
-// reports it, because it holds two facts the row alone cannot express (the
-// flip landed, and the row has not settled). It is never stored and never
-// cached; a later check reads the window as "pending", and a wait follows the
-// row to its settled state.
-const taskStatusAborting = "aborting"
-
 // reportSettled reports whether a task report's status can no longer change on
-// its own, which is the rule the wait tool counts by. Report statuses are a
-// superset of the runtime's snapshot statuses (taskStatusUnknown and
-// taskStatusAborting are report-only), so the rule lives here rather than as a
-// cast into [aix.SnapshotStatus.Terminal], which would misread "aborting" as
-// settled. Snapshot statuses keep the runtime's rule, anything not pending is
-// settled, so a status added there cannot be counted wrong here; "unknown" is
-// settled (see taskStatusUnknown) and "aborting" is not (its row is still
-// winding down).
+// its own, which is the rule the wait tool counts by. Report statuses are the
+// runtime's snapshot statuses plus taskStatusUnknown, which is settled (see
+// above); the snapshot statuses keep the runtime's own rule
+// ([aix.SnapshotStatus.Terminal]), under which a pending row and an aborting
+// one (winding down toward its finalize) are the two still in flight.
 func reportSettled(reportStatus string) bool {
-	return reportStatus != string(aix.SnapshotStatusPending) && reportStatus != taskStatusAborting
+	return reportStatus == taskStatusUnknown || aix.SnapshotStatus(reportStatus).Terminal()
 }
 
 // noTaskIDsNote is the guidance returned when a background-task tool is called
@@ -563,12 +551,10 @@ var (
 // The abort never waits: it answers "did the stop land?", and the wait tool is
 // the one tool that waits. The answer comes from Abort's own return, not from
 // a re-read that could fail on its own and turn a delivered stop into
-// "unknown": [aix.SnapshotStatusAborted] means the flip is durable (or was
+// "unknown": [aix.SnapshotStatusAborting] means the flip is durable (or was
 // already), so the task is winding down toward the settled, resumable row and
-// the report says taskStatusAborting; aborted is a promise the row is settled,
-// and the winding-down window is not that yet. Any other terminal return
-// means the task settled between the read and the abort, and one re-read
-// fetches the answer it now carries.
+// the report says so. Any other return means the task settled between the
+// read and the abort, and one re-read fetches the answer it now carries.
 func (a *Agents) abortSnapshot() snapshotFetch {
 	return func(ctx context.Context, agent *aix.AgentHandle, snapshotID string) (*aix.SessionSnapshot[json.RawMessage], *backgroundTaskReport, error) {
 		cur, err := agent.GetSnapshot(ctx, snapshotID)
@@ -585,9 +571,9 @@ func (a *Agents) abortSnapshot() snapshotFetch {
 		if err != nil {
 			return nil, nil, err
 		}
-		if flipped == aix.SnapshotStatusAborted {
+		if flipped == aix.SnapshotStatusAborting {
 			return nil, &backgroundTaskReport{
-				Status: taskStatusAborting,
+				Status: string(aix.SnapshotStatusAborting),
 				Error: fmt.Sprintf(
 					"The stop signal was delivered and the task is winding down; its progress is being saved and it will settle as %q. No further action is needed to stop it. Collect the settled state with %s only if you need it.",
 					aix.SnapshotStatusAborted, a.backgroundToolNames().wait),
@@ -711,17 +697,25 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 			// model that sees "completed" moves on and never reads the error.
 			// Which reason it was, and what the agent last said, is in Error.
 			report.Status = string(aix.SnapshotStatusFailed)
-			report.Error = folded.Response +
-				" The task's session is saved; resume it with " + a.resumeToolName() + " using this taskId."
+			report.Error = folded.Response
+			// An interrupt is the one no-answer outcome with no continuation:
+			// continuing past it means answering it, which the orchestrator
+			// cannot do, and the folded text already says so.
+			if snap.FinishReason != aix.AgentFinishReasonInterrupted {
+				report.Error += " The task's session is saved; continue it with " + a.continueToolName() + " using this taskId."
+			}
 		}
+	case aix.SnapshotStatusAborting:
+		report.Error = "The stop signal reached the task and it is winding down; its progress is being saved and it will settle as " +
+			string(aix.SnapshotStatusAborted) + ". Check again or wait for it to settle."
 	case aix.SnapshotStatusFailed:
 		report.Error = subAgentFailureMessage(snap.FinishReason, snap.Error, lastModelMessage(snap)) +
-			" The task's progress up to the failure is saved; resume it with " + a.resumeToolName() + " using this taskId."
+			" The task's progress up to the failure is saved; continue it with " + a.continueToolName() + " using this taskId."
 	case aix.SnapshotStatusAborted:
-		report.Error = "The task was aborted before it finished. Resume it with " + a.resumeToolName() +
-			" using this taskId to continue from its last saved progress."
+		report.Error = "The task was aborted before it finished. Continue it with " + a.continueToolName() +
+			" using this taskId to pick up from its last saved progress."
 	case aix.SnapshotStatusExpired:
-		report.Error = "The background worker stopped reporting progress and is presumed dead. Attempt " + a.resumeToolName() +
+		report.Error = "The background worker stopped reporting progress and is presumed dead. Attempt " + a.continueToolName() +
 			" with this taskId to recover saved progress, or delegate the task again."
 	}
 

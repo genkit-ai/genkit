@@ -78,6 +78,16 @@ func (s *flakyStore) SaveSnapshot(ctx context.Context, snapshotID string, fn fun
 	return s.InMemorySessionStore.SaveSnapshot(ctx, snapshotID, fn)
 }
 
+// GetSnapshotMetadata routes through GetSnapshot so the hook shapes metadata
+// reads exactly as it shapes full ones, then drops the state.
+func (s *flakyStore) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[any], error) {
+	snap, err := s.GetSnapshot(ctx, snapshotID)
+	if snap != nil {
+		snap.State = nil
+	}
+	return snap, err
+}
+
 func (s *flakyStore) GetSnapshot(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[any], error) {
 	snap, err := s.InMemorySessionStore.GetSnapshot(ctx, snapshotID)
 	s.mu.Lock()
@@ -183,7 +193,7 @@ func delegateThenResumeModel(t *testing.T, g *genkit.Genkit, name, delegateTool,
 	})
 }
 
-func TestAgentsResumeRetriesFailedTask(t *testing.T) {
+func TestAgentsContinueRetriesFailedTask(t *testing.T) {
 	// A server-managed sub-agent fails, the failure result carries its task
 	// handle, and resuming that handle re-attempts the run from the failed
 	// snapshot: the sub-agent's second call sees the same conversation and
@@ -197,7 +207,7 @@ func TestAgentsResumeRetriesFailedTask(t *testing.T) {
 		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
 	)
 
-	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "resume_subagent", "try X", "")
+	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "continue_task", "try X", "")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "flaky"}}}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
@@ -209,11 +219,11 @@ func TestAgentsResumeRetriesFailedTask(t *testing.T) {
 	if len(failures) != 1 || failures[0].Status != string(aix.SnapshotStatusFailed) {
 		t.Fatalf("expected 1 failed delegation, got %+v", failures)
 	}
-	if !strings.Contains(failures[0].Response, "resume_subagent") {
-		t.Errorf("failure response does not advertise the resume tool: %q", failures[0].Response)
+	if !strings.Contains(failures[0].Response, "continue_task") {
+		t.Errorf("failure response does not advertise the continue tool: %q", failures[0].Response)
 	}
 
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 {
 		t.Fatalf("expected 1 resume response, got %d", len(resumes))
 	}
@@ -234,7 +244,7 @@ func TestAgentsResumeRetriesFailedTask(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeWithInstructionsSteersRetry(t *testing.T) {
+func TestAgentsContinueWithInstructionsSteersRetry(t *testing.T) {
 	// Instructions ride into the resumed run as a fresh user message on top of
 	// the committed conversation, steering the retry instead of repeating it.
 	g := newTestGenkit(t)
@@ -245,14 +255,14 @@ func TestAgentsResumeWithInstructionsSteersRetry(t *testing.T) {
 		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
 	)
 
-	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "resume_subagent", "try X", "skip the flaky source")
+	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "continue_task", "try X", "skip the flaky source")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "flaky"}}}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || resumes[0].Response != "steered" {
 		t.Fatalf("expected a steered resume, got %+v", resumes)
 	}
@@ -273,7 +283,7 @@ func TestAgentsResumeWithInstructionsSteersRetry(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeCompletedTask(t *testing.T) {
+func TestAgentsContinueCompletedTask(t *testing.T) {
 	// A completed task refuses an instructions-less resume (an empty input
 	// would re-run the finished turn) and accepts a follow-up with
 	// instructions inside the sub-agent's own session.
@@ -289,7 +299,7 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		resumes := 0
 		var lastResume delegationResult
-		for _, v := range toolOutputs(req.Messages, "resume_subagent") {
+		for _, v := range toolOutputs(req.Messages, "continue_task") {
 			b, _ := json.Marshal(v)
 			var r delegationResult
 			if json.Unmarshal(b, &r) == nil {
@@ -302,9 +312,9 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 		case !ok:
 			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_helper", Input: map[string]any{"task": "answer X"}}), nil
 		case resumes == 0:
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": delegated.TaskID}}), nil
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": delegated.TaskID}}), nil
 		case resumes == 1:
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": delegated.TaskID, "instructions": "now also cover Y"}}), nil
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": delegated.TaskID, "instructions": "now also cover Y"}}), nil
 		default:
 			return textResp(req, "done: "+lastResume.Response), nil
 		}
@@ -318,7 +328,7 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 2 {
 		t.Fatalf("expected 2 resume responses, got %d", len(resumes))
 	}
@@ -341,7 +351,7 @@ func TestAgentsResumeCompletedTask(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeCarriesLabel(t *testing.T) {
+func TestAgentsContinueCarriesLabel(t *testing.T) {
 	// A resumed task is the same undertaking, so the caller-chosen label
 	// follows the handle onto the continuation's result.
 	g := newTestGenkit(t)
@@ -350,11 +360,11 @@ func TestAgentsResumeCarriesLabel(t *testing.T) {
 		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
 	)
 	orch := toolModel(t, g, "test/orch-label2", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+		if _, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done"), nil
 		}
 		if res, ok := lastDelegationOutput(req.Messages, "delegate_to_flaky"); ok {
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": res.TaskID}}), nil
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": res.TaskID}}), nil
 		}
 		return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_flaky",
 			Input: map[string]any{"task": "try X", "name": "second-try"}}), nil
@@ -368,13 +378,13 @@ func TestAgentsResumeCarriesLabel(t *testing.T) {
 	if len(failures) != 1 || failures[0].Name != "second-try" {
 		t.Fatalf("expected the labeled failure, got %+v", failures)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || resumes[0].Response != "recovered" || resumes[0].Name != "second-try" {
 		t.Fatalf("expected the label to follow the resume, got %+v", resumes)
 	}
 }
 
-func TestAgentsResumeCountsAgainstCap(t *testing.T) {
+func TestAgentsContinueCountsAgainstCap(t *testing.T) {
 	// A resume is a real sub-agent run and spends a delegation slot; with the
 	// cap exhausted by the delegation itself, the resume is refused.
 	g := newTestGenkit(t)
@@ -384,20 +394,20 @@ func TestAgentsResumeCountsAgainstCap(t *testing.T) {
 		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
 	)
 
-	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "resume_subagent", "try X", "")
+	orch := delegateThenResumeModel(t, g, "test/orch", "delegate_to_flaky", "continue_task", "try X", "")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "flaky"}}, MaxDelegations: 1}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "Delegation limit reached") {
 		t.Fatalf("expected the resume to be refused by the cap, got %+v", resumes)
 	}
 }
 
-func TestAgentsResumeExpiredRecoversCommittedProgress(t *testing.T) {
+func TestAgentsContinueExpiredRecoversCommittedProgress(t *testing.T) {
 	// An expired handle (a dead worker's pending row) is fenced with an abort
 	// and resumed from the session's latest committed snapshot, recovering
 	// whatever the run persisted before it detached.
@@ -435,10 +445,10 @@ func TestAgentsResumeExpiredRecoversCommittedProgress(t *testing.T) {
 
 	deadTask := "keeper:" + pending.SnapshotID
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if res, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+		if res, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done: "+res.Response), nil
 		}
-		return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}), nil
 	})
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
@@ -446,19 +456,20 @@ func TestAgentsResumeExpiredRecoversCommittedProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || resumes[0].Response != "kept going" {
 		t.Fatalf("expected the expired task to resume from committed progress, got %+v", resumes)
 	}
 
 	// The fence flipped the dead pending row so a slow worker cannot race the
-	// recovered session.
+	// recovered session. No worker is behind it to finalize, so the raw row
+	// stays at the flip.
 	fenced, err := store.GetSnapshot(ctx, pending.SnapshotID)
 	if err != nil || fenced == nil {
 		t.Fatalf("read fenced row: %v", err)
 	}
-	if fenced.Status != aix.SnapshotStatusAborted {
-		t.Errorf("fenced row status = %q, want %q", fenced.Status, aix.SnapshotStatusAborted)
+	if fenced.Status != aix.SnapshotStatusAborting {
+		t.Errorf("fenced row status = %q, want %q", fenced.Status, aix.SnapshotStatusAborting)
 	}
 
 	// The recovered run saw the committed conversation plus the instructions.
@@ -472,7 +483,7 @@ func TestAgentsResumeExpiredRecoversCommittedProgress(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeExpiredWithNothingSavedRefused(t *testing.T) {
+func TestAgentsContinueExpiredWithNothingSavedRefused(t *testing.T) {
 	// A dead worker that never committed anything (a background launch dies
 	// before finalize) left nothing to recover; the refusal says to delegate
 	// again instead of pretending to resume.
@@ -493,21 +504,21 @@ func TestAgentsResumeExpiredWithNothingSavedRefused(t *testing.T) {
 
 	deadTask := "keeper:" + pending.SnapshotID
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+		if _, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done"), nil
 		}
-		return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": deadTask}}), nil
+		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": deadTask}}), nil
 	})
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 {
 		t.Fatalf("expected 1 resume response, got %d", len(resumes))
 	}
-	if !strings.Contains(resumes[0].Response, "saved no resumable progress") ||
+	if !strings.Contains(resumes[0].Response, "saved no progress to continue from") ||
 		!strings.Contains(resumes[0].Response, "Delegate the task again") {
 		t.Errorf("expected an honest nothing-saved refusal, got %q", resumes[0].Response)
 	}
@@ -531,7 +542,7 @@ func saveDeadPendingRow(store *localstore.InMemorySessionStore[any], sessionID, 
 	})
 }
 
-func TestAgentsResumeExpiredFinishedParentRequiresInstructions(t *testing.T) {
+func TestAgentsContinueExpiredFinishedParentRequiresInstructions(t *testing.T) {
 	// The parent behind a dead task can be a finished turn; continuing past
 	// it gets the same instructions gate as a completed task, since an empty
 	// input would re-run the finished turn instead of continuing the work.
@@ -563,23 +574,23 @@ func TestAgentsResumeExpiredFinishedParentRequiresInstructions(t *testing.T) {
 
 	deadTask := "keeper:" + pending.SnapshotID
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if _, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+		if _, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done"), nil
 		}
-		return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent", Input: map[string]any{"taskId": deadTask}}), nil
+		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": deadTask}}), nil
 	})
 	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "last finished turn") {
 		t.Fatalf("expected the finished-parent instructions gate, got %+v", resumes)
 	}
 }
 
-func TestAgentsResumeInBackground(t *testing.T) {
+func TestAgentsContinueInBackground(t *testing.T) {
 	// With Async set, a failed task can be resumed in the background: the tool
 	// returns a fresh pending handle in the same session, and the wait tool
 	// collects the retried result.
@@ -594,12 +605,12 @@ func TestAgentsResumeInBackground(t *testing.T) {
 		if outs := toolOutputs(req.Messages, waitBackgroundTasksToolName); len(outs) > 0 {
 			return textResp(req, "done"), nil
 		}
-		if res, ok := lastDelegationOutput(req.Messages, "resume_subagent"); ok {
+		if res, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return toolReqResp(req, &ai.ToolRequest{Name: waitBackgroundTasksToolName,
 				Input: map[string]any{"taskIds": []string{res.TaskID}}}), nil
 		}
 		if res, ok := lastDelegationOutput(req.Messages, "delegate_to_flaky"); ok {
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 				Input: map[string]any{"taskId": res.TaskID, "background": true}}), nil
 		}
 		return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_flaky", Input: map[string]any{"task": "try X"}}), nil
@@ -610,7 +621,7 @@ func TestAgentsResumeInBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || resumes[0].Status != string(aix.SnapshotStatusPending) {
 		t.Fatalf("expected a pending background resume, got %+v", resumes)
 	}
@@ -632,7 +643,7 @@ func TestAgentsResumeInBackground(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
+func TestAgentsContinueExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 	// The fence is the one write standing between the recovery and a live
 	// worker: a fence that fails must refuse rather than recover unfenced,
 	// and the refusal names a retry that can succeed, so it returns its slot.
@@ -645,9 +656,9 @@ func TestAgentsResumeExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 	store.setSaveFailure(pendingID, errors.New("store blip"))
 
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		resume := &ai.ToolRequest{Name: "resume_subagent",
+		resume := &ai.ToolRequest{Name: "continue_task",
 			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
-		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		switch len(toolOutputs(req.Messages, "continue_task")) {
 		case 0:
 			return toolReqResp(req, resume), nil
 		case 1:
@@ -663,7 +674,7 @@ func TestAgentsResumeExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 2 {
 		t.Fatalf("expected 2 resume responses, got %+v", resumes)
 	}
@@ -675,9 +686,9 @@ func TestAgentsResumeExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeParentReadBlipRefundsSlot(t *testing.T) {
+func TestAgentsContinueParentReadBlipRefundsSlot(t *testing.T) {
 	// A transient failure reading the dead task's parent snapshot refuses
-	// with a retry hint and returns its slot, exactly as resumeFromStore's
+	// with a retry hint and returns its slot, exactly as continueFromStore's
 	// own transient read arm does; MaxDelegations of 1 pins the refund.
 	g := newTestGenkit(t)
 	store := newFlakyStore()
@@ -690,9 +701,9 @@ func TestAgentsResumeParentReadBlipRefundsSlot(t *testing.T) {
 	})
 
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		resume := &ai.ToolRequest{Name: "resume_subagent",
+		resume := &ai.ToolRequest{Name: "continue_task",
 			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
-		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		switch len(toolOutputs(req.Messages, "continue_task")) {
 		case 0:
 			return toolReqResp(req, resume), nil
 		case 1:
@@ -707,7 +718,7 @@ func TestAgentsResumeParentReadBlipRefundsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 2 {
 		t.Fatalf("expected 2 resume responses, got %+v", resumes)
 	}
@@ -719,7 +730,7 @@ func TestAgentsResumeParentReadBlipRefundsSlot(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
+func TestAgentsContinueExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	// A worker that is alive after all observes the fence and keeps beating
 	// while it drains, so the post-fence re-read shapes the row as pending.
 	// The resume must not fall back to the parent (that would race the
@@ -730,9 +741,9 @@ func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
 	pendingID := strings.TrimPrefix(deadTask, "keeper:")
 	// While the hook is set, any read of the fenced row reports a fresh
-	// heartbeat: the winding-down window as a live worker's beats keep it.
+	// heartbeat: the aborting row as a live worker's beats keep it.
 	store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
-		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborted && snap.State == nil {
+		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborting {
 			fresh := *snap
 			now := time.Now()
 			fresh.HeartbeatAt = &now
@@ -742,9 +753,9 @@ func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	})
 
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		resume := &ai.ToolRequest{Name: "resume_subagent",
+		resume := &ai.ToolRequest{Name: "continue_task",
 			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
-		switch len(toolOutputs(req.Messages, "resume_subagent")) {
+		switch len(toolOutputs(req.Messages, "continue_task")) {
 		case 0:
 			return toolReqResp(req, resume), nil
 		case 1:
@@ -761,7 +772,7 @@ func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 2 {
 		t.Fatalf("expected 2 resume responses, got %+v", resumes)
 	}
@@ -773,7 +784,7 @@ func TestAgentsResumeExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	}
 }
 
-func TestAgentsResumeExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) {
+func TestAgentsContinueExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) {
 	// The worker the fence targeted was alive and its COMPLETED finalize won
 	// the race: the post-fence re-read finds a finished row, and an
 	// instructions-less resume of it must hit the same gate as any completed
@@ -785,7 +796,7 @@ func TestAgentsResumeExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) 
 	// After the fence flips the raw row, reads report the worker's completed
 	// finalize having landed instead.
 	store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
-		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborted {
+		if id == pendingID && err == nil && snap != nil && snap.Status == aix.SnapshotStatusAborting {
 			done := *snap
 			done.Status = aix.SnapshotStatusCompleted
 			done.FinishReason = aix.AgentFinishReasonStop
@@ -797,8 +808,8 @@ func TestAgentsResumeExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) 
 	})
 
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if len(toolOutputs(req.Messages, "resume_subagent")) == 0 {
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+		if len(toolOutputs(req.Messages, "continue_task")) == 0 {
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 				Input: map[string]any{"taskId": deadTask}}), nil
 		}
 		return textResp(req, "done"), nil
@@ -808,8 +819,152 @@ func TestAgentsResumeExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
+	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "already completed") {
 		t.Fatalf("expected the completed-task instructions gate, got %+v", resumes)
+	}
+}
+
+func TestAgentsAbortingTaskReportsAndRefusesContinue(t *testing.T) {
+	// An aborting row is a live wind-down: the check tool reports it as such,
+	// and the continue tool refuses it with a refund, since the same handle
+	// continues once the worker's finalize lands.
+	g := newTestGenkit(t)
+	store := newFlakyStore()
+	_, committedID := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+	committed, err := store.GetSnapshot(ctx, committedID)
+	if err != nil || committed == nil {
+		t.Fatalf("read committed snapshot: %v", err)
+	}
+	now := time.Now()
+	aborting, err := store.SaveSnapshot(ctx, "", func(_ *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error) {
+		return &aix.SessionSnapshot[any]{
+			SessionID:   committed.SessionID,
+			ParentID:    committed.SnapshotID,
+			Status:      aix.SnapshotStatusAborting,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			HeartbeatAt: &now,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("SaveSnapshot aborting row: %v", err)
+	}
+	task := "keeper:" + aborting.SnapshotID
+
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		checks := toolOutputs(req.Messages, checkBackgroundTasksToolName)
+		continues := toolOutputs(req.Messages, "continue_task")
+		delegations := toolOutputs(req.Messages, "delegate_to_keeper")
+		switch {
+		case len(checks) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: checkBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{task}}}), nil
+		case len(continues) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
+				Input: map[string]any{"taskId": task, "instructions": "go on"}}), nil
+		case len(delegations) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_keeper",
+				Input: map[string]any{"task": "more"}}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, Async: true, MaxDelegations: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := toolOutputs(resp.History(), checkBackgroundTasksToolName)
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check response, got %d", len(checks))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, checks[0])
+	if len(res.Tasks) != 1 || res.Tasks[0].Status != string(aix.SnapshotStatusAborting) || !strings.Contains(res.Tasks[0].Error, "winding down") {
+		t.Errorf("check report = %+v, want status %q with the winding-down explanation", res.Tasks, aix.SnapshotStatusAborting)
+	}
+	continues := delegationResponses(t, resp.History(), "continue_task")
+	if len(continues) != 1 || !strings.Contains(continues[0].Response, "winding down") {
+		t.Errorf("expected the winding-down refusal, got %+v", continues)
+	}
+	// The refusal returned its slot: under a cap of one, a delegation still
+	// runs afterwards.
+	delegations := delegationResponses(t, resp.History(), "delegate_to_keeper")
+	if len(delegations) != 1 || delegations[0].Response != "kept going" {
+		t.Errorf("expected the refused continuation to refund its slot, got %+v", delegations)
+	}
+}
+
+func TestAgentsInterruptedTaskNotContinuable(t *testing.T) {
+	// A background task that stops on an interrupt gets a handle like any
+	// settled task, but nothing can continue it: the report says so without
+	// a continue hint, and the continue tool refuses the handle.
+	g := newTestGenkit(t)
+	gate := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				sess.AddMessages(ai.NewModelTextMessage("need a human"))
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonInterrupted}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := toolModel(t, g, "test/orch-interrupt", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+		continues := toolOutputs(req.Messages, "continue_task")
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_researcher",
+				Input: map[string]any{"task": "dig into X", "background": true}}), nil
+		case len(waits) == 0:
+			release()
+			return toolReqResp(req, &ai.ToolRequest{Name: waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}}}), nil
+		case len(continues) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
+				Input: map[string]any{"taskId": lenientDelegation(launches[0]).TaskID, "instructions": "the answer is 42"}}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+	if len(res.Tasks) != 1 {
+		t.Fatalf("expected 1 task report, got %+v", res.Tasks)
+	}
+	got := res.Tasks[0]
+	if got.Status != string(aix.SnapshotStatusFailed) || !strings.Contains(got.Error, "interrupted") {
+		t.Errorf("report = %+v, want a failed status explained as an interrupt", got)
+	}
+	if strings.Contains(got.Error, "continue it with") {
+		t.Errorf("report advertises continuation of an interrupted task: %q", got.Error)
+	}
+	continues := delegationResponses(t, resp.History(), "continue_task")
+	if len(continues) != 1 || !strings.Contains(continues[0].Response, "stopped on an interrupt") {
+		t.Errorf("expected the interrupt refusal, got %+v", continues)
 	}
 }

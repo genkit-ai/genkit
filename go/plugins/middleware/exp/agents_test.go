@@ -495,9 +495,9 @@ func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
 	}
 }
 
-func TestAgentsClientManagedDelegationNotResumable(t *testing.T) {
+func TestAgentsClientManagedDelegationNotContinuable(t *testing.T) {
 	// A client-managed sub-agent persists nothing, so its settled result
-	// carries no task handle, and the resume tool refuses a handle naming it:
+	// carries no task handle, and the continue tool refuses a handle naming it:
 	// only server-managed sub-agents leave resume points behind.
 	g := newTestGenkit(t)
 
@@ -509,18 +509,18 @@ func TestAgentsClientManagedDelegationNotResumable(t *testing.T) {
 
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		delegations := toolOutputs(req.Messages, "delegate_to_ephemeral")
-		resumes := toolOutputs(req.Messages, "resume_subagent")
+		resumes := toolOutputs(req.Messages, "continue_task")
 		switch {
 		case len(delegations) == 0:
 			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_ephemeral", Input: map[string]any{"task": "do X"}}), nil
 		case len(resumes) == 0:
-			return toolReqResp(req, &ai.ToolRequest{Name: "resume_subagent",
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 				Input: map[string]any{"taskId": "ephemeral:whatever"}}), nil
 		default:
 			return textResp(req, "done"), nil
 		}
 	})
-	// A server-managed sibling keeps the resume tool registered, so the
+	// A server-managed sibling keeps the continue tool registered, so the
 	// refusal (and not a missing tool) is what answers the model.
 	genkitx.DefineAgent[any](g, "keeper",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/keeper", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
@@ -541,9 +541,9 @@ func TestAgentsClientManagedDelegationNotResumable(t *testing.T) {
 	if got[0].TaskID != "" || got[0].Status != "" {
 		t.Errorf("client-managed result carries a handle: taskId=%q status=%q", got[0].TaskID, got[0].Status)
 	}
-	resumes := delegationResponses(t, resp.History(), "resume_subagent")
-	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "not resumable") {
-		t.Fatalf("expected the client-managed resume refusal, got %+v", resumes)
+	resumes := delegationResponses(t, resp.History(), "continue_task")
+	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "cannot be continued") {
+		t.Fatalf("expected the client-managed continue refusal, got %+v", resumes)
 	}
 }
 
@@ -584,7 +584,7 @@ func TestAgentsTwoClientManagedInstancesCoexist(t *testing.T) {
 	if len(got) != 1 || got[0].Response != "ok" {
 		t.Fatalf("delegation through the first instance failed: %+v", got)
 	}
-	if strings.Contains(capturedSystem, resumeSubagentToolName) {
+	if strings.Contains(capturedSystem, continueTaskToolName) {
 		t.Errorf("system prompt advertises the unregistered resume tool: %q", capturedSystem)
 	}
 }
