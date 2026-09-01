@@ -242,6 +242,27 @@ def _first_action_arg_has_default(input_spec: inspect.FullArgSpec, n_action_args
     return len(defaults) >= n_action_args
 
 
+def _is_context_annotation(annotation: Any) -> bool:  # noqa: ANN401 - annotations are arbitrary types
+    """Return True when ``annotation`` is ActionRunContext or a subclass.
+
+    Context parameters (e.g. the tool-only ``ToolRunContext``) receive runtime
+    state rather than action input, so they must not be treated as input
+    types when inferring schemas or dispatching arguments.
+
+    String annotations are handled too: when a user module enables
+    ``from __future__ import annotations`` (or ``get_type_hints`` fails and we
+    fall back to raw annotations), the annotation arrives as the class name.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, ActionRunContext):
+        return True
+    if isinstance(annotation, str):
+        return annotation in ('ActionRunContext', 'ToolRunContext') or annotation.endswith((
+            '.ActionRunContext',
+            '.ToolRunContext',
+        ))
+    return False
+
+
 # =============================================================================
 # Action key utilities
 # =============================================================================
@@ -446,6 +467,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._n_action_args: int = len(action_args)
         self._action_arg_names: list[str] = action_args
+        self._arg_types: list[Any] = arg_types
         # When True, calling the action without an input is legal because the
         # wrapped function will fall back to its own Python-level default.
         self._first_arg_optional: bool = _first_action_arg_has_default(input_spec, len(action_args))
@@ -628,7 +650,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if len(action_args) > 2:
             raise TypeError(f'can only have up to 2 args: {action_args}')
 
-        if len(action_args) > 0:
+        has_input = len(action_args) > 0 and not _is_context_annotation(arg_types[0])
+        if has_input:
             type_adapter = TypeAdapter(arg_types[0])
             self._input_schema: dict[str, object] = type_adapter.json_schema()
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
@@ -823,6 +846,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             case 0:
                 return await self._fn()
             case 1:
+                if _is_context_annotation(self._arg_types[0]):
+                    return await self._fn(ctx)
                 if omit_input:
                     return await self._fn()
                 return await self._fn(input)

@@ -20,12 +20,12 @@ import inspect
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Any, cast
+from typing import Any, cast, get_type_hints
 
 from opentelemetry import trace as trace_api
 from pydantic import BaseModel
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, _is_context_annotation
 from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
@@ -368,6 +368,12 @@ def _define_tool(
 
     input_spec = inspect.getfullargspec(func)
 
+    try:
+        resolved_annotations = get_type_hints(func)
+    except (NameError, TypeError, AttributeError):
+        resolved_annotations = input_spec.annotations
+    arg_types = [resolved_annotations.get(arg, Any) for arg in input_spec.args]
+
     async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
@@ -378,22 +384,27 @@ def _define_tool(
                     span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
                 except Exception:
                     span.set_attribute('genkit:metadata:resumed', str(resumed_meta))
+        original_input = _tool_original_input.get()
+
+        def tool_run_context(action_ctx: ActionRunContext) -> ToolRunContext:
+            return ToolRunContext(
+                action_ctx,
+                resumed_metadata=resumed_meta,
+                original_input=original_input,
+            )
 
         # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
         match len(input_spec.args):
             case 0:
                 return await func()
             case 1:
+                if _is_context_annotation(arg_types[0]):
+                    return await func(tool_run_context(cast(ActionRunContext, args[0])))
                 return await func(args[0])
             case 2:
-                original_input = _tool_original_input.get()
                 return await func(
                     args[0],
-                    ToolRunContext(
-                        cast(ActionRunContext, args[1]),
-                        resumed_metadata=resumed_meta,
-                        original_input=original_input,
-                    ),
+                    tool_run_context(cast(ActionRunContext, args[1])),
                 )
             case _:
                 raise ValueError('tool must have 0-2 args...')
