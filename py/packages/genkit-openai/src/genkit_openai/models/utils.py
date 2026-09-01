@@ -23,7 +23,8 @@ import re
 from collections.abc import Callable
 from typing import Any, NoReturn
 
-from openai import APIStatusError
+from openai import APIStatusError, BaseModel
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from genkit import (
     GenkitError,
@@ -200,6 +201,60 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     if hasattr(request.config, 'model_dump'):
         return request.config.model_dump(exclude_none=True)
     return {}
+
+
+def _unmodeled_field(source: BaseModel, name: str) -> object:
+    """Read a response field the OpenAI schema does not model.
+
+    The SDK's response models allow extra fields and collect them in
+    ``model_extra``, which is where a provider's non-standard fields land.
+
+    Args:
+        source: A response object from the OpenAI SDK.
+        name: The wire name of the field.
+
+    Returns:
+        The field value, or None when it is absent or arrived as null.
+    """
+    extras = source.model_extra
+    if not isinstance(extras, dict):
+        return None
+    return extras.get(name)
+
+
+def extract_response_metadata(response: ChatCompletion | ChatCompletionChunk) -> dict[str, Any]:
+    """Collect the response metadata that is not part of the generated message.
+
+    Accepts a chat completion or a single streamed chunk of one: both carry
+    the same metadata fields.
+
+    Args:
+        response: A ``ChatCompletion`` or ``ChatCompletionChunk``.
+
+    Returns:
+        A dict of the metadata fields the response actually carries, empty
+        when it carries none.
+    """
+    metadata: dict[str, Any] = {}
+    for key, value in (
+        ('systemFingerprint', response.system_fingerprint),
+        ('model', response.model),
+        ('id', response.id),
+    ):
+        if isinstance(value, str) and value:
+            metadata[key] = value
+
+    # xAI returns live-search sources in an unmodeled citations field.
+    citations = _unmodeled_field(response, 'citations')
+    if citations is not None:
+        metadata['citations'] = citations
+
+    # A gateway reports a mid-generation upstream failure as an error object on the choice.
+    failure = _unmodeled_field(response.choices[0], 'error') if response.choices else None
+    if isinstance(failure, dict):
+        metadata['error'] = failure
+
+    return metadata
 
 
 def _extract_media(request: ModelRequest) -> tuple[str, str]:
