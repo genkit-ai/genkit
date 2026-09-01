@@ -50,9 +50,11 @@ deterministically with no API key.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
+    AgentChat,
     AgentError,
     AgentFinishReason,
     AgentInput,
@@ -92,9 +94,9 @@ async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
 agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 
 
-def turns(chat: object) -> list[str]:
+def turns(chat: AgentChat[Any]) -> list[str]:
     """A compact 'text/role' view of the chat's running history."""
-    return [f'{_text(m.content or [])}/{m.role}' for m in chat.messages]  # type: ignore[attr-defined]
+    return [f'{_text(m.content or [])}/{m.role}' for m in chat.messages]
 
 
 async def client_side_abort() -> None:

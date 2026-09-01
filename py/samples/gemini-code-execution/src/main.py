@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,42 +14,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Code execution - let Gemini write and run Python for a task."""
+"""Gemini writes and runs the Python. You call generate()."""
 
-from genkit_google_genai import GeminiConfigSchema, GoogleAI
-from pydantic import BaseModel, Field
+from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, Message
+from genkit import Genkit
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
-
-
-class CodeExecutionInput(BaseModel):
-    """Input for code execution."""
-
-    task: str = Field(default='What is the sum of the first 50 prime numbers?', description='Problem to solve')
-
-
-@ai.flow()
-async def execute_code(input: CodeExecutionInput) -> Message:
-    """Ask Gemini to generate and execute code."""
-
-    response = await ai.generate(
-        prompt=f'Write code and run it to solve this task: {input.task}',
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
-    )
-    if not response.message:
-        raise ValueError('No message returned from model')
-    return response.message
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 
 async def main() -> None:
-    """Run the code execution sample once."""
-    try:
-        message = await execute_code(CodeExecutionInput())
-        print(message.model_dump_json(indent=2))  # noqa: T201
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+    # code_execution=True is the whole feature. The model has to compute
+    # this, not guess.
+    response = await ai.generate(
+        prompt=(
+            'Monthly revenue ($k): Jan 120, Feb 135, Mar 128, Apr 150, May 162, '
+            'Jun 158, Jul 175, Aug 180, Sep 195, Oct 210, Nov 205, Dec 230. '
+            'What is the 12-month CAGR, and which quarter grew fastest?'
+        ),
+        config={'code_execution': True},
+    )
+    print(response.text)
 
 
 if __name__ == '__main__':

@@ -23,28 +23,25 @@ fluency, safety, groundedness, and summarization quality.
 Example:
     ```python
     from genkit import Genkit
+    from genkit.evaluator import BaseDataPoint
     from genkit_google_genai import VertexAI
 
-    # 1. Initialize Genkit with VertexAI plugin
-    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+    ai = Genkit(plugins=[VertexAI(project='my-project')])
 
-    # 2. Prepare dataset with input and model output
     dataset = [
-        {
-            'input': 'What is the capital of France?',
-            'output': 'Paris is the capital of France.',
-        }
+        BaseDataPoint(
+            input='Write about AI.',
+            output='AI is transforming industries through intelligent automation.',
+        ),
     ]
 
-    # 3. Evaluate output fluency using Vertex AI Evaluators
     results = await ai.evaluate(
         evaluator='vertexai/fluency',
         dataset=dataset,
     )
 
-    # 4. Inspect evaluation score directly
-    print(results[0].evaluation.score)
-    # => 5.0
+    for result in results.root:
+        print(f'Score: {result.evaluation.score}')
     ```
 """
 

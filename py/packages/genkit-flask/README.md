@@ -17,7 +17,7 @@ from genkit_flask import genkit_flask_handler
 from genkit_google_genai import GoogleAI
 
 app = Flask(__name__)
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 
 @app.post('/api/greet')

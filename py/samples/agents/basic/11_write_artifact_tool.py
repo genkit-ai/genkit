@@ -35,7 +35,7 @@ store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='workspaceAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     use=[Artifacts()],
     store=store,
 )

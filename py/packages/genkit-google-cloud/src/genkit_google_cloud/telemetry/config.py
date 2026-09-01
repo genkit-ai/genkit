@@ -57,11 +57,12 @@ def resolve_project_id(
 ) -> str | None:
     """Resolve the GCP project ID from multiple sources.
 
-    Resolution order (matching JS/Go):
+    Resolution order:
     1. Explicit project_id parameter
-    2. FIREBASE_PROJECT_ID environment variable
-    3. GOOGLE_CLOUD_PROJECT environment variable
-    4. GCLOUD_PROJECT environment variable
+    2. FIREBASE_PROJECT_ID environment variable (legacy compatibility
+       fallback, still honored for existing deployments)
+    3. GOOGLE_CLOUD_PROJECT environment variable (standard Google Cloud)
+    4. GCLOUD_PROJECT environment variable (standard Google Cloud)
     5. Project ID from credentials
 
     Args:

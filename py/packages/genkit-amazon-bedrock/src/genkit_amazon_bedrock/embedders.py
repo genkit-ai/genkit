@@ -382,7 +382,7 @@ class BedrockEmbedder:
             raise GenkitError(
                 message=(
                     f'bedrock embed: {self._model_id!r} uses the Cohere Embed v4 request schema, '
-                    'which is not supported yet; use cohere.embed-english-v3 or cohere.embed-multilingual-v3'
+                    'which this plugin does not accept; use cohere.embed-english-v3 or cohere.embed-multilingual-v3.'
                 ),
                 status='UNIMPLEMENTED',
             )

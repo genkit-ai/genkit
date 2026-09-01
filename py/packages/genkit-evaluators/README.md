@@ -1,6 +1,6 @@
 # Genkit Evaluators Plugin
 
-Provides three rule-based evaluators matching the Go and JS implementations:
+Provides three built-in rule-based evaluators:
 
 - **regex** – Tests output against a regex pattern (reference = regex string)
 - **deep_equal** – Tests equality of output against reference

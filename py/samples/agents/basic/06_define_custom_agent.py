@@ -49,7 +49,7 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
         messages = [Message(m) for m in history] if history else None
 
         stream_resp = ai.generate_stream(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             system='Concise coding assistant.',
             messages=messages,
         )
