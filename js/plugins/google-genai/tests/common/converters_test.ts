@@ -1529,6 +1529,91 @@ describe('toGeminiTool', () => {
     assert.deepStrictEqual(got, want);
   });
 
+  it('should resolve local definitions referenced by array items', () => {
+    const got = toGeminiTool({
+      name: 'create_draft',
+      description: 'Create an email draft',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          attachments: {
+            type: 'array',
+            items: { $ref: '#/$defs/Attachment' },
+          },
+        },
+        $defs: {
+          Attachment: {
+            type: 'object',
+            properties: {
+              content: { type: 'string' },
+              filename: { type: 'string' },
+            },
+            required: ['content'],
+          },
+        },
+      } as any,
+    });
+
+    assert.deepStrictEqual(got.parameters, {
+      type: SchemaType.OBJECT,
+      properties: {
+        attachments: {
+          type: SchemaType.ARRAY,
+          items: {
+            type: SchemaType.OBJECT,
+            properties: {
+              content: { type: SchemaType.STRING },
+              filename: { type: SchemaType.STRING },
+            },
+            required: ['content'],
+          },
+        },
+      },
+      required: undefined,
+    });
+  });
+
+  it('should stop resolving circular local definitions', () => {
+    const got = toGeminiTool({
+      name: 'circular_tool',
+      description: 'A tool with a recursive schema',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          node: { $ref: '#/$defs/Node' },
+        },
+        $defs: {
+          Node: {
+            type: 'object',
+            properties: {
+              children: {
+                type: 'array',
+                items: { $ref: '#/$defs/Node' },
+              },
+            },
+          },
+        },
+      } as any,
+    });
+
+    assert.deepStrictEqual(got.parameters, {
+      type: SchemaType.OBJECT,
+      properties: {
+        node: {
+          type: SchemaType.OBJECT,
+          properties: {
+            children: {
+              type: SchemaType.ARRAY,
+              items: undefined,
+            },
+          },
+          required: undefined,
+        },
+      },
+      required: undefined,
+    });
+  });
+
   it('should replace slashes in tool names', async () => {
     const got = toGeminiTool({
       name: 'my/tool/name',
