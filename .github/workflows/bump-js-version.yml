@@ -19,24 +19,20 @@ name: Bump and Tag JS Version
 on:
   workflow_dispatch:
     inputs:
-      releaseType:
-        description: Release type
+      mode:
+        description: Release mode
         type: choice
-        default: patch
+        default: auto
         required: true
         options:
-          - patch
-          - minor
-          - major
-          - prerelease
-          - premajor
-          - preminor
-          - prepatch
-      preid:
-        description: Prerelease identifier
+          - auto
+          - rc
+          - graduate
+      rcTag:
+        description: Pre-release identifier (only used for "rc" mode)
         type: string
         default: rc
-        required: true
+        required: false
 
 jobs:
   build:
@@ -46,6 +42,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -62,10 +59,15 @@ jobs:
           git config --global user.name "genkit-releaser"
 
       - name: Bump and Tag
+        shell: bash
         run: |
-          js/scripts/bump_and_tag_js.sh ${{ inputs.releaseType }} ${INPUTS_PREID}
-        env:
-          INPUTS_PREID: ${{ inputs.preid }}
+          ARGS=""
+          if [ "${{ inputs.mode }}" = "rc" ]; then
+            ARGS="--rc ${{ inputs.rcTag }}"
+          elif [ "${{ inputs.mode }}" = "graduate" ]; then
+            ARGS="--graduate"
+          fi
+          npx tsx js/scripts/version.ts $ARGS
 
       - name: Push
         shell: bash
