@@ -344,6 +344,18 @@ class MessageAdapter:
         except AttributeError:
             return None
 
+    @property
+    def refusal(self) -> str | None:
+        """The 'refusal' attribute of the message if available.
+
+        A model that declines to answer sends the reason it declined here
+        rather than as content.
+
+        Returns:
+            The refusal string or None.
+        """
+        return getattr(self._data, 'refusal', None)
+
 
 ChatCompletionMessageAdapter = DictMessageAdapter | MessageAdapter
 
@@ -461,11 +473,8 @@ class MessageConverter:
             message: A ChatCompletionMessageAdapter instance.
 
         Returns:
-            A Genkit `Message` object.
-
-        Raises:
-            ValueError: If neither content, tool_calls, nor reasoning_content
-                are present in the message.
+            A Genkit `Message` object, with empty content when the message
+            carries no content, tool calls, or reasoning.
         """
         content: list[Part] = []
 
@@ -479,9 +488,6 @@ class MessageConverter:
 
             if message.content:
                 content.append(cls.text_part_to_genkit(message.content))
-
-        if not content:
-            raise ValueError('Unable to determine content part')
 
         role = message.role or Role.MODEL
         return Message(role=cls._genkit_role_map.get(role, role), content=content)

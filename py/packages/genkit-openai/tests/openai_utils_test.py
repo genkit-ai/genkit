@@ -511,14 +511,13 @@ class TestMessageConverterReasoningContent:
         assert len(msg.content) == 1
         assert isinstance(msg.content[0].root, TextPart)
 
-    def test_raises_when_no_content_at_all(self) -> None:
-        """Raise ValueError when all content fields are None/empty."""
+    def test_empty_message_has_empty_content(self) -> None:
+        """A message with no content fields converts to a message with no parts."""
         adapter = DictMessageAdapter({
             'content': None,
             'role': 'assistant',
         })
-        with pytest.raises(ValueError, match='Unable to determine content part'):
-            MessageConverter.to_genkit(adapter)
+        assert MessageConverter.to_genkit(adapter).content == []
 
     def test_tool_calls_take_precedence_over_reasoning(self) -> None:
         """Tool calls take precedence; reasoning_content is ignored."""
