@@ -1,6 +1,7 @@
 {
   "entryPoints": [
     "genkit",
+    "plugins/a2ui",
     "plugins/google-genai",
     "plugins/compat-oai",
     "plugins/vertexai",

@@ -49,7 +49,8 @@
 //	(text)             send a message and stream the reply
 //	/detach (text...)  send the text, then leave it running in the background
 //	                   and return to the agent list. Re-pick the agent to wait
-//	                   for the snapshot and resume from the final state.
+//	                   for the snapshot, or to stop it and resume from the
+//	                   turns it finished.
 //	/back              return to the agent list
 //	/quit              exit
 //

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -196,9 +197,10 @@ type ModelOptions struct {
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
-			// The request and response are recorded on the action's trace span;
-			// no need to duplicate them here.
-			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
+			// The action's own span records the request and response, and
+			// stands in for the first turn's: opening one would nest a
+			// duplicate "generate" span directly inside it.
+			return generateWithRequest(ctx, r, actionOpts, nil, cb, false /* spanTurnZero */)
 		})
 	a.Register(r)
 	return (*generateAction)(a)
@@ -318,8 +320,129 @@ func LookupModel(r api.Registry, name string) Model {
 	return &ModelAction{*action}
 }
 
+// isAbnormal reports whether generation ended in a way known to carry no
+// conforming output. Every code path that would otherwise parse a response
+// against its output schema consults this predicate first: a schema error
+// raised on such a response would mask the FinishReason and FinishMessage the
+// caller needs to handle the outcome.
+//
+// FinishReasonUnknown is not in the set on purpose: plugins map unrecognized
+// provider reasons to it, so treating it as abnormal would silently drop
+// output validation for responses the model may well have completed.
+//
+// FinishReasonBlocked is in the set, because a refusal must skip parsing like
+// any other abnormal finish, but the typed helpers test for it first and
+// report [ErrGenerationBlocked] instead of reaching here.
+func (fr FinishReason) isAbnormal() bool {
+	switch fr {
+	case FinishReasonBlocked, FinishReasonAborted, FinishReasonFailed, FinishReasonInterrupted, FinishReasonOther:
+		return true
+	default:
+		return false
+	}
+}
+
+// blockedError reports a refusal as [ErrGenerationBlocked], carrying the
+// provider's explanation when there is one. Only the typed helpers call it:
+// they promise a value that a refusal cannot produce, whereas [Generate]
+// hands the response back and lets the caller read FinishReason.
+func blockedError(resp *ModelResponse) error {
+	if resp.FinishMessage == "" {
+		return status.Errorf(ErrGenerationBlocked, "generation blocked")
+	}
+	return status.Errorf(ErrGenerationBlocked, "generation blocked: %s", resp.FinishMessage)
+}
+
+// responseError renders cause as the structured error a response carries
+// alongside it. [status.Convert] supplies the status, classified or inferred,
+// and the message is replaced with the error's own text so it matches the
+// FinishMessage beside it: a wrapped error's sentinel carries only the
+// innermost wording. A public error keeps the wording it was given, which was
+// chosen for a caller to read.
+func responseError(cause error) *status.Error {
+	e := status.Convert(cause)
+	if e == nil {
+		return nil
+	}
+	if !e.Public && e.Message != cause.Error() {
+		ne := *e
+		ne.Message = cause.Error()
+		return &ne
+	}
+	return e
+}
+
+// callerStopped reports whether the loop ended because the caller stopped it
+// rather than because something inside it broke: it cancelled the context, its
+// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded]).
+// Those report [FinishReasonAborted]; everything else reports
+// [FinishReasonFailed].
+//
+// It tests the context and the sentinels, never the classified status. A
+// service that answers 409 or 504 lands on ABORTED or DEADLINE_EXCEEDED
+// through the HTTP mapping in [status], and a provider stopping the request is
+// not the caller stopping the run: reporting it aborted tells a retry client
+// the one thing that is not true of it.
+func callerStopped(ctx context.Context, cause error) bool {
+	return ctx.Err() != nil ||
+		errors.Is(cause, context.Canceled) ||
+		errors.Is(cause, context.DeadlineExceeded) ||
+		errors.Is(cause, ErrMaxTurnsExceeded)
+}
+
+// failurePartial builds the partial [ModelResponse] that accompanies the
+// error when the generate loop stops before it produced a final response.
+//
+// The partial ends at a turn seam: req carries the conversation as it stood
+// when the failing turn began, which is either the caller's own messages or
+// a run of completed [model with tool requests, tool with every response]
+// rounds, and Message is cleared so nothing half-finished rides along. The
+// failing turn's own output is dropped whatever it was, a partially streamed
+// model message, a model message whose tools did not all answer, or the tool
+// requests [WithMaxTurns] refused to run, because a conversation ending in
+// an unanswered tool request is one no provider will accept back. What the
+// caller gets is therefore a conversation it can re-send.
+//
+// base, when non-nil, supplies the accounting the turn already earned (usage
+// and custom data); it is copied, not mutated, since the model
+// implementation and hooks may retain the original.
+//
+// The finish reason is [FinishReasonFailed] with the cause as the finish
+// message, or [FinishReasonAborted] when the caller stopped the loop rather
+// than anything breaking: a cancelled context, an expired deadline, or a
+// limit the caller set such as [WithMaxTurns]. Error carries the same cause
+// classified, so a consumer reading the response as data branches on a status
+// rather than a string. Downstream consumers treat both finishes as abnormal:
+// output parsing is skipped and the typed helpers extract nothing from it.
+func failurePartial(ctx context.Context, base *ModelResponse, req *ModelRequest, cause error) *ModelResponse {
+	p := ModelResponse{}
+	if base != nil {
+		p = *base
+	}
+	p.Message = nil
+	p.FinishReason = FinishReasonFailed
+	if callerStopped(ctx, cause) {
+		p.FinishReason = FinishReasonAborted
+	}
+	p.FinishMessage = cause.Error()
+	p.Error = responseError(cause)
+	if req != nil {
+		p.Request = req
+	}
+	return &p
+}
+
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
+//
+// Failures follow the partial-response contract documented on [Generate].
 func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback) (*ModelResponse, error) {
+	return generateWithRequest(ctx, r, opts, mmws, cb, true /* spanTurnZero */)
+}
+
+// generateWithRequest runs the tool loop. spanTurnZero reports whether the
+// first turn opens its own "generate" span; the generate action passes false
+// because its own span already serves as that one.
+func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
 			opts.Model = defaultModel
@@ -392,7 +515,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: max turns must be greater than 0, got %d", maxTurns)
 	}
 	if maxTurns == 0 {
-		maxTurns = 5 // Default max turns.
+		maxTurns = 50 // Default max turns.
 	}
 
 	var outputCfg ModelOutputConfig
@@ -485,157 +608,203 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	runTool := buildToolRunner(mws)
 
 	var generate func(context.Context, *ModelRequest, int, int) (*ModelResponse, error)
-	var runGenerate func(context.Context, *GenerateParams) (*ModelResponse, error)
 
-	runGenerate = func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
-		name := params.Options.StepName
+	// The loop records the conversation behind each turn so a failure hands
+	// back the rounds that completed: runTurn records each failing turn's
+	// partial response, and lastReq tracks the conversation entering the
+	// current turn as a fallback for errors raised outside a turn (e.g. by a
+	// WrapGenerate hook). The loop is sequential, so neither needs
+	// synchronization.
+	var lastPartial *ModelResponse
+	lastReq := req
+
+	turnBody := func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+		req := params.Request
+		currentTurn := params.Iteration
+		messageIndex := params.MessageIndex
+		var wrappedCb ModelStreamCallback
+		currentRole := RoleModel
+		currentIndex := messageIndex
+
+		if cb != nil {
+			wrappedCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
+				if chunk.Role != currentRole && chunk.Role != "" {
+					currentIndex++
+					currentRole = chunk.Role
+				}
+				chunk.Index = currentIndex
+				if chunk.Role == "" {
+					chunk.Role = RoleModel
+				}
+				chunk.formatHandler = streamingHandler
+				return cb(ctx, chunk)
+			}
+		}
+
+		// Resume on the first turn is handled here so that restarted tool
+		// execution is both wrapped by WrapGenerate and recorded under this
+		// turn's span (generate > tool > generate > model > tool).
+		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
+			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
+			if err != nil {
+				return nil, err
+			}
+
+			if ir := resumeOutput.interruptedResponse; ir != nil {
+				err := status.Errorf(status.ErrFailedPrecondition,
+					"One or more tools triggered an interrupt during a restarted execution.")
+				ir.Error = responseError(err)
+				// ir.Message is the conversation's revised last message, so
+				// the request carries the messages before it and History()
+				// reproduces the full conversation. Copied from the turn's
+				// request so a field added to ModelRequest carries through.
+				irReq := *req
+				irReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				ir.Request = &irReq
+				return ir, err
+			}
+
+			opts = resumeOutput.revisedRequest
+
+			resumeReq := *req
+			resumeReq.Messages = opts.Messages
+
+			if resumeOutput.toolMessage != nil && wrappedCb != nil {
+				if err := wrappedCb(ctx, &ModelResponseChunk{
+					Content: resumeOutput.toolMessage.Content,
+					Role:    RoleTool,
+				}); err != nil {
+					err = fmt.Errorf("streaming callback failed for resumed tool message: %w", err)
+					return failurePartial(ctx, nil, &resumeReq, err), err
+				}
+			}
+
+			return generate(ctx, &resumeReq, currentTurn+1, currentIndex)
+		}
+
+		logger.Debug(ctx, "calling model", "model", opts.Model, "turn", currentTurn, "messages", len(req.Messages))
+		resp, err := fn(ctx, req, wrappedCb)
+		if err != nil {
+			// The model's own output is dropped, complete or not: only the
+			// conversation entering this turn survives. Chunks already
+			// streamed reached the callback, so nothing observable is lost.
+			return failurePartial(ctx, resp, req, err), err
+		}
+
+		// ToolRequests allocates a scan of the message, so only build the
+		// log arguments when a handler accepts debug records.
+		if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
+			modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
+			if resp.Usage != nil {
+				modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
+			}
+			logger.Debug(ctx, "model responded", modelArgs...)
+		}
+
+		// Ensure all tool requests have unique refs for matching during resume.
+		ensureToolRequestRefs(resp.Message)
+
+		// If this is a long-running operation response, return it immediately without further processing
+		if bm != nil && resp.Operation != nil {
+			return resp, nil
+		}
+
+		if formatHandler != nil {
+			resp.formatHandler = streamingHandler
+			if resp.FinishReason.isAbnormal() {
+				// The response passes through as-is so the caller reads the
+				// finish reason rather than a schema error. See
+				// [FinishReason.isAbnormal].
+				logger.Warn(ctx, "model finished abnormally, skipping output parsing",
+					"model", opts.Model,
+					"finishReason", resp.FinishReason,
+					"finishMessage", resp.FinishMessage)
+			} else {
+				// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
+				parsed, perr := formatHandler.ParseMessage(resp.Message)
+				if perr != nil {
+					logger.Debug(ctx, "model output does not match the expected schema", "model", opts.Model, "error", perr)
+					// The response rides back with its original message and
+					// finish reason, not marked aborted: the model finished,
+					// post-processing did not, and the raw output is often
+					// exactly what the caller needs to see.
+					if resp.Request == nil {
+						resp.Request = req
+					}
+					err := status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", perr)
+					resp.Error = responseError(err)
+					return resp, err
+				}
+				resp.Message = parsed
+			}
+		}
+
+		if len(resp.ToolRequests()) == 0 || opts.ReturnToolRequests {
+			return resp, nil
+		}
+
+		if currentTurn+1 > maxTurns {
+			err := status.Errorf(ErrMaxTurnsExceeded, "exceeded maximum tool call iterations (%d)", maxTurns)
+			return failurePartial(ctx, resp, req, err), err
+		}
+
+		newReq, revisedMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
+		if err != nil {
+			// The whole round goes, the model message that opened it
+			// included: a failed tool leaves its request unanswered, and
+			// [failurePartial] hands back a conversation that can be
+			// re-sent.
+			return failurePartial(ctx, resp, req, err), err
+		}
+		if revisedMsg != nil {
+			logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
+			resp.FinishReason = "interrupted"
+			resp.FinishMessage = "One or more tool calls resulted in interrupts."
+			resp.Message = revisedMsg
+			return resp, nil
+		}
+		if newReq == nil {
+			return resp, nil
+		}
+
+		return generate(ctx, newReq, currentTurn+1, currentIndex+1)
+	}
+
+	// runTurn records the turn's partial result before it enters the
+	// WrapGenerate chain, so a hook that drops the response on the way up
+	// does not lose it.
+	runTurn := func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+		resp, err := turnBody(ctx, params)
+		if err != nil && resp != nil {
+			lastPartial = resp
+		}
+		return resp, err
+	}
+
+	// runGenerate opens the turn's span around runTurn. The span records the
+	// messages this turn sends rather than the ones the call started with, and
+	// is built after the WrapGenerate hooks so it includes theirs.
+	runGenerate := func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
+		if params.Iteration == 0 && !spanTurnZero {
+			return runTurn(ctx, params)
+		}
+		name := opts.StepName
 		if name == "" {
 			name = "generate"
 		}
+		// No subtype, as in TypeScript: the type says it all, and a subtype
+		// would annotate the trace path as well.
 		spanMetadata := &tracing.SpanMetadata{
-			Name:    name,
-			Type:    "util",
-			Subtype: "util",
+			Name: name,
+			Type: "util",
 		}
+		spanInput := turnOptions(opts)
+		spanInput.Messages = params.Request.Messages
 
-		return tracing.RunInNewSpan(ctx, spanMetadata, params.Options, func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
-			req := params.Request
-			currentTurn := params.Iteration
-			messageIndex := params.MessageIndex
-			var wrappedCb ModelStreamCallback
-			currentRole := RoleModel
-			currentIndex := messageIndex
-
-			if cb != nil {
-				wrappedCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
-					if chunk.Role != currentRole && chunk.Role != "" {
-						currentIndex++
-						currentRole = chunk.Role
-					}
-					chunk.Index = currentIndex
-					if chunk.Role == "" {
-						chunk.Role = RoleModel
-					}
-					chunk.formatHandler = streamingHandler
-					return cb(ctx, chunk)
-				}
-			}
-
-			// Handle resume on the first iteration inside this span so that
-			// restarted tool execution is both wrapped by WrapGenerate (from
-			// the outer middleware chain) and recorded as a child of the
-			// current generate span (lifecycle: generate > tool > generate >
-			// model > tool).
-			if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
-				resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
-				if err != nil {
-					return nil, err
-				}
-
-				if resumeOutput.interruptedResponse != nil {
-					return nil, status.Errorf(status.ErrFailedPrecondition,
-						"One or more tools triggered an interrupt during a restarted execution.")
-				}
-
-				opts = resumeOutput.revisedRequest
-
-				if resumeOutput.toolMessage != nil && wrappedCb != nil {
-					if err := wrappedCb(ctx, &ModelResponseChunk{
-						Content: resumeOutput.toolMessage.Content,
-						Role:    RoleTool,
-					}); err != nil {
-						return nil, fmt.Errorf("streaming callback failed for resumed tool message: %w", err)
-					}
-				}
-
-				resumeReq := &ModelRequest{
-					Messages:   opts.Messages,
-					Config:     req.Config,
-					Docs:       req.Docs,
-					ToolChoice: req.ToolChoice,
-					Tools:      req.Tools,
-					Output:     req.Output,
-				}
-				return generate(ctx, resumeReq, currentTurn+1, currentIndex)
-			}
-
-			logger.Debug(ctx, "calling model", "model", opts.Model, "turn", currentTurn, "messages", len(req.Messages))
-			resp, err := fn(ctx, req, wrappedCb)
-			if err != nil {
-				return nil, err
-			}
-
-			// ToolRequests allocates a scan of the message, so only build the
-			// log arguments when a handler accepts debug records.
-			if logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
-				modelArgs := []any{"model", opts.Model, "turn", currentTurn, "finishReason", resp.FinishReason, "toolRequests", len(resp.ToolRequests())}
-				if resp.Usage != nil {
-					modelArgs = append(modelArgs, "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
-				}
-				logger.Debug(ctx, "model responded", modelArgs...)
-			}
-
-			// Ensure all tool requests have unique refs for matching during resume.
-			ensureToolRequestRefs(resp.Message)
-
-			// If this is a long-running operation response, return it immediately without further processing
-			if bm != nil && resp.Operation != nil {
-				return resp, nil
-			}
-
-			if formatHandler != nil {
-				resp.formatHandler = streamingHandler
-				switch resp.FinishReason {
-				case FinishReasonBlocked, FinishReasonAborted, FinishReasonInterrupted, FinishReasonOther:
-					// A termination known to be abnormal carries no conforming
-					// output, and a schema error here would mask the
-					// FinishReason and FinishMessage the caller needs to
-					// handle it, so the response passes through as-is.
-					// FinishReasonUnknown is not in this set on purpose:
-					// plugins map unrecognized provider reasons to it, and
-					// ParseMessage is the only place the output schema is
-					// enforced, so skipping it on an unclassified reason would
-					// silently drop validation for output the model may well
-					// have completed.
-					logger.Warn(ctx, "model finished abnormally, skipping output parsing",
-						"model", opts.Model,
-						"finishReason", resp.FinishReason,
-						"finishMessage", resp.FinishMessage)
-				default:
-					// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
-					resp.Message, err = formatHandler.ParseMessage(resp.Message)
-					if err != nil {
-						logger.Debug(ctx, "model output does not match the expected schema", "model", opts.Model, "error", err)
-						return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
-					}
-				}
-			}
-
-			if len(resp.ToolRequests()) == 0 || opts.ReturnToolRequests {
-				return resp, nil
-			}
-
-			if currentTurn+1 > maxTurns {
-				return nil, status.Errorf(ErrMaxTurnsExceeded, "exceeded maximum tool call iterations (%d)", maxTurns)
-			}
-
-			newReq, interruptMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
-			if err != nil {
-				return nil, err
-			}
-			if interruptMsg != nil {
-				logger.Debug(ctx, "generation paused by tool interrupts", "model", opts.Model, "turn", currentTurn)
-				resp.FinishReason = "interrupted"
-				resp.FinishMessage = "One or more tool calls resulted in interrupts."
-				resp.Message = interruptMsg
-				return resp, nil
-			}
-			if newReq == nil {
-				return resp, nil
-			}
-
-			return generate(ctx, newReq, currentTurn+1, currentIndex+1)
-		})
+		return tracing.RunInNewSpan(ctx, spanMetadata, spanInput,
+			func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
+				return runTurn(ctx, params)
+			})
 	}
 
 	// Compose WrapGenerate hooks once; this chain is invoked for every
@@ -643,8 +812,15 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	hookedGenerate := buildGenerateChain(mws, runGenerate)
 
 	generate = func(ctx context.Context, req *ModelRequest, currentTurn int, messageIndex int) (*ModelResponse, error) {
+		// A fresh turn invalidates the previous turn's recorded partial: a
+		// hook may have recovered that failure, and pairing its stale partial
+		// with a later error would regress the conversation.
+		lastReq = req
+		lastPartial = nil
 		return hookedGenerate(ctx, &GenerateParams{
-			Options:      opts,
+			// The hooks get their own copy of the options: a hook writing to
+			// it must reach neither the loop nor the turns after it.
+			Options:      turnOptions(opts),
 			Request:      req,
 			Iteration:    currentTurn,
 			MessageIndex: messageIndex,
@@ -666,7 +842,32 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	}
 	logger.Debug(ctx, "generate request resolved", resolvedArgs...)
 
-	return generate(ctx, req, 0, 0)
+	resp, err := generate(ctx, req, 0, 0)
+	if err != nil && resp == nil {
+		// Every error after this point comes with a partial response. A
+		// failing turn built its own; when it was lost on the way up (a
+		// WrapGenerate hook that returns (nil, err)) the recorded one is
+		// restored, and an error raised outside a turn gets one synthesized
+		// from the conversation entering the current turn.
+		if lastPartial != nil {
+			resp = lastPartial
+		} else {
+			resp = failurePartial(ctx, nil, lastReq, err)
+		}
+	}
+	return resp, err
+}
+
+// turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and
+// the turn's span. Messages and Resume are the fields the loop reads back, so
+// the copy detaches both; everything else is shared.
+func turnOptions(opts *GenerateActionOptions) *GenerateActionOptions {
+	turn := *opts
+	if turn.Resume != nil {
+		resume := *turn.Resume
+		turn.Resume = &resume
+	}
+	return &turn
 }
 
 // middlewareNames returns the names of the resolved middleware in chain
@@ -857,6 +1058,33 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 }
 
 // Generate generates a model response based on the provided options.
+//
+// When generation fails after the request has resolved, the classified error
+// is returned together with a non-nil partial [ModelResponse].
+//
+// A loop that stopped early leaves Message nil and reports FinishReason
+// [FinishReasonFailed] with the cause as the FinishMessage when something
+// broke (a failed model call, a failed tool), or [FinishReasonAborted] when
+// the caller stopped it instead: a cancelled context, an expired deadline, or
+// a limit it set such as [WithMaxTurns]. Error carries the same cause
+// classified, the structured form of the FinishMessage beside it.
+// [ModelResponse.History] is then a
+// conversation that can be sent again: it ends at a turn seam, meaning the
+// messages the failing turn started from, which are the caller's own or a run
+// of completed [model with tool requests, tool with every response] rounds.
+// Nothing from the failing turn rides along, since a conversation ending in a
+// tool request nothing answered is one no provider accepts. Text streamed
+// before the failure still reached the callback.
+//
+// Two errors are not loop failures and keep their response's message: a
+// response the model completed but post-processing rejected (structured
+// output that does not match the schema), which keeps the model's own finish
+// reason, and a resume whose restarted tool interrupted again, which keeps
+// FinishReason interrupted under its FAILED_PRECONDITION error and is
+// answered with [WithResume] rather than re-sent.
+//
+// Errors reported before a request is made (unknown model or tool, invalid
+// options) carry a nil response.
 func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*ModelResponse, error) {
 	genOpts := &generateOptions{}
 	for _, opt := range opts {
@@ -986,19 +1214,23 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 }
 
 // GenerateText run generate request for this model. Returns generated text only.
+// On error, the text of the partial response (see [Generate]), usually empty,
+// is returned with the error.
 func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (string, error) {
 	res, err := Generate(ctx, r, opts...)
-	if err != nil {
-		return "", err
-	}
-
-	return res.Text(), nil
+	return res.Text(), err
 }
 
-// GenerateData runs a generate request and returns strongly-typed output.
-// If the response doesn't contain text output (e.g., contains tool requests
-// or interrupts instead), the output will be nil and no error is returned.
-// Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
+// A refusal is an error: when the response finished blocked, the output is nil
+// and the error is [ErrGenerationBlocked], carrying the provider's explanation.
+// The response is still returned alongside it. A generation failure likewise
+// returns its error alongside the partial response [Generate] documents, with
+// a nil output.
+//
+// Every other finish that yields nothing to extract is not an error. If the
+// response carries no text (tool requests or interrupts instead), or ended
+// aborted, interrupted, or other, the output is nil and the error is nil.
+// Check resp.FinishReason, resp.Interrupts(), and resp.ToolRequests().
 //
 // The output format is JSON with a schema inferred from Out; an explicit
 // [WithOutputSchema] or [WithOutputSchemaName] overrides the schema while
@@ -1015,13 +1247,21 @@ func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...Generate
 
 	resp, err := Generate(ctx, r, opts...)
 	if err != nil {
-		return nil, nil, err
+		return nil, resp, err
 	}
 
-	// If there's no text content to parse (e.g., the response contains tool
-	// requests or interrupts), return nil output. The caller should check
-	// resp.Interrupts() or resp.ToolRequests() to handle these cases.
-	if resp.Text() == "" {
+	// A refusal cannot produce the value this helper promises, so it is
+	// reported rather than handed back as a zero value that reads as success.
+	// [Generate] still returns the response unwrapped.
+	if resp.FinishReason == FinishReasonBlocked {
+		return nil, resp, blockedError(resp)
+	}
+
+	// The remaining abnormal finishes, and a response with no text at all
+	// (what a turn holding tool requests, interrupts, or media looks like), have
+	// nothing to extract but are not failures. The response goes back unparsed
+	// rather than as a schema error naming the wrong cause.
+	if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 		return nil, resp, nil
 	}
 
@@ -1052,7 +1292,10 @@ var errStop = errors.New("stop")
 // It returns an iterator that yields streaming results.
 //
 // If the yield function is passed a non-nil error, generation has failed with that
-// error; the yield function will not be called again.
+// error; the yield function will not be called again. The value beside it is
+// still Done and still carries the partial Response, the same pair [Generate]
+// returns, so a consumer that streamed a tool loop reads the conversation it
+// can send again.
 //
 // If the yield function's [ModelStreamValue] argument has Done == true, the value's
 // Response field contains the final response; the yield function will not be called
@@ -1084,11 +1327,10 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 		if done || errors.Is(err, errStop) {
 			return
 		}
-		if err != nil {
-			yield(nil, err)
-		} else {
-			yield(&ModelStreamValue{Done: true, Response: resp}, nil)
-		}
+		// A failure yields its partial beside the error, the same pair
+		// [Generate] returns, so a consumer that streamed a tool loop can
+		// still read the conversation it should send again.
+		yield(&ModelStreamValue{Done: true, Response: resp}, err)
 	}
 }
 
@@ -1096,7 +1338,9 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // It returns an iterator that yields streaming results.
 //
 // If the yield function is passed a non-nil error, generation has failed with that
-// error; the yield function will not be called again.
+// error; the yield function will not be called again. The value beside it is
+// still Done and still carries the partial Response (Output stays zero, since
+// a failed call produced no value), the same pair [GenerateData] returns.
 //
 // If the yield function's [StreamValue] argument has Done == true, the value's
 // Output and Response fields contain the final typed output and response; the yield function
@@ -1106,7 +1350,16 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 //
 // Like [GenerateData], the output format is JSON with a schema inferred from
 // Out; overriding the format with a non-JSON [WithOutputFormat] or
-// [WithOutputEnums] breaks typed extraction.
+// [WithOutputEnums] breaks typed extraction. Also like [GenerateData], a
+// blocked response fails with [ErrGenerationBlocked], while a response with no
+// text output or one that ended aborted, interrupted, or other yields
+// zero-value Output and no error; check Response.FinishReason, Interrupts(),
+// and ToolRequests() to handle those.
+//
+// Chunks are provisional. They are parsed as they arrive, before the finish
+// reason exists, so a generation that streams partial output and then ends
+// abnormally will have yielded chunks that the final value does not stand
+// behind. The Done value is the authoritative one.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		done := false
@@ -1146,21 +1399,32 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 		if err != nil {
-			yield(nil, err)
+			// The partial rides along, as on [Generate]; Output stays zero,
+			// since a failed call produced no value to extract.
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, err)
 			return
 		}
 
-		// If there's no text content to parse (e.g., the response contains tool
-		// requests or interrupts), return zero-value output. The caller should check
-		// resp.Interrupts() or resp.ToolRequests() to handle these cases.
-		if resp.Text() == "" {
+		// A refusal cannot produce the value this helper promises, so it is
+		// reported rather than handed back as a zero value that reads as success.
+		// [Generate] still returns the response unwrapped.
+		if resp.FinishReason == FinishReasonBlocked {
+			yield(nil, blockedError(resp))
+			return
+		}
+
+		// The remaining abnormal finishes, and a response with no text at all
+		// (what a turn holding tool requests, interrupts, or media looks like), have
+		// nothing to extract but are not failures. The response goes back unparsed
+		// rather than as a schema error naming the wrong cause.
+		if resp.FinishReason.isAbnormal() || resp.Text() == "" {
 			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, nil)
 			return
 		}
 
 		output, err := extractTypedOutput[Out](resp)
 		if err != nil {
-			yield(nil, err)
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, err)
 			return
 		}
 
@@ -1220,7 +1484,9 @@ func ensureToolRequestRefs(msg *Message) {
 		return
 	}
 	for _, part := range msg.Content {
-		if part.IsToolRequest() && part.ToolRequest.Ref == "" {
+		// The kind is a string a plugin sets, so the pointer it promises is
+		// guarded too rather than dereferenced on trust.
+		if part.IsToolRequest() && part.ToolRequest != nil && part.ToolRequest.Ref == "" {
 			part.ToolRequest.Ref = uuid.New().String()
 		}
 	}
@@ -1245,13 +1511,64 @@ func clone[T any](obj *T) *T {
 	return &newObj
 }
 
+// toolFailureError classifies a tool's error for the loop. A tool that failed
+// on its own terms is [ErrToolFailed], which the loop reports as a failed
+// generation. A tool that stopped because the call's context ended is not a
+// tool failure at all: the cancellation is returned with its own status, so
+// the partial response carries [FinishReasonAborted] rather than blaming the
+// tool for a stop the caller asked for.
+func toolFailureError(ctx context.Context, name string, cause error) error {
+	if ctx.Err() != nil {
+		return status.Errorf(status.ErrCancelled, "tool %q stopped: %w", name, cause)
+	}
+	return status.Errorf(ErrToolFailed, "tool %q failed: %w", name, cause)
+}
+
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
 type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
 
-// handleToolRequests processes any tool requests in the response, returning
-// either a new request to continue the conversation or nil if no tool requests
-// need handling.
+// interruptedPart clones a tool request part and marks it interrupted. The
+// interrupt's metadata is the marker when it carries any; otherwise the
+// marker is true, since a nil value would make the part read as not
+// interrupted at all (see [Part.IsInterrupt]).
+func interruptedPart(p *Part, tie *toolInterruptError) *Part {
+	newPart := clone(p)
+	if newPart.Metadata == nil {
+		newPart.Metadata = make(map[string]any)
+	}
+	if tie.Metadata != nil {
+		newPart.Metadata["interrupt"] = tie.Metadata
+	} else {
+		newPart.Metadata["interrupt"] = true
+	}
+	return newPart
+}
+
+// stampPendingToolOutcome records a resolved tool call's response on its
+// request part so a later resume replays it (see handleResumedToolRequest).
+// The response's metadata and content ride under their own keys;
+// pendingOutput itself stays output-only for cross-SDK parity.
+func stampPendingToolOutcome(part *Part, resp *MultipartToolResponse) {
+	if part.Metadata == nil {
+		part.Metadata = make(map[string]any)
+	}
+	part.Metadata["pendingOutput"] = resp.Output
+	if len(resp.Metadata) > 0 {
+		part.Metadata["pendingMetadata"] = resp.Metadata
+	}
+	if len(resp.Content) > 0 {
+		part.Metadata["pendingContent"] = resp.Content
+	}
+}
+
+// handleToolRequests processes any tool requests in the response. On success
+// it returns either a new request to continue the conversation, or, when a
+// tool interrupted, a nil request and the revised model message carrying the
+// interrupt metadata. On error it returns no message: the caller drops the
+// whole round, so the results that did arrive have nowhere to go. The error
+// is reported as soon as it arrives; a still-running sibling is left to
+// finish detached and its result is discarded.
 func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, resp *ModelResponse, cb ModelStreamCallback, messageIndex int, runTool toolRunnerFunc) (*ModelRequest, *Message, error) {
 	toolRequests := resp.ToolRequests()
 	if len(toolRequests) == 0 {
@@ -1330,32 +1647,17 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				var tie *toolInterruptError
 				if errors.As(err, &tie) {
 					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
-
-					newPart := clone(p)
-					if newPart.Metadata == nil {
-						newPart.Metadata = make(map[string]any)
-					}
-					if tie.Metadata != nil {
-						newPart.Metadata["interrupt"] = tie.Metadata
-					} else {
-						newPart.Metadata["interrupt"] = true
-					}
-
-					revisedMsg.Content[idx] = newPart
-
+					revisedMsg.Content[idx] = interruptedPart(p, tie)
 					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
 					return
 				}
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolFailed, "tool %q failed: %w", toolReq.Name, err)}
+				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
 				return
 			}
 
 			newPart := clone(p)
-			if newPart.Metadata == nil {
-				newPart.Metadata = make(map[string]any)
-			}
-			newPart.Metadata["pendingOutput"] = multipartResp.Output
+			stampPendingToolOutcome(newPart, multipartResp)
 			revisedMsg.Content[idx] = newPart
 
 			resultChan <- result[*MultipartToolResponse]{index: idx, value: multipartResp}
@@ -1366,17 +1668,20 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	// order. Collect them keyed by the request's position in the model message
 	// so they can be re-emitted in request order below.
 	toolRespByIndex := make(map[int]*Part, len(toolRequests))
+	receivedIndexes := make([]int, 0, len(toolRequests))
 	hasInterrupts := false
-	for range len(toolRequests) {
+	var toolErr error
+	for len(receivedIndexes) < len(toolRequests) && toolErr == nil {
 		res := <-resultChan
+		receivedIndexes = append(receivedIndexes, res.index)
 		if res.err != nil {
 			var tie *toolInterruptError
 			if errors.As(res.err, &tie) {
 				hasInterrupts = true
 				continue
 			}
-
-			return nil, nil, res.err
+			toolErr = res.err
+			continue
 		}
 
 		toolReq := revisedMsg.Content[res.index].ToolRequest
@@ -1388,6 +1693,16 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		})
 		newToolResp.Metadata = res.value.Metadata
 		toolRespByIndex[res.index] = newToolResp
+	}
+
+	if toolErr != nil {
+		// Nothing rides back with the error. The caller drops the whole
+		// round, the model message that opened it included, because a
+		// conversation ending on a tool request nothing answered is one no
+		// provider accepts. A still-running sibling keeps revising its own
+		// element of revisedMsg after this returns, which nothing reads, and
+		// its send cannot block: resultChan buffers one slot per request.
+		return nil, nil, toolErr
 	}
 
 	if hasInterrupts {
@@ -1417,10 +1732,13 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}
 	}
 
-	newReq := req
+	// The next turn gets its own request value: appending to the current one
+	// would retroactively grow the request a WrapModel or WrapGenerate hook is
+	// still holding.
+	newReq := *req
 	newReq.Messages = append(slices.Clone(req.Messages), resp.Message, toolMsg)
 
-	return newReq, nil, nil
+	return &newReq, nil, nil
 }
 
 // Text returns the contents of the first candidate in a
@@ -1565,6 +1883,9 @@ func (c *ModelResponseChunk) Text() string {
 	}
 	var sb strings.Builder
 	for _, p := range c.Content {
+		// Data parts are deliberately excluded: their payload lives on Data (not
+		// Text), so they contribute no text (e.g. A2UI envelope JSON must not
+		// leak into Text()).
 		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
@@ -1701,13 +2022,17 @@ func (m *Message) Text() string {
 	// Single-part messages are the common case and skip the builder, but they
 	// are still filtered: a lone media part is not this message's text.
 	if len(m.Content) == 1 {
-		if p := m.Content[0]; p.IsText() {
-			return p.Text
+		// Fast path only applies to a text part; a lone data part carries its
+		// payload on Data (not Text) and must not be returned as message text.
+		if m.Content[0].IsText() {
+			return m.Content[0].Text
 		}
-		return ""
 	}
 	var sb strings.Builder
 	for _, p := range m.Content {
+		// Data parts are deliberately excluded: their payload lives on Data (not
+		// Text), so they contribute no text (e.g. A2UI envelope JSON must not
+		// leak into Text()).
 		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
@@ -1825,14 +2150,30 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 	}
 
 	if pendingOutputVal, ok := p.Metadata["pendingOutput"]; ok {
-		newReqPart := clone(p)
-		delete(newReqPart.Metadata, "pendingOutput")
+		// Only the metadata map needs detaching from the caller's part; a
+		// deep clone would JSON round-trip the (possibly large) pending
+		// payload just to delete it.
+		reqPart := *p
+		reqPart.Metadata = maps.Clone(p.Metadata)
+		delete(reqPart.Metadata, "pendingOutput")
+		delete(reqPart.Metadata, "pendingMetadata")
+		delete(reqPart.Metadata, "pendingContent")
 
 		newRespPart := NewResponseForToolRequest(p, pendingOutputVal)
 		newRespPart.Metadata = map[string]any{"source": "pending"}
+		// Restore the response metadata and content parts the original call
+		// carried, stashed next to pendingOutput. The content is []*Part in
+		// process and generic JSON after a wire or persistence round-trip;
+		// ConvertTo decodes both.
+		if pm, ok := p.Metadata["pendingMetadata"].(map[string]any); ok {
+			maps.Copy(newRespPart.Metadata, pm)
+		}
+		if content, ok := base.ConvertTo[[]*Part](p.Metadata["pendingContent"]); ok && len(content) > 0 {
+			newRespPart.ToolResponse.Content = content
+		}
 
 		return &resumedToolRequestOutput{
-			toolRequest:  newReqPart,
+			toolRequest:  &reqPart,
 			toolResponse: newRespPart,
 		}, nil
 	}
@@ -1917,19 +2258,12 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					var tie *toolInterruptError
 					if errors.As(err, &tie) {
 						logger.Debug(ctx, "restarted tool triggered an interrupt", "tool", restartPart.ToolRequest.Name)
-
-						interruptPart := clone(p)
-						if interruptPart.Metadata == nil {
-							interruptPart.Metadata = make(map[string]any)
-						}
-						interruptPart.Metadata["interrupt"] = tie.Metadata
-
 						return &resumedToolRequestOutput{
-							interrupt: interruptPart,
+							interrupt: interruptedPart(p, tie),
 						}, nil
 					}
 
-					return nil, status.Errorf(ErrToolFailed, "tool %q failed: %w", restartPart.ToolRequest.Name, err)
+					return nil, toolFailureError(ctx, restartPart.ToolRequest.Name, err)
 				}
 
 				newToolReq := clone(p)
@@ -1979,13 +2313,10 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}
 	}
 
-	toolDefMap := make(map[string]*ToolDefinition)
 	for _, t := range genOpts.Tools {
-		tool := LookupTool(r, t)
-		if tool == nil {
+		if LookupTool(r, t) == nil {
 			return nil, status.Errorf(ErrToolNotFound, "handleResumeOption: tool %q not found", t)
 		}
-		toolDefMap[t] = tool.Definition()
 	}
 
 	messages := genOpts.Messages
@@ -2024,7 +2355,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}(i, part)
 	}
 
-	var toolResps []*Part
+	respByIndex := make(map[int]*Part, toolReqCount)
 	interrupted := false
 
 	for range toolReqCount {
@@ -2037,7 +2368,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 			interrupted = true
 			newContent[res.index] = res.value.interrupt
 		} else {
-			toolResps = append(toolResps, res.value.toolResponse)
+			respByIndex[res.index] = res.value.toolResponse
 			newContent[res.index] = res.value.toolRequest
 		}
 	}
@@ -2045,6 +2376,18 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	lastMessage.Content = newContent
 
 	if interrupted {
+		// Siblings resolved in this resume (restarted runs, supplied
+		// responses, replayed pending outputs) are preserved as
+		// pendingOutput on their request parts, the way a first-run
+		// interrupt preserves completed siblings, so the next resume
+		// replays their outcomes instead of demanding new directives.
+		for idx, respPart := range respByIndex {
+			stampPendingToolOutcome(newContent[idx], &MultipartToolResponse{
+				Output:   respPart.ToolResponse.Output,
+				Content:  respPart.ToolResponse.Content,
+				Metadata: respPart.Metadata,
+			})
+		}
 		return &resumeOptionOutput{
 			interruptedResponse: &ModelResponse{
 				Message:       lastMessage,
@@ -2054,8 +2397,18 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}, nil
 	}
 
-	if len(toolResps) != toolReqCount {
-		return nil, status.Errorf(status.ErrFailedPrecondition, "handleResumeOption: Expected %d tool responses but resolved to %d.", toolReqCount, len(toolResps))
+	if len(respByIndex) != toolReqCount {
+		return nil, status.Errorf(status.ErrFailedPrecondition, "handleResumeOption: Expected %d tool responses but resolved to %d.", toolReqCount, len(respByIndex))
+	}
+
+	// Emit tool responses in the order their requests appear in the model
+	// message, matching handleToolRequests, so the resumed tool message is
+	// deterministic across runs.
+	toolResps := make([]*Part, 0, len(respByIndex))
+	for i := range newContent {
+		if part, ok := respByIndex[i]; ok {
+			toolResps = append(toolResps, part)
+		}
 	}
 
 	toolMessage := &Message{
@@ -2070,20 +2423,15 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	}
 	revisedMessages := append(slices.Clone(messages), toolMessage)
 
+	// Copied rather than rebuilt field by field, so that a field added to
+	// GenerateActionOptions carries through a resume without being listed here.
+	revised := *genOpts
+	revised.Messages = revisedMessages
+	revised.Resume = nil // These directives have now been applied.
+
 	return &resumeOptionOutput{
-		revisedRequest: &GenerateActionOptions{
-			Model:              genOpts.Model,
-			Messages:           revisedMessages,
-			Tools:              genOpts.Tools,
-			MaxTurns:           genOpts.MaxTurns,
-			Config:             genOpts.Config,
-			ToolChoice:         genOpts.ToolChoice,
-			Docs:               genOpts.Docs,
-			ReturnToolRequests: genOpts.ReturnToolRequests,
-			Output:             genOpts.Output,
-			Use:                genOpts.Use,
-		},
-		toolMessage: toolMessage,
+		revisedRequest: &revised,
+		toolMessage:    toolMessage,
 	}, nil
 }
 

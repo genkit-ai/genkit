@@ -21,7 +21,8 @@
 //  2. For the picked agent, pick between resuming from the latest
 //     snapshot or starting fresh. If the latest snapshot is still
 //     pending (a detached invocation is still processing in the
-//     background), offer to wait, start fresh, or back out.
+//     background), offer to wait for it, stop it, start fresh, or back
+//     out.
 //  3. Run a small REPL against the agent: stream the model's reply each
 //     turn, accept text input, and offer /detach, /back, and /quit as
 //     control commands.
@@ -31,6 +32,14 @@
 // processing in the background and the caller gets a pending snapshot
 // ID. Re-picking the same agent in step 2 then surfaces the wait/resume
 // flow.
+//
+// A turn that breaks or gets stopped is not a dead end here. Either one
+// leaves a snapshot holding the conversation up to the last turn seam, so
+// step 2 offers it like any other. Whether the turn it left unanswered is
+// worth running again is the user's call: an empty line in step 3 runs a
+// turn on the conversation as it stands, so nothing has to be retyped. The
+// only rows the CLI cannot continue from are the ones the runtime refuses
+// too, and for those it walks back to the snapshot before.
 
 package main
 
@@ -220,18 +229,24 @@ func runCLI(ctx context.Context, agents []agentEntry) error {
 	fmt.Println("Pick an agent below, choose to resume the last conversation")
 	fmt.Println("or start a new one, and chat. Inside a chat:")
 	fmt.Println("  (text)             send a message and stream the reply")
+	fmt.Println("  (empty line)       run a turn on the conversation as it")
+	fmt.Println("                     stands, without adding a message")
 	fmt.Println("  /detach (text...)  send the text (optional) as the final")
 	fmt.Println("                     input, then detach. The agent finishes")
 	fmt.Println("                     in the background and writes a pending")
 	fmt.Println("                     snapshot. Re-pick the agent later to")
-	fmt.Println("                     wait for it and resume from the final")
-	fmt.Println("                     state.")
+	fmt.Println("                     wait for it, or stop it and resume from")
+	fmt.Println("                     the turns it finished.")
 	fmt.Println("  /back              return to the agent list")
 	fmt.Println("  /quit              exit the program")
 	fmt.Println()
 	fmt.Println("Some agents pause mid-turn to ask for input (a tool")
 	fmt.Println("interrupt). When that happens, the CLI prompts you inline and")
 	fmt.Println("resumes the turn with your answer.")
+	fmt.Println()
+	fmt.Println("A turn that breaks, or one you stop, still leaves a snapshot")
+	fmt.Println("you can continue: re-pick the agent, resume from it, and press")
+	fmt.Println("Enter to run the turn it left unanswered again.")
 
 	// lastSession remembers, per agent, the session ID of the most recent
 	// conversation this process ran with it. That is all a client needs to
@@ -309,12 +324,19 @@ func openAgent[State any](ctx context.Context, inputCh <-chan string, a *aix.Age
 	// session (a first visit this run) there is nothing to resume;
 	// otherwise the store resolves the session's latest snapshot, which
 	// also surfaces a still-pending detached invocation.
+	//
+	// Reads go through the agent, not its store: the agent normalizes what a
+	// client should see, which is what turns a detached worker that stopped
+	// beating into an expired row instead of one stuck pending forever. It
+	// reports a missing snapshot as an error where the raw store returns nil,
+	// so an unknown session reads as "nothing to resume".
 	var tip *aix.SessionSnapshot[State]
 	if lastSessionID != "" {
 		var err error
-		tip, err = a.Store().GetLatestSnapshot(ctx, lastSessionID)
-		if err != nil {
-			return lastSessionID, fmt.Errorf("read snapshot for %q: %w", a.Name(), err)
+		tip, err = a.GetLatestSnapshot(ctx, lastSessionID)
+		if err != nil && !errors.Is(err, aix.ErrSnapshotNotFound) {
+			fmt.Fprintf(os.Stderr, "Read snapshot for %q: %v\n", a.Name(), err)
+			return lastSessionID, nil
 		}
 	}
 
@@ -324,9 +346,11 @@ func openAgent[State any](ctx context.Context, inputCh <-chan string, a *aix.Age
 	)
 	if tip != nil && tip.Status == aix.SnapshotStatusPending {
 		// Background invocation still in flight. handlePending makes the
-		// final decision itself (wait & resume, new, or back), so we don't
-		// fall through to pickSession: the user already chose, and asking
-		// again would just be noise.
+		// final decision itself (wait & resume, stop & resume, new, or back),
+		// so we don't fall through to pickSession: the user already chose,
+		// and asking again would just be noise. An expired row is not offered
+		// the wait, since its worker is presumed dead; it goes to pickSession,
+		// which walks back to the last snapshot that can be continued.
 		resume, ok = handlePending(ctx, inputCh, a, tip)
 	} else {
 		resume, ok = pickSession(ctx, inputCh, a, tip)
@@ -341,12 +365,13 @@ func openAgent[State any](ctx context.Context, inputCh <-chan string, a *aix.Age
 // invocation of this agent is still running in the background:
 //
 //  1. wait for it to finalize and resume from it directly,
-//  2. ignore it and start a fresh conversation,
-//  3. go back to the agent list.
+//  2. stop it now and resume from the turns it finished,
+//  3. ignore it and start a fresh conversation,
+//  4. go back to the agent list.
 //
-// Returns the snapshot to resume from (option 1, completed) or nil
-// (option 2, or option 1 when the snapshot terminated non-completed).
-// ok=false means the user chose 3 or the context was canceled.
+// Returns the snapshot to resume from (options 1 and 2) or nil (option 3, or
+// 1 and 2 when nothing in the chain can be continued). ok=false means the
+// user chose 4 or the context was canceled.
 //
 // Crucially, options that imply "use this conversation" return the
 // snapshot directly so the caller can skip the resume / new prompt:
@@ -357,16 +382,32 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 		fmt.Printf("\nThe last %s session is still running in the background (%s).\n",
 			style(a.Name(), ansiBold), style(shortID(pending.SnapshotID), ansiDim))
 		fmt.Printf("  %s Wait for it to finalize\n", style("1.", ansiCyan))
-		fmt.Printf("  %s Start a new conversation\n", style("2.", ansiCyan))
-		fmt.Printf("  %s Back to agent list\n", style("3.", ansiCyan))
+		fmt.Printf("  %s Stop it now and resume from the turns it finished\n", style("2.", ansiCyan))
+		fmt.Printf("  %s Start a new conversation\n", style("3.", ansiCyan))
+		fmt.Printf("  %s Back to agent list\n", style("4.", ansiCyan))
 
 		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			return nil, false
 		}
-		switch strings.TrimSpace(line) {
-		case "1":
-			fmt.Println(style("Waiting for it to finalize...", ansiYellow))
+		choice := strings.TrimSpace(line)
+		switch choice {
+		case "1", "2":
+			if choice == "2" {
+				// Abort flips the pending row, and the runtime observes the
+				// flip and cancels the background work. The flip alone writes
+				// no state: the invocation that owns the row stamps the turns
+				// it finished onto it as it unwinds, which is what the wait
+				// below is for. Stopping and waiting are therefore the same
+				// flow, differing only in who ends the work.
+				if _, err := a.Abort(ctx, pending.SnapshotID); err != nil {
+					fmt.Fprintf(os.Stderr, "Stop error: %v\n", err)
+					return nil, false
+				}
+				fmt.Println(style("Stopping it...", ansiYellow))
+			} else {
+				fmt.Println(style("Waiting for it to finalize...", ansiYellow))
+			}
 			final, err := waitForFinalize(ctx, a, pending.SnapshotID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Wait error: %v\n", err)
@@ -376,35 +417,104 @@ func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix
 				fmt.Println(style("Snapshot disappeared while waiting. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
-			fmt.Println(style(fmt.Sprintf("Done (%s).", final.Status), ansiGreen))
+			tone := ansiGreen
 			if final.Status != aix.SnapshotStatusCompleted {
-				// failed / aborted snapshots aren't resumable; the
-				// agent runtime would reject WithSnapshotID on them.
-				// Fall through to a fresh chat instead.
-				fmt.Println(style("Cannot resume this snapshot. Starting a new conversation.", ansiYellow))
+				tone = ansiYellow
+			}
+			fmt.Println(style(fmt.Sprintf("Settled (%s).", final.Status), tone))
+			// A stopped run holds the turns that finished, so it resumes like
+			// a completed one. Only a row its invocation never finished
+			// writing has nothing to continue from, and resumePoint falls
+			// back to the snapshot before it.
+			resume := resumePoint(ctx, a, final)
+			if resume == nil {
+				fmt.Println(style("Nothing here can be continued. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
-			return final, true
-		case "2":
+			if resume.SnapshotID != final.SnapshotID {
+				fmt.Println(style("That snapshot holds no state; falling back to the one before it.", ansiYellow))
+			}
+			return resume, true
+		case "3":
 			// Ignore the pending snapshot and start fresh. The background
 			// invocation keeps running; this CLI just stops tracking it.
 			return nil, true
-		case "3":
+		case "4":
 			return nil, false
 		default:
-			fmt.Println("Invalid choice. Type 1, 2, or 3.")
+			fmt.Println("Invalid choice. Type 1, 2, 3, or 4.")
 		}
 	}
 }
 
+// resumable reports whether a snapshot can be handed to WithSnapshotID. It
+// mirrors the runtime's own gate. A failed row qualifies: it holds what its
+// turn committed before the failure, so resuming picks up there. So does an
+// aborted one, which holds the turns that finished before the stop.
+//
+// Two shapes do not. A pending row is still being written to by the
+// invocation that owns it (an expired one is a pending row whose worker
+// stopped beating). And an aborted row with no state was flipped by an abort
+// whose invocation never got to stamp the conversation onto it, so it holds
+// nothing to continue from.
+func resumable[State any](snap *aix.SessionSnapshot[State]) bool {
+	switch snap.Status {
+	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed:
+		return true
+	case aix.SnapshotStatusAborted:
+		return snap.State != nil
+	}
+	return false
+}
+
+// resumePoint walks back from tip along ParentID to the newest snapshot that
+// can be continued, or nil when the whole chain is dead ends. That is what
+// turns an orphaned tip (a detached worker that died, or an abort nothing
+// finalized) into a conversation the user keeps rather than loses.
+func resumePoint[State any](ctx context.Context, a *aix.Agent[State], tip *aix.SessionSnapshot[State]) *aix.SessionSnapshot[State] {
+	for snap := tip; snap != nil && snap.SnapshotID != ""; {
+		if resumable(snap) {
+			return snap
+		}
+		if snap.ParentID == "" {
+			return nil
+		}
+		parent, err := a.GetSnapshot(ctx, snap.ParentID)
+		if err != nil {
+			return nil
+		}
+		snap = parent
+	}
+	return nil
+}
+
+// endedEarly reports whether a finish reason means the run did not get to
+// finish on its own terms. Both terminals propagate out of the agent's turn
+// loop, so the invocation is over either way and the connection is closing:
+// the REPL has to stop reading rather than send into it. Which of the two it
+// is changes the wording the CLI uses, never the handling.
+func endedEarly(r aix.AgentFinishReason) bool {
+	return r == aix.AgentFinishReasonFailed || r == aix.AgentFinishReasonAborted
+}
+
 // pickSession decides which snapshot (if any) to resume from. It only
-// offers two paths so the demo stays focused: resume from the most
-// recent terminal snapshot (returns the snapshot pointer), or start
+// offers two paths so the demo stays focused: resume from the newest
+// snapshot that can be continued (returns the snapshot pointer), or start
 // fresh (returns nil).
-func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], latest *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], bool) {
-	if latest == nil || latest.Status != aix.SnapshotStatusCompleted {
+func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], tip *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], bool) {
+	var latest *aix.SessionSnapshot[State]
+	if tip != nil {
+		latest = resumePoint(ctx, a, tip)
+	}
+	if latest == nil {
 		fmt.Printf("\nStarting a new conversation with %s.\n", style(a.Name(), ansiBold))
 		return nil, true
+	}
+	if latest.SnapshotID != tip.SnapshotID {
+		// The tip is orphaned: a detached worker that stopped beating, or an
+		// abort that flipped the row before anything wrote state onto it.
+		// Neither loses the conversation, since its parent still holds it.
+		fmt.Printf("\n%s\n", style(fmt.Sprintf("The last snapshot is %s and holds nothing to continue; using the one before it.", tip.Status), ansiYellow))
 	}
 
 	msgs := 0
@@ -414,6 +524,16 @@ func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.A
 	fmt.Printf("\nLast %s session: %s\n",
 		style(a.Name(), ansiBold),
 		style(fmt.Sprintf("%s (%s, %d msgs)", shortID(latest.SnapshotID), latest.UpdatedAt.Format(time.RFC822), msgs), ansiDim))
+	switch latest.Status {
+	case aix.SnapshotStatusFailed:
+		why := "its last turn failed"
+		if latest.Error != nil && latest.Error.Message != "" {
+			why = latest.Error.Message
+		}
+		fmt.Println(style("This session stopped on an error: "+why, ansiYellow))
+	case aix.SnapshotStatusAborted:
+		fmt.Println(style("This session was stopped early.", ansiYellow))
+	}
 	fmt.Println("Resume from it? " + style("[Y/n] (n = start a new conversation)", ansiDim))
 
 	line, ok := promptLine(ctx, inputCh, chevron)
@@ -433,13 +553,14 @@ func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.A
 // session is validated against the store first: if it does not resolve
 // to a resumable snapshot (a detached invocation still pending, legacy
 // rows with no session ID, or a store error), fall back to the exact
-// snapshot the user was just shown. Validating up front keeps the chat
-// from opening on a connection whose invocation already failed, which
-// would surface the error only after the user types a message.
+// snapshot the user was just shown, which is also how a walk back past an
+// orphaned tip stays on the snapshot pickSession settled on. Validating up
+// front keeps the chat from opening on a connection whose invocation already
+// failed, which would surface the error only after the user types a message.
 func resumeOption[State any](ctx context.Context, a *aix.Agent[State], resume *aix.SessionSnapshot[State]) aix.InvocationOption[State] {
 	if resume.SessionID != "" {
-		tip, err := a.Store().GetLatestSnapshot(ctx, resume.SessionID)
-		if err == nil && tip != nil && tip.Status != aix.SnapshotStatusPending {
+		tip, err := a.GetLatestSnapshot(ctx, resume.SessionID)
+		if err == nil && tip != nil && resumable(tip) {
 			return aix.WithSessionID[State](resume.SessionID)
 		}
 		fmt.Println(style("(this conversation's session can't be resumed as a whole; continuing from the selected snapshot)", ansiDim))
@@ -463,7 +584,8 @@ func runChat[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent
 	}
 	fmt.Println(style("Commands: /detach [text], /back, /quit", ansiDim))
 
-	if resume != nil && resume.State != nil && len(resume.State.Messages) > 0 {
+	resumed := resume != nil && resume.State != nil && len(resume.State.Messages) > 0
+	if resumed {
 		fmt.Println()
 		fmt.Println(style("(picking up where you left off)", ansiDim))
 		printHistory(resume.State.Messages)
@@ -476,57 +598,88 @@ func runChat[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent
 	}
 	conn, err := a.Connect(ctx, opts...)
 	if err != nil {
-		return prevSessionID, fmt.Errorf("open agent %q: %w", a.Name(), err)
+		// A snapshot the store accepted a moment ago can still be refused
+		// here, so hand the user back to the agent list rather than take the
+		// process down with the connection.
+		fmt.Fprintf(os.Stderr, "Open agent %q: %v\n", a.Name(), err)
+		return prevSessionID, nil
 	}
 
 	var (
-		detached   bool
-		quit       bool
-		failedTurn bool
+		detached bool
+		quit     bool
+		runEnded bool
+		// conversation is whether there is anything for an empty line to run
+		// a turn on. A stray Enter before the first message has nothing, and
+		// the agent rejects an empty input on an empty session.
+		conversation = resumed
 	)
+
+	// Whether the turn a stopped run left unanswered is worth running again
+	// is the user's call, not the CLI's, so it is a keystroke rather than an
+	// inference. Saying so here is the only thing the status decides.
+	if resume != nil && (resume.Status == aix.SnapshotStatusFailed || resume.Status == aix.SnapshotStatusAborted) {
+		fmt.Println(style("Its last turn stopped. Press Enter on an empty line to run", ansiYellow))
+		fmt.Println(style("it again on the messages it kept, or just type a new one.", ansiYellow))
+		fmt.Println()
+	}
 
 repl:
 	for {
+		if runEnded {
+			break
+		}
 		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			break
 		}
 		text := strings.TrimSpace(line)
 		if text == "" {
-			continue
-		}
-
-		switch {
-		case text == "/back":
-			break repl
-		case text == "/quit" || text == "/exit":
-			quit = true
-			break repl
-		case text == "/detach" || strings.HasPrefix(text, "/detach "):
-			trailing := strings.TrimSpace(strings.TrimPrefix(text, "/detach"))
-			// Send (optional message) + detach in a single wire input so
-			// the trailing text becomes the last buffered message. The
-			// agent will process it in the background after the
-			// connection closes.
-			input := &aix.AgentInput{Detach: true}
-			if trailing != "" {
-				input.Message = ai.NewUserTextMessage(trailing)
+			if !conversation {
+				continue
 			}
-			if err := conn.Send(input); err != nil {
-				fmt.Fprintf(os.Stderr, "Detach error: %v\n", err)
+			// An input with no payload runs a turn on the conversation as it
+			// stands. That is how the turn a stopped run left unanswered is
+			// picked back up: its message is already in the session, so
+			// sending it again would only duplicate it.
+			if err := conn.Send(&aix.AgentInput{}); err != nil {
+				fmt.Fprintf(os.Stderr, "Send error: %v\n", err)
+				break
+			}
+		} else {
+			switch {
+			case text == "/back":
 				break repl
+			case text == "/quit" || text == "/exit":
+				quit = true
+				break repl
+			case text == "/detach" || strings.HasPrefix(text, "/detach "):
+				trailing := strings.TrimSpace(strings.TrimPrefix(text, "/detach"))
+				// Send (optional message) + detach in a single wire input so
+				// the trailing text becomes the last buffered message. The
+				// agent will process it in the background after the
+				// connection closes.
+				input := &aix.AgentInput{Detach: true}
+				if trailing != "" {
+					input.Message = ai.NewUserTextMessage(trailing)
+				}
+				if err := conn.Send(input); err != nil {
+					fmt.Fprintf(os.Stderr, "Detach error: %v\n", err)
+					break repl
+				}
+				detached = true
+				break repl
+			case strings.HasPrefix(text, "/"):
+				fmt.Println("Unknown command. Try /detach, /back, or /quit.")
+				continue
 			}
-			detached = true
-			break repl
-		case strings.HasPrefix(text, "/"):
-			fmt.Println("Unknown command. Try /detach, /back, or /quit.")
-			continue
-		}
 
-		if err := conn.SendText(text); err != nil {
-			fmt.Fprintf(os.Stderr, "Send error: %v\n", err)
-			break
+			if err := conn.SendText(text); err != nil {
+				fmt.Fprintf(os.Stderr, "Send error: %v\n", err)
+				break
+			}
 		}
+		conversation = true
 		fmt.Println()
 		end, wrote, ok := streamReply(conn, hooks, prompter)
 		if !ok {
@@ -557,11 +710,12 @@ repl:
 		}
 		fmt.Println()
 		fmt.Println()
-		if end.FinishReason == aix.AgentFinishReasonFailed {
-			// A failed turn ends the invocation; Output below reports the
-			// error and the last-good snapshot. The footer above already
-			// spaced things off, so flag it to skip the pre-outcome blank.
-			failedTurn = true
+		if endedEarly(end.FinishReason) {
+			// A turn that broke or was stopped ends the invocation; Output
+			// below reports the error and the snapshot to pick up from. The
+			// footer above already spaced things off, so flag it to skip the
+			// pre-outcome blank.
+			runEnded = true
 			break repl
 		}
 	}
@@ -574,7 +728,7 @@ repl:
 	// Set the closing status apart from the last input line (e.g. /back or
 	// /detach) with a blank line. A failed turn already printed its footer
 	// with trailing spacing just above, so skip the extra blank there.
-	if out != nil && !failedTurn {
+	if out != nil && !runEnded {
 		fmt.Println()
 	}
 	switch {
@@ -584,11 +738,15 @@ repl:
 		fmt.Println(style("The agent keeps processing in the background. Pick this", ansiDim))
 		fmt.Println(style("agent again from the list to wait for it to finalize and", ansiDim))
 		fmt.Println(style("resume from the cumulative final state.", ansiDim))
-	case out != nil && out.FinishReason == aix.AgentFinishReasonFailed:
-		// A failed invocation resolves with the error and a last-good
-		// snapshot to resume from.
+	case out != nil && endedEarly(out.FinishReason):
+		// Both terminals resolve with the error and a snapshot to resume
+		// from; which one it is picks the wording, not the handling.
+		what := "Agent failed"
+		if out.FinishReason == aix.AgentFinishReasonAborted {
+			what = "Agent stopped"
+		}
 		if out.Error != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", style(fmt.Sprintf("Agent failed (%s): %s", out.Error.Status, out.Error.Message), ansiYellow))
+			fmt.Fprintf(os.Stderr, "%s\n", style(fmt.Sprintf("%s (%s): %s", what, out.Error.Status, out.Error.Message), ansiYellow))
 			// The output's error carries the status the failure was
 			// classified with, so the client can offer the right next step
 			// without parsing message text.
@@ -599,10 +757,17 @@ repl:
 				fmt.Println(style("The model or a tool rejected the request. Rephrase and try again.", ansiDim))
 			case status.Cancelled, status.DeadlineExceeded:
 				fmt.Println(style("The turn was cut short. Resume from the snapshot below to continue.", ansiDim))
+			case status.Aborted:
+				// A limit the run was given, such as ai.WithMaxTurns. Resuming
+				// re-runs the same turn into the same limit, so say so rather
+				// than invite a retry that burns tokens to fail identically.
+				fmt.Println(style("The run hit a limit it was given. Resuming re-runs the same turn, so it needs a bigger limit or a simpler ask.", ansiDim))
 			}
 		}
 		if out.SnapshotID != "" {
-			fmt.Printf("%s\n", style(fmt.Sprintf("Last-good snapshot: %s. Pick this agent again to resume from it.", shortID(out.SnapshotID)), ansiDim))
+			// The stopped turn's own row when it committed anything, the turn
+			// before it otherwise. Either way it is where to pick up.
+			fmt.Printf("%s\n", style(fmt.Sprintf("Resume point: %s. Pick this agent again to continue from it.", shortID(out.SnapshotID)), ansiDim))
 		}
 	case out != nil && out.SnapshotID != "":
 		fmt.Printf("%s Final snapshot: %s.\n",
@@ -794,22 +959,24 @@ func resolveInterrupts(hooks agentHooks, p *Prompter, interrupts []*ai.Part) *ai
 // when none has run yet, or the session has no resumable snapshot, so a
 // fresh list shows no clutter.
 //
-// It returns the line already styled: dim metadata, with a still-pending
-// detach highlighted in yellow. Each segment carries its own reset so the
-// yellow status doesn't bleed into the surrounding dim text. A pending
-// snapshot has no finalized messages yet, so its count is omitted.
+// It returns the line already styled: dim metadata, with a detach that is
+// still running (or whose worker died) highlighted in yellow. Each segment
+// carries its own reset so the yellow status doesn't bleed into the
+// surrounding dim text. Neither row has finalized messages yet, so the count
+// is omitted for both.
 func summarizeLatest[State any](ctx context.Context, a *aix.Agent[State], sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	latest, err := a.Store().GetLatestSnapshot(ctx, sessionID)
+	latest, err := a.GetLatestSnapshot(ctx, sessionID)
 	if err != nil || latest == nil {
 		return ""
 	}
 	when := latest.UpdatedAt.Format(time.RFC822)
-	if latest.Status == aix.SnapshotStatusPending {
+	switch latest.Status {
+	case aix.SnapshotStatusPending, aix.SnapshotStatusExpired:
 		return style("last: "+shortID(latest.SnapshotID)+" (", ansiDim) +
-			style("pending", ansiYellow) +
+			style(string(latest.Status), ansiYellow) +
 			style(", "+when+")", ansiDim)
 	}
 	msgs := 0
@@ -820,37 +987,66 @@ func summarizeLatest[State any](ctx context.Context, a *aix.Agent[State], sessio
 		shortID(latest.SnapshotID), latest.Status, msgs, when), ansiDim)
 }
 
+// orphanPoll is how often waitForFinalize re-reads a snapshot it is waiting
+// on. Comfortably under the runtime's heartbeat timeout, so a worker that
+// died is noticed a poll or two after the row goes stale rather than a minute
+// later.
+const orphanPoll = 10 * time.Second
+
 // waitForFinalize subscribes to a snapshot's status and blocks until it
 // transitions out of pending. The returned snapshot is the final one (or
 // nil if it disappeared). OnSnapshotStatusChange yields the current
 // status first, so a snapshot that finalized just before the
 // subscription is observed immediately.
 //
+// The subscription reports the status as stored, which stays pending forever
+// if the background worker died: nothing writes a terminal in its place. So
+// the wait also polls, because a read through the agent surfaces a stale
+// heartbeat as expired and gives the caller something to act on.
+//
 // The status subscription is the optional SnapshotSubscriber capability of
 // the store contract. A store without it cannot stream background progress,
 // so we fall back to reading the snapshot once and returning it as-is.
 func waitForFinalize[State any](ctx context.Context, a *aix.Agent[State], snapshotID string) (*aix.SessionSnapshot[State], error) {
-	store := a.Store()
-	subscriber, ok := store.(aix.SnapshotSubscriber)
+	// A snapshot that vanished under us reads as an error through the agent
+	// where the raw store returns nil; the callers treat both as "gone".
+	read := func() (*aix.SessionSnapshot[State], error) {
+		snap, err := a.GetSnapshot(ctx, snapshotID)
+		if errors.Is(err, aix.ErrSnapshotNotFound) {
+			return nil, nil
+		}
+		return snap, err
+	}
+	subscriber, ok := a.Store().(aix.SnapshotSubscriber)
 	if !ok {
-		return store.GetSnapshot(ctx, snapshotID)
+		return read()
 	}
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	statusCh := subscriber.OnSnapshotStatusChange(subCtx, snapshotID)
+	ticker := time.NewTicker(orphanPoll)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-ticker.C:
+			// Expired is not a status anything writes, so it arrives only on
+			// a read. Stop waiting on it: the worker is presumed dead and no
+			// terminal is coming.
+			snap, err := read()
+			if err != nil || snap == nil || snap.Status != aix.SnapshotStatusPending {
+				return snap, err
+			}
 		case status, ok := <-statusCh:
 			if !ok {
 				// Subscription closed (e.g. snapshot deleted under us).
-				return store.GetSnapshot(ctx, snapshotID)
+				return read()
 			}
 			if status == aix.SnapshotStatusPending {
 				continue
 			}
-			return store.GetSnapshot(ctx, snapshotID)
+			return read()
 		}
 	}
 }

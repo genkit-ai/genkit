@@ -18,6 +18,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -379,6 +380,31 @@ func TestRunInNewSpanWithMetadata(t *testing.T) {
 			expectedPath:    "/{generate,t:action,s:model}",
 		},
 		{
+			name:     "Util span",
+			spanName: "generate",
+			isRoot:   true,
+			metadata: &SpanMetadata{
+				Name: "generate",
+				Type: "util", // A tool-loop turn: no subtype, so nothing follows the type.
+			},
+			expectedType:    "util",
+			expectedSubtype: "",
+			expectedPath:    "/{generate,t:util}",
+		},
+		{
+			name:     "Util action span",
+			spanName: "generate",
+			isRoot:   true,
+			metadata: &SpanMetadata{
+				Name:    "generate",
+				Type:    "action", // /util/generate is an action first,
+				Subtype: "util",   // so util is its subtype, not its type.
+			},
+			expectedType:    "action",
+			expectedSubtype: "util",
+			expectedPath:    "/{generate,t:action,s:util}",
+		},
+		{
 			name:     "Nil metadata",
 			spanName: "testSpan",
 			isRoot:   true,
@@ -516,6 +542,47 @@ func TestIsFailureSourceOnError(t *testing.T) {
 	// on the span via span.SetAttributes() during error handling
 	if err == nil {
 		t.Fatal("Expected error to be returned")
+	}
+}
+
+func TestRunInNewSpanRecordsPartialOutputOnError(t *testing.T) {
+	// A failure can still carry a result, so the span records it and a trace
+	// shows what the call produced. A failure that produced nothing records
+	// no output at all, rather than stamping a null one on every failing span.
+	ctx := context.Background()
+	boom := errors.New("boom")
+
+	// The metadata is filled in after the function returns, so the test keeps
+	// the pointer the run handed its callback and reads it afterwards.
+	run := func(t *testing.T, fn func() (*string, error)) *spanMetadata {
+		t.Helper()
+		var sm *spanMetadata
+		_, err := RunInNewSpan(ctx, &SpanMetadata{Name: "partial"}, "in",
+			func(ctx context.Context, in string) (*string, error) {
+				sm = spanMetaKey.FromContext(ctx)
+				return fn()
+			})
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		return sm
+	}
+
+	partial := "as far as it got"
+	sm := run(t, func() (*string, error) { return &partial, boom })
+	if sm.State != spanStateError {
+		t.Errorf("state = %q, want %q", sm.State, spanStateError)
+	}
+	got, ok := sm.Output.(*string)
+	if !ok {
+		t.Fatalf("failing span recorded output %v, want the partial result", sm.Output)
+	}
+	if got != &partial {
+		t.Errorf("output = %q, want the returned partial", *got)
+	}
+
+	if sm := run(t, func() (*string, error) { return nil, boom }); sm.Output != nil {
+		t.Errorf("output = %v, want none: the call produced nothing", sm.Output)
 	}
 }
 

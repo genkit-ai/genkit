@@ -46,9 +46,8 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 SpanAttributeValue = otel_types.AttributeValue
 
 
-def _record_latency(output: object, start_time: float) -> object:
+def _record_latency(output: object, latency_ms: float) -> object:
     """Stamp ``latency_ms`` on the output if it has one (in place, or via ``model_copy`` for frozen models)."""
-    latency_ms = (time.perf_counter() - start_time) * 1000
     if hasattr(output, 'latency_ms'):
         try:
             cast(Any, output).latency_ms = latency_ms
@@ -146,6 +145,7 @@ class ActionResponse(BaseModel, Generic[ResponseT]):
     response: ResponseT
     trace_id: str
     span_id: str = ''
+    latency_ms: float | None = None
 
 
 ChunkT_co = TypeVar('ChunkT_co', covariant=True)
@@ -793,10 +793,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     output = await execute()
                 else:
                     output = await self._invoke(input, ctx)
-                output = cast(OutputT, _record_latency(output, start_time))
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                output = cast(OutputT, _record_latency(output, latency_ms))
                 # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
                 span_meta.output = output
-                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+                return ActionResponse(
+                    response=output,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    latency_ms=latency_ms,
+                )
         except GenkitError:
             raise
         except Exception as e:

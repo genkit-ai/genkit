@@ -116,6 +116,14 @@ def _classify_model(name: str) -> _ModelType:
     return _ModelType.CHAT
 
 
+_UNSUPPORTED_MODEL_MATCHERS = ('babbage', 'davinci', 'codex', '-pro')
+
+
+def _is_known_unsupported(name: str) -> bool:
+    """Report whether a model id is in a family Chat Completions does not serve."""
+    return any(matcher in name for matcher in _UNSUPPORTED_MODEL_MATCHERS)
+
+
 # Default Supports for each multimodal model type, used as fallback when
 # a model is not found in the registry.
 _DEFAULT_SUPPORTS: dict[_ModelType, Supports] = {
@@ -516,6 +524,8 @@ class OpenAI(Plugin):
         models: list[Model] = models_.data
         for model in models:
             name = model.id
+            if _is_known_unsupported(name):
+                continue
             model_type = _classify_model(name)
             if model_type == _ModelType.EMBEDDER:
                 actions.append(

@@ -723,10 +723,10 @@ export function openAIModelRunner(
             status = 'RESOURCE_EXHAUSTED';
             break;
           case 401:
-            status = 'PERMISSION_DENIED';
+            status = 'UNAUTHENTICATED';
             break;
           case 403:
-            status = 'UNAUTHENTICATED';
+            status = 'PERMISSION_DENIED';
             break;
           case 400:
             status = 'INVALID_ARGUMENT';

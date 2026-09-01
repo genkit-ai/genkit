@@ -33,8 +33,10 @@ import {
   extractMimeType,
   extractText,
   extractVersion,
+  httpStatusToGenkitStatus,
   modelName,
   parseRetryAfterMs,
+  parseStreamErrorText,
   processStream,
 } from '../../src/common/utils.js';
 
@@ -970,6 +972,171 @@ describe('Common Utils', () => {
       } catch (err: any) {
         assert.ok(err.message.includes('Failed to parse stream'));
       }
+    });
+
+    it('surfaces a JSON error body (HTTP 200 with error) as a GenkitError', async () => {
+      // Overloaded models sometimes return HTTP 200 and put the real error in
+      // the body as plain JSON (not an SSE `data:` frame).
+      const encoder = new TextEncoder();
+      const errorBody = JSON.stringify({
+        error: {
+          code: 503,
+          message:
+            'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.',
+          status: 'UNAVAILABLE',
+        },
+      });
+
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(errorBody));
+          controller.close();
+        },
+      });
+
+      const mockResponse = new Response(stream);
+      const { stream: asyncStream, response } = processStream(mockResponse);
+
+      // Silence the parallel promise rejection so it doesn't fail the test runner asynchronously
+      response.catch(() => {});
+
+      try {
+        for await (const val of asyncStream) {
+          // should throw
+        }
+        assert.fail('Should have thrown on error body');
+      } catch (err: any) {
+        assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+        assert.strictEqual(err.status, 'UNAVAILABLE');
+        assert.ok(err.message.includes('high demand'));
+      }
+    });
+
+    it('does not cause an unhandled rejection when only the stream is consumed on error', async () => {
+      // Regression test: previously the teed `response` promise would reject
+      // with no handler attached (the caller only awaits `stream`), producing
+      // an unhandled promise rejection that crashed the process.
+      const encoder = new TextEncoder();
+      const errorBody = JSON.stringify({
+        error: { code: 503, message: 'overloaded', status: 'UNAVAILABLE' },
+      });
+
+      const rejections: unknown[] = [];
+      const onRejection = (reason: unknown) => rejections.push(reason);
+      process.on('unhandledRejection', onRejection);
+
+      try {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(errorBody));
+            controller.close();
+          },
+        });
+
+        const mockResponse = new Response(stream);
+        // Intentionally ignore `response` to simulate the streaming consumer.
+        const { stream: asyncStream } = processStream(mockResponse);
+
+        await assert.rejects(async () => {
+          for await (const val of asyncStream) {
+            // should throw
+          }
+        });
+
+        // Give any pending microtasks/rejections a chance to surface.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.strictEqual(
+          rejections.length,
+          0,
+          `Expected no unhandled rejections, got: ${rejections}`
+        );
+      } finally {
+        process.off('unhandledRejection', onRejection);
+      }
+    });
+  });
+
+  describe('httpStatusToGenkitStatus', () => {
+    it('maps known HTTP status codes to Genkit statuses', () => {
+      assert.strictEqual(httpStatusToGenkitStatus(400), 'INVALID_ARGUMENT');
+      assert.strictEqual(httpStatusToGenkitStatus(401), 'UNAUTHENTICATED');
+      assert.strictEqual(httpStatusToGenkitStatus(403), 'PERMISSION_DENIED');
+      assert.strictEqual(httpStatusToGenkitStatus(404), 'NOT_FOUND');
+      assert.strictEqual(httpStatusToGenkitStatus(429), 'RESOURCE_EXHAUSTED');
+      assert.strictEqual(httpStatusToGenkitStatus(499), 'CANCELLED');
+      assert.strictEqual(httpStatusToGenkitStatus(500), 'INTERNAL');
+      assert.strictEqual(httpStatusToGenkitStatus(503), 'UNAVAILABLE');
+      assert.strictEqual(httpStatusToGenkitStatus(504), 'DEADLINE_EXCEEDED');
+    });
+
+    it('returns UNKNOWN for unmapped or missing codes', () => {
+      assert.strictEqual(httpStatusToGenkitStatus(418), 'UNKNOWN');
+      assert.strictEqual(httpStatusToGenkitStatus(undefined), 'UNKNOWN');
+    });
+  });
+
+  describe('parseStreamErrorText', () => {
+    it('returns a GenkitError with status from the error status field', () => {
+      const text = JSON.stringify({
+        error: { code: 503, message: 'overloaded', status: 'UNAVAILABLE' },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNAVAILABLE');
+      assert.ok(err.message.includes('overloaded'));
+    });
+
+    it('falls back to the HTTP code when status is not a valid StatusName', () => {
+      const text = JSON.stringify({
+        error: { code: 429, message: 'too many' },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
+    });
+
+    it('coerces a stringified HTTP code to a number when mapping status', () => {
+      const text = JSON.stringify({
+        error: { code: '503', message: 'overloaded' },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNAVAILABLE');
+    });
+
+    it('uses a default message when the error message is not a string', () => {
+      const text = JSON.stringify({
+        error: { code: 500, message: { nested: 'oops' } },
+      });
+      const err = parseStreamErrorText(text);
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'INTERNAL');
+      assert.ok(err.message.includes('Error streaming from the model'));
+    });
+
+    it('truncates long non-JSON payloads in the fallback message', () => {
+      const longText = 'x'.repeat(1000);
+      const err = parseStreamErrorText(longText);
+      assert.ok(!(err instanceof GenkitError));
+      assert.ok(err.message.includes('...'));
+      // 'Failed to parse stream: ' + 500 chars + '...'
+      assert.ok(
+        err.message.length < 600,
+        `Expected truncated message, got length ${err.message.length}`
+      );
+    });
+
+    it('returns a generic Error for non-JSON text', () => {
+      const err = parseStreamErrorText('not json at all');
+      assert.ok(!(err instanceof GenkitError));
+      assert.ok(err.message.includes('Failed to parse stream'));
+      assert.ok(err.message.includes('not json at all'));
+    });
+
+    it('returns a generic Error for JSON that is not an error body', () => {
+      const err = parseStreamErrorText(JSON.stringify({ hello: 'world' }));
+      assert.ok(!(err instanceof GenkitError));
+      assert.ok(err.message.includes('Failed to parse stream'));
     });
   });
 });

@@ -403,6 +403,7 @@ async def cat_profile(data: CatInput) -> Cat:
         output_instructions=True,
         config={'maxOutputTokens': 1024},
     )
+    assert response.output is not None
     return response.output
 
 

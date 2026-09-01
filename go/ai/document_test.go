@@ -55,7 +55,7 @@ func TestDocumentJSON(t *testing.T) {
 			},
 			&Part{
 				Kind: PartData,
-				Text: "somedata\x00string",
+				Data: map[string]any{"some": "data", "n": 3.3},
 			},
 			&Part{
 				Kind: PartToolRequest,
@@ -95,7 +95,7 @@ func TestDocumentJSON(t *testing.T) {
 		case PartMedia:
 			return a.ContentType == b.ContentType && a.Text == b.Text
 		case PartData:
-			return a.Text == b.Text
+			return reflect.DeepEqual(a.Data, b.Data)
 		case PartToolRequest:
 			return reflect.DeepEqual(a.ToolRequest, b.ToolRequest)
 		case PartToolResponse:
@@ -141,28 +141,116 @@ func TestReasoningPartJSON(t *testing.T) {
 	if unmarshaledPart.ContentType != "plain/text" {
 		t.Errorf("unmarshaled reasoning content type = %q, want %q", unmarshaledPart.ContentType, "plain/text")
 	}
+
+	if got := unmarshaledPart.Metadata["signature"]; got == nil {
+		t.Errorf("unmarshaled reasoning part lost its signature, metadata = %v", unmarshaledPart.Metadata)
+	}
+}
+
+func TestReasoningPartWithoutSignature(t *testing.T) {
+	// A part with no signature carries no metadata at all. A metadata map
+	// holding only a nil signature reads as "this part has metadata" to
+	// consumers, which stops adjacent reasoning parts from being merged.
+	p := NewReasoningPart("thinking", nil)
+	if p.Metadata != nil {
+		t.Errorf("Metadata = %v, want nil", p.Metadata)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+	if got, want := string(b), `{"reasoning":"thinking"}`; got != want {
+		t.Errorf("marshaled = %s, want %s", got, want)
+	}
+}
+
+func TestReasoningPartClonesSignature(t *testing.T) {
+	// A caller reusing a buffer across streamed chunks must not be able to
+	// rewrite a signature it has already handed off.
+	buf := []byte("sig123")
+	p := NewReasoningPart("thinking", buf)
+	copy(buf, "XXXXXX")
+
+	got, ok := p.Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature = %#v, want []byte", p.Metadata["signature"])
+	}
+	if string(got) != "sig123" {
+		t.Errorf("signature = %q, want %q: the caller's buffer is aliased", got, "sig123")
+	}
+}
+
+func TestEmptyReasoningPartRoundTrip(t *testing.T) {
+	// The reasoning key marks the kind, so it has to survive an empty text:
+	// dropping it turns the part into an empty text part on the way back, and
+	// the wire schema lists reasoning as required.
+	p := NewReasoningPart("", []byte("sig123"))
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+
+	var got Part
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("failed to unmarshal reasoning part: %v", err)
+	}
+
+	if !got.IsReasoning() {
+		t.Errorf("empty reasoning part became kind %v, want %v (marshaled as %s)", got.Kind, PartReasoning, b)
+	}
+	if got.Text != "" {
+		t.Errorf("Text = %q, want empty", got.Text)
+	}
 }
 
 func TestNewDataPart(t *testing.T) {
-	t.Run("creates data part with content", func(t *testing.T) {
+	t.Run("creates data part with string content", func(t *testing.T) {
 		p := NewDataPart("some binary data")
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "some binary data" {
-			t.Errorf("Text = %q, want %q", p.Text, "some binary data")
+		if p.Data != "some binary data" {
+			t.Errorf("Data = %v, want %q", p.Data, "some binary data")
 		}
 	})
 
-	t.Run("creates data part with empty content", func(t *testing.T) {
-		p := NewDataPart("")
+	t.Run("creates data part with structured content", func(t *testing.T) {
+		data := map[string]any{"name": "Alice", "age": 30}
+		p := NewDataPart(data)
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "" {
-			t.Errorf("Text = %q, want empty string", p.Text)
+		if !reflect.DeepEqual(p.Data, data) {
+			t.Errorf("Data = %v, want %v", p.Data, data)
+		}
+	})
+
+	t.Run("round-trips structured data through JSON", func(t *testing.T) {
+		p := NewDataPart(map[string]any{"envelopes": []any{map[string]any{"x": 1.0}}})
+		p.Metadata = map[string]any{"mimeType": "application/a2ui+json"}
+
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"data":{"envelopes":[{"x":1}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+		if string(b) != want {
+			t.Errorf("marshaled = %s, want %s", string(b), want)
+		}
+
+		var p2 Part
+		if err := json.Unmarshal(b, &p2); err != nil {
+			t.Fatal(err)
+		}
+		if p2.Kind != PartData {
+			t.Errorf("Kind = %v, want %v", p2.Kind, PartData)
+		}
+		if !reflect.DeepEqual(p2.Data, p.Data) {
+			t.Errorf("Data = %v, want %v", p2.Data, p.Data)
 		}
 	})
 }
@@ -421,6 +509,7 @@ func TestPartClone(t *testing.T) {
 		Kind:        PartToolRequest,
 		ContentType: "application/json",
 		Text:        "body",
+		Data:        map[string]any{"dk": "dv"},
 		ToolRequest: &ToolRequest{Name: "tool", Input: map[string]any{"a": 1}},
 		// Normally a Part wouldn't have both ToolRequest and ToolResponse,
 		// but we populate everything to catch missing fields.
@@ -456,6 +545,18 @@ func TestPartClone(t *testing.T) {
 	cp.Custom["extra"] = true
 	if _, ok := orig.Custom["extra"]; ok {
 		t.Error("mutating clone Custom affected original")
+	}
+
+	// A map-shaped Data value is cloned too, so mutating the clone's top-level
+	// keys must not affect the original (data parts, e.g. A2UI envelopes, are
+	// commonly map[string]any and shared by reference before this).
+	cpData, _ := cp.Data.(map[string]any)
+	if cpData == nil {
+		t.Fatalf("clone Data type = %T, want map[string]any", cp.Data)
+	}
+	cpData["extra"] = true
+	if _, ok := orig.Data.(map[string]any)["extra"]; ok {
+		t.Error("mutating clone Data affected original")
 	}
 
 	// Go types in metadata (e.g. []byte) must be preserved, not string-ified.
@@ -515,5 +616,41 @@ func TestMessageClone(t *testing.T) {
 	var nilMsg *Message
 	if nilMsg.Clone() != nil {
 		t.Error("nil Message.Clone() should return nil")
+	}
+}
+
+// A []any Data value gets the same top-level isolation as a map, so switching a
+// payload from an object to an array doesn't silently lose Clone's guarantee.
+func TestPartCloneSliceData(t *testing.T) {
+	orig := NewDataPart([]any{"a", "b"})
+	cp := orig.Clone()
+	cpData, ok := cp.Data.([]any)
+	if !ok {
+		t.Fatalf("clone Data type = %T, want []any", cp.Data)
+	}
+	cpData[0] = "mutated"
+	if orig.Data.([]any)[0] != "a" {
+		t.Error("mutating clone's slice Data affected the original")
+	}
+}
+
+func TestPartDataString(t *testing.T) {
+	tests := []struct {
+		name string
+		part *Part
+		want string
+	}{
+		{"string payload as-is", NewDataPart("data:image/png;base64,aGVsbG8="), "data:image/png;base64,aGVsbG8="},
+		{"map payload as JSON", NewDataPart(map[string]any{"k": "v"}), `{"k":"v"}`},
+		{"slice payload as JSON", NewDataPart([]any{1.0, 2.0}), `[1,2]`},
+		{"nil data", NewDataPart(nil), ""},
+		{"nil part", (*Part)(nil), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.part.DataString(); got != tt.want {
+				t.Errorf("DataString() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

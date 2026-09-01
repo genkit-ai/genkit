@@ -27,9 +27,12 @@ from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
+from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+
+logger = get_logger(__name__)
 
 
 class Tool:
@@ -313,6 +316,10 @@ async def run_tool_after_restart(
             else (e if isinstance(e, Interrupt) else None)
         )
         if intr is not None:
+            logger.debug(
+                'restarted tool triggered an interrupt',
+                tool=restart_trp.tool_request.name,
+            )
             raise restart_interrupt_error(intr) from e
         raise
 

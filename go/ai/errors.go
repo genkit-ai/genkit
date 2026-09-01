@@ -36,13 +36,19 @@ var (
 
 	// ErrMaxTurnsExceeded means the tool-calling loop hit its turn limit before
 	// the model produced a final response. Raise the limit with WithMaxTurns, or
-	// look for a tool the model keeps retrying.
+	// look for a tool the model keeps retrying. The loop's partial
+	// [ModelResponse] rides alongside this error (see [Generate]).
 	ErrMaxTurnsExceeded = status.ErrAborted.Subtype("max turns exceeded")
 
 	// ErrToolFailed means a tool returned an error or produced output that does
 	// not match its declared schema. The tool's own error is wrapped, so
 	// errors.Is and errors.As still reach it; the status is INTERNAL because a
-	// tool's failure is not a failure of the caller's request.
+	// tool's failure is not a failure of the caller's request. The loop's
+	// partial [ModelResponse] rides alongside this error (see [Generate]).
+	//
+	// A tool that stopped because the call's context ended is not a tool
+	// failure: that error carries CANCELLED instead, so the partial response
+	// reports [FinishReasonAborted].
 	ErrToolFailed = status.ErrInternal.Subtype("tool failed")
 
 	// ErrUnsupportedByModel means the request used a capability the model does
@@ -63,4 +69,14 @@ var (
 	// ErrUnresolvedToolRequest means a resumed generation left an interrupted
 	// tool request without a Respond or Restart directive.
 	ErrUnresolvedToolRequest = status.ErrInvalidArgument.Subtype("unresolved tool request")
+
+	// ErrGenerationBlocked means the provider refused to generate, which is
+	// usually a safety filter firing. Only the typed helpers report it
+	// ([GenerateData], [GenerateDataStream], [DataPrompt.Execute],
+	// [DataPrompt.ExecuteStream]): a refusal cannot produce the value they
+	// promise, so returning a zero value with no error would read as success.
+	// [Generate] still hands the response back unwrapped, so read
+	// FinishReason there. The status is FAILED_PRECONDITION, matching the
+	// GenerationBlockedError that JS and Python raise on the same event.
+	ErrGenerationBlocked = status.ErrFailedPrecondition.Subtype("generation blocked")
 )

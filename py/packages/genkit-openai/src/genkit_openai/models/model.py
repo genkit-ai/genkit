@@ -21,14 +21,17 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
+from openai.types import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import (
     Message,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    ModelUsage,
     Part,
     ReasoningPart,
     Role,
@@ -41,6 +44,7 @@ from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    reraise_openai_error,
     strip_markdown_fences,
 )
 from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
@@ -76,6 +80,71 @@ def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
     if 'stop' not in body and config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
     return body
+
+
+def _token_count(value: Any) -> float | None:  # noqa: ANN401
+    """A token count as a float, or None when it is absent or not positive.
+
+    Args:
+        value: A count read from a usage field, possibly missing or non-numeric.
+
+    Returns:
+        The count, or None. Zero is dropped: it is indistinguishable from a
+        field the provider did not send.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return float(value)
+
+
+def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
+    """Build ModelUsage from a chat completion's usage block.
+
+    Args:
+        usage: The ``usage`` object from a completion or a stream's usage
+            chunk, or None when the response carried none.
+
+    Returns:
+        The token counts, empty when there is no usage to report.
+    """
+    if usage is None:
+        return ModelUsage()
+
+    extras = usage.model_extra or {}
+    prompt = usage.prompt_tokens_details or PromptTokensDetails()
+    completion = usage.completion_tokens_details or CompletionTokensDetails()
+
+    custom: dict[str, Any] = {}
+    for name, value in (
+        ('audioTokens', completion.audio_tokens),
+        ('acceptedPredictionTokens', completion.accepted_prediction_tokens),
+        ('rejectedPredictionTokens', completion.rejected_prediction_tokens),
+        # xAI counts the live-search sources it consulted and breaks image
+        # tokens out of the prompt; neither is in OpenAI's usage shape.
+        ('numSourcesUsed', extras.get('num_sources_used')),
+        ('imageTokens', (prompt.model_extra or {}).get('image_tokens')),
+    ):
+        count = _token_count(value)
+        if count is not None:
+            custom[name] = count
+    # Presence decides for the price a gateway charged, not the value: a
+    # free-tier request is priced at an explicit zero, which is an answer.
+    cost = extras.get('cost')
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        custom['cost'] = float(cost)
+
+    return ModelUsage(
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        thoughts_tokens=_token_count(completion.reasoning_tokens),
+        # DeepSeek reports cache hits in a usage field of its own and sends no
+        # prompt_tokens_details at all.
+        cached_content_tokens=(
+            _token_count(prompt.cached_tokens) or _token_count(extras.get('prompt_cache_hit_tokens'))
+        ),
+        custom=custom or None,
+    )
 
 
 class OpenAIModel:
@@ -337,6 +406,7 @@ class OpenAIModel:
         result = ModelResponse(
             request=request,
             message=MessageConverter.to_genkit(MessageAdapter(response.choices[0].message)),
+            usage=_usage_from_completion(response.usage),
         )
         return self._clean_json_response(result, request)
 
@@ -354,12 +424,23 @@ class OpenAIModel:
         """
         openai_config = await self._get_openai_request_config(request=request)
         openai_config['stream'] = True
+        openai_config['stream_options'] = {
+            **(openai_config.get('stream_options') or {}),
+            'include_usage': True,
+        }
 
         stream = await self._openai_client.chat.completions.create(**openai_config)
 
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
+        usage: CompletionUsage | None = None
         async for chunk in stream:  # type: ignore
+            # Usage rides on a final chunk that carries no choices.
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
+
             delta = chunk.choices[0].delta
 
             # Text content chunk
@@ -414,6 +495,7 @@ class OpenAIModel:
         result = ModelResponse(
             request=request,
             message=Message(role=Role.MODEL, content=accumulated_content),
+            usage=_usage_from_completion(usage),
         )
         return self._clean_json_response(result, request)
 
@@ -427,13 +509,14 @@ class OpenAIModel:
         Returns:
             A ModelResponse containing the model's response.
         """
-        request.config = self.normalize_config(request.config)
-
-        if ctx.is_streaming:
-            logger.debug('OpenAI generate request', model=self._model, streaming=True)
-            return await self._generate_stream(request, ctx.send_chunk)
-        else:
+        try:
+            request.config = self.normalize_config(request.config)
+            if ctx.is_streaming:
+                logger.debug('OpenAI generate request', model=self._model, streaming=True)
+                return await self._generate_stream(request, ctx.send_chunk)
             return await self._generate(request)
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)
 
     @staticmethod
     def normalize_config(config: object) -> OpenAIConfig:

@@ -16,6 +16,7 @@
 
 """Utility functions for extracting JSON data from text and markdown."""
 
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +35,10 @@ def extract_json(text: str, throw_on_bad_json: bool = True) -> Any:  # noqa: ANN
     """Extract JSON from text with lenient parsing (handles trailing commas, partial JSON, etc.)."""
     if not text.strip():
         return None
+
+    stripped = text.strip()
+    with suppress(ValueError):
+        return json5.loads(stripped)
 
     opening_char: str | None = None
     closing_char: str | None = None

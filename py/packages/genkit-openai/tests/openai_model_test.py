@@ -17,15 +17,21 @@
 
 """Tests for OpenAI compatible model implementation."""
 
+from collections.abc import AsyncIterator
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 from genkit_openai.models import OpenAIModel
+from genkit_openai.models.model import _usage_from_completion
 from genkit_openai.models.utils import strip_markdown_fences
 from genkit_openai.typing import OpenAIConfig
+from openai.types import CompletionUsage
+from openai.types.chat import ChatCompletionChunk
+from pydantic import BaseModel
 
 from genkit import (
+    GenkitError,
     Message,
     ModelRequest,
     ModelResponse,
@@ -139,6 +145,7 @@ async def test__generate(sample_request: ModelRequest) -> None:
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = None
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -182,7 +189,7 @@ async def test__generate_stream(sample_request: ModelRequest) -> None:
             choice_mock = MagicMock()
             choice_mock.delta = delta_mock
 
-            return MagicMock(choices=[choice_mock])
+            return MagicMock(choices=[choice_mock], usage=None)
 
     mock_client.chat.completions.create = AsyncMock(return_value=MockStream(['Hello', ', world!']))
 
@@ -195,6 +202,200 @@ async def test__generate_stream(sample_request: ModelRequest) -> None:
     await model._generate_stream(sample_request, callback)
 
     assert collected_chunks == ['Hello', ', world!']
+
+
+_USAGE_PAYLOAD: dict[str, Any] = {
+    'prompt_tokens': 10,
+    'completion_tokens': 7,
+    'total_tokens': 17,
+    'prompt_cache_hit_tokens': 6,
+    'prompt_cache_miss_tokens': 4,
+    'completion_tokens_details': {'reasoning_tokens': 5},
+    'cost': 0.00042,
+}
+
+
+def _assert_usage_payload_reported(usage: Any) -> None:  # noqa: ANN401
+    """Assert every part of _USAGE_PAYLOAD reached the response usage."""
+    assert usage is not None
+    assert usage.input_tokens == 10
+    assert usage.output_tokens == 7
+    assert usage.total_tokens == 17
+    assert usage.thoughts_tokens == 5
+    assert usage.cached_content_tokens == 6
+    assert usage.custom == {'cost': 0.00042}
+
+
+def _text_chunk(text: str) -> ChatCompletionChunk:
+    """A content chunk with no usage, as the API sends mid-stream."""
+    return ChatCompletionChunk.model_validate({
+        'id': '1',
+        'object': 'chat.completion.chunk',
+        'created': 1,
+        'model': 'gpt-4',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': text}, 'finish_reason': None}],
+        'usage': None,
+    })
+
+
+def _usage_chunk() -> ChatCompletionChunk:
+    """The final usage chunk, which carries no choices."""
+    return ChatCompletionChunk.model_validate({
+        'id': '1',
+        'object': 'chat.completion.chunk',
+        'created': 1,
+        'model': 'gpt-4',
+        'choices': [],
+        'usage': _USAGE_PAYLOAD,
+    })
+
+
+def _mock_stream(chunks: list[ChatCompletionChunk]) -> AsyncMock:
+    """A create() mock returning chunks from an async iterator."""
+
+    async def iterator() -> AsyncIterator[ChatCompletionChunk]:
+        for chunk in chunks:
+            yield chunk
+
+    return AsyncMock(return_value=iterator())
+
+
+@pytest.mark.asyncio
+async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
+    """A non-streaming response's token usage reaches the ModelResponse."""
+    mock_message = MagicMock()
+    mock_message.content = 'Hello, user!'
+    mock_message.role = 'model'
+    mock_message.tool_calls = None
+    mock_message.reasoning_content = None
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = CompletionUsage.model_validate(_USAGE_PAYLOAD)
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate(sample_request)
+
+    _assert_usage_payload_reported(response.usage)
+    # include_usage is added on the streaming path only.
+    assert 'stream_options' not in mock_client.chat.completions.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test__generate_reports_extra_token_counts() -> None:
+    """Counts Genkit has no field for land in usage.custom; zeroes are dropped."""
+    mock_message = MagicMock()
+    mock_message.content = 'hi'
+    mock_message.role = 'model'
+    mock_message.tool_calls = None
+    mock_message.reasoning_content = None
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = CompletionUsage.model_validate({
+        'prompt_tokens': 3,
+        'completion_tokens': 2,
+        'total_tokens': 5,
+        'prompt_tokens_details': {'cached_tokens': 0, 'image_tokens': 9},
+        'completion_tokens_details': {
+            'audio_tokens': 4,
+            'accepted_prediction_tokens': 0,
+            'rejected_prediction_tokens': 2,
+            'reasoning_tokens': 0,
+        },
+        'num_sources_used': 8,
+    })
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+    response = await model._generate(request)
+
+    assert response.usage is not None
+    assert response.usage.custom == {
+        'audioTokens': 4,
+        'rejectedPredictionTokens': 2,
+        'imageTokens': 9,
+        'numSourcesUsed': 8,
+    }
+    assert response.usage.thoughts_tokens is None
+    assert response.usage.cached_content_tokens is None
+
+
+@pytest.mark.parametrize(
+    ('usage_fields', 'expected'),
+    [
+        ({'prompt_tokens_details': {'cached_tokens': 64}}, 64),
+        ({'prompt_cache_hit_tokens': 6}, 6),
+        ({'prompt_tokens_details': {'cached_tokens': 64}, 'prompt_cache_hit_tokens': 6}, 64),
+    ],
+    ids=['prompt_tokens_details', 'top_level_fallback', 'details_take_precedence'],
+)
+def test_cached_content_tokens(usage_fields: dict[str, Any], expected: float) -> None:
+    """cached_content_tokens prefers prompt_tokens_details over the top-level count."""
+    usage = CompletionUsage.model_validate({
+        'prompt_tokens': 10,
+        'completion_tokens': 2,
+        'total_tokens': 12,
+        **usage_fields,
+    })
+
+    assert _usage_from_completion(usage).cached_content_tokens == expected
+
+
+def test_accepted_prediction_tokens() -> None:
+    """A non-zero predicted-outputs count reaches usage.custom."""
+    usage = CompletionUsage.model_validate({
+        'prompt_tokens': 10,
+        'completion_tokens': 4,
+        'total_tokens': 14,
+        'completion_tokens_details': {'accepted_prediction_tokens': 3},
+    })
+
+    assert _usage_from_completion(usage).custom == {'acceptedPredictionTokens': 3}
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_requests_usage(sample_request: ModelRequest) -> None:
+    """A stream asks for its usage, keeping any stream_options the caller set."""
+    config = OpenAIConfig(model='gpt-4', stream_options={'other': 'keep'})
+    sample_request.config = config
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([_text_chunk('Hello')])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert mock_client.chat.completions.create.call_args.kwargs['stream_options'] == {
+        'other': 'keep',
+        'include_usage': True,
+    }
+    # The caller's config is reused across requests, so it must not be mutated.
+    assert config.stream_options == {'other': 'keep'}
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_reports_usage(sample_request: ModelRequest) -> None:
+    """The choice-less usage chunk is read, not indexed into."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([_text_chunk('Hello'), _usage_chunk()])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected_chunks = []
+
+    def callback(chunk: ModelResponseChunk) -> None:
+        collected_chunks.append(chunk.content[0].root.text)
+
+    response = await model._generate_stream(sample_request, callback)
+
+    assert collected_chunks == ['Hello']
+    _assert_usage_payload_reported(response.usage)
 
 
 @pytest.mark.parametrize(
@@ -225,6 +426,26 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
         model_any._generate_stream.assert_called_once()
     else:
         model_any._generate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_bad_config_type() -> None:
+    """A config type we cannot send is INVALID_ARGUMENT so retry skips it."""
+    ctx_mock = MagicMock(spec=ActionRunContext)
+    type(ctx_mock).is_streaming = PropertyMock(return_value=False)
+    model = OpenAIModel(model='gpt-4', client=MagicMock())
+
+    class OtherConfig(BaseModel):
+        pass
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=OtherConfig(),
+    )
+
+    with pytest.raises(GenkitError) as raised:
+        await model.generate(request, ctx_mock)
+    assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.parametrize(

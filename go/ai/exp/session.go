@@ -245,8 +245,8 @@ func readSnapshot[State any](
 	// Return a normalized copy: the documented defaults (empty status means
 	// completed, zero UpdatedAt means CreatedAt) are resolved here so every
 	// caller sees the same shaping, and the state transform shapes what leaves
-	// the server. A failed snapshot's state is its last-good state, so it is
-	// returned like any other.
+	// the server. A failed snapshot's state is what its turn committed, so it
+	// is returned like any other row's.
 	resp := *snap
 	// Surface a pending snapshot whose heartbeat has gone stale as expired: its
 	// detached background worker is presumed dead, so report the orphan rather

@@ -29,15 +29,17 @@ else:
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
+    GenkitError,
     ModelInfo,
     ModelRequest,
     Supports,
 )
 from genkit.model import Error, Operation
-from genkit.plugin_api import ActionRunContext
+from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
@@ -230,17 +232,20 @@ class VeoModel:
             An Operation with the job ID.
         """
         if request.tools:
-            raise ValueError('Tools are not supported for this model.')
+            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
         prompt = _extract_text(request)
         if not prompt:
-            raise ValueError('Veo requires a text prompt')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Veo requires a text prompt')
 
-        response = await self._client.aio.models.generate_videos(
-            model=self._version,
-            prompt=prompt,
-            config=self._get_config(request),
-        )
+        try:
+            response = await self._client.aio.models.generate_videos(
+                model=self._version,
+                prompt=prompt,
+                config=self._get_config(request),
+            )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
 
         # Convert to Operation
         return _from_veo_operation({
@@ -261,7 +266,10 @@ class VeoModel:
         # See: https://ai.google.dev/gemini-api/docs/video
         # Create a GenerateVideosOperation object from the operation ID
         op_request = genai_types.GenerateVideosOperation.model_validate({'name': operation.id})
-        response = await self._client.aio.operations.get(operation=op_request)
+        try:
+            response = await self._client.aio.operations.get(operation=op_request)
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
 
         # Convert response to dict for processing
         op_dict = {

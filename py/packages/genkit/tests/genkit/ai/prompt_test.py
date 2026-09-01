@@ -1002,7 +1002,13 @@ async def test_load_prompt_metadata_tool_defs_empty_array() -> None:
 @pytest.mark.asyncio
 async def test_define_prompt_primitive_with_output_instructions() -> None:
     """``define_prompt(registry, ...)`` primitive preserves output_instructions and injects on call."""
-    ai, *_ = setup_test()
+    ai, _, pm = setup_test()
+    pm.responses = [
+        ModelResponse(
+            finish_reason='stop',
+            message=Message(role='model', content=[Part(root=TextPart(text='{"foo": 1}'))]),
+        )
+    ]
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
@@ -1013,7 +1019,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
 
     p_true = ai.define_prompt(
         name='p_true',
-        model='echoModel',
+        model='programmableModel',
         prompt='hi',
         output_format='json',
         output_schema=TestSchema,
@@ -1048,7 +1054,13 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
 @pytest.mark.asyncio
 async def test_load_prompt_with_output_instructions() -> None:
     """File-based (.prompt) dotprompts preserve output.instructions and inject on call."""
-    ai, *_ = setup_test()
+    ai, _, pm = setup_test()
+    pm.responses = [
+        ModelResponse(
+            finish_reason='stop',
+            message=Message(role='model', content=[Part(root=TextPart(text='{"foo": 1}'))]),
+        )
+    ]
 
     def output_parts(resp: Any) -> list[Any]:
         msg = resp.request.messages[0]
@@ -1058,7 +1070,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'with_instructions.prompt').write_text(
-            '---\nmodel: echoModel\noutput:\n  format: json\n  schema:\n'
+            '---\nmodel: programmableModel\noutput:\n  format: json\n  schema:\n'
             '    type: object\n    properties:\n      foo:\n        type: integer\n'
             '  instructions: true\n---\nhi\n'
         )
@@ -1071,7 +1083,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         assert rendered.output is not None
         assert rendered.output.instructions is True
 
-        resp = await loaded()
+        resp = await loaded(model='programmableModel')
         injected = output_parts(resp)
         assert len(injected) == 1
         assert 'Output should be in JSON format' in (injected[0].root.text or '')

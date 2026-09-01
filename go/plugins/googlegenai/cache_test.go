@@ -198,6 +198,107 @@ func TestExtractCacheConfig_InvalidCacheType(t *testing.T) {
 	}
 }
 
+// TestMessagesToCache pins that the cached span stops at the boundary, stays
+// in chronological order (calculateCacheHash reads it in slice order, so the
+// order is part of every live cache name), and is encoded exactly like the
+// messages sent inline. The last part matters because the cached prefix is no
+// longer sent inline as well: the copy stored on the resource is the only one
+// the model ever sees.
+func TestMessagesToCache(t *testing.T) {
+	t.Run("chronological up to the boundary", func(t *testing.T) {
+		msgs := []*ai.Message{
+			ai.NewUserTextMessage("first"),
+			ai.NewModelTextMessage("second"),
+			ai.NewUserTextMessage("third, not cached"),
+		}
+		got, err := messagesToCache(msgs, 1)
+		if err != nil {
+			t.Fatalf("messagesToCache: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2", len(got))
+		}
+		if got[0].Parts[0].Text != "first" || got[1].Parts[0].Text != "second" {
+			t.Errorf("order = %q, %q; want first, second", got[0].Parts[0].Text, got[1].Parts[0].Text)
+		}
+	})
+
+	t.Run("tool turns take the gemini role", func(t *testing.T) {
+		msgs := []*ai.Message{
+			ai.NewMessage(ai.RoleTool, nil, ai.NewToolResponsePart(&ai.ToolResponse{Name: "myTool", Output: "result"})),
+			ai.NewUserTextMessage("and now?"),
+		}
+		got, err := messagesToCache(msgs, 0)
+		if err != nil {
+			t.Fatalf("messagesToCache: %v", err)
+		}
+		// The Gemini Content API takes only "user" and "model"; a raw "tool"
+		// is rejected by Caches.Create.
+		if got[0].Role != "user" {
+			t.Errorf("cached role = %q, want %q", got[0].Role, "user")
+		}
+	})
+
+	t.Run("contentless turns are skipped", func(t *testing.T) {
+		// A blocked model turn replayed via resp.History() carries no content,
+		// and the API rejects contents with zero parts.
+		msgs := []*ai.Message{
+			{Role: ai.RoleModel},
+			ai.NewUserTextMessage("hi"),
+		}
+		got, err := messagesToCache(msgs, 1)
+		if err != nil {
+			t.Fatalf("messagesToCache: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1 (the contentless turn must be dropped)", len(got))
+		}
+		if got[0].Parts[0].Text != "hi" {
+			t.Errorf("cached = %q, want %q", got[0].Parts[0].Text, "hi")
+		}
+	})
+}
+
+// TestCalculateCacheHash pins that the hash tells apart everything the cache
+// lookup relies on it to tell apart. It is the only check that a named cache
+// holds the request's own content, and the request no longer carries that
+// content inline, so a collision silently answers from the wrong cache.
+func TestCalculateCacheHash(t *testing.T) {
+	hashOf := func(t *testing.T, model string, msgs ...*ai.Message) string {
+		t.Helper()
+		contents, err := messagesToCache(msgs, len(msgs)-1)
+		if err != nil {
+			t.Fatalf("messagesToCache: %v", err)
+		}
+		h, err := calculateCacheHash(contents, model)
+		if err != nil {
+			t.Fatalf("calculateCacheHash: %v", err)
+		}
+		return h
+	}
+	media := func(uri string) *ai.Message {
+		return ai.NewMessage(ai.RoleUser, nil, ai.NewMediaPart("video/mp4", uri))
+	}
+
+	// URI media carries neither Text nor InlineData, the two fields the hash
+	// used to fold in, so every such cache hashed alike.
+	if a, b := hashOf(t, "m", media("gs://bucket/a.mp4")), hashOf(t, "m", media("gs://bucket/b.mp4")); a == b {
+		t.Errorf("two different gs:// videos hash alike: %s", a)
+	}
+	// A cache resource belongs to the model that created it.
+	if a, b := hashOf(t, "gemini-2.5-flash", ai.NewUserTextMessage("x")), hashOf(t, "gemini-2.5-pro", ai.NewUserTextMessage("x")); a == b {
+		t.Errorf("same contents on two models hash alike: %s", a)
+	}
+	// Message boundaries have to survive: without them "ab" and "a"+"b" fold
+	// into the same digest.
+	if a, b := hashOf(t, "m", ai.NewUserTextMessage("ab")), hashOf(t, "m", ai.NewUserTextMessage("a"), ai.NewUserTextMessage("b")); a == b {
+		t.Errorf("[ab] and [a b] hash alike: %s", a)
+	}
+	if a, b := hashOf(t, "m", ai.NewUserTextMessage("x")), hashOf(t, "m", ai.NewUserTextMessage("x")); a != b {
+		t.Errorf("hash is not stable: %s != %s", a, b)
+	}
+}
+
 func TestFindCacheMarker_NumericTTLForms(t *testing.T) {
 	// ttlSeconds is an int when set from Go code but arrives as float64 or
 	// json.Number after a JSON round-trip (dev UI, reflection server). All

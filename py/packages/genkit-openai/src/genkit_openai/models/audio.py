@@ -28,11 +28,12 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
-from openai.types.audio import Transcription
+from openai.types.audio import Transcription, Translation
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -52,6 +53,7 @@ from genkit_openai.models.utils import (
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    reraise_openai_error,
 )
 
 # Maps audio response formats to their MIME types.
@@ -271,7 +273,7 @@ def _to_stt_params(
     return {k: v for k, v in params.items() if v is not None}
 
 
-def _to_stt_response(result: Transcription | str) -> ModelResponse:
+def _to_stt_response(result: Transcription | Translation | str) -> ModelResponse:
     """Convert an OpenAI transcription result to a Genkit ModelResponse.
 
     Handles the full union of types returned by transcriptions.create().
@@ -333,10 +335,13 @@ class OpenAITTSModel:
         Returns:
             A ModelResponse containing audio media parts.
         """
-        params = _to_tts_params(self._model_name, request)
-        response_format = params.get('response_format', 'mp3')
-        result = await self._client.audio.speech.create(**params)
-        return _to_tts_response(result, response_format)
+        try:
+            params = _to_tts_params(self._model_name, request)
+            response_format = params.get('response_format', 'mp3')
+            result = await self._client.audio.speech.create(**params)
+            return _to_tts_response(result, response_format)
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)
 
 
 class OpenAISTTModel:
@@ -372,12 +377,30 @@ class OpenAISTTModel:
         Returns:
             A ModelResponse containing the transcribed text.
         """
-        params = _to_stt_params(self._model_name, request)
-        result = await self._client.audio.transcriptions.create(
-            **params,
-            stream=False,
-        )
-        # transcriptions.create(stream=False) returns a union of
-        # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
-        # _to_stt_response handles all of these via isinstance/hasattr checks.
-        return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
+        translate = extract_config_dict(request).get('translate', False)
+        if translate and self._model_name != 'whisper-1':
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    "OpenAI audio translations only support 'whisper-1'; "
+                    f"model '{self._model_name}' cannot use translate=True."
+                ),
+            )
+
+        try:
+            params = _to_stt_params(self._model_name, request)
+            if translate:
+                params.pop('language', None)
+                params.pop('timestamp_granularities', None)
+                result = await self._client.audio.translations.create(**params)
+            else:
+                result = await self._client.audio.transcriptions.create(
+                    **params,
+                    stream=False,
+                )
+            # transcriptions.create(stream=False) returns a union of
+            # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
+            # _to_stt_response handles all of these via isinstance/hasattr checks.
+            return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)

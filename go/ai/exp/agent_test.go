@@ -1156,6 +1156,93 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 	}
 }
 
+// defineCommittingFailureAgent is defineLastGoodTestAgent's counterpart for a
+// turn that fails holding state worth continuing from: it mutates the session
+// and returns a TurnResult alongside the error, which commits the turn.
+func defineCommittingFailureAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
+	return DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("as far as it got"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter = 5
+					return s
+				})
+				return &TurnResult{FinishReason: AgentFinishReasonFailed},
+					status.Errorf(status.ErrUnavailable, "model timeout")
+			})
+		},
+		opts...,
+	)
+}
+
+func TestAgent_CommittedFailedTurn_SnapshotsUnderFailed(t *testing.T) {
+	// A failed turn that committed writes its own row: status failed, the
+	// error on it for the client to judge, and the state the turn reached.
+	// That row is the resume point the failed output reports.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := defineCommittingFailureAgent(reg, "committedFailure", WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("committed failure wrote no snapshot")
+	}
+
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusFailed {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusFailed)
+	}
+	if snap.Error == nil || snap.Error.Status != core.UNAVAILABLE {
+		t.Errorf("snapshot error = %+v, want the turn's UNAVAILABLE", snap.Error)
+	}
+	if got := snap.State.Custom.Counter; got != 5 {
+		t.Errorf("snapshot counter = %d, want the failed turn's own 5", got)
+	}
+	if got := len(snap.State.Messages); got != 2 {
+		t.Errorf("snapshot has %d messages, want 2 (the input and what the turn added)", got)
+	}
+}
+
+func TestAgent_CommittedFailedTurn_AdvancesLastGoodState(t *testing.T) {
+	// Client-managed: the state a committed failure hands back is the failed
+	// turn's own, not the state it started with. Nothing else moves
+	// lastGoodState, so this pins the capture on a committed failure.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineCommittingFailureAgent(reg, "committedFailureClient")
+
+	out, err := af.RunText(ctx, "go", WithState(&SessionState[testState]{
+		Messages: []*ai.Message{ai.NewUserTextMessage("earlier")},
+		Custom:   testState{Counter: 1},
+	}))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.State == nil {
+		t.Fatal("expected state on the failed output")
+	}
+	if got := out.State.Custom.Counter; got != 5 {
+		t.Errorf("counter = %d, want the failed turn's own 5", got)
+	}
+	last := out.State.Messages[len(out.State.Messages)-1]
+	if got := last.Content[0].Text; got != "as far as it got" {
+		t.Errorf("last message = %q, want what the failed turn added", got)
+	}
+}
+
 func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T) {
 	// Resuming from a snapshot and failing before any turn completes:
 	// the parent snapshot already captures the last-good state, so the
@@ -3661,11 +3748,7 @@ func TestAgent_Detach_SuppressesChunksFromTheDetachedTurn(t *testing.T) {
 	// cannot finish before the turn has emitted. That is the ordering that
 	// used to leak chunks onto the wire.
 	reg := newTestRegistry(t)
-	store := &blockingSaveStore[testState]{
-		testInMemStore: newTestInMemStore[testState](),
-		entered:        make(chan struct{}),
-		release:        make(chan struct{}),
-	}
+	store := newBlockingSaveStore[testState]()
 
 	emitted := make(chan struct{})
 	af := DefineCustomAgent(reg, "detachSuppressesChunks",
@@ -3798,14 +3881,17 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		t.Errorf("expected snapshot.Error.Message to contain %q, got %+v", "kaboom", snap.Error)
 	}
 
-	// Resuming from an errored detached snapshot is rejected before the
-	// invocation starts, so the action fails with the original error.
+	// The failure is recorded, not sealed: the row carries the error for the
+	// caller to judge, and resuming from it is admitted rather than rejected
+	// at init. This agent fails the same way every turn, so the resumed
+	// invocation resolves with a failed output instead of an init error.
+	go func() { <-entered }()
 	resumeOut, err := af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
-	if err == nil {
-		t.Fatalf("expected error resuming errored snapshot, got output: %+v", resumeOut)
+	if err != nil {
+		t.Fatalf("resume from the failed snapshot was rejected: %v", err)
 	}
-	if !strings.Contains(err.Error(), "kaboom") {
-		t.Errorf("expected resume error to surface the original failure, got: %v", err)
+	if resumeOut.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("resumed FinishReason = %q, want %q", resumeOut.FinishReason, AgentFinishReasonFailed)
 	}
 }
 
@@ -3875,6 +3961,402 @@ func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 	}
 }
 
+// abortTestAgent commits a message on its first turn, then blocks on its
+// second so a stop always lands mid-turn with exactly one turn behind it.
+// commit says whether the blocked turn returns a TurnResult beside its error,
+// which is what a prompt-backed agent does whenever the generate call produced
+// a partial response.
+func abortTestAgent(t *testing.T, store SessionStore[testState], name string, commit bool, entered chan<- struct{}) *Agent[testState] {
+	t.Helper()
+	turns := 0
+	return DefineCustomAgent(newTestRegistry(t), name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				turns++
+				if turns == 1 {
+					sess.AddMessages(ai.NewModelTextMessage("first turn"))
+					return nil, nil
+				}
+				sess.AddMessages(ai.NewModelTextMessage("second turn"))
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-ctx.Done()
+				if commit {
+					return &TurnResult{}, ctx.Err()
+				}
+				return nil, ctx.Err()
+			})
+		},
+		WithSessionStore(store),
+	)
+}
+
+// TestAgent_AbortedRunsResume covers the roads to a stopped run. An attached
+// caller cancels the context under it and a detached one calls abort; both
+// land the same aborted snapshot, holding the work through the last turn that
+// finished and resumable like any other.
+func TestAgent_AbortedRunsResume(t *testing.T) {
+	t.Run("an attached cancel returns the resume point with the error", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "attachedAbort", true, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+
+		out, err := outputWithin(t, conn, 10*time.Second)
+		// Both, as ai.Generate hands back a partial response beside the error
+		// that ended it. The error alone left nothing to resume from.
+		if err == nil {
+			t.Fatal("Output err is nil, want the cancellation")
+		}
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point alongside the error")
+		}
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
+		}
+		if out.SnapshotID == "" {
+			t.Fatal("SnapshotID is empty, want the snapshot the run stopped at")
+		}
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status != SnapshotStatusPending
+		})
+		// The same status a detached run's abort writes: the row does not
+		// record which way the invocation was running when it was stopped.
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusAborted)
+		}
+	})
+
+	t.Run("an uncommitted turn rolls back to its predecessor", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "attachedNoCommit", false, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+
+		out, err := outputWithin(t, conn, 10*time.Second)
+		if err == nil {
+			t.Fatal("Output err is nil, want the cancellation")
+		}
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point beside the error")
+		}
+		// The stopped turn committed nothing, so it wrote no snapshot and the
+		// resume point stays the turn before it.
+		snap, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusCompleted {
+			t.Errorf("snapshot status = %q, want the completed turn before the stop", snap.Status)
+		}
+		for _, m := range snap.State.Messages {
+			if m.Text() == "second turn" {
+				t.Error("resume point holds the turn that did not finish")
+			}
+		}
+	})
+
+	t.Run("a detached abort keeps the work it had done", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "detachedAbort", false, entered)
+
+		conn, err := af.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		// Both inputs are queued before the detach, which the intake reads
+		// while the second turn is still blocked; detach then suspends
+		// per-turn snapshots for the rest of the invocation.
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		out, err := outputWithin(t, conn, 10*time.Second)
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if _, err := af.Abort(context.Background(), out.SnapshotID); err != nil {
+			t.Fatalf("Abort: %v", err)
+		}
+
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted && s.FinishReason == AgentFinishReasonAborted
+		})
+		// The row used to carry no state at all: abort only flipped the
+		// pending row's status, and the finalize kept that row verbatim.
+		if snap.State == nil {
+			t.Fatal("aborted snapshot carries no state, so there is nothing to resume from")
+		}
+		var texts []string
+		for _, m := range snap.State.Messages {
+			texts = append(texts, m.Text())
+		}
+		if !slices.Contains(texts, "first turn") {
+			t.Errorf("messages = %q, want the committed turn's reply", texts)
+		}
+		// Detach suspends per-turn snapshots, so the rollback comes off the
+		// pending row's parent rather than a snapshot of its own.
+		if slices.Contains(texts, "second turn") {
+			t.Errorf("messages = %q, want the turn that did not finish rolled back", texts)
+		}
+	})
+
+	t.Run("a detached abort with nothing committed rolls all the way back", func(t *testing.T) {
+		// The rollback floor. This run detaches on its first input and that
+		// turn never commits, so there is no last-good copy in memory and no
+		// earlier snapshot to read one from: without the invocation's own
+		// initial state as a source, the row keeps the mutations of a turn
+		// that did not finish, on a row this PR makes resumable.
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := DefineCustomAgent(newTestRegistry(t), "detachedAbortNothingCommitted",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("uncommitted turn"))
+					select {
+					case entered <- struct{}{}:
+					case <-ctx.Done():
+					}
+					<-ctx.Done()
+					return nil, ctx.Err()
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "go")
+		<-entered
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		out, err := outputWithin(t, conn, 10*time.Second)
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if _, err := af.Abort(context.Background(), out.SnapshotID); err != nil {
+			t.Fatalf("Abort: %v", err)
+		}
+
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted && s.FinishReason == AgentFinishReasonAborted
+		})
+		if snap.State == nil {
+			t.Fatal("aborted snapshot carries no state")
+		}
+		var texts []string
+		for _, m := range snap.State.Messages {
+			texts = append(texts, m.Text())
+		}
+		if len(texts) != 0 {
+			t.Errorf("messages = %q, want none: no turn committed, so there is nothing to keep", texts)
+		}
+	})
+
+	t.Run("an aborted snapshot resumes", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "resumeAborted", true, entered)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+		cancel()
+		out, _ := outputWithin(t, conn, 10*time.Second)
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point")
+		}
+		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted
+		})
+
+		// A fresh agent over the same store, so nothing in memory carries
+		// over: the snapshot is the whole resume point.
+		resumed := DefineCustomAgent(newTestRegistry(t), "resumeAbortedContinuation",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("continued"))
+					return nil, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+		cont, err := resumed.RunText(context.Background(), "carry on",
+			WithSnapshotID[testState](out.SnapshotID))
+		if err != nil {
+			t.Fatalf("resuming the aborted snapshot: %v", err)
+		}
+		contSnap, err := store.GetSnapshot(context.Background(), cont.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if contSnap.State.Messages[len(contSnap.State.Messages)-1].Text() != "continued" {
+			t.Error("the resumed turn's reply is not the conversation's last message")
+		}
+	})
+
+	t.Run("a service that answers ABORTED is a failure, not an abort", func(t *testing.T) {
+		// The status map turns HTTP 409 into ABORTED and 504 into
+		// DEADLINE_EXCEEDED, so a provider stamping the service's own status
+		// reaches the same names a stopped caller does. Only the caller's
+		// context and the limits it set decide aborted: persisting a dropped
+		// request as aborted would tell a client the run stopped on request,
+		// which is the class a retry loop is most likely to leave alone.
+		ctx := context.Background()
+		store := newTestInMemStore[testState]()
+		af := DefineCustomAgent(newTestRegistry(t), "serviceAborted",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					sess.AddMessages(ai.NewModelTextMessage("as far as it got"))
+					return &TurnResult{}, status.Errorf(status.ErrAborted, "409 from the service")
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		out, err := af.RunText(ctx, "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+		}
+		snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusFailed {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusFailed)
+		}
+		// The classification itself is untouched: only who ended the run is
+		// this layer's call.
+		if snap.Error == nil || snap.Error.Status != core.ABORTED {
+			t.Errorf("snapshot error = %+v, want the service's ABORTED preserved", snap.Error)
+		}
+	})
+
+	t.Run("an aborted row still being finalized points at itself", func(t *testing.T) {
+		// The abort flips the pending row and the finalize stamps the state
+		// on, so a row caught between them carries none. What the caller does
+		// next differs by which half of that window it is, and the heartbeat
+		// the abort left running is what says.
+		ctx := context.Background()
+		store := newTestInMemStore[testState]()
+		af := defineCounterAgent(newTestRegistry(t), "resumeMidFinalize", WithSessionStore(store))
+
+		stateless := func(beat time.Time) string {
+			snap, err := store.SaveSnapshot(ctx, "",
+				func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+					return &SessionSnapshot[testState]{
+						Status:      SnapshotStatusAborted,
+						HeartbeatAt: &beat,
+					}, nil
+				})
+			if err != nil {
+				t.Fatalf("SaveSnapshot: %v", err)
+			}
+			return snap.SnapshotID
+		}
+
+		for _, tc := range []struct {
+			name string
+			beat time.Time
+			want string
+		}{
+			{"a live heartbeat means the write is coming", time.Now(), "retry this same snapshot ID"},
+			{"a quiet heartbeat means it never will", time.Now().Add(-2 * defaultHeartbeatTimeout), "resume from an earlier snapshot"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := af.RunText(ctx, "carry on", WithSnapshotID[testState](stateless(tc.beat)))
+				if err == nil {
+					t.Fatal("resuming a stateless aborted row was accepted")
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("error %q does not contain %q", err, tc.want)
+				}
+				if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
+					t.Errorf("status = %q, want %q", ge.Status, core.FAILED_PRECONDITION)
+				}
+			})
+		}
+	})
+
+	t.Run("a deadline aborts too, and the error says which", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+		af := abortTestAgent(t, store, "deadlineAborts", true, entered)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		drainInBackground(conn)
+		sendText(t, conn, "one")
+		sendText(t, conn, "two")
+		<-entered
+
+		out, _ := outputWithin(t, conn, 10*time.Second)
+		if out == nil {
+			t.Fatal("Output is nil, want the resume point")
+		}
+		// The caller set the deadline, so it stopped the run as deliberately
+		// as a cancel does, only in advance.
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
+		}
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status != SnapshotStatusPending
+		})
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusAborted)
+		}
+		// The row does not say which stop it was. The work context is
+		// decoupled from the client's, so the turn only ever sees
+		// context.Canceled and the deadline does not reach the error either.
+		if snap.Error == nil || snap.Error.Status != status.Cancelled {
+			t.Errorf("Error = %+v, want a CANCELLED classification", snap.Error)
+		}
+	})
+}
+
 func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	// Sanity: a non-detached invocation against a store-backed flow still
 	// behaves like a synchronous flow (turn-end snapshots, no pending row).
@@ -3913,6 +4395,68 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	}
 	if snap.Status != SnapshotStatusCompleted {
 		t.Errorf("turn-end snapshot status = %q, want completed", snap.Status)
+	}
+}
+
+func TestAgent_TurnSnapshotSurvivesCancelledContext(t *testing.T) {
+	// A turn that ends because the invocation's context was cancelled is
+	// exactly the turn whose snapshot the client needs, so the write must not
+	// ride the context that just died. Both in-memory stores ignore their
+	// context, so the wrapper is what makes the defect visible.
+	reg := newTestRegistry(t)
+	store := &ctxHonoringStore[testState]{SessionStore: newTestInMemStore[testState]()}
+
+	entered := make(chan struct{})
+	snapshotIDs := make(chan string, 1)
+
+	af := DefineCustomAgent(reg, "cancelCommits",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				snapshotIDs <- TurnContextFromContext(ctx).SnapshotID
+				close(entered)
+				<-ctx.Done()
+				// Commit: the turn has state worth continuing from, which is
+				// what makes it snapshot. See [SessionRunner.Run].
+				return &TurnResult{FinishReason: AgentFinishReasonFailed}, ctx.Err()
+			})
+			return nil, err
+		},
+		WithSessionStore(store),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	drainInBackground(conn)
+
+	sendText(t, conn, "go")
+	<-entered
+	cancel()
+
+	turnID := <-snapshotIDs
+	// The write is asynchronous with respect to this goroutine only in that fn
+	// is still unwinding; poll briefly rather than sleeping a fixed time.
+	var snap *SessionSnapshot[testState]
+	for range 100 {
+		snap, err = store.GetSnapshot(context.Background(), turnID)
+		if err == nil && snap != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap == nil {
+		t.Fatalf("turn snapshot %q was never written (%d writes rejected on a dead context)", turnID, store.rejected.Load())
+	}
+	// The subject is that the row landed at all. Which terminal status a
+	// cancelled turn writes is a separate question, asserted where it is
+	// decided.
+	if snap.Status == SnapshotStatusPending {
+		t.Errorf("status = %q, want a terminal status", snap.Status)
 	}
 }
 
@@ -3963,7 +4507,88 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	}
 }
 
-func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
+// TestAgent_Detach_CommitSurvivesClientDeadline is the other side of that
+// guard. Once the runtime reads the detach directive the invocation is
+// committed: the pending row is written on a context.WithoutCancel, the
+// background goroutines own the turn, and the snapshot ID handed back is the
+// only handle to the work. A client context that dies inside that window must
+// not turn the handoff into an error. It used to, because the bidi framework
+// adopted the connection context's cancel cause as the session's error
+// whenever the function itself reported none, and a delegating caller reads
+// that error as a failed launch: the sub-agent keeps running with nothing
+// tracking or aborting it.
+func TestAgent_Detach_CommitSurvivesClientDeadline(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newBlockingSaveStore[testState]()
+
+	// The turn outlives the handoff, so the pending row is the only write the
+	// gate below can catch. Released on every exit path: a failed assertion
+	// must not leave the turn (and the runtime goroutines behind it) parked
+	// for the rest of the run.
+	turnRelease := make(chan struct{})
+	releaseTurn := sync.OnceFunc(func() { close(turnRelease) })
+	t.Cleanup(releaseTurn)
+	af := DefineCustomAgent(reg, "detachDeadline",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				<-turnRelease
+				return nil, nil
+			})
+		},
+		WithSessionStore[testState](store),
+	)
+
+	// Cancelled with the cause a lapsed deadline carries: the cause is what
+	// the framework mistook for an abort of its own, and firing it on the
+	// gate pins it inside the commit window instead of guessing a wall-clock
+	// timeout against the directive read.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	go func() {
+		<-store.entered
+		cancel(context.DeadlineExceeded)
+		close(store.release)
+	}()
+
+	input, err := json.Marshal(&AgentInput{Detach: true, Message: ai.NewUserTextMessage("go")})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	// The one-shot JSON path, which is how a delegating caller launches a
+	// background sub-agent.
+	res, err := af.RunBidiJSON(ctx, input, nil, nil)
+	if err != nil {
+		t.Fatalf("RunBidiJSON: %v, want the detached output", err)
+	}
+	var out AgentOutput[testState]
+	if err := json.Unmarshal(res.Result, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonDetached {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("SnapshotID is empty, want the pending snapshot's ID")
+	}
+	// The gate is what puts the cancellation inside the commit window. If a
+	// future store write lands ahead of the pending row, the gate parks on
+	// that instead and this test would pass while covering nothing.
+	if cause := context.Cause(ctx); !errors.Is(cause, context.DeadlineExceeded) {
+		t.Errorf("caller context cause = %v, want the deadline to have lapsed during the handoff", cause)
+	}
+
+	// The handle is good: the background work runs on and finalizes the row
+	// the caller was handed.
+	releaseTurn()
+	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+}
+
+func TestAgent_ResumeFromErrorSnapshot_Allowed(t *testing.T) {
+	// A failed row is a resume point, not a dead end: its state is what the
+	// turn committed, and whether the recorded error is worth another attempt
+	// is the caller's call.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
@@ -3976,29 +4601,32 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 					Status:  core.INTERNAL,
 					Message: "underlying failure",
 				},
-				State: &SessionState[testState]{},
+				State: &SessionState[testState]{
+					Custom: testState{Counter: 7},
+				},
 			}, nil
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 
+	var resumed testState
 	af := DefineCustomAgent(reg, "resumeErrored",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			resumed = sess.State().Custom
 			return nil, nil
 		},
 		WithSessionStore(store),
 	)
 
 	out, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
-	if err == nil {
-		t.Fatalf("expected error when resuming from errored snapshot, got output: %+v", out)
+	if err != nil {
+		t.Fatalf("resume from the failed snapshot: %v", err)
 	}
-	ge := core.AsGenkitError(err)
-	if ge.Status != core.FAILED_PRECONDITION {
-		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, ge.Status)
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("resumed invocation failed: %+v", out.Error)
 	}
-	if !strings.Contains(ge.Message, "underlying failure") {
-		t.Errorf("expected error to surface underlying failure, got: %v", err)
+	if resumed.Counter != 7 {
+		t.Errorf("resumed counter = %d, want the failed row's committed state (7)", resumed.Counter)
 	}
 }
 
@@ -6163,6 +6791,123 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	}
 }
 
+// TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted pins the second
+// interrupt to the same landing as the first. [ai.Generate] reports a
+// restarted tool that interrupts again with a FAILED_PRECONDITION, because its
+// caller asked for a completed generation, and taking that at face value would
+// write a failed row whose documented recovery cannot work: the tip it holds
+// ends on a model message carrying an unanswered tool request, which is not a
+// turn seam, so re-attempting the turn sends the model a conversation no
+// provider accepts. Only Resume answers this row, exactly as for the first
+// interrupt.
+func TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+	store := newTestInMemStore[testState]()
+
+	interruptTool := defineTestTool(reg, "interruptor", "interrupts every time",
+		func(tc *ai.ToolContext, input any) (any, error) {
+			return nil, tc.Interrupt(&ai.InterruptOptions{
+				Metadata: map[string]any{"reason": "needs approval"},
+			})
+		},
+	)
+	var modelCalls atomic.Int32
+	defineTestModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			return &ai.ModelResponse{
+				Request: req,
+				Message: &ai.Message{
+					Role:    ai.RoleModel,
+					Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "interruptor"})},
+				},
+			}, nil
+		})
+	ai.DefineGenerateAction(ctx, reg)
+	ai.DefinePrompt(reg, "interruptPrompt",
+		ai.WithModelName("test/interrupt"),
+		ai.WithTools(interruptTool),
+	)
+
+	af := DefinePromptAgent[testState](reg, "interruptPrompt", WithSessionStore[testState](store))
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Turn 1: the tool interrupts on its first run.
+	te := sendTurn(t, conn, "do it")
+	if te.FinishReason != AgentFinishReasonInterrupted {
+		t.Fatalf("first TurnEnd.FinishReason = %q, want %q", te.FinishReason, AgentFinishReasonInterrupted)
+	}
+	first, err := store.GetSnapshot(ctx, te.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	pending := interruptParts(first.State.Messages)
+	if len(pending) != 1 {
+		t.Fatalf("first turn left %d interrupts, want 1", len(pending))
+	}
+
+	// Turn 2: restart the interrupted tool, which interrupts again.
+	if err := conn.SendResume(&ToolResume{Restart: pending}); err != nil {
+		t.Fatalf("SendResume: %v", err)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonInterrupted {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonInterrupted)
+	}
+	if out.Error != nil {
+		t.Errorf("Error = %+v, want none: a second interrupt is a turn outcome", out.Error)
+	}
+	// The restart resolves before the model is consulted again, so the second
+	// turn adds no model call.
+	if got := modelCalls.Load(); got != 1 {
+		t.Errorf("model calls = %d, want 1 (the restart interrupted before generate)", got)
+	}
+
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+	}
+	if snap.FinishReason != AgentFinishReasonInterrupted {
+		t.Errorf("snapshot finish reason = %q, want %q", snap.FinishReason, AgentFinishReasonInterrupted)
+	}
+	if snap.Error != nil {
+		t.Errorf("snapshot error = %+v, want none", snap.Error)
+	}
+	// The row is answerable: it holds a fresh interrupt, so Resume has
+	// something to resolve.
+	if got := len(interruptParts(snap.State.Messages)); got != 1 {
+		t.Errorf("snapshot carries %d interrupts, want the fresh one", got)
+	}
+}
+
+// interruptParts collects the unanswered interrupt parts on a conversation's
+// last model message.
+func interruptParts(msgs []*ai.Message) []*ai.Part {
+	if len(msgs) == 0 {
+		return nil
+	}
+	var parts []*ai.Part
+	for _, p := range msgs[len(msgs)-1].Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
 // TestAgent_Detach_CompletedHonorsResultOverride verifies the detach finalizer
 // applies an AgentResult.FinishReason override on clean success, matching the
 // synchronous path (the override does not leak into the failed/aborted cases,
@@ -6448,11 +7193,11 @@ func TestAgent_ResumeFromSessionID_ForkContinuesLatestBranch(t *testing.T) {
 	}
 }
 
-func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
-	// GetLatestSnapshot returns the session's literal latest row, so a failed
-	// (or aborted) tip is no longer skipped: resuming the session by ID hits
-	// the dead end and is rejected. To continue past it the caller names an
-	// earlier good snapshot via WithSnapshotID.
+func TestAgent_ResumeFromSessionID_FailedTipResumes(t *testing.T) {
+	// GetLatestSnapshot returns the session's literal latest row. A failed tip
+	// is a resume point, so resuming the session by ID continues from it; to
+	// go back further the caller names an earlier snapshot via WithSnapshotID,
+	// which is how a failed turn's state is rolled back rather than continued.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -6479,14 +7224,16 @@ func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
 		t.Fatalf("SaveSnapshot failed row: %v", err)
 	}
 
-	// Resuming by session ID hits the failed tip and is rejected.
-	if _, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID)); err == nil {
-		t.Fatal("expected resume to be rejected for a failed tip, got nil")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
-		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
+	// Resuming by session ID continues from the failed tip.
+	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("resume from the failed tip: %v", err)
+	}
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("resume from the failed tip failed: %+v", out2.Error)
 	}
 
-	// Naming the last good snapshot explicitly still resumes past the dead end.
+	// Naming the earlier snapshot explicitly rewinds past the failed tip.
 	out3, err := af.RunText(ctx, "third", WithSnapshotID[testState](out1.SnapshotID))
 	if err != nil {
 		t.Fatalf("RunText resume from good snapshot: %v", err)
@@ -6854,6 +7601,14 @@ type blockingSaveStore[State any] struct {
 	once    sync.Once
 }
 
+func newBlockingSaveStore[State any]() *blockingSaveStore[State] {
+	return &blockingSaveStore[State]{
+		testInMemStore: newTestInMemStore[State](),
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+}
+
 func (s *blockingSaveStore[State]) SaveSnapshot(
 	ctx context.Context,
 	id string,
@@ -6875,11 +7630,7 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	// permanently break resume-by-session-ID), and the conversation stays
 	// in one session.
 	reg := newTestRegistry(t)
-	store := &blockingSaveStore[testState]{
-		testInMemStore: newTestInMemStore[testState](),
-		entered:        make(chan struct{}),
-		release:        make(chan struct{}),
-	}
+	store := newBlockingSaveStore[testState]()
 	af := defineLastGoodTestAgent(reg, "detachMidWrite", WithSessionStore[testState](store))
 
 	conn, err := af.Connect(context.Background())
@@ -7347,5 +8098,95 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Output did not return after cancellation; no context escape")
+	}
+}
+
+// TestPromptAgent_FailedTurnReasonIsNotTheModelReason pins the one place the
+// generate loop's finish reason must not be forwarded verbatim. A response
+// the loop completed and post-processing then rejected keeps the model's own
+// reason ("stop") beside its ErrInvalidOutput, so a turn that failed would
+// otherwise report a success on its TurnEnd chunk and on its snapshot row.
+func TestPromptAgent_FailedTurnReasonIsNotTheModelReason(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	ai.ConfigureFormats(reg)
+	defineTestModel(reg, "test/badjson", nil,
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			// Not the JSON the output type asks for, and the model itself
+			// finished cleanly: exactly the shape that carries "stop" out of
+			// a failed generate.
+			return &ai.ModelResponse{
+				Request:      req,
+				Message:      ai.NewModelTextMessage("not json"),
+				FinishReason: ai.FinishReasonStop,
+			}, nil
+		})
+	ai.DefineGenerateAction(ctx, reg)
+
+	store := newTestInMemStore[testState]()
+	af := DefineAgent[testState](reg, "invalidOutputAgent", InlinePrompt{
+		ai.WithModelName("test/badjson"),
+		ai.WithOutputType(struct {
+			Name string `json:"name"`
+		}{}),
+	}, WithSessionStore(store))
+
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("no snapshot: the turn committed the partial, so it must have one")
+	}
+	snap, err := af.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusFailed {
+		t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
+	}
+	if snap.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
+			snap.FinishReason, AgentFinishReasonFailed)
+	}
+}
+
+// TestAgent_ResumeRejectsAbortedRowWithNoState covers the window between the
+// two writes an aborted detached row takes: abort flips the status, and the
+// finalize that follows stamps the state. A row still between them holds no
+// conversation, so resuming it must fail rather than hand back an empty
+// session in place of the one the caller asked to continue.
+func TestAgent_ResumeRejectsAbortedRowWithNoState(t *testing.T) {
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	af := DefineCustomAgent(newTestRegistry(t), "abortedNoState",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store))
+
+	// The shape abortPendingSnapshot leaves behind before finalizePendingSnapshot
+	// stamps the state: aborted, and carrying nothing.
+	snap, err := store.SaveSnapshot(ctx, "",
+		func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				SessionID: "sess-no-state",
+				Status:    SnapshotStatusAborted,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	if _, err := af.RunText(ctx, "continue", WithSnapshotID[testState](snap.SnapshotID)); err == nil {
+		t.Fatal("resume from a stateless aborted snapshot succeeded, want FAILED_PRECONDITION")
+	} else if !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Errorf("resume error = %v, want FAILED_PRECONDITION", err)
 	}
 }
