@@ -15,10 +15,13 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func asMap(t *testing.T, v any, label string) map[string]any {
@@ -159,5 +162,372 @@ func TestPrepareToolArguments(t *testing.T) {
 	_, err = prepareToolArguments(tool, nil)
 	if err == nil {
 		t.Fatalf("expected error for nil args with required field")
+	}
+}
+
+// TestToolOutputSchema tests that both input and output schemas are correctly retrieved
+// from the MCP server.
+func TestToolOutputSchema(t *testing.T) {
+	// Start a test MCP server with a tool that has an input and output schema.
+	type InputSchema struct {
+		City string
+	}
+	type OutputSchema struct {
+		Weather     string
+		Temperature int
+	}
+	mcpServer := server.NewMCPServer("test", "1.0.0",
+		server.WithToolCapabilities(true),
+	)
+	mcpServer.AddTool(
+		mcp.NewTool("getWeather",
+			mcp.WithInputSchema[InputSchema](),
+			mcp.WithRawOutputSchema(json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"Weather": {"type": "string"},
+					"Temperature": {"type": "integer"}
+				},
+				"required": ["Weather", "Temperature"],
+				"x-fastmcp-wrap-result": true
+			}`)),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultStructured(
+				OutputSchema{Weather: "Sunny, 25°C", Temperature: 25},
+				"{\"weather\": \"Sunny, 25°C\", \"temperature\": 25}",
+			), nil
+		},
+	)
+	// Start the stdio server
+	sseServer := server.NewTestServer(mcpServer)
+	defer sseServer.Close()
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		Name: "test",
+		SSE: &SSEConfig{
+			BaseURL: sseServer.URL + "/sse",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Disconnect()
+	// Retrieve tools from the MCP server
+	tools, err := client.GetActiveTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetActiveTools error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	for _, tool := range tools {
+		if tool.Name() != "test_getWeather" {
+			t.Fatalf("unexpected tool: %s", tool.Name())
+		}
+		inputSchema := tool.Definition().InputSchema
+		assertSchemaProperty(t, inputSchema, "City", "string")
+
+		outputSchema := tool.Definition().OutputSchema
+		assertSchemaProperty(t, outputSchema, "Weather", "string")
+		assertSchemaProperty(t, outputSchema, "Temperature", "integer")
+		if got := outputSchema["x-fastmcp-wrap-result"]; got != true {
+			t.Fatalf("x-fastmcp-wrap-result = %v, want true", got)
+		}
+
+		result, err := tool.RunRaw(t.Context(), InputSchema{
+			City: "Paris",
+		})
+		if err != nil {
+			t.Fatalf("RunRaw error: %v", err)
+		}
+		if result == nil {
+			t.Fatalf("RunRaw result is nil")
+		}
+		toolResultOutput := parseMapToStruct[OutputSchema](t, result)
+		if toolResultOutput.Weather != "Sunny, 25°C" {
+			t.Fatalf("unexpected weather: %s", toolResultOutput.Weather)
+		}
+		if toolResultOutput.Temperature != 25 {
+			t.Fatalf("unexpected temperature: %d", toolResultOutput.Temperature)
+		}
+	}
+}
+
+func TestToolOutputSchemaRejectsInvalidStructuredContent(t *testing.T) {
+	mcpServer := server.NewMCPServer("test", "1.0.0",
+		server.WithToolCapabilities(true),
+	)
+	mcpServer.AddTool(
+		mcp.NewTool("getWeather",
+			mcp.WithRawOutputSchema(json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"Weather": {"type": "string"},
+					"Temperature": {"type": "integer"}
+				},
+				"required": ["Weather", "Temperature"]
+			}`)),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultStructured(
+				map[string]any{"Weather": "Sunny", "Temperature": "warm"},
+				"invalid temperature",
+			), nil
+		},
+	)
+
+	testServer := server.NewTestServer(mcpServer)
+	defer testServer.Close()
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		Name: "test",
+		SSE:  &SSEConfig{BaseURL: testServer.URL + "/sse"},
+	})
+	if err != nil {
+		t.Fatalf("NewGenkitMCPClient() error = %v", err)
+	}
+	defer client.Disconnect()
+
+	tools, err := client.GetActiveTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("GetActiveTools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("GetActiveTools() returned %d tools, want 1", len(tools))
+	}
+	if _, err := tools[0].RunRaw(t.Context(), map[string]any{}); err == nil || !strings.Contains(err.Error(), "invalid output from tool") {
+		t.Fatalf("RunRaw() error = %v, want invalid output error", err)
+	}
+}
+
+func TestValidateMCPToolResultPreservesOutputSchemaScope(t *testing.T) {
+	outputSchema := map[string]any{
+		"$defs": map[string]any{
+			"answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "string"},
+				},
+				"required": []string{"value"},
+			},
+		},
+		"$ref": "#/$defs/answer",
+	}
+	result := &mcp.CallToolResult{
+		StructuredContent: map[string]any{"value": "ok"},
+	}
+	if err := validateMCPToolResult(result, outputSchema); err != nil {
+		t.Fatalf("validateMCPToolResult() error = %v", err)
+	}
+}
+
+func TestValidateMCPToolResultAllowsToolErrors(t *testing.T) {
+	outputSchema := map[string]any{
+		"type":     "object",
+		"required": []string{"answer"},
+	}
+	result := mcp.NewToolResultError("expected tool failure")
+	if err := validateMCPToolResult(result, outputSchema); err != nil {
+		t.Fatalf("validateMCPToolResult() error = %v", err)
+	}
+}
+
+func TestConvertMCPToolResultFallsBackToTextContent(t *testing.T) {
+	outputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Weather": map[string]any{"type": "string"},
+		},
+		"required": []string{"Weather"},
+	}
+
+	t.Run("JSON text is parsed and validated", func(t *testing.T) {
+		result := mcp.NewToolResultText(`{"Weather":"Sunny"}`)
+		response, err := convertMCPToolResult(t.Context(), result, outputSchema, true, "test_getWeather")
+		if err != nil {
+			t.Fatalf("convertMCPToolResult() error = %v", err)
+		}
+		output := asMap(t, response.Output, "response.Output")
+		if output["Weather"] != "Sunny" {
+			t.Fatalf("Weather = %#v, want Sunny", output["Weather"])
+		}
+	})
+
+	t.Run("plain text remains backward compatible", func(t *testing.T) {
+		result := mcp.NewToolResultText("Sunny")
+		response, err := convertMCPToolResult(t.Context(), result, outputSchema, true, "test_getWeather")
+		if err != nil {
+			t.Fatalf("convertMCPToolResult() error = %v", err)
+		}
+		if response.Output != "Sunny" {
+			t.Fatalf("Output = %#v, want Sunny", response.Output)
+		}
+	})
+}
+
+func TestConvertMCPToolResultPreservesContentParts(t *testing.T) {
+	result := mcp.NewToolResultStructuredOnly(map[string]any{"Weather": "Sunny"})
+	result.Content = append(result.Content,
+		mcp.NewImageContent("aW1hZ2U=", "image/png"),
+		mcp.NewResourceLink("https://example.com/report", "report", "", "text/plain"),
+	)
+
+	response, err := convertMCPToolResult(t.Context(), result, nil, false, "test_getWeather")
+	if err != nil {
+		t.Fatalf("convertMCPToolResult() error = %v", err)
+	}
+	if len(response.Content) != 2 {
+		t.Fatalf("Content length = %d, want 2", len(response.Content))
+	}
+	if !response.Content[0].IsMedia() {
+		t.Fatalf("Content[0] = %#v, want media part", response.Content[0])
+	}
+	if !response.Content[1].IsResource() {
+		t.Fatalf("Content[1] = %#v, want resource part", response.Content[1])
+	}
+}
+
+func TestToolWithRawOutputSchemaAcceptsUnionType(t *testing.T) {
+	data := []byte(`{
+		"name": "nullable",
+		"inputSchema": {"type": "object"},
+		"outputSchema": {"type": ["string", "null"]}
+	}`)
+	var decoded toolWithRawSchemas
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	client := &GenkitMCPClient{}
+	schema, present, err := client.getOutputSchema(decoded.Tool)
+	if err != nil {
+		t.Fatalf("getOutputSchema() error = %v", err)
+	}
+	if !present {
+		t.Fatal("getOutputSchema() reported the schema as absent")
+	}
+	types, ok := schema["type"].([]any)
+	if !ok || len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("schema type = %#v, want [string null]", schema["type"])
+	}
+}
+
+func TestToolWithRawInputSchemaPreservesUnsupportedKeywords(t *testing.T) {
+	data := []byte(`{
+		"name": "complex-input",
+		"inputSchema": {
+			"type": ["object", "null"],
+			"description": "complex schema",
+			"additionalProperties": false,
+			"anyOf": [{"type": "object"}, {"type": "null"}]
+		}
+	}`)
+	var decoded toolWithRawSchemas
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	client := &GenkitMCPClient{}
+	schema, err := client.getInputSchema(decoded.Tool)
+	if err != nil {
+		t.Fatalf("getInputSchema() error = %v", err)
+	}
+	if schema["description"] != "complex schema" || schema["additionalProperties"] != false {
+		t.Fatalf("input schema lost keywords: %#v", schema)
+	}
+	types, ok := schema["type"].([]any)
+	if !ok || len(types) != 2 {
+		t.Fatalf("input schema type = %#v, want [object null]", schema["type"])
+	}
+	if _, ok := schema["anyOf"].([]any); !ok {
+		t.Fatalf("input schema anyOf = %#v, want array", schema["anyOf"])
+	}
+}
+
+func TestCreateToolPreservesEmptyOutputSchema(t *testing.T) {
+	client := &GenkitMCPClient{
+		options: MCPClientOptions{Name: "test"},
+		server:  &ServerRef{},
+	}
+	mcpTool := mcp.NewTool("anything",
+		mcp.WithRawOutputSchema(json.RawMessage(`{}`)),
+	)
+	tool, err := client.createTool(mcpTool)
+	if err != nil {
+		t.Fatalf("createTool() error = %v", err)
+	}
+	schema := tool.Definition().OutputSchema
+	if schema == nil || len(schema) != 0 {
+		t.Fatalf("output schema = %#v, want an explicit empty schema", schema)
+	}
+}
+
+func TestGetOutputSchemaWithoutSchema(t *testing.T) {
+	client := &GenkitMCPClient{}
+	schema, present, err := client.getOutputSchema(mcp.NewTool("schema-less"))
+	if err != nil {
+		t.Fatalf("getOutputSchema() error = %v", err)
+	}
+	if present || schema != nil {
+		t.Fatalf("getOutputSchema() = (%#v, %v), want (nil, false)", schema, present)
+	}
+}
+
+func TestFetchToolsPageWithoutInitializedClient(t *testing.T) {
+	t.Run("missing server", func(t *testing.T) {
+		client := &GenkitMCPClient{}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "client not initialized") {
+			t.Fatalf("fetchToolsPage() error = %v, want client not initialized", err)
+		}
+	})
+
+	t.Run("initialization error", func(t *testing.T) {
+		client := &GenkitMCPClient{
+			server: &ServerRef{Error: "protocol version negotiation failed"},
+		}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "protocol version negotiation failed") {
+			t.Fatalf("fetchToolsPage() error = %v, want initialization error", err)
+		}
+	})
+
+	t.Run("disabled client", func(t *testing.T) {
+		client := &GenkitMCPClient{
+			options: MCPClientOptions{Disabled: true},
+		}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "client disabled") {
+			t.Fatalf("fetchToolsPage() error = %v, want client disabled", err)
+		}
+	})
+}
+
+func parseMapToStruct[T any](t *testing.T, v any) T {
+	t.Helper()
+	var result T
+	jsonBytes, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("failed to marshal map to JSON: %v", err)
+	}
+	err = json.Unmarshal(jsonBytes, &result)
+	if err != nil {
+		t.Fatalf("failed to unmarshal JSON to struct: %v", err)
+	}
+	return result
+}
+
+// assertSchemaProperty asserts that a property in a schema is present and of the expected type.
+func assertSchemaProperty(t *testing.T, schema map[string]any, propName string, propType string) {
+	t.Helper()
+	if schema == nil {
+		t.Fatalf("schema is nil")
+	}
+	if props, ok := schema["properties"].(map[string]any); !ok {
+		t.Fatalf("schema properties is nil")
+	} else if propValue, ok := props[propName].(map[string]any); !ok {
+		t.Fatalf("schema property %s is nil. schema: %v", propName, schema)
+	} else if propValue["type"] != propType {
+		t.Fatalf("schema property %s type is %s, expected %s",
+			propName, propValue["type"], propType)
 	}
 }
