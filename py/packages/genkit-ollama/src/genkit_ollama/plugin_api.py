@@ -25,7 +25,7 @@ from typing import Any, cast
 import ollama as ollama_api
 import structlog
 
-from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import ModelResponse
 from genkit.embedder import (
     EmbedderOptions,
     EmbedderSupports,
@@ -33,7 +33,7 @@ from genkit.embedder import (
     EmbedResponse,
     embedder_action_metadata,
 )
-from genkit.model import model_action_metadata
+from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,

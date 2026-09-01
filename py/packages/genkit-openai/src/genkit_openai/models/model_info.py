@@ -25,10 +25,7 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
-from genkit import (
-    ModelInfo,
-    Supports,
-)
+from genkit.model import ModelInfo, Supports
 from genkit_openai.typing import SupportedOutputFormat
 
 OPENAI = 'openai'

@@ -28,15 +28,9 @@ from genkit_google_genai.models.embedder import (
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit import (
-    Document,
-    DocumentPart,
-    EmbedRequest,
-    EmbedResponse,
-    Media,
-    MediaPart,
-    TextPart,
-)
+from genkit import Document, Media
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.model import DocumentPart, MediaPart, TextPart
 
 
 @pytest.mark.asyncio

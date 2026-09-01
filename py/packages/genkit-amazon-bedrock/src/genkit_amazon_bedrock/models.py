@@ -36,7 +36,9 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from genkit import ErrorResponseMetadata, ModelRequest, ModelResponse
+from genkit import ModelResponse
+from genkit._core._error import ErrorResponseMetadata
+from genkit.model import ModelRequest
 from genkit.plugin_api import ActionRunContext, GenkitError, StatusName
 from genkit_amazon_bedrock.converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock.stream import consume_converse_stream

@@ -34,8 +34,9 @@ from genkit_amazon_bedrock.rerank import (
 )
 from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit import Document, DocumentPart, TextPart
+from genkit import Document
 from genkit._core._typing import DocumentData
+from genkit.model import DocumentPart, TextPart
 from genkit.plugin_api import GenkitError
 
 COHERE_RERANK = 'cohere.rerank-v3-5:0'

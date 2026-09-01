@@ -34,15 +34,8 @@ from botocore.validate import ParamValidator
 from genkit_amazon_bedrock.config import BedrockConfig
 from genkit_amazon_bedrock.converters import build_converse_request, cache_point_part
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest, ReasoningPart, TextPart, ToolDefinition
 
 _SERVICE_MODEL = botocore.session.get_session().get_service_model('bedrock-runtime')
 CONVERSE_INPUT_SHAPES = {

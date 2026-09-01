@@ -23,9 +23,10 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ModelRequest, ModelResponse
+from genkit import ModelResponse
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
+from genkit.model import ModelRequest
 
 
 def _make_params() -> ModelHookParams:

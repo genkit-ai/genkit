@@ -28,7 +28,8 @@ from genkit_amazon_bedrock.converters import (
 )
 from genkit_amazon_bedrock.stream import consume_converse_stream
 
-from genkit import FinishReason, Message, ModelRequest, Part, Role, TextPart, ToolDefinition
+from genkit import FinishReason, Message, Part, Role
+from genkit.model import ModelRequest, TextPart, ToolDefinition
 from genkit.plugin_api import ActionRunContext, GenkitError
 
 pytestmark = pytest.mark.asyncio

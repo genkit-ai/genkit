@@ -21,8 +21,8 @@ from typing import Any, Literal, cast
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import GenkitError, ModelRequest, ModelResponse
-from genkit.model import ModelRef, model_action_metadata, model_ref
+from genkit import GenkitError, ModelResponse
+from genkit.model import ModelRef, ModelRequest, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,

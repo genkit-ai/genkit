@@ -32,26 +32,28 @@ from anthropic import APIError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import (
-    Constrained,
-    CustomPart,
-    ErrorResponseMetadata,
     FinishReason,
     GenkitError,
-    MediaPart,
     Message,
-    ModelRequest,
     ModelResponse,
     ModelResponseChunk,
     ModelUsage,
     Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolRequest,
     ToolRequestPart,
     ToolResponsePart,
 )
-from genkit.model import get_basic_usage_stats
+from genkit._core._error import ErrorResponseMetadata
+from genkit.model import (
+    Constrained,
+    CustomPart,
+    MediaPart,
+    ModelRequest,
+    ReasoningPart,
+    TextPart,
+    get_basic_usage_stats,
+)
 from genkit.plugin_api import (
     ActionRunContext,
     StatusName,

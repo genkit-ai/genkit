@@ -95,21 +95,17 @@ from pydantic.alias_generators import to_camel, to_snake
 from genkit import (
     GenkitError,
     Media,
-    MediaPart,
     Message,
-    ModelRequest,
     ModelResponse,
     ModelResponseChunk,
     ModelUsage,
     Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolRequest,
     ToolRequestPart,
     ToolResponsePart,
 )
-from genkit.model import get_basic_usage_stats
+from genkit.model import MediaPart, ModelRequest, ReasoningPart, TextPart, get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, ModelConfig, get_cached_client, wrap_http_error
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (

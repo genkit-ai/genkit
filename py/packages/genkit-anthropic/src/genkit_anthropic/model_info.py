@@ -18,11 +18,7 @@
 
 from typing import Literal, TypeAlias, cast
 
-from genkit import (
-    Constrained,
-    ModelInfo,
-    Supports,
-)
+from genkit.model import Constrained, ModelInfo, Supports
 
 # Model definitions
 CLAUDE_SONNET_4 = ModelInfo(

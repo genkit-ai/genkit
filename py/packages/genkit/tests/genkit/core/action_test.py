@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Message, ModelRequest, Part, TextPart
+from genkit import Message, Part
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -25,6 +25,7 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError
 from genkit._core._model import OutputConfig
+from genkit.model import ModelRequest, TextPart
 
 
 def test_action_enum_behaves_like_str() -> None:

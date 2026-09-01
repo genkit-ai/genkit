@@ -22,13 +22,14 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
 from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
+from genkit.plugin_api import ActionKind
 
 
 @pytest.fixture(autouse=True)

@@ -40,10 +40,9 @@ from typing import Any
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from genkit._ai._tools import Interrupt, define_tool
+from genkit import Interrupt, Message, tool
 from genkit._core._action import Action
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk
-from genkit._core._registry import Registry
+from genkit._core._model import ModelResponse, ModelResponseChunk
 from genkit._core._typing import (
     Media,
     MediaPart,
@@ -271,7 +270,6 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return filesystem tool actions for this generate() call."""
-        scratch = Registry()
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
             return await asyncio.to_thread(self._list_files, input.dir_path, input.recursive)
@@ -284,14 +282,12 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 input.limit,
             )
 
-        t_list = define_tool(
-            scratch,
+        t_list = tool(
             list_files,
             name=self._tool_name('list_files'),
             description='List files and directories under a path (optional recursive).',
         )
-        t_read = define_tool(
-            scratch,
+        t_read = tool(
             read_file,
             name=self._tool_name('read_file'),
             description='Read a text file, optionally from an offset/limit in lines.',
@@ -310,14 +306,12 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                     [e.model_dump() for e in input.edits],
                 )
 
-            t_write = define_tool(
-                scratch,
+            t_write = tool(
                 write_file,
                 name=self._tool_name('write_file'),
                 description='Create or overwrite a text file with the given content.',
             )
-            t_edit = define_tool(
-                scratch,
+            t_edit = tool(
                 edit_file,
                 name=self._tool_name('edit_file'),
                 description='Apply search/replace edits to an existing text file.',

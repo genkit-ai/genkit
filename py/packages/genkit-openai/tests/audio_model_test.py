@@ -35,16 +35,8 @@ from genkit_openai.models.audio import (
     _to_tts_response,
 )
 
-from genkit import (
-    GenkitError,
-    Media,
-    MediaPart,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import GenkitError, Media, Message, Part, Role
+from genkit.model import MediaPart, ModelRequest, TextPart
 
 
 class TestExtractText:

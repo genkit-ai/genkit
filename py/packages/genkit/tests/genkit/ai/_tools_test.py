@@ -5,7 +5,7 @@
 
 import pytest
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit
 from genkit._ai._tools import (
     Interrupt,
     ToolRunContext,
@@ -19,6 +19,7 @@ from genkit._ai._tools import (
 from genkit._core._error import GenkitError
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
+from genkit.plugin_api import ActionKind
 
 
 async def _echo_tool(x: object) -> object:

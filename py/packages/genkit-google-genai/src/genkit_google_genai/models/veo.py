@@ -32,13 +32,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from genkit import (
-    GenkitError,
-    ModelInfo,
-    ModelRequest,
-    Supports,
-)
-from genkit.model import Error, Operation
+from genkit import GenkitError
+from genkit.model import Error, ModelInfo, ModelRequest, Operation, Supports
 from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,

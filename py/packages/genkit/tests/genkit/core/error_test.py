@@ -20,9 +20,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from genkit import ErrorResponseMetadata
 from genkit._core import _error as error_mod
 from genkit._core._error import (
+    ErrorResponseMetadata,
     GenkitError,
     PublicError,
     ReflectionError,

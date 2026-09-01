@@ -26,7 +26,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Message, MiddlewareRef, ModelResponse
+from genkit import Genkit, Message, ModelResponse
 from genkit._ai._model import ModelRequest, text_from_message
 from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt, resume_options_to_resume
 from genkit._ai._testing import (
@@ -39,7 +39,7 @@ from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._typing import Part, Role, TextPart, ToolChoice, ToolRequest, ToolRequestPart
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
 
 

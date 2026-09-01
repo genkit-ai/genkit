@@ -29,14 +29,8 @@ from genkit_openai.models.image import (
     _to_image_generate_params,
 )
 
-from genkit import (
-    MediaPart,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import Message, Part, Role
+from genkit.model import MediaPart, ModelRequest, TextPart
 
 
 class TestExtractPromptText:

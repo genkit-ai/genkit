@@ -53,20 +53,8 @@ from urllib.parse import urlparse
 
 from google import genai
 
-from genkit import (
-    CustomPart,
-    DocumentPart,
-    Media,
-    MediaPart,
-    Metadata,
-    Part,
-    ReasoningPart,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
-)
+from genkit import Media, Part, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+from genkit.model import CustomPart, DocumentPart, MediaPart, Metadata, ReasoningPart, TextPart
 from genkit.plugin_api import get_cached_client
 
 logger = logging.getLogger(__name__)

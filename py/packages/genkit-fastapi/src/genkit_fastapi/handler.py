@@ -27,9 +27,9 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from genkit import Action, ActionKind, Genkit, GenkitError
+from genkit import Action, Genkit, GenkitError
 from genkit.agent import Agent, SessionSnapshot
-from genkit.plugin_api import ContextProvider, RequestData, get_callable_json
+from genkit.plugin_api import ActionKind, ContextProvider, RequestData, get_callable_json
 
 
 def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:

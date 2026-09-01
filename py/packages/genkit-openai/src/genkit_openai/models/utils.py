@@ -25,19 +25,8 @@ from typing import Any, NoReturn
 
 from openai import APIStatusError
 
-from genkit import (
-    GenkitError,
-    MediaPart,
-    Message,
-    ModelRequest,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponsePart,
-)
+from genkit import GenkitError, Message, Part, Role, ToolRequest, ToolRequestPart, ToolResponsePart
+from genkit.model import MediaPart, ModelRequest, ReasoningPart, TextPart
 from genkit.plugin_api import wrap_http_error
 
 

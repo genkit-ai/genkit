@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import pytest
 
-from genkit import ActionKind, Document, Genkit, Message
+from genkit import Document, Genkit, Message
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
@@ -38,6 +38,7 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
+from genkit.plugin_api import ActionKind
 
 
 @pytest.fixture

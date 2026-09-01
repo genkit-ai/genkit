@@ -35,15 +35,26 @@ from genkit._core._model import (
 from genkit._core._typing import (
     Candidate,
     Constrained,
+    CustomPart,
+    DataPart,
+    DocumentPart,
     Error,
     FinishReason,
+    MediaPart,
+    Metadata,
     ModelInfo,
     Operation,
+    Part,
+    ReasoningPart,
+    Role,
     Stage,
     Supports,
+    TextPart,
     ToolDefinition,
     ToolRequest,
+    ToolRequestPart,
     ToolResponse,
+    ToolResponsePart,
 )
 
 __all__ = [
@@ -60,15 +71,28 @@ __all__ = [
     # Error and operation
     'Error',
     'Operation',
+    # Content & Parts
+    'Message',
+    'Part',
+    'Role',
+    'TextPart',
+    'MediaPart',
+    'DataPart',
+    'CustomPart',
+    'ReasoningPart',
+    'DocumentPart',
     # Tool types
     'ToolRequest',
     'ToolDefinition',
     'ToolResponse',
+    'ToolRequestPart',
+    'ToolResponsePart',
     # Model info
     'ModelInfo',
     'Supports',
     'Constrained',
     'Stage',
+    'Metadata',
     # Factory functions and metadata
     'model_action_metadata',
     'model_ref',
@@ -76,8 +100,6 @@ __all__ = [
     'ModelRef',
     # Config
     'ModelConfigDict',
-    # Message
-    'Message',
     # Usage
     'get_basic_usage_stats',
 ]
