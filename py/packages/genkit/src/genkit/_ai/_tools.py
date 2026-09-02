@@ -18,7 +18,7 @@
 
 import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
@@ -49,6 +49,18 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 
+PartLike = (
+    Part
+    | TextPart
+    | MediaPart
+    | ToolRequestPart
+    | ToolResponsePart
+    | DataPart
+    | CustomPart
+    | ReasoningPart
+    | ResourcePart
+)
+
 PART_VARIANTS = (
     TextPart,
     MediaPart,
@@ -64,7 +76,7 @@ PART_VARIANTS = (
 def response(
     output: OutputT | None = None,
     *,
-    parts: list[Part] | Part | None = None,
+    parts: Sequence[PartLike] | PartLike | None = None,
     metadata: Metadata | None = None,
 ) -> MultipartToolResponse[OutputT]:
     """Build a tool result the model can see as structured output plus media.
@@ -92,7 +104,7 @@ def coerce_part(value: object) -> Part | None:
 def normalize_response_parts(parts: object) -> list[Part] | None:
     if parts is None:
         return None
-    if isinstance(parts, list):
+    if isinstance(parts, (list, tuple, Sequence)) and not isinstance(parts, (str, bytes, dict, Part, *PART_VARIANTS)):
         out: list[Part] = []
         for item in parts:
             part = coerce_part(item)
@@ -277,6 +289,7 @@ def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> M
             metadata=dump_tool_metadata(value.metadata, tool_name=tool_name),
         )
     return MultipartToolResponse(output=dump_tool_output(value, tool_name=tool_name))
+
 
 logger = get_logger(__name__)
 
