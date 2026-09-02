@@ -23,7 +23,6 @@ import json
 import logging
 from typing import Any, Literal, cast
 
-from genkit_google_genai._interactions.options import ClientOptions
 from google.genai.interactions import (
     AudioContent,
     CodeExecutionCallStep,
@@ -838,16 +837,9 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
     raise ValueError(f'Unknown interaction status: {status!r}')
 
 
-def from_interaction(
-    interaction: Interaction,
-    client_options: ClientOptions | None = None,
-) -> Operation:
+def from_interaction(interaction: Interaction) -> Operation:
     """Convert an interaction poll result to a Genkit operation."""
     op = Operation.model_construct(id=interaction.id or '')
-    if client_options is not None:
-        dumped = client_options.to_metadata_dict()
-        if dumped:
-            op.metadata = {'clientOptions': dumped}
 
     status = interaction.status
     if status in ('in_progress', 'queued'):

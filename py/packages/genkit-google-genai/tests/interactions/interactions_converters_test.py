@@ -36,7 +36,6 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_tool,
     usage_from_interaction,
 )
-from genkit_google_genai._interactions.options import ClientOptions
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
 from pydantic import BaseModel, TypeAdapter
 
@@ -873,21 +872,10 @@ class TestFunctionCallRoundTrip:
         assert root.metadata == {'thoughtSignature': 'sig'}
 
 
-class TestClientOptionsWireFormat:
-    def test_operation_metadata_uses_camel_case_keys(self) -> None:
-        op = from_interaction(
-            Interaction.model_validate({'id': '123', 'status': 'in_progress'}),
-            ClientOptions(api_key='k', base_url='https://example.test', api_version='v1beta', timeout=1500),
-        )
-        assert op.metadata == {
-            'clientOptions': {
-                'apiVersion': 'v1beta',
-                'timeout': 1500.0,
-            }
-        }
-        persisted = (op.metadata or {}).get('clientOptions') or {}
-        assert 'apiKey' not in persisted
-        assert 'baseUrl' not in persisted
+def test_operation_does_not_persist_client_options() -> None:
+    op = from_interaction(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
+
+    assert not op.metadata
 
 
 class TestFromInteractionStatusMapping:

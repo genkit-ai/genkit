@@ -30,10 +30,8 @@ ResponseModality = Literal['text', 'image', 'audio']
 class ClientOptions(BaseModel):
     """HTTP settings for an Interactions call.
 
-    A tenant key never lives here on a ticket. Check/cancel read it again
-    from context.secrets. Tickets may persist timeout, headers, and
-    api_version — not api_key or base_url (those would leak a secret or
-    let a ticket steer the next request at an attacker host).
+    These options belong to one HTTP call. Background operations don't retain
+    them; check/cancel receive the options needed for their own request.
     """
 
     model_config = ConfigDict(alias_generator=to_camel, extra='ignore', populate_by_name=True)
@@ -54,31 +52,3 @@ class ClientOptions(BaseModel):
         # Field names (not aliases) — model_copy(update=...) keys off Python attrs.
         update = overrides.model_dump(exclude_none=True)
         return self.model_copy(update=update) if update else self
-
-    @classmethod
-    def from_metadata(cls, metadata: dict[str, Any] | None) -> Self:
-        """Load transport knobs previously persisted on an Operation.
-
-        Drops api_key and base_url even if an older ticket still has them.
-        The key is re-supplied on the run; a ticket must not pick the host.
-        """
-        raw = (metadata or {}).get('clientOptions')
-        if raw is None:
-            raw = (metadata or {}).get('client_options')
-        parsed: Self
-        if isinstance(raw, cls):
-            parsed = raw
-        elif isinstance(raw, dict):
-            parsed = cls.model_validate(raw)
-        else:
-            return cls()
-        return parsed.model_copy(update={'api_key': None, 'base_url': None})
-
-    def to_metadata_dict(self) -> dict[str, Any]:
-        """Serialize transport knobs for Operation.metadata (no key, no host)."""
-        dumped = self.model_dump(by_alias=True, exclude_none=True)
-        dumped.pop('apiKey', None)
-        dumped.pop('api_key', None)
-        dumped.pop('baseUrl', None)
-        dumped.pop('base_url', None)
-        return dumped

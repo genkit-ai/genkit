@@ -251,24 +251,3 @@ async def test_get_interaction_quotes_path_traversal_id(http_client: MagicMock) 
     encoded = quote('../evil', safe='')
     assert '../' not in url
     assert url.endswith(f'/interactions/{encoded}')
-
-
-def test_from_metadata_drops_untrusted_base_url() -> None:
-    loaded = ClientOptions.from_metadata({
-        'clientOptions': {
-            'apiKey': 'ticket-key',
-            'baseUrl': 'https://evil.test',
-            'apiVersion': 'v1alpha',
-            'timeout': 1000,
-        }
-    })
-    assert loaded.api_key is None
-    assert loaded.base_url is None
-    assert loaded.api_version == 'v1alpha'
-    assert loaded.timeout == 1000
-
-
-def test_from_metadata_accepts_snake_case_wrapper() -> None:
-    loaded = ClientOptions.from_metadata({'client_options': {'timeout': 5000, 'api_version': 'v1beta'}})
-    assert loaded.timeout == 5000
-    assert loaded.api_version == 'v1beta'
