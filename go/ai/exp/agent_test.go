@@ -2416,6 +2416,74 @@ func TestAgent_RunText_WithSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgent_RunDetached(t *testing.T) {
+	// The typed launch: the task polls, rehydrates, and waits with custom
+	// state typed as the agent's own, so the owner never unmarshals raw JSON.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	agent, entered, release := defineGatedAgent(t, reg, "typedWorker", store)
+
+	task, err := agent.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+	if err != nil {
+		t.Fatalf("RunDetached: %v", err)
+	}
+	if task.SnapshotID() == "" {
+		t.Fatal("RunDetached returned a task with no snapshot ID")
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background work did not start")
+	}
+
+	snap, err := task.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if snap.Status != SnapshotStatusPending {
+		t.Fatalf("Poll status = %q, want %q", snap.Status, SnapshotStatusPending)
+	}
+
+	close(release)
+	final, err := agent.Task(task.SnapshotID()).Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if final.Status != SnapshotStatusCompleted {
+		t.Fatalf("Wait status = %q, want %q", final.Status, SnapshotStatusCompleted)
+	}
+	if final.State == nil || final.State.Custom.Counter != 42 {
+		t.Fatalf("final state = %+v, want typed custom state with Counter 42", final.State)
+	}
+
+	// Aborting a settled task reports its terminal status, as Agent.Abort does.
+	if got, err := task.Abort(context.Background()); err != nil || got != SnapshotStatusCompleted {
+		t.Fatalf("Abort after settle = (%q, %v), want (%q, nil)", got, err, SnapshotStatusCompleted)
+	}
+}
+
+func TestAgent_RunDetached_Rejected(t *testing.T) {
+	t.Run("nil input", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		agent, _, _ := defineGatedAgent(t, reg, "nilInput", newTestInMemStore[testState]())
+		if _, err := agent.RunDetached(context.Background(), nil); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Fatalf("RunDetached(nil) error = %v, want INVALID_ARGUMENT", err)
+		}
+	})
+
+	t.Run("client-managed agent cannot detach", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		agent := defineEchoAgent(t, reg, "storeless")
+		_, err := agent.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+		if err == nil {
+			t.Fatal("RunDetached succeeded on a storeless agent, want rejection")
+		}
+		if got := status.Of(err); got != status.FailedPrecondition {
+			t.Fatalf("status.Of(err) = %v, want FAILED_PRECONDITION (err: %v)", got, err)
+		}
+	})
+}
+
 func TestPromptAgent_RunText(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)

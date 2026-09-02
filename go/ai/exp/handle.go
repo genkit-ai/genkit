@@ -250,79 +250,46 @@ func (h *AgentHandle) RunText(ctx context.Context, text string, opts ...Invocati
 	return h.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage(text)}, opts...)
 }
 
+// RunDetached launches input as a detached (background) invocation and returns
+// the task tracking it. It is [Agent.RunDetached] for callers holding only the
+// handle, with the task's snapshots read as raw JSON: the input is delivered
+// with [AgentInput.Detach] set whatever the caller set it to, a launch the
+// agent cannot support (no session store, or one without [SnapshotSubscriber];
+// check [AgentMetadata.Abortable] to pre-flight) fails with
+// FAILED_PRECONDITION, and an invocation the agent settled before observing
+// the detach yields a task over its committed snapshot.
+//
+// The rejection is decoded from the invocation's failed output, which keeps
+// only the status name, so match it with [status.Of] rather than errors.Is.
+func (h *AgentHandle) RunDetached(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*DetachedTask[json.RawMessage], error) {
+	if h == nil {
+		return nil, nilHandleError("RunDetached")
+	}
+	if input == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
+	}
+	out, err := h.Run(ctx, detachedInput(input), opts...)
+	if err != nil {
+		return nil, err
+	}
+	return detachedTaskFrom(h.name, h, out)
+}
+
+// Task returns the task tracking a snapshot ID recorded earlier (e.g.
+// by a prior process that called [AgentHandle.RunDetached]), with custom state
+// as raw JSON. It performs no I/O and does not verify the snapshot exists; the
+// first [DetachedTask.Poll] or [DetachedTask.Wait] surfaces NOT_FOUND for an
+// unknown ID.
+func (h *AgentHandle) Task(snapshotID string) *DetachedTask[json.RawMessage] {
+	return &DetachedTask[json.RawMessage]{ops: h, snapshotID: snapshotID}
+}
+
 // nilHandleError is what a method reports on a nil receiver, so a caller that
 // skipped the nil check after [LookupAgent] reads the cause rather than a
 // panic. method names the caller.
 func nilHandleError(method string) error {
 	return status.Errorf(status.ErrInvalidArgument,
 		"AgentHandle.%s: called on a nil handle; check that LookupAgent found the agent", method)
-}
-
-// Start launches input as a detached (background) invocation and returns the
-// task tracking it. It is the one-shot counterpart of
-// [AgentConnection.Detach]: the input is delivered with [AgentInput.Detach]
-// set, the agent's runtime persists a pending snapshot and keeps working on a
-// context decoupled from ctx, and the returned [DetachedTask] polls, waits on,
-// or aborts that snapshot. The pending snapshot is the durable record: record
-// [DetachedTask.SnapshotID] and rehydrate with [AgentHandle.Task] to pick the
-// work up later, including from another process.
-//
-// The launch is rejected with FAILED_PRECONDITION when the agent cannot
-// support detach: it has no session store, or the store does not implement
-// [SnapshotSubscriber]. Check [AgentMetadata.Abortable] to pre-flight. The
-// rejection is decoded from the invocation's failed output, which keeps only
-// the status name, so match it with [status.Of] rather than errors.Is.
-//
-// An agent may also settle the invocation synchronously, before the runtime
-// observes the detach directive (e.g. a custom agent whose fn returns without
-// consuming the input). When a turn committed, Start returns a task over its
-// snapshot, which is already terminal, so Poll and Wait resolve immediately;
-// when nothing was recorded, Start fails with FAILED_PRECONDITION naming the
-// finish reason, since there is no durable record to track.
-func (h *AgentHandle) Start(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*DetachedTask, error) {
-	if h == nil {
-		return nil, status.Errorf(status.ErrInvalidArgument,
-			"AgentHandle.Start: called on a nil handle; check that LookupAgent found the agent")
-	}
-	if input == nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
-	}
-	detachInput := *input
-	detachInput.Detach = true
-	out, err := h.Run(ctx, &detachInput, opts...)
-	if err != nil {
-		return nil, err
-	}
-	switch out.FinishReason {
-	case AgentFinishReasonDetached:
-		return &DetachedTask{handle: h, snapshotID: out.SnapshotID}, nil
-	case AgentFinishReasonFailed:
-		var cause error = out.Error
-		if out.Error == nil {
-			cause = status.Errorf(status.ErrInternal, "launch failed without error detail")
-		}
-		return nil, fmt.Errorf("agent %q: background launch failed: %w", h.name, cause)
-	default:
-		// The invocation settled before the runtime observed the detach
-		// directive (nothing orders the intake reader ahead of an agent fn
-		// that never consumes its input). A committed turn's snapshot is the
-		// settled work's durable record, so hand back a task over it; Poll
-		// and Wait resolve immediately with the terminal snapshot.
-		if out.SnapshotID != "" {
-			return &DetachedTask{handle: h, snapshotID: out.SnapshotID}, nil
-		}
-		return nil, status.Errorf(status.ErrFailedPrecondition,
-			"agent %q: the invocation settled synchronously (finish reason %q, session %q) without recording a snapshot, so there is no background task to track",
-			h.name, out.FinishReason, out.SessionID)
-	}
-}
-
-// Task returns a [DetachedTask] for a snapshot ID recorded earlier (e.g. by a
-// prior process that called [AgentHandle.Start]). It performs no I/O and does
-// not verify the snapshot exists; the first [DetachedTask.Poll] or
-// [DetachedTask.Wait] surfaces NOT_FOUND for an unknown ID.
-func (h *AgentHandle) Task(snapshotID string) *DetachedTask {
-	return &DetachedTask{handle: h, snapshotID: snapshotID}
 }
 
 // GetSnapshot fetches a session snapshot by ID through the agent's getSnapshot
@@ -508,51 +475,4 @@ func callJSON[Resp any](ctx context.Context, agentName string, act api.Action, w
 		return nil, fmt.Errorf("agent %q: unmarshal %s response: %w", agentName, what, err)
 	}
 	return &resp, nil
-}
-
-// --- DetachedTask ---
-
-// DetachedTask tracks a detached (background) agent invocation through its
-// pending snapshot. Obtain one from [AgentHandle.Start] when launching, or
-// rehydrate one from a recorded snapshot ID with [AgentHandle.Task]; the two
-// are equivalent, because the snapshot is the only state a task has.
-type DetachedTask struct {
-	handle     *AgentHandle
-	snapshotID string
-}
-
-// SnapshotID returns the ID of the snapshot tracking the task: pending while
-// the background work runs, finalized in place when it settles. It is the
-// task's durable identity; record it to pick the task up later with
-// [AgentHandle.Task].
-func (t *DetachedTask) SnapshotID() string { return t.snapshotID }
-
-// Poll fetches the task's snapshot once, without waiting. The snapshot's
-// Status says where the task stands: [SnapshotStatusPending] while the work
-// runs, a terminal status once it settles (see [SnapshotStatus.Terminal]),
-// including [SnapshotStatusExpired] when the worker stopped heartbeating and
-// is presumed dead. A terminal snapshot carries the cumulative session state.
-func (t *DetachedTask) Poll(ctx context.Context) (*SessionSnapshot[json.RawMessage], error) {
-	return t.handle.GetSnapshot(ctx, t.snapshotID)
-}
-
-// Wait blocks until the task settles and returns its terminal snapshot, in one
-// dispatch of the agent's waitForSnapshot companion action: the waiting happens
-// server-side, next to the store that knows when the work finished, so the
-// caller neither picks a cadence nor pays a dispatch per tick. A task that
-// failed, aborted, or expired still returns its snapshot rather than an error
-// (inspect [SessionSnapshot.Status] and [SessionSnapshot.Error]), so a non-nil
-// error means the wait itself could not proceed: reads failed past the wait's
-// transient-retry budget, or ctx ended and its error is returned.
-//
-// Use [context.WithTimeout] to bound the wait; on the deadline the wait returns
-// ctx's error, and [DetachedTask.Poll] then reports where the task stands.
-func (t *DetachedTask) Wait(ctx context.Context) (*SessionSnapshot[json.RawMessage], error) {
-	return t.handle.WaitForSnapshot(ctx, t.snapshotID)
-}
-
-// Abort asks the task's background work to stop and returns the snapshot's
-// status after the attempt; see [AgentHandle.Abort].
-func (t *DetachedTask) Abort(ctx context.Context) (SnapshotStatus, error) {
-	return t.handle.Abort(ctx, t.snapshotID)
 }

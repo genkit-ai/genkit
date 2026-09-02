@@ -3128,7 +3128,8 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 
 // Connect starts a new agent invocation with bidirectional streaming.
 // Use this for multi-turn interactions where you need to send multiple inputs
-// and receive streaming chunks. For single-turn usage, see Run and RunText.
+// and receive streaming chunks. For single-turn usage, see Run and RunText;
+// for a single turn that keeps working after the call returns, RunDetached.
 func (a *Agent[State]) Connect(
 	ctx context.Context,
 	opts ...InvocationOption[State],
@@ -3182,6 +3183,51 @@ func (a *Agent[State]) RunText(
 	return a.Run(ctx, &AgentInput{
 		Message: ai.NewUserTextMessage(text),
 	}, opts...)
+}
+
+// RunDetached launches input as a detached (background) invocation and returns
+// the task tracking it. It is the one-shot counterpart of
+// [AgentConnection.Detach]: the input is delivered with [AgentInput.Detach]
+// set, whatever the caller set it to; the runtime persists a pending snapshot
+// and keeps working on a context decoupled from ctx; and the returned
+// [DetachedTask] polls, waits on, or aborts that snapshot, with custom state
+// typed as State. The pending snapshot is the durable record: record
+// [DetachedTask.SnapshotID] and rehydrate with [Agent.Task] to pick the
+// work up later, including from another process.
+//
+// The launch is rejected with FAILED_PRECONDITION when the agent cannot
+// support detach: it has no session store, or the store does not implement
+// [SnapshotSubscriber]. The rejection is the invocation's failed output
+// ([AgentOutput.Error]) surfaced as the returned error; match it by status.
+//
+// An agent may also settle the invocation synchronously, before the runtime
+// observes the detach directive (e.g. a custom agent whose fn returns without
+// consuming the input). When a turn committed, RunDetached returns a task over
+// its snapshot, which is already terminal, so Poll and Wait resolve
+// immediately; when nothing was recorded, it fails with FAILED_PRECONDITION
+// naming the finish reason, since there is no durable record to track.
+func (a *Agent[State]) RunDetached(
+	ctx context.Context,
+	input *AgentInput,
+	opts ...InvocationOption[State],
+) (*DetachedTask[State], error) {
+	if input == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", a.Name())
+	}
+	out, err := a.Run(ctx, detachedInput(input), opts...)
+	if err != nil {
+		return nil, err
+	}
+	return detachedTaskFrom(a.Name(), a, out)
+}
+
+// Task returns the task tracking a snapshot ID recorded earlier (e.g.
+// by a prior process that called [Agent.RunDetached]), with custom state typed
+// as State. It performs no I/O and does not verify the snapshot exists; the
+// first [DetachedTask.Poll] or [DetachedTask.Wait] surfaces NOT_FOUND for an
+// unknown ID.
+func (a *Agent[State]) Task(snapshotID string) *DetachedTask[State] {
+	return &DetachedTask[State]{ops: a, snapshotID: snapshotID}
 }
 
 // --- AgentConnection ---

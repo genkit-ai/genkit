@@ -135,8 +135,8 @@ func TestLookupAgent(t *testing.T) {
 		if _, err := h.RunText(context.Background(), "hi"); !errors.Is(err, status.ErrInvalidArgument) {
 			t.Errorf("RunText on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
-		if _, err := h.Start(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
-			t.Errorf("Start on a nil handle = %v, want INVALID_ARGUMENT", err)
+		if _, err := h.RunDetached(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("RunDetached on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
 	})
 }
@@ -326,7 +326,7 @@ func TestAgentHandle_Run(t *testing.T) {
 	})
 }
 
-func TestAgentHandle_StartPollWaitTask(t *testing.T) {
+func TestAgentHandle_RunDetachedPollWaitRehydrate(t *testing.T) {
 	// Full background lifecycle through the handle: launch, observe pending,
 	// rehydrate the task from nothing but its snapshot ID, and wait for the
 	// finalized snapshot.
@@ -336,12 +336,12 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 
 	h := LookupAgent(reg, "worker")
 
-	task, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+	task, err := h.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("RunDetached: %v", err)
 	}
 	if task.SnapshotID() == "" {
-		t.Fatal("Start returned a task with no snapshot ID")
+		t.Fatal("RunDetached returned a task with no snapshot ID")
 	}
 
 	select {
@@ -388,14 +388,14 @@ func TestAgentHandle_StartPollWaitTask(t *testing.T) {
 	}
 }
 
-func TestAgentHandle_StartRejected(t *testing.T) {
+func TestAgentHandle_RunDetachedRejected(t *testing.T) {
 	t.Run("client-managed agent cannot detach", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		defineEchoAgent(t, reg, "storeless")
 		h := LookupAgent(reg, "storeless")
-		_, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+		_, err := h.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 		if err == nil {
-			t.Fatal("Start succeeded on a storeless agent, want rejection")
+			t.Fatal("RunDetached succeeded on a storeless agent, want rejection")
 		}
 		// The rejection is decoded from the invocation's failed output, so only
 		// the status name survives; match by status, not sentinel.
@@ -434,9 +434,9 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 	agent, entered, _ := defineGatedAgent(t, reg, "abortable", store)
 
 	h := agent.Handle()
-	task, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+	task, err := h.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("RunDetached: %v", err)
 	}
 	select {
 	case <-entered:
@@ -522,14 +522,14 @@ func TestAgentHandle_SnapshotReadErrors(t *testing.T) {
 	})
 }
 
-func TestAgentHandle_StartSettledSynchronously(t *testing.T) {
+func TestAgentHandle_RunDetachedSettledSynchronously(t *testing.T) {
 	// An agent whose fn returns without consuming its input can settle the
-	// invocation before the runtime observes the detach directive. Start must
-	// treat that as a first-class outcome: a task over the committed snapshot
-	// when one exists, or FAILED_PRECONDITION when nothing was recorded;
-	// never an INTERNAL contract-violation error. The race is scheduling-
-	// dependent, so accept either outcome on each iteration and pin only the
-	// contract.
+	// invocation before the runtime observes the detach directive. RunDetached
+	// must treat that as a first-class outcome: a task over the committed
+	// snapshot when one exists, or FAILED_PRECONDITION when nothing was
+	// recorded; never an INTERNAL contract-violation error. The race is
+	// scheduling-dependent, so accept either outcome on each iteration and pin
+	// only the contract.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 	agent := DefineCustomAgent(reg, "eager",
@@ -540,7 +540,7 @@ func TestAgentHandle_StartSettledSynchronously(t *testing.T) {
 	)
 	h := agent.Handle()
 	for i := 0; i < 20; i++ {
-		task, err := h.Start(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
+		task, err := h.RunDetached(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("go")})
 		if err == nil {
 			// The detach won the race; the launch is a normal task.
 			if task == nil || task.SnapshotID() == "" {
@@ -659,6 +659,21 @@ func TestAgentHandle_DelegatesToTransport(t *testing.T) {
 		t.Error("Run passed a stream callback; the handle reports a turn by its final output")
 	}
 
+	// RunDetached sets the detach directive on a copy, whatever the caller
+	// set, and leaves the caller's input alone. The canned output settles
+	// without a snapshot, so the launch reports that; the directive is what
+	// this checks.
+	input := &AgentInput{Message: ai.NewUserTextMessage("go")}
+	if _, err := h.RunDetached(ctx, input); !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Fatalf("RunDetached over a synchronously settled output: err = %v, want FAILED_PRECONDITION", err)
+	}
+	if tr.runInput == nil || !tr.runInput.Detach {
+		t.Errorf("RunDetached sent %+v, want the detach directive set", tr.runInput)
+	}
+	if input.Detach {
+		t.Error("RunDetached mutated the caller's input")
+	}
+
 	// Validation is the handle's too, so a bad argument costs no dispatch and
 	// fails identically wherever the agent lives.
 	before := tr.callCount
@@ -667,6 +682,7 @@ func TestAgentHandle_DelegatesToTransport(t *testing.T) {
 		call func() error
 	}{
 		{"nil input", func() error { _, err := h.Run(ctx, nil); return err }},
+		{"nil detached input", func() error { _, err := h.RunDetached(ctx, nil); return err }},
 		{"empty snapshot ID", func() error { _, err := h.GetSnapshot(ctx, ""); return err }},
 		{"empty wait ID", func() error { _, err := h.WaitForSnapshot(ctx, ""); return err }},
 		{"empty session ID", func() error { _, err := h.GetLatestSnapshot(ctx, ""); return err }},

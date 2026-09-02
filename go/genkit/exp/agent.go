@@ -205,8 +205,9 @@ func DefineCustomAgent[State any](
 // [aix.AgentHandle]: the untyped caller-side view for code that does not hold
 // the typed [aix.Agent] value (orchestrators, middleware, tools). The handle
 // runs the agent ([aix.AgentHandle.Run], [aix.AgentHandle.RunText]), launches
-// and tracks background work ([aix.AgentHandle.Start], [aix.AgentHandle.Task]),
-// and reads or aborts snapshots, with custom state as raw JSON.
+// and tracks background work ([aix.AgentHandle.RunDetached],
+// [aix.AgentHandle.Task]), and reads or aborts snapshots, with custom
+// state as raw JSON.
 //
 // It returns nil when name resolves to no agent, matching every other Lookup
 // in the framework. Like [ListAgents] it does not require
