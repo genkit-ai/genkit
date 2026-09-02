@@ -514,43 +514,52 @@ func (s *FileSessionStore[State]) derivePrefix(ctx context.Context) (string, err
 // readAt reads and parses the snapshot file at path. Returns (nil, nil) if the
 // file does not exist. Caller must hold s.mu.
 func (s *FileSessionStore[State]) readAt(path string) (*exp.SessionSnapshot[State], error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("FileSessionStore: read %s: %w", path, err)
-	}
 	var snap exp.SessionSnapshot[State]
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("FileSessionStore: unmarshal %s: %w", path, err)
+	if ok, err := readJSONAt(path, &snap); !ok {
+		return nil, err
 	}
 	return &snap, nil
 }
 
 // snapshotWithoutState decodes a snapshot file without materializing its state:
 // the outer State field shadows the embedded row's under the same JSON key,
-// so the payload lands here as raw bytes and is dropped with the wrapper.
+// so the payload is handed to skipJSON and never decoded or copied.
 type snapshotWithoutState[State any] struct {
 	exp.SessionSnapshot[State]
-	State json.RawMessage `json:"state,omitempty"`
+	State skipJSON `json:"state,omitempty"`
 }
+
+// skipJSON is a JSON value that decodes to nothing. encoding/json hands an
+// Unmarshaler the value's bytes as a sub-slice of the input, so the payload is
+// skipped without the copy a json.RawMessage would take.
+type skipJSON struct{}
+
+func (skipJSON) UnmarshalJSON([]byte) error { return nil }
 
 // readMetadataAt is readAt without the state: the row at path with State
 // nil, or nil if the file does not exist. Caller must hold s.mu.
 func (s *FileSessionStore[State]) readMetadataAt(path string) (*exp.SessionSnapshot[State], error) {
+	var m snapshotWithoutState[State]
+	if ok, err := readJSONAt(path, &m); !ok {
+		return nil, err
+	}
+	return &m.SessionSnapshot, nil
+}
+
+// readJSONAt reads the file at path and decodes it into v. It reports
+// (false, nil) when the file does not exist.
+func readJSONAt(path string, v any) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return false, nil
 		}
-		return nil, fmt.Errorf("FileSessionStore: read %s: %w", path, err)
+		return false, fmt.Errorf("FileSessionStore: read %s: %w", path, err)
 	}
-	var m snapshotWithoutState[State]
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("FileSessionStore: unmarshal %s: %w", path, err)
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, fmt.Errorf("FileSessionStore: unmarshal %s: %w", path, err)
 	}
-	return &m.SessionSnapshot, nil
+	return true, nil
 }
 
 // writeAt atomically writes snap to <prefix>/<id>.json via a temp file +
