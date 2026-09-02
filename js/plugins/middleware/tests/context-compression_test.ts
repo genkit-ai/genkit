@@ -670,4 +670,213 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(String(toolMessages[0].content[0].toolResponse?.output).includes('Deduplicated'), false);
     assert.strictEqual(String(toolMessages[1].content[0].toolResponse?.output).includes('Deduplicated'), false);
   });
+
+  it('summarizes older messages using summary model', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const summaryModel = ai.defineModel(
+      { name: 'summaryModel' },
+      async () => ({
+        message: {
+          role: 'model',
+          content: [{ text: 'Summary of past events: steps were executed.' }],
+        },
+      })
+    );
+
+    const dummyTool = ai.defineTool(
+      {
+        name: 'step',
+        description: 'step',
+        inputSchema: z.object({ step: z.number() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `output ${input.step}`
+    );
+
+    const pm = ai.defineModel({ name: 'multiTurnModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn <= 3) {
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'step', input: { step: turn } } }],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'all done' }] },
+        usage: { inputTokens: 200 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      system: 'System instructions',
+      prompt: 'Run multi turn steps',
+      tools: [dummyTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: {
+            model: { name: 'summaryModel' },
+            preserveRecent: 2,
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'all done');
+
+    const lastReq = capturedRequests[capturedRequests.length - 1];
+    const summaryMsg = lastReq.messages.find((m) =>
+      m.content.some((p) => p.text?.includes('Summary of past events'))
+    );
+    assert.ok(summaryMsg);
+  });
+
+  it('respects custom summarization prompt', async () => {
+    const ai = genkit({});
+    let capturedPrompt = '';
+
+    const summaryModel = ai.defineModel(
+      { name: 'customPromptModel' },
+      async (req) => {
+        capturedPrompt = req.messages[0]?.content[0]?.text ?? '';
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Custom summary result' }],
+          },
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'testModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'A long discussion part 1' }] },
+        { role: 'model', content: [{ text: 'A long discussion response 1' }] },
+        { role: 'user', content: [{ text: 'A long discussion part 2' }] },
+        { role: 'model', content: [{ text: 'A long discussion response 2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 10,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+            prompt: 'TLDR THIS: {conversation}\nEND TLDR',
+          },
+        }),
+      ],
+    });
+
+    assert.match(capturedPrompt, /^TLDR THIS:/);
+    assert.match(capturedPrompt, /A long discussion part 1/);
+    assert.match(capturedPrompt, /END TLDR$/);
+  });
+
+  it('skips summarization when cheap strategies achieve skipSummarizationThreshold', async () => {
+    const ai = genkit({});
+    let summaryCalled = false;
+
+    const summaryModel = ai.defineModel(
+      { name: 'trackedSummaryModel' },
+      async () => {
+        summaryCalled = true;
+        return {
+          message: { role: 'model', content: [{ text: 'Summary' }] },
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'skipModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'huge',
+                ref: '1',
+                output: 'X'.repeat(2000),
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ text: 'msg 2' }] },
+        { role: 'model', content: [{ text: 'msg 3' }] },
+        { role: 'user', content: [{ text: 'msg 4' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          toolResponses: { maxChars: 100, preserveRecent: 0 },
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+          skipSummarizationThreshold: 0.25, // 2000 chars reduced to ~100 is > 90% savings
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(summaryCalled, false);
+    assert.strictEqual(
+      response.custom?.contextCompression?.summarizationSkipped,
+      true
+    );
+  });
+
+  it('dynamically adjusts preserveRecent window when token usage overshoots budget', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'overshootModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    // 10 messages, maxMessages = 6, basePreserveRecent = 4
+    // overshootRatio = 3000 estimated chars / 3.5 / 50 tokens = ~17x overshoot (>= 2.0)
+    // adjustForOvershoot caps preserveRecent to min(4, 2) = 2
+    // effectiveMaxMessages = max(2+1, 6 - (4 - 2)) = 4
+    await ai.generate({
+      model: pm,
+      messages: Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('model' as const),
+        content: [{ text: `Message number ${i}: ${'X'.repeat(300)}` }],
+      })),
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          maxMessages: 6,
+          preserveRecent: 4,
+          insertTruncationNotice: false,
+        }),
+      ],
+    });
+
+    // Truncation should have clamped to 4 messages rather than 6 due to severe overshoot
+    assert.strictEqual(capturedRequest?.messages.length, 4);
+  });
 });

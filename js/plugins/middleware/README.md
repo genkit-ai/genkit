@@ -255,6 +255,7 @@ Compresses conversation context when it grows too large, reducing token usage an
 2. **Deduplication**: Replaces duplicate tool responses with a short notice (`deduplicateToolResponses`).
 3. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent responses.
 4. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, optionally inserting a notice.
+5. **Summarization**: Summarizes older conversation history using an LLM (`summarize`), with optional threshold skipping (`skipSummarizationThreshold`) and dynamic overshoot adjustment.
 
 ```typescript
 import { genkit } from 'genkit';
@@ -271,6 +272,11 @@ const response = await ai.generate({
       maxInputTokens: 80000,
       deduplicateToolResponses: { matchBy: 'name-and-input' },
       toolResponses: { maxChars: 2000, preserveRecent: 2 },
+      summarize: {
+        model: googleAI.model('gemini-2.5-flash'),
+        preserveRecent: 6,
+      },
+      skipSummarizationThreshold: 0.25, // Skip LLM summary if cheap strategies save >= 25%
       maxMessages: 20,
     }),
   ],
