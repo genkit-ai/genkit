@@ -27,7 +27,7 @@ import (
 
 // LoadCatalog registers an A2UI catalog in the Genkit registry under the key
 // `/a2ui-catalog/<id>` (using the catalog's own ID), so the [ai.Middleware] can
-// resolve it by id via [Config.CatalogID], and tooling such as the Dev UI can
+// resolve it by id via [Surfaces.CatalogID], and tooling such as the Dev UI can
 // enumerate catalogs (GET /api/values?type=a2ui-catalog). This mirrors the JS
 // and Dart plugins, keeping the catalog representation identical across
 // runtimes.
@@ -43,7 +43,7 @@ import (
 //
 //	a2ui.LoadCatalog(g, myCatalog)
 //	// ... then reference it by id:
-//	ai.WithUse(&a2ui.Config{CatalogID: myCatalog.ID})
+//	ai.WithUse(&a2ui.Surfaces{CatalogID: myCatalog.ID})
 func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 	if catalog == nil {
 		return fmt.Errorf("a2ui: LoadCatalog: catalog is nil")

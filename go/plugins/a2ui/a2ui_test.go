@@ -53,7 +53,7 @@ func TestMiddlewareInjectsInstructions(t *testing.T) {
 	r := newTestRegistry(t)
 	m, captured := echoModel(t, r, "test/echo", "ok")
 
-	cfg := &Config{}
+	cfg := &Surfaces{}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestMiddlewareInstructionsNone(t *testing.T) {
 	r := newTestRegistry(t)
 	m, captured := echoModel(t, r, "test/echo-none", "ok")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestMiddlewareRewritesFinalMessage(t *testing.T) {
 		"\n```"
 	m, _ := echoModel(t, r, "test/rewrite", reply)
 
-	cfg := &Config{SurfaceID: "fixed-surface", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed-surface", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("card please"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestMiddlewareRewritesFinalMessageSplitAcrossParts(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{SurfaceID: "fixed-surface", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed-surface", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("card please"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestMiddlewareTransformsStream(t *testing.T) {
 		return nil
 	}
 
-	cfg := &Config{SurfaceID: "fixed", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
 		ai.WithPrompt("card please"),
@@ -305,7 +305,7 @@ func TestMiddlewareSanitizesInboundA2UI(t *testing.T) {
 	})
 	userMsg := ai.NewMessage(ai.RoleUser, nil, ai.NewTextPart("submit"), actionPart)
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestMiddlewarePreservesTextPartMetadata(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	cfg := &Surfaces{Instructions: InstructionsNone, Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +382,7 @@ func TestMiddlewareSkipsParseOnAbnormalFinish(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	cfg := &Surfaces{Instructions: InstructionsNone, Validate: ValidateStrict}
 	// Generate itself surfaces a blocked finish as an error, but the middleware
 	// must not replace it with an a2ui parse error, and the response state must
 	// survive. Call the model through the middleware directly to observe that.
@@ -424,7 +424,7 @@ func TestMiddlewareReplaysPriorSurfaceAsBlock(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, ai.NewTextPart("Here you go:"), surfacePart)
 	userMsg := ai.NewUserTextMessage("thanks")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestMiddlewareDropsEmptiedMessage(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, emptyPart)
 	userMsg := ai.NewUserTextMessage("hi")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestMiddlewareNewRenderNeverReusesHistoryID(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, priorSurface)
 	userMsg := ai.NewMessage(ai.RoleUser, nil, actionPart)
 
-	cfg := &Config{SurfaceID: "sfc-new"}
+	cfg := &Surfaces{SurfaceID: "sfc-new"}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +592,7 @@ func TestMiddlewareGroupsSurfacesSplitsAroundAction(t *testing.T) {
 	})
 	userMsg := ai.NewMessage(ai.RoleUser, nil, part)
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -621,20 +621,20 @@ func TestMiddlewareGroupsSurfacesSplitsAroundAction(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsInvalidValidateMode(t *testing.T) {
-	if _, err := (&Config{Validate: "strick"}).New(ctx); err == nil {
+func TestSurfacesRejectsInvalidValidateMode(t *testing.T) {
+	if _, err := (&Surfaces{Validate: "strick"}).New(ctx); err == nil {
 		t.Fatal("expected an error for an invalid Validate mode")
 	}
 }
 
-func TestConfigRejectsUnsupportedVersion(t *testing.T) {
-	if _, err := (&Config{Version: "0.9"}).New(ctx); err == nil {
+func TestSurfacesRejectsUnsupportedVersion(t *testing.T) {
+	if _, err := (&Surfaces{Version: "0.9"}).New(ctx); err == nil {
 		t.Fatal("expected an error for an unsupported Version")
 	}
 }
 
-func TestConfigRejectsInvalidInstructions(t *testing.T) {
-	if _, err := (&Config{Instructions: "prompt"}).New(ctx); err == nil {
+func TestSurfacesRejectsInvalidInstructions(t *testing.T) {
+	if _, err := (&Surfaces{Instructions: "prompt"}).New(ctx); err == nil {
 		t.Fatal("expected an error for invalid Instructions")
 	}
 }

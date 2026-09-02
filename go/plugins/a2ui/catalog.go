@@ -36,10 +36,11 @@ type CatalogComponent struct {
 	Props string `json:"props"`
 }
 
-// Catalog pins the set of components a surface may render. The middleware uses
-// it to tell the model what it may render (prompt injection) and to validate
-// that emitted envelopes only reference known components. The renderer on the
-// client registers a matching @a2ui/* catalog under the same ID.
+// Catalog pins the set of components a surface may render. The [Surfaces]
+// middleware uses it to tell the model what it may render (prompt injection)
+// and to validate that emitted envelopes only reference known components. The
+// renderer on the client registers a matching @a2ui/* catalog under the same
+// ID.
 type Catalog struct {
 	// ID is a globally-unique catalog id (also used as catalogId on
 	// createSurface).

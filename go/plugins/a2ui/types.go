@@ -40,7 +40,7 @@ const A2UIMimeType = "application/a2ui+json"
 const DefaultVersion = "v0.9"
 
 // SupportedVersions is the set of A2UI protocol versions the plugin can stamp on
-// emitted envelopes. [Config.Version] is validated against it so a typo cannot
+// emitted envelopes. [Surfaces.Version] is validated against it so a typo cannot
 // stamp a version the renderer will reject at runtime. Matches the JS plugin's
 // SUPPORTED_VERSIONS.
 var SupportedVersions = []string{"v0.9", "v0.9.1"}
@@ -84,7 +84,7 @@ const BasicCatalogID = "https://a2ui.org/specification/v0_9/catalogs/basic/catal
 // them. Matches the JS plugin's value type.
 const CatalogValueType = "a2ui-catalog"
 
-// DefaultCatalogID is the id used when [Config] specifies neither Catalog nor
+// DefaultCatalogID is the id used when [Surfaces] specifies neither Catalog nor
 // CatalogID. It resolves to the bundled basic catalog.
 const DefaultCatalogID = "basic"
 

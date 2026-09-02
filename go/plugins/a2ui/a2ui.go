@@ -17,6 +17,7 @@
 package a2ui
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,7 +33,7 @@ import (
 // provider is the plugin/middleware namespace.
 const provider = "a2ui"
 
-// Instruction placement options for [Config.Instructions].
+// Instruction placement options for [Surfaces.Instructions].
 const (
 	// InstructionsSystem appends A2UI capabilities to the system prompt
 	// (default).
@@ -42,25 +43,28 @@ const (
 	InstructionsNone = "none"
 )
 
-// Config is the configuration for the A2UI [ai.Middleware]. Add it to a generate
-// call with [github.com/firebase/genkit/go/ai.WithUse].
+// Surfaces is the A2UI [ai.Middleware]: it lets the model stream UI surfaces
+// drawn from a catalog. Add it to a generate call with
+// [github.com/firebase/genkit/go/ai.WithUse].
 //
 // Example:
 //
 //	resp, err := genkit.Generate(ctx, g,
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("show me the weather in Tokyo"),
-//	    ai.WithUse(&a2ui.Config{}), // defaults to the bundled basic catalog
+//	    ai.WithUse(&a2ui.Surfaces{}), // defaults to the bundled basic catalog
 //	)
 //
 // Middleware ordering: A2UI keeps per-turn streaming state (a stream parser and
 // its minted surface ids) for the model call it wraps. Place any retrying or
 // fallback middleware (which re-invokes the model) OUTSIDE A2UI so each attempt
-// gets a fresh A2UI turn, i.e. WithUse(retry, &a2ui.Config{}) rather than
-// WithUse(&a2ui.Config{}, retry). WithUse(A, B) means A wraps B.
-type Config struct {
+// gets a fresh A2UI turn, i.e. WithUse(retry, &a2ui.Surfaces{}) rather than
+// WithUse(&a2ui.Surfaces{}, retry). WithUse(A, B) means A wraps B.
+//
+// Every field is per-call configuration; the [A2UI] plugin only registers the
+// middleware by name and carries no settings of its own.
+type Surfaces struct {
 	// Catalog describes what the agent may render, provided inline. When set it
-
 	// takes precedence over CatalogID. Not serialized, so it is only honored for
 	// code-defined use (not JSON/Dev-UI dispatch); prefer CatalogID with
 	// [LoadCatalog] for a registry-backed catalog that also survives dispatch
@@ -101,35 +105,26 @@ type Config struct {
 }
 
 // Name returns the middleware's stable identifier.
-func (c *Config) Name() string { return provider }
+func (c *Surfaces) Name() string { return provider }
 
 // New produces the per-call [ai.Hooks] bundle that implements the A2UI
 // integration.
-func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
+func (c *Surfaces) New(ctx context.Context) (*ai.Hooks, error) {
 	explicitCatalog := c.Catalog
 	catalogID := c.CatalogID
-	validate := c.Validate
-	if validate == "" {
-		validate = ValidateWarn
-	}
+	validate := cmp.Or(c.Validate, ValidateWarn)
 	if !validValidateModes[validate] {
 		return nil, fmt.Errorf(
 			"a2ui: invalid Validate %q; want one of %q, %q, %q",
 			validate, ValidateStrict, ValidateWarn, ValidateOff)
 	}
-	version := c.Version
-	if version == "" {
-		version = DefaultVersion
-	}
+	version := cmp.Or(c.Version, DefaultVersion)
 	if !supportedVersions[version] {
 		return nil, fmt.Errorf(
 			"a2ui: unsupported Version %q; want one of %s",
 			version, strings.Join(supportedVersionList(), ", "))
 	}
-	instructions := c.Instructions
-	if instructions == "" {
-		instructions = InstructionsSystem
-	}
+	instructions := cmp.Or(c.Instructions, InstructionsSystem)
 	if instructions != InstructionsSystem && instructions != InstructionsNone {
 		return nil, fmt.Errorf(
 			"a2ui: invalid Instructions %q; want %q or %q",
@@ -235,26 +230,33 @@ func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
 	return &ai.Hooks{WrapModel: wrapModel}, nil
 }
 
-// Plugin provides A2UI as a Genkit plugin so the middleware appears in the Dev
-// UI and can be referenced by name. Registering the plugin is optional: the
-// middleware works when passed directly to [ai.WithUse]. Register it with
-// [github.com/firebase/genkit/go/genkit.WithPlugins] during Init.
-type Plugin struct{}
+// A2UI provides the [Surfaces] middleware as a Genkit plugin, so it appears in
+// the Dev UI and can be referenced by name (for example from a prompt file's
+// `use:` list). Registering the plugin is optional: the middleware works when
+// passed directly to [ai.WithUse]. Register it with
+// [github.com/firebase/genkit/go/genkit.WithPlugins] during Init:
+//
+//	g := genkit.Init(ctx, genkit.WithPlugins(&a2ui.A2UI{}))
+//
+// The plugin carries no settings; every option lives on the per-call [Surfaces].
+type A2UI struct{}
 
-// Name returns the plugin's unique identifier.
-func (p *Plugin) Name() string { return provider }
+// Name returns the plugin's unique identifier, which is also the registered
+// name of the [Surfaces] middleware.
+func (p *A2UI) Name() string { return provider }
 
-// Init implements the plugin interface. A2UI registers no actions.
-func (p *Plugin) Init(ctx context.Context) []api.Action { return nil }
+// Init implements [api.Plugin]. A2UI registers no actions.
+func (p *A2UI) Init(ctx context.Context) []api.Action { return nil }
 
-// Middlewares exposes the A2UI middleware descriptor to Genkit.
-func (p *Plugin) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, error) {
+// Middlewares implements [ai.MiddlewarePlugin], exposing the [Surfaces]
+// middleware descriptor to Genkit.
+func (p *A2UI) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, error) {
 	return []*ai.MiddlewareDesc{
 		ai.NewMiddleware(
 			"Adds A2UI (Agent-to-UI) streaming UI support: injects catalog "+
 				"capabilities into the prompt and rewrites emitted UI blocks into "+
 				"a2ui data parts.",
-			&Config{},
+			&Surfaces{},
 		),
 	}, nil
 }

@@ -40,7 +40,7 @@ func main() {
 		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-flash-latest")),
 		ai.WithSystem("You help users. Render UI when it is clearer than prose."),
 		ai.WithPrompt("show me the weather in Tokyo"),
-		ai.WithUse(&a2ui.Config{}), // defaults to the bundled 'basic' catalog
+		ai.WithUse(&a2ui.Surfaces{}), // defaults to the bundled 'basic' catalog
 	)
 
 	// A2UI envelopes ride as data parts on the response message.
@@ -56,7 +56,7 @@ a2ui data parts.
 
 ### Options
 
-`a2ui.Config` fields:
+`a2ui.Surfaces` fields:
 
 | Field          | Default            | Description                                                                                       |
 | -------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
@@ -91,7 +91,7 @@ if err != nil { /* ... */ }
 resp, _ := genkit.Generate(ctx, g,
 	ai.WithModel(m),
 	ai.WithPrompt("..."),
-	ai.WithUse(&a2ui.Config{CatalogID: catalog.ID}),
+	ai.WithUse(&a2ui.Surfaces{CatalogID: catalog.ID}),
 )
 ```
 
@@ -105,14 +105,14 @@ myCatalog := &a2ui.Catalog{
 	},
 }
 a2ui.LoadCatalog(g, myCatalog)
-// ... ai.WithUse(&a2ui.Config{CatalogID: myCatalog.ID})
+// ... ai.WithUse(&a2ui.Surfaces{CatalogID: myCatalog.ID})
 ```
 
 Register the bundled basic catalog too (so it shows up in the Dev UI) with
 `a2ui.RegisterBasicCatalog(g)`.
 
 The middleware resolves the catalog for each turn in this order: an inline
-`Config.Catalog` (code-defined only), then `Config.CatalogID` looked up from the
+`Surfaces.Catalog` (code-defined only), then `Surfaces.CatalogID` looked up from the
 registry, then the bundled basic catalog. Prefer `CatalogID`: unlike an inline
 `Catalog`, it survives JSON/Dev-UI dispatch and appears in tooling.
 
@@ -139,12 +139,12 @@ any message/chunk content.
 
 ## Registering as a plugin (optional)
 
-Passing `&a2ui.Config{}` to `ai.WithUse` is all you need. If you also want the
+Passing `&a2ui.Surfaces{}` to `ai.WithUse` is all you need. If you also want the
 middleware to appear in the Dev UI and be referenceable by name, register the
 plugin during init:
 
 ```go
-g := genkit.Init(ctx, genkit.WithPlugins(&a2ui.Plugin{}, &googlegenai.GoogleAI{}))
+g := genkit.Init(ctx, genkit.WithPlugins(&a2ui.A2UI{}, &googlegenai.GoogleAI{}))
 ```
 
 ## Try it with the web UI
@@ -195,7 +195,7 @@ The A2UI team is standardizing prompt formatting, catalog management, and
 inference inside official SDKs (a2ui-core / a2ui-agent). Those are the eventual
 home for the prompt-rendering, parsing, and validation this plugin does today,
 so treat those internals as thin and replaceable. The stable surface is the
-`a2ui.Config` entrypoint and the spec-defined wire part
+`a2ui.Surfaces` entrypoint and the spec-defined wire part
 (`application/a2ui+json`), both of which are unaffected by an SDK swap.
 
 
