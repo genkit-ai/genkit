@@ -328,7 +328,13 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
         with patch('genkit_google_genai.google.VeoModel.start', new_callable=AsyncMock) as mock_start:
             await action.run({
                 'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
-                'config': {'aspectRatio': '16:9', 'durationSeconds': 5},
+                'config': {
+                    'aspectRatio': '16:9',
+                    'durationSeconds': 5,
+                    'baseUrl': 'https://request.example',
+                    'apiVersion': 'v1',
+                    'location': 'eu',
+                },
             })
             called = mock_start.await_args
             assert called is not None
@@ -336,6 +342,9 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
             assert isinstance(request.config, VeoConfig)
             assert request.config.aspect_ratio == '16:9'
             assert request.config.duration_seconds == 5
+            assert request.config.base_url == 'https://request.example'
+            assert request.config.api_version == 'v1'
+            assert request.config.location == 'eu'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -576,6 +585,58 @@ async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
     assert action.name == 'googleai/veo-3.0-generate-001'
+
+
+@patch('genkit_google_genai.models.veo.genai.Client')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_and_check_operation_apply_veo_context_and_config(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_veo_client: MagicMock,
+) -> None:
+    """The public background calls keep tenant auth and routing on both requests."""
+    mock_list_models.return_value = GenaiModels()
+    sdk_op = MagicMock()
+    sdk_op.name = 'operations/1'
+    sdk_op.done = False
+    sdk_op.error = None
+    sdk_op.response = None
+    request_client = mock_veo_client.return_value
+    request_client.aio.models.generate_videos = AsyncMock(return_value=sdk_op)
+    request_client.aio.operations.get = AsyncMock(return_value=sdk_op)
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    context = {'secrets': {'api_key': 'tenant-key'}}
+
+    operation = await ai.generate_operation(
+        model='googleai/veo-3.0-generate-001',
+        prompt='a cat walking',
+        config={'aspectRatio': '16:9', 'baseUrl': 'https://request.example', 'apiVersion': 'v1'},
+        context=context,
+    )
+
+    start_kwargs = mock_veo_client.call_args.kwargs
+    assert start_kwargs['api_key'] == 'tenant-key'
+    assert start_kwargs['http_options'].base_url == 'https://request.example'
+    assert start_kwargs['http_options'].api_version == 'v1'
+    start_call = request_client.aio.models.generate_videos.await_args
+    assert start_call is not None
+    start_config = start_call.kwargs['config']
+    assert start_config.aspect_ratio == '16:9'
+    assert start_config.http_options is None
+
+    await ai.check_operation(
+        operation,
+        context=context,
+        config={'base_url': 'https://poll.example', 'api_version': 'v1beta'},
+    )
+
+    check_kwargs = mock_veo_client.call_args.kwargs
+    assert check_kwargs['api_key'] == 'tenant-key'
+    assert check_kwargs['http_options'].base_url == 'https://poll.example'
+    assert check_kwargs['http_options'].api_version == 'v1beta'
+    request_client.aio.operations.get.assert_awaited_once()
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
