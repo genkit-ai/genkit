@@ -244,3 +244,34 @@ const response = await ai.generate({
   ]
 });
 ```
+
+### 8. Context Compression Middleware (`contextCompression`)
+
+Compresses conversation context when it grows too large, reducing token usage and costs in agentic workflows and tool loops. Compression triggers when estimated tokens or previous turn usage exceeds `maxInputTokens`.
+
+**Strategies applied:**
+
+1. **Safety cap**: Hard-truncates any single oversized tool response (`maxToolResponseChars`, default: 400,000 chars).
+2. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent responses.
+3. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, optionally inserting a notice.
+
+```typescript
+import { genkit } from 'genkit';
+import { contextCompression } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-pro'),
+  prompt: 'Research and summarize...',
+  tools: [searchTool],
+  use: [
+    contextCompression({
+      maxInputTokens: 80000,
+      toolResponses: { maxChars: 2000, preserveRecent: 2 },
+      maxMessages: 20,
+    }),
+  ],
+});
+```
+
