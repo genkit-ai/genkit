@@ -46,6 +46,7 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
+    GenkitRuntimeError,
     Media,
     MediaModel,
     MediaPart,
@@ -506,6 +507,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
+    error: GenkitRuntimeError | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -526,6 +528,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     def assert_valid(self) -> None:
         """No-op. A blocked or empty reply is still a response the caller can read."""
 
+    def _mark_invalid_output(self, message: str) -> None:
+        self.finish_reason = FinishReason.FAILED
+        self.finish_message = message
+        self.error = GenkitRuntimeError(status='INTERNAL', message=message)
+
     def assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
@@ -544,8 +551,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             parsed = self._raw_parsed_output()
         except ValueError:
             preview = (self.text or '')[:200]
-            self.finish_reason = FinishReason.FAILED
-            self.finish_message = f'Model output was not valid JSON for the requested schema: {preview}'
+            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
             return
 
         # A custom format's parser can return a string on purpose (enum,
@@ -558,8 +564,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 except GenkitError as error:
                     if error.original_message.startswith('Invalid output_schema'):
                         raise
-                    self.finish_reason = FinishReason.FAILED
-                    self.finish_message = error.original_message
+                    self._mark_invalid_output(error.original_message)
             return
 
         if schema is not None:
@@ -568,16 +573,14 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             except GenkitError as error:
                 if error.original_message.startswith('Invalid output_schema'):
                     raise
-                self.finish_reason = FinishReason.FAILED
-                self.finish_message = error.original_message
+                self._mark_invalid_output(error.original_message)
                 return
         if self._schema_type is None:
             return
         try:
             _ = self._schema_type.model_validate(parsed)
         except ValidationError:
-            self.finish_reason = FinishReason.FAILED
-            self.finish_message = 'Model output did not match the requested schema.'
+            self._mark_invalid_output('Model output did not match the requested schema.')
 
     def _raw_parsed_output(self) -> object:
         if self._message_parser and self.message is not None:

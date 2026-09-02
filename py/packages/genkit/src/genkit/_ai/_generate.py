@@ -47,7 +47,12 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
 )
-from genkit._core._background import _ensure_operation, missing_operation_error, stamp_operation_action
+from genkit._core._background import (
+    MissingOperationError,
+    _ensure_operation,
+    missing_operation_error,
+    stamp_operation_action,
+)
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -72,6 +77,7 @@ from genkit._core._schema import check_output_schema
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
+    GenkitRuntimeError,
     MiddlewareRef,
     MultipartToolResponse,
     Operation,
@@ -91,6 +97,19 @@ logger = get_logger(__name__)
 
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
+
+
+class StreamingCallbackError(Exception):
+    """Carries a caller callback failure through generate's failure handling."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+class ModelContractError(GenkitError):
+    """A model action returned a value its registered kind cannot use."""
+
 
 # A termination known to be abnormal carries no conforming output, so a schema
 # error here would mask the finish reason the caller needs to handle it.
@@ -321,6 +340,7 @@ class _GenerateMiddlewarePipeline:
 
     middleware: list[MiddlewareDef]
     ctx: GenerateMiddlewareContext
+    latest_messages: list[Message]
 
 
 def _prepare_middleware(
@@ -332,6 +352,7 @@ def _prepare_middleware(
     return _GenerateMiddlewarePipeline(
         middleware=[_copy_middleware_instance(mw) for mw in middleware],
         ctx=ctx,
+        latest_messages=[],
     )
 
 
@@ -615,10 +636,20 @@ async def generate_with_request(
         raw_request.tools = await expand_wildcard_tools(registry, raw_request.tools)
 
     middleware = resolve_middleware_from_use(registry, raw_request.use)
+    caller_on_chunk = on_chunk
+
+    def send_caller_chunk(chunk: ModelResponseChunk) -> None:
+        if caller_on_chunk is None:
+            return
+        try:
+            caller_on_chunk(chunk)
+        except Exception as exc:
+            raise StreamingCallbackError(exc) from exc
+
     run_ctx = GenerateMiddlewareContext(
         ai=ScopedGenkitView(registry),
         custom_context=dict(context or {}),
-        on_chunk=on_chunk,
+        on_chunk=send_caller_chunk if caller_on_chunk is not None else None,
         abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
     )
 
@@ -642,7 +673,7 @@ async def generate_with_request(
             raw_request = raw_request.model_copy()
             raw_request.tools = existing
     else:
-        mw_pipeline = _GenerateMiddlewarePipeline(middleware=[], ctx=run_ctx)
+        mw_pipeline = _GenerateMiddlewarePipeline(middleware=[], ctx=run_ctx, latest_messages=[])
 
     if is_debug_enabled(logger):
         resolved: dict[str, object] = {
@@ -756,7 +787,7 @@ def box_background_start(
 def require_model_response(*, raw: object, name: str) -> ModelResponse:
     """A chat model returns a ModelResponse, not a dict or a job handle."""
     if isinstance(raw, Operation) or (isinstance(raw, ModelResponse) and raw.operation is not None):
-        raise GenkitError(
+        raise ModelContractError(
             status='FAILED_PRECONDITION',
             message=(
                 f"Model '{name}' is a regular model that returns a response immediately. "
@@ -764,7 +795,7 @@ def require_model_response(*, raw: object, name: str) -> ModelResponse:
             ),
         )
     if not isinstance(raw, ModelResponse):
-        raise GenkitError(
+        raise ModelContractError(
             status='FAILED_PRECONDITION',
             message=f"Model '{name}' did not return a ModelResponse.",
         )
@@ -797,6 +828,63 @@ def _persist_threaded_conversation(response: ModelResponse, messages: list[Messa
     return response
 
 
+def closed_round_failure(
+    *,
+    response: ModelResponse | None,
+    messages: list[Message],
+    finish_reason: FinishReason,
+    finish_message: str,
+    error: GenkitRuntimeError,
+) -> ModelResponse:
+    """Stop before this turn closed: only completed rounds stay.
+
+    The unanswered model call is dropped so the caller can send the
+    history again.
+    """
+    out = response if response is not None else ModelResponse()
+    out.finish_reason = finish_reason
+    out.finish_message = finish_message
+    out.error = error
+    out.message = None
+    if out.request is None:
+        out.request = ModelRequest(messages=list(messages))
+    return _persist_threaded_conversation(out, messages)
+
+
+def closed_round_from_exc(
+    *,
+    response: ModelResponse | None,
+    messages: list[Message],
+    exc: BaseException,
+    caller_stopped: bool,
+) -> ModelResponse:
+    if isinstance(exc, StreamingCallbackError):
+        raise exc.cause
+    if isinstance(exc, MissingOperationError | ModelContractError):
+        raise exc
+    if isinstance(exc, GenkitError) and isinstance(exc.cause, ValidationError):
+        raise exc
+    if isinstance(exc, Interrupt):
+        raise
+    finish_message = str(exc) or type(exc).__name__
+    if isinstance(exc, GenkitError):
+        status = exc.status
+        details = exc.details
+    elif isinstance(exc, asyncio.CancelledError):
+        status = 'CANCELLED'
+        details = None
+    else:
+        status = 'INTERNAL'
+        details = None
+    return closed_round_failure(
+        response=response,
+        messages=messages,
+        finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
+        finish_message=finish_message,
+        error=GenkitRuntimeError(status=status, message=finish_message, details=details),
+    )
+
+
 async def _generate_action_turn(
     registry: Registry,
     raw_request: GenerateActionOptions,
@@ -807,7 +895,15 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
-    raise_if_aborted(run_ctx.abort_signal)
+    mw_pipeline.latest_messages = list(raw_request.messages or [])
+    if run_ctx.abort_signal.is_set():
+        return closed_round_failure(
+            response=None,
+            messages=list(raw_request.messages or []),
+            finish_reason=FinishReason.ABORTED,
+            finish_message='Generation aborted.',
+            error=GenkitRuntimeError(status='ABORTED', message='Generation aborted.'),
+        )
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
     boxed_start = BoxedStart()
@@ -963,11 +1059,19 @@ async def _generate_action_turn(
                 return boxed_start.response
             return require_model_response(raw=raw, name=model.name)
 
-        with chunks.intercept_model_stream(ctx, role=Role.MODEL):
-            model_response = await dispatch_model(
-                ModelHookParams(request=request),
-                ctx,
-                next_fn,
+        try:
+            with chunks.intercept_model_stream(ctx, role=Role.MODEL):
+                model_response = await dispatch_model(
+                    ModelHookParams(request=request),
+                    ctx,
+                    next_fn,
+                )
+        except (Exception, asyncio.CancelledError) as exc:
+            return closed_round_from_exc(
+                response=None,
+                messages=list(turn_options.messages),
+                exc=exc,
+                caller_stopped=ctx.abort_signal.is_set() or isinstance(exc, asyncio.CancelledError),
             )
         assert_hook_kept_operation(
             boxed=boxed_start.response,
@@ -1056,10 +1160,21 @@ async def _generate_action_turn(
         if current_turn + 1 > max_iters:
             response.finish_reason = FinishReason.ABORTED
             response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
+            response.error = GenkitRuntimeError(status='ABORTED', message=response.finish_message)
             log_responded()
+            # This model call opened a tool round we will not run. Only
+            # closed rounds are history, so the unanswered request is dropped.
+            response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
 
-        raise_if_aborted(ctx.abort_signal)
+        if ctx.abort_signal.is_set():
+            return closed_round_failure(
+                response=response,
+                messages=list(turn_options.messages),
+                finish_reason=FinishReason.ABORTED,
+                finish_message='Generation aborted.',
+                error=GenkitRuntimeError(status='ABORTED', message='Generation aborted.'),
+            )
 
         known_tools = {t.name for t in turn_tools}
         if turn_options.tools:
@@ -1075,16 +1190,26 @@ async def _generate_action_turn(
         if missing_tool is not None:
             response.finish_reason = FinishReason.FAILED
             response.finish_message = f'Tool {missing_tool} not found'
+            response.error = GenkitRuntimeError(status='NOT_FOUND', message=response.finish_message)
             log_responded()
+            response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
 
-        revised_model_msg, tool_msg = await resolve_tool_requests(
-            registry=registry,
-            request=turn_options,
-            message=generated_msg,
-            mw_pipeline=mw_pipeline,
-            abort_signal=ctx.abort_signal,
-        )
+        try:
+            revised_model_msg, tool_msg = await resolve_tool_requests(
+                registry=registry,
+                request=turn_options,
+                message=generated_msg,
+                mw_pipeline=mw_pipeline,
+                abort_signal=ctx.abort_signal,
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            return closed_round_from_exc(
+                response=response,
+                messages=list(turn_options.messages),
+                exc=exc,
+                caller_stopped=ctx.abort_signal.is_set() or isinstance(exc, asyncio.CancelledError),
+            )
 
         # if an interrupt message is returned, stop the tool loop and return a
         # response.
@@ -1133,7 +1258,15 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=chunks.message_index,
     )
-    response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    try:
+        response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
+    except (Exception, asyncio.CancelledError) as exc:
+        return closed_round_from_exc(
+            response=None,
+            messages=mw_pipeline.latest_messages,
+            exc=exc,
+            caller_stopped=run_ctx.abort_signal.is_set() or isinstance(exc, asyncio.CancelledError),
+        )
     assert_hook_kept_operation(
         boxed=boxed_start.response,
         after_hooks=response,

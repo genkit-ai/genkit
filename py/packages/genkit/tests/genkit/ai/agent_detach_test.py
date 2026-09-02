@@ -37,6 +37,7 @@ from genkit._core._typing import (
     AgentInput,
     AgentResult,
     AgentStreamChunk,
+    FinishReason,
     MessageData,
     ModelResponseChunk,
     Part,
@@ -350,17 +351,18 @@ async def test_generate_tool_respects_abort_signal() -> None:
     )
 
     async def run_generate() -> None:
-        with pytest.raises(GenkitError) as exc_info:
-            await generate_action(
-                ai.registry,
-                GenerateActionOptions(
-                    model='programmableModel',
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
-                    tools=['slowWork'],
-                ),
-                abort_signal=abort_signal,
-            )
-        assert exc_info.value.status == 'ABORTED'
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
+                tools=['slowWork'],
+            ),
+            abort_signal=abort_signal,
+        )
+        assert response.finish_reason == FinishReason.ABORTED
+        assert response.message is None
+        assert [m.role for m in response.messages] == [Role.USER]
 
     task = asyncio.create_task(run_generate())
     await asyncio.sleep(0.05)
