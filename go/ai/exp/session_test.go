@@ -108,26 +108,11 @@ func TestSnapshotStatus_Terminal(t *testing.T) {
 // --- waitForSnapshot ---
 
 // unsubscribableStore is a [SessionStore] that deliberately does not implement
-// [SnapshotSubscriber], so a wait on it falls back to re-reading. It forwards
-// to testInMemStore rather than embedding it, because embedding would promote
-// the subscription method and defeat the point.
-type unsubscribableStore[State any] struct{ inner *testInMemStore[State] }
-
-func (s unsubscribableStore[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
-	return s.inner.GetSnapshot(ctx, snapshotID)
-}
-
-func (s unsubscribableStore[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
-	return s.inner.GetLatestSnapshot(ctx, sessionID)
-}
-
-func (s unsubscribableStore[State]) SaveSnapshot(
-	ctx context.Context,
-	snapshotID string,
-	fn func(*SessionSnapshot[State]) (*SessionSnapshot[State], error),
-) (*SessionSnapshot[State], error) {
-	return s.inner.SaveSnapshot(ctx, snapshotID, fn)
-}
+// [SnapshotSubscriber], so a wait on it falls back to re-reading. It embeds
+// the interface rather than testInMemStore: embedding the interface promotes
+// only its three methods, where embedding the store would promote the
+// subscription method and defeat the point.
+type unsubscribableStore[State any] struct{ SessionStore[State] }
 
 // tipText returns the text of a state's last message: the settled turn's
 // response, as a reader of the persisted conversation sees it.
@@ -225,7 +210,7 @@ func TestWaitSnapshot_RereadsWithoutSubscriber(t *testing.T) {
 	t.Cleanup(func() { snapshotWaitPollInterval = restore })
 
 	inner := newTestInMemStore[any]()
-	store := unsubscribableStore[any]{inner: inner}
+	store := unsubscribableStore[any]{SessionStore: inner}
 	beat := time.Now()
 	putSnapshot[any](t, store, &SessionSnapshot[any]{
 		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,

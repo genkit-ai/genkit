@@ -451,19 +451,7 @@ func (t *actionTransport) snapshotVia(ctx context.Context, act api.Action, verb 
 			"agent %q publishes no action to %s a snapshot; an agent publishes one only when it has a session store",
 			t.name, verb)
 	}
-	reqJSON, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("agent %q: marshal snapshot request: %w", t.name, err)
-	}
-	raw, err := act.RunJSON(ctx, reqJSON, nil)
-	if err != nil {
-		return nil, err
-	}
-	var snap SessionSnapshot[json.RawMessage]
-	if err := json.Unmarshal(raw, &snap); err != nil {
-		return nil, fmt.Errorf("agent %q: unmarshal snapshot: %w", t.name, err)
-	}
-	return &snap, nil
+	return callJSON[SessionSnapshot[json.RawMessage]](ctx, t.name, act, "snapshot", req)
 }
 
 func (t *actionTransport) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
@@ -479,19 +467,31 @@ func (t *actionTransport) Abort(ctx context.Context, snapshotID string) (Snapsho
 		return "", status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: the session store does not support abort (it does not implement SnapshotSubscriber)", t.name)
 	}
-	reqJSON, err := json.Marshal(&AgentAbortRequest{SnapshotID: snapshotID})
-	if err != nil {
-		return "", fmt.Errorf("agent %q: marshal abort request: %w", t.name, err)
-	}
-	raw, err := t.abort.RunJSON(ctx, reqJSON, nil)
+	resp, err := callJSON[AgentAbortResponse](ctx, t.name, t.abort, "abort", &AgentAbortRequest{SnapshotID: snapshotID})
 	if err != nil {
 		return "", err
 	}
-	var resp AgentAbortResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return "", fmt.Errorf("agent %q: unmarshal abort response: %w", t.name, err)
-	}
 	return resp.Status, nil
+}
+
+// callJSON dispatches req to act, one of the agent's companion actions, and
+// decodes the result into Resp. what names the exchange in the marshal and
+// unmarshal errors; a dispatch error is returned as is, so its status stays
+// matchable.
+func callJSON[Resp any](ctx context.Context, agentName string, act api.Action, what string, req any) (*Resp, error) {
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q: marshal %s request: %w", agentName, what, err)
+	}
+	raw, err := act.RunJSON(ctx, reqJSON, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp Resp
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("agent %q: unmarshal %s response: %w", agentName, what, err)
+	}
+	return &resp, nil
 }
 
 // --- DetachedTask ---
