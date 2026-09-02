@@ -17,11 +17,7 @@
 """GCP Cloud Logging integration for Genkit telemetry.
 
 This module provides a logger that writes structured logs directly to
-Google Cloud Logging with trace correlation, enabling visibility in
-the Firebase AIM dashboard.
-
-This is analogous to the JavaScript implementation in:
-- js/plugins/google-cloud/src/gcpLogger.ts
+Google Cloud Logging with trace correlation.
 
 Usage:
     from genkit_google_cloud.telemetry.gcp_logger import gcp_logger
@@ -51,8 +47,8 @@ class GcpLogger:
     """Logger for writing structured logs to Cloud Logging.
 
     This class provides a simple interface for writing logs that appear
-    in the Firebase AIM dashboard. It writes directly to Cloud Logging
-    using the google-cloud-logging client library.
+    in Cloud Logging. It writes directly to Cloud Logging using the
+    google-cloud-logging client library.
     """
 
     def __init__(self) -> None:
@@ -80,7 +76,7 @@ class GcpLogger:
 
         Behavior:
             - export=False: Local logging only (console output)
-            - export=True: Logs sent to Cloud Logging for AIM visibility
+            - export=True: Logs sent to Cloud Logging
         """
         if self._initialized:
             logger.debug('GcpLogger already initialized, skipping re-initialization')
@@ -105,7 +101,7 @@ class GcpLogger:
                 'GcpLogger initialization FAILED: project_id required for export=True',
                 export=True,
                 project_id=None,
-                consequence='Telemetry logs will NOT appear in Cloud Logging or AIM dashboard',
+                consequence='Telemetry logs will NOT appear in Cloud Logging',
                 fix='Provide project_id when calling enable_google_cloud_telemetry()',
             )
             self._initialized = True  # Mark initialized to prevent repeated errors
@@ -128,7 +124,7 @@ class GcpLogger:
                 export=True,
                 project_id=project_id,
                 log_name='genkit_log',
-                consequence='Logs will appear in Cloud Logging and AIM dashboard',
+                consequence='Logs will appear in Cloud Logging',
             )
         except ImportError:
             logger.error(

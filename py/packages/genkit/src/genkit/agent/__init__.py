@@ -14,7 +14,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Agent types for defining and running bidirectional streaming agents."""
+"""Agent types for defining and running bidirectional streaming agents.
+
+Example:
+    from genkit import Genkit
+    from genkit.agent import InMemorySessionStore
+    from genkit_google_genai import GoogleAI
+
+    ai = Genkit(plugins=[GoogleAI()])
+
+    @ai.tool()
+    async def current_weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    agent = ai.define_agent(
+        name='weatherAgent',
+        model=GoogleAI.gemini_model('gemini-flash-latest'),
+        system='Weather assistant.',
+        tools=[current_weather],
+        store=InMemorySessionStore(),
+    )
+    chat = agent.chat()
+    res = await chat.send('Weather in Paris?')
+"""
 
 from genkit._ai._agents._base import Agent
 from genkit._ai._agents._client import (

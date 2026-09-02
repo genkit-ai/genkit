@@ -19,7 +19,6 @@
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import genkit_anthropic.models as anthropic_models
 import httpx
 import pytest
 from anthropic import APIConnectionError, APIError, APIStatusError
@@ -69,11 +68,11 @@ def _model_failing_with(error: Exception) -> AnthropicModel:
         (500, 'INTERNAL'),
         (503, 'UNAVAILABLE'),
         (529, 'UNAVAILABLE'),
-        (404, 'UNKNOWN'),
+        (404, 'NOT_FOUND'),
     ],
 )
 async def test_generate_maps_anthropic_status_errors(status_code: int, expected_status: StatusName) -> None:
-    """Map only the status codes supported by the JavaScript adapter."""
+    """HTTP codes go through the shared map; 529 stays overloaded/unavailable."""
     api_error = _status_error(status_code)
     model = _model_failing_with(api_error)
 
@@ -181,54 +180,6 @@ async def test_generate_maps_streaming_anthropic_errors() -> None:
     assert error.response_metadata == {'retry_after_ms': 1000.0}
     assert error.cause is None
     assert error.__cause__ is api_error
-
-
-@pytest.mark.parametrize(
-    ('value', 'expected_ms'),
-    [
-        ('2', 2000.0),
-        (' 1.5 ', 1500.0),
-        ('0', 0.0),
-    ],
-)
-def test_parse_retry_after_delay_seconds(value: str, expected_ms: float) -> None:
-    """Parse whole, fractional, and zero delay-seconds values."""
-    assert anthropic_models._parse_retry_after_ms(value) == expected_ms
-
-
-@pytest.mark.parametrize('value', ['', '   ', 'not-a-delay'])
-def test_parse_retry_after_rejects_blank_and_malformed_values(value: str) -> None:
-    """Do not attach metadata for blank or malformed header values."""
-    assert anthropic_models._parse_retry_after_ms(value) is None
-
-
-@pytest.mark.parametrize('value', ['inf', 'Infinity', 'nan', '1e999', '1e307'])
-def test_parse_retry_after_rejects_non_finite_delays(value: str) -> None:
-    """Reject delays that are, or scale to, non-finite milliseconds."""
-    assert anthropic_models._parse_retry_after_ms(value) is None
-
-
-def test_parse_retry_after_future_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Convert a future HTTP-date to a relative millisecond delay."""
-    monkeypatch.setattr(anthropic_models.time, 'time', lambda: 1_700_000_000.0)
-
-    assert anthropic_models._parse_retry_after_ms('Tue, 14 Nov 2023 22:13:25 GMT') == 5000.0
-
-
-def test_parse_retry_after_past_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clamp a past HTTP-date delay to zero."""
-    monkeypatch.setattr(anthropic_models.time, 'time', lambda: 1_700_000_000.0)
-
-    assert anthropic_models._parse_retry_after_ms('Tue, 14 Nov 2023 22:13:15 GMT') == 0.0
-
-
-def test_parse_retry_after_returns_none_on_timestamp_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ignore platform timestamp failures for parseable dates."""
-    retry_at = MagicMock()
-    retry_at.timestamp.side_effect = OSError
-    monkeypatch.setattr(anthropic_models, 'parsedate_to_datetime', lambda _: retry_at)
-
-    assert anthropic_models._parse_retry_after_ms('Thu, 01 Jan 1601 00:00:00') is None
 
 
 @pytest.mark.asyncio

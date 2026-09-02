@@ -20,7 +20,7 @@ from genkit_google_genai import GoogleAI
 
 from genkit import Genkit, Media, MediaPart, MultipartToolResponse, response
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 # 1x1 PNG so the tool message has real media without a camera.
 _PNG = MediaPart(
@@ -43,22 +43,14 @@ async def screenshot(label: str) -> MultipartToolResponse:
     return response({'ok': True, 'label': label}, parts=[_PNG], metadata={'src': 'lab-cam'})
 
 
-@ai.flow()
-async def ask_about_the_lab() -> str:
-    """Ask the model to check the weather and snap the lab."""
+async def main() -> None:
     res = await ai.generate(
         prompt='What is the weather in Austin, and take a screenshot of the lab camera.',
-        tools=['weather', 'screenshot'],
+        tools=[weather, screenshot],
     )
-    return res.text
-
-
-async def main() -> None:
-    try:
-        print(await ask_about_the_lab())
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')
+    print(res.text)
 
 
 if __name__ == '__main__':
     ai.run_main(main())
+

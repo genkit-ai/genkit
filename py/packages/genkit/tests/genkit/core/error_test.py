@@ -16,7 +16,12 @@
 
 """Unit tests for the error module."""
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from genkit import ErrorResponseMetadata
+from genkit._core import _error as error_mod
 from genkit._core._error import (
     GenkitError,
     PublicError,
@@ -24,6 +29,8 @@ from genkit._core._error import (
     get_callable_json,
     get_error_stack,
     get_http_status,
+    parse_retry_after_ms,
+    wrap_http_error,
 )
 
 
@@ -123,3 +130,118 @@ def test_get_error_stack() -> None:
     except ValueError as e:
         tb = get_error_stack(e)
         assert tb == ''
+
+
+def test_wrap_http_error_classifies_status() -> None:
+    cause = RuntimeError('bad request')
+    error = wrap_http_error(cause, status_code=400)
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.cause is cause
+    assert error.original_message == 'bad request'
+
+
+def test_wrap_http_error_marks_503_unavailable() -> None:
+    """A 503 must stay retryable — not collapse to INTERNAL."""
+    cause = RuntimeError('overloaded')
+    error = wrap_http_error(cause, status_code=503)
+    assert error.status == 'UNAVAILABLE'
+    assert error.cause is cause
+
+
+def test_wrap_http_error_coerces_string_status_code() -> None:
+    """Some SDKs leave the code as a string; still classify a real 503."""
+    cause = RuntimeError('overloaded')
+    error = wrap_http_error(cause, status_code='503')
+    assert error.status == 'UNAVAILABLE'
+
+
+@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301])
+def test_wrap_http_error_leaves_missing_status_unclassified(status_code: object) -> None:
+    """No HTTP failure status means retry still sees the raw error."""
+    cause = RuntimeError('model failed')
+    with pytest.raises(RuntimeError) as raised:
+        wrap_http_error(cause, status_code=status_code)
+    assert raised.value is cause
+
+
+def test_wrap_http_error_marks_408_deadline_exceeded() -> None:
+    """A request timeout is transient — retry should wait and try again."""
+    cause = RuntimeError('request timeout')
+    error = wrap_http_error(cause, status_code=408)
+    assert error.status == 'DEADLINE_EXCEEDED'
+    assert error.cause is cause
+
+
+def test_wrap_http_error_reads_retry_after() -> None:
+    """Retry should wait the provider delay, not come back in a second."""
+
+    class FakeResponse:
+        headers = {'retry-after': '60'}
+
+    class FakeError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__('rate limited')
+            self.response = FakeResponse()
+
+    error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.response_metadata == {'retry_after_ms': 60000.0}
+    assert error.to_callable_serializable().message == 'rate limited'
+
+
+def test_callable_wire_uses_original_message_when_cause_is_set() -> None:
+    """The callable wire shows the provider text, not the SDK repr."""
+    error = GenkitError(
+        status='UNAVAILABLE',
+        message='overloaded',
+        cause=RuntimeError('APIError(503 UNAVAILABLE)'),
+    )
+    assert get_callable_json(error)['message'] == 'overloaded'
+
+
+@pytest.mark.parametrize(
+    ('value', 'expected_ms'),
+    [
+        ('2', 2000.0),
+        (' 1.5 ', 1500.0),
+        ('0', 0.0),
+    ],
+)
+def test_parse_retry_after_delay_seconds(value: str, expected_ms: float) -> None:
+    """Parse whole, fractional, and zero delay-seconds values."""
+    assert parse_retry_after_ms(value) == expected_ms
+
+
+@pytest.mark.parametrize('value', ['', '   ', 'not-a-delay'])
+def test_parse_retry_after_rejects_blank_and_malformed_values(value: str) -> None:
+    """Do not attach metadata for blank or malformed header values."""
+    assert parse_retry_after_ms(value) is None
+
+
+@pytest.mark.parametrize('value', ['inf', 'Infinity', 'nan', '1e999', '1e307'])
+def test_parse_retry_after_rejects_non_finite_delays(value: str) -> None:
+    """Reject delays that are, or scale to, non-finite milliseconds."""
+    assert parse_retry_after_ms(value) is None
+
+
+def test_parse_retry_after_future_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Convert a future HTTP-date to a relative millisecond delay."""
+    monkeypatch.setattr(error_mod.time, 'time', lambda: 1_700_000_000.0)
+
+    assert parse_retry_after_ms('Tue, 14 Nov 2023 22:13:25 GMT') == 5000.0
+
+
+def test_parse_retry_after_past_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clamp a past HTTP-date delay to zero."""
+    monkeypatch.setattr(error_mod.time, 'time', lambda: 1_700_000_000.0)
+
+    assert parse_retry_after_ms('Tue, 14 Nov 2023 22:13:15 GMT') == 0.0
+
+
+def test_parse_retry_after_returns_none_on_timestamp_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore platform timestamp failures for parseable dates."""
+    retry_at = MagicMock()
+    retry_at.timestamp.side_effect = OSError
+    monkeypatch.setattr(error_mod, 'parsedate_to_datetime', lambda _: retry_at)
+
+    assert parse_retry_after_ms('Thu, 01 Jan 1601 00:00:00') is None

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model protocol types for plugin authors."""
+"""Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
 from genkit._ai._model import (
     ModelConfigDict,

@@ -18,13 +18,11 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel
-
 from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -48,6 +46,13 @@ def _make_action_key(action_type: ActionKind | str, name: str) -> str:
         Action key in format /{action_type}/{name}.
     """
     return f'/{action_type}/{name}'
+
+
+def stamp_operation_action(*, operation: Operation, name: str) -> None:
+    """A handle needs the start action key so check/cancel can find the job."""
+    if operation.action:
+        return
+    operation.action = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
 
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
@@ -119,7 +124,7 @@ class BackgroundAction(Generic[OutputT]):
             An Operation with an ID to track the job.
         """
         result = await self.start_action.run(input)
-        return _ensure_operation(result.response)
+        return _ensure_operation(response=result.response, name=self.start_action.name)
 
     async def check(self, operation: Operation) -> Operation:
         """Check the status of a background operation.
@@ -129,53 +134,54 @@ class BackgroundAction(Generic[OutputT]):
 
         Returns:
             Updated Operation with current status.
+
+        Raises:
+            GenkitError: INVALID_ARGUMENT if ``operation`` is not a live
+                ``Operation`` (e.g. a dump or a ``ModelResponse``).
         """
+        operation = require_operation(value=operation)
         result = await self.check_action.run(operation)
-        return _ensure_operation(result.response)
+        return _ensure_operation(response=result.response, name=self.check_action.name)
 
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel a background operation.
-
-        If cancellation is not supported, returns the operation unchanged.
 
         Args:
             operation: The operation to cancel.
 
         Returns:
             Updated Operation reflecting cancellation attempt.
+
+        Raises:
+            GenkitError: UNIMPLEMENTED if this action does not implement
+                cancel, INVALID_ARGUMENT if ``operation`` is not a live
+                ``Operation``.
         """
+        operation = require_operation(value=operation)
+        # Raising here is deliberate: returning the operation unchanged would
+        # make "this model can't cancel" indistinguishable from "cancelled".
         if self.cancel_action is None:
-            # Return operation unchanged if cancel not supported
-            return operation
+            raise GenkitError(
+                status='UNIMPLEMENTED',
+                message=f'Background action {operation.action} does not support cancellation.',
+            )
         result = await self.cancel_action.run(operation)
-        return _ensure_operation(result.response)
+        return _ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
-def _ensure_operation(response: Any) -> Operation:  # noqa: ANN401
-    """Convert response to Operation type."""
+def missing_operation_error(*, name: str) -> GenkitError:
+    """The caller asked for a handle and this action did not return one."""
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=f"'{name}' did not return an operation.",
+    )
+
+
+def _ensure_operation(*, response: object, name: str) -> Operation:
+    """A start/check/cancel fn returns an Operation, not a dict."""
     if isinstance(response, Operation):
         return response
-    if isinstance(response, dict):
-        return Operation.model_validate(response)
-    raise TypeError(f'Expected Operation, got {type(response)}')
-
-
-class DefineBackgroundModelOptions(BaseModel):
-    """Options for defining a background model.
-
-    Attributes:
-        name: Unique name for this background model.
-        label: Human-readable label (defaults to name).
-        versions: Known version names for this model.
-        supports: Model capability information.
-        config_schema: Custom options schema for this model.
-    """
-
-    name: str
-    label: str | None = None
-    versions: list[str] | None = None
-    supports: dict[str, Any] | None = None
-    config_schema: type | dict[str, Any] | None = None
+    raise missing_operation_error(name=name)
 
 
 def define_background_model(
@@ -256,16 +262,10 @@ def define_background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        start_time = time.perf_counter()
         op = await start(request, ctx)
-        # Set action key in format: /{action_type}/{name}
+        # The handle needs this key so check/cancel can find the job later.
         op.action = action_key
-        latency_ms = (time.perf_counter() - start_time) * 1000
-        if op.metadata is None:
-            op.metadata = {}
-        op.metadata['latencyMs'] = latency_ms
         return op
 
     # Wrap the check function (no ctx parameter)
@@ -365,29 +365,93 @@ async def lookup_background_action(
     )
 
 
+def require_operation(*, value: object) -> Operation:
+    """A poll handle is an Operation. A dump or generate() box is not."""
+    if isinstance(value, Operation):
+        return value
+    if isinstance(value, ModelResponse):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='got ModelResponse; pass response.operation',
+        )
+    if isinstance(value, Mapping):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='got a dump; pass Operation.model_validate(...)',
+        )
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'got {type(value).__name__}, expected Operation',
+    )
+
+
+async def resolve_operation_action(
+    registry: Registry,
+    operation: Operation,
+) -> BackgroundAction[ModelResponse]:
+    """Turn a poll handle into the background action that owns it."""
+    operation = require_operation(value=operation)
+    if not operation.action:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='Provided operation is missing original request information',
+        )
+
+    try:
+        background_action = await lookup_background_action(registry, operation.action)
+    except ValueError as e:
+        # operation.action is caller data (often reloaded from storage), so a
+        # mangled key is the caller's bad argument, not an internal failure.
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to resolve background action from original request: {operation.action}',
+        ) from e
+    if background_action is None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to resolve background action from original request: {operation.action}',
+        )
+    return background_action
+
+
 async def check_operation(
     registry: Registry,
     operation: Operation,
 ) -> Operation:
     """Check the status of a background operation.
 
-    Matches JS checkOperation from js/ai/src/check-operation.ts.
-
     Args:
         registry: The registry to look up actions from.
-        operation: The operation to check.
+        operation: The poll handle.
 
     Returns:
         Updated Operation with current status.
 
     Raises:
-        ValueError: If operation is missing action or action not found.
+        GenkitError: If the handle is missing action, or the action is
+            not found.
     """
-    if not operation.action:
-        raise ValueError('Provided operation is missing original request information')
-
-    background_action = await lookup_background_action(registry, operation.action)
-    if background_action is None:
-        raise ValueError(f'Failed to resolve background action from original request: {operation.action}')
-
+    background_action = await resolve_operation_action(registry, operation)
     return await background_action.check(operation)
+
+
+async def cancel_operation(
+    registry: Registry,
+    operation: Operation,
+) -> Operation:
+    """Cancel a background operation.
+
+    Args:
+        registry: The registry to look up actions from.
+        operation: The poll handle.
+
+    Returns:
+        Updated Operation reflecting the cancel attempt.
+
+    Raises:
+        GenkitError: If the handle is missing action, the action is not
+            found, or cancel is not implemented (UNIMPLEMENTED, raised by
+            ``BackgroundAction.cancel``).
+    """
+    background_action = await resolve_operation_action(registry, operation)
+    return await background_action.cancel(operation)

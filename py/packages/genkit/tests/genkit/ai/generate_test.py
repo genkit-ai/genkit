@@ -2425,3 +2425,139 @@ async def test_wrap_generate_middleware_injects_dynamic_tool() -> None:
     )
     assert response.text == '[ECHO] user: "hi" tools=dynamic_mw_tool'
     assert captured_tool_names == [['dynamic_mw_tool']]
+
+
+@pytest.mark.asyncio
+async def test_generate_requires_at_least_one_message(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """ai.generate() rejects an empty conversation before calling the model."""
+    ai, _pm = setup_test
+
+    with pytest.raises(GenkitError, match='at least one message is required') as exc_info:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[],
+            ),
+        )
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_on_blocked_finish() -> None:
+    """Blocked is a refusal that still returns so the leftover is on the response."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.text == 'nope'
+    assert response.output is None
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_error_finish_when_output_does_not_match_schema() -> None:
+    """A leftover string is not a Recipe — generate() returns, .output is None."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='not json'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == 'not json'
+    assert response.output is None
+    assert response.finish_message is not None
+    assert 'not valid JSON' in response.finish_message
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_typed_output_when_schema_matches() -> None:
+    """Matching JSON is parsed and handed back as the schema type."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output.title == 'Soup'
+
+
+@pytest.mark.asyncio
+async def test_generate_enum_off_list_is_error_finish() -> None:
+    """An enum reply that is not one of the listed values is a leftover."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='MAYBE'))]),
+        )
+    ]
+
+    response = await ai.generate(
+        prompt='classify',
+        output_format='enum',
+        output_schema={'type': 'string', 'enum': ['POSITIVE', 'NEGATIVE', 'NEUTRAL']},
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.output is None
+    assert response.text == 'MAYBE'
+
+
+@pytest.mark.asyncio
+async def test_generate_array_of_scalars() -> None:
+    """A JSON array of strings is the output, not a parse miss."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='["a", "b"]'))]),
+        )
+    ]
+
+    response = await ai.generate(
+        prompt='list',
+        output_format='array',
+        output_schema={'type': 'array', 'items': {'type': 'string'}},
+    )
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output == ['a', 'b']
+
+
+@pytest.mark.asyncio
+async def test_generate_unknown_format_is_invalid_argument() -> None:
+    """An unresolved output format fails before the model is called."""
+    ai = Genkit(model='programmableModel')
+    define_programmable_model(ai)
+
+    with pytest.raises(GenkitError, match='Unable to resolve format') as raised:
+        await ai.generate(prompt='hi', output_format='no-such-format')
+    assert raised.value.status == 'INVALID_ARGUMENT'

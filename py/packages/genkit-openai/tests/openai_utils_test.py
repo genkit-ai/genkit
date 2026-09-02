@@ -17,7 +17,9 @@
 """Exhaustive tests for models/utils.py utility functions."""
 
 import base64
+import json
 
+import httpx
 import pytest
 from genkit_openai.models.utils import (
     DictMessageAdapter,
@@ -29,10 +31,13 @@ from genkit_openai.models.utils import (
     decode_data_uri_bytes,
     extract_config_dict,
     parse_data_uri_content_type,
+    reraise_openai_error,
 )
+from openai import APIStatusError
 from pydantic import BaseModel
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -744,3 +749,41 @@ class TestMessageConverterToOpenAI:
         message = Message(role=Role.USER, content=[])
         result = MessageConverter.to_openai(message)
         assert result == []
+
+
+def test_reraise_openai_error_marks_503_unavailable() -> None:
+    """A provider 503 must stay retryable, not collapse to INTERNAL."""
+    error = APIStatusError(
+        'overloaded',
+        response=httpx.Response(503, request=httpx.Request('POST', 'https://api.openai.com/v1/chat')),
+        body=None,
+    )
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+    assert raised.value.status == 'UNAVAILABLE'
+
+
+def test_reraise_openai_error_marks_request_shaping_invalid_argument() -> None:
+    """A request we could never send is INVALID_ARGUMENT so retry skips it."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('No text content found in the first message'))
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+def test_reraise_openai_error_marks_empty_model_reply_internal() -> None:
+    """An empty model reply is not a bad request — retry can try again."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('Unable to determine content part'))
+    assert raised.value.status == 'INTERNAL'
+
+
+def test_reraise_openai_error_marks_malformed_tool_json_internal() -> None:
+    """Malformed tool-call JSON from the model is INTERNAL so retry can try again."""
+    try:
+        json.loads('{')
+    except json.JSONDecodeError as error:
+        with pytest.raises(GenkitError) as raised:
+            reraise_openai_error(error)
+        assert raised.value.status == 'INTERNAL'
+        return
+    raise AssertionError('expected JSONDecodeError')

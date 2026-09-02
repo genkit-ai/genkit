@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 
 from genkit import (
@@ -40,7 +40,7 @@ from genkit import (
 )
 from genkit.model import FinishReason
 from genkit.plugin_api import ActionRunContext
-from genkit_openai.models.utils import _extract_text, extract_config_dict
+from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
 
 # Supported image generation models with their metadata.
 SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
@@ -174,6 +174,9 @@ class OpenAIImageModel:
         Returns:
             A ModelResponse containing generated image media parts.
         """
-        params = _to_image_generate_params(self._model_name, request)
-        result = await self._client.images.generate(**params)
-        return _to_generate_response(result)
+        try:
+            params = _to_image_generate_params(self._model_name, request)
+            result = await self._client.images.generate(**params)
+            return _to_generate_response(result)
+        except (APIStatusError, ValueError) as e:
+            reraise_openai_error(e)

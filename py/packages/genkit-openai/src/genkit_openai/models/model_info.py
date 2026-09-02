@@ -119,25 +119,22 @@ KnownGpt: TypeAlias = Literal[
     'o1',
     'o3',
     'o3-mini',
-    'o3-pro',
     'o4-mini',
     'gpt-5',
     'gpt-5-mini',
     'gpt-5-nano',
     'gpt-5-chat-latest',
     'gpt-5.1',
-    'gpt-5.1-codex',
-    'gpt-5.1-codex-max',
     'gpt-5.2',
     'gpt-5.2-chat',
-    'gpt-5.2-pro',
-    'gpt-5.3-codex',
     'gpt-oss-120b',
     'gpt-oss-20b',
 ]
 
 
 # Source: https://platform.openai.com/docs/models
+# Codex and -pro ids (gpt-5.x-codex, o3-pro, gpt-5.x-pro) are served only by
+# the Responses API; this plugin speaks Chat Completions, so they are absent.
 SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
     # --- GPT-4o series ---
     'gpt-4o': ModelInfo(label='OpenAI - gpt-4o', supports=MULTIMODAL_MODEL_SUPPORTS),
@@ -172,7 +169,6 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
         ),
     ),
-    'o3-pro': ModelInfo(label='OpenAI - o3-pro', supports=O_SERIES_MODEL_SUPPORTS),
     'o4-mini': ModelInfo(label='OpenAI - o4-mini', supports=O_SERIES_MODEL_SUPPORTS),
     # --- GPT-5 series ---
     'gpt-5': ModelInfo(label='OpenAI - gpt-5', supports=GPT_5_MODEL_SUPPORTS),
@@ -189,12 +185,8 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
         ),
     ),
     'gpt-5.1': ModelInfo(label='OpenAI - gpt-5.1', supports=GPT_5_MODEL_SUPPORTS),
-    'gpt-5.1-codex': ModelInfo(label='OpenAI - gpt-5.1-codex', supports=GPT_5_MODEL_SUPPORTS),
-    'gpt-5.1-codex-max': ModelInfo(label='OpenAI - gpt-5.1-codex-max', supports=GPT_5_MODEL_SUPPORTS),
     'gpt-5.2': ModelInfo(label='OpenAI - gpt-5.2', supports=GPT_5_MODEL_SUPPORTS),
     'gpt-5.2-chat': ModelInfo(label='OpenAI - gpt-5.2-chat', supports=GPT_5_MODEL_SUPPORTS),
-    'gpt-5.2-pro': ModelInfo(label='OpenAI - gpt-5.2-pro', supports=GPT_5_MODEL_SUPPORTS),
-    'gpt-5.3-codex': ModelInfo(label='OpenAI - gpt-5.3-codex', supports=GPT_5_MODEL_SUPPORTS),
     # --- OSS models (hosted) ---
     'gpt-oss-120b': ModelInfo(label='OpenAI - gpt-oss-120b', supports=GPT_OSS_MODEL_SUPPORTS),
     'gpt-oss-20b': ModelInfo(label='OpenAI - gpt-oss-20b', supports=GPT_OSS_MODEL_SUPPORTS),

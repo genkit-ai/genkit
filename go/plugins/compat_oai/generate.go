@@ -463,6 +463,9 @@ func concatenateTextContent(parts []*ai.Part) string {
 		if part == nil {
 			continue
 		}
+		// Data parts are deliberately excluded: their payload lives on Data (not
+		// Text), so they contribute no text (e.g. A2UI envelope JSON must not
+		// leak into aggregated message text).
 		if part.IsText() {
 			content.WriteString(part.Text)
 		}

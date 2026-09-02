@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from genkit._ai._agents._preamble import (
     HISTORY_TAG,
@@ -26,16 +27,19 @@ from genkit._ai._aio import Genkit
 from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
 from genkit._core._typing import (
+    AgentFinishReason,
     FinishReason,
     MessageData,
     Part,
     Role,
+    SnapshotStatus,
     TextPart,
     ToolRequest,
     ToolRequestPart,
     ToolResponse,
     ToolResponsePart,
 )
+from genkit.agent import AgentError, InMemorySessionStore
 
 
 def test_tag_history_for_render_copies_messages() -> None:
@@ -315,3 +319,136 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     assert isinstance(session.messages[1].content[0].root, ToolRequestPart)
     assert session.messages[2].role == Role.TOOL
     assert isinstance(session.messages[2].content[0].root, ToolResponsePart)
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_schema_miss_keeps_invalid_argument() -> None:
+    """A leftover Recipe is a failed turn with the generate() status, not UNKNOWN."""
+
+    class Recipe(BaseModel):
+        title: str
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    ai.define_prompt(name='cook', model='programmableModel', output_schema=Recipe)
+    agent = ai.define_prompt_agent(name='cook')
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='not json'))]),
+        )
+    )
+
+    with pytest.raises(AgentError) as raised:
+        await agent.chat().send('give me a recipe')
+    assert raised.value.status == 'UNKNOWN'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
+    """A safety refusal is not a completed turn resume can continue from."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    store = InMemorySessionStore()
+    ai.define_prompt(name='blocked', model='programmableModel')
+    agent = ai.define_prompt_agent(name='blocked', store=store)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+        )
+    )
+
+    chat = agent.chat()
+    out = await chat.send('hi')
+    assert out.finish_reason == AgentFinishReason.BLOCKED
+    assert out.snapshot_id
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.COMPLETED
+    assert snap.error is None
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+        )
+    )
+    resumed = await agent.chat(snapshot_id=out.snapshot_id).send('again')
+    assert resumed.finish_reason == AgentFinishReason.STOP
+    assert resumed.text == 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+        )
+    )
+    again = await chat.send('try again')
+    assert again.finish_reason == AgentFinishReason.STOP
+    assert again.text == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_client_managed_blocked_is_not_next_turn_history() -> None:
+    """A safety leftover is this turn's reply, not the next generate's history."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    ai.define_prompt(name='blocked', model='programmableModel')
+    agent = ai.define_prompt_agent(name='blocked')
+    pm.responses.extend([
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+        ),
+    ])
+
+    chat = agent.chat()
+    out = await chat.send('hi')
+    assert out.finish_reason == AgentFinishReason.BLOCKED
+    again = await chat.send('try again')
+    assert again.finish_reason == AgentFinishReason.STOP
+    assert again.text == 'ok'
+    assert pm.last_request is not None
+    model_texts = [m.text for m in pm.last_request.messages if m.role == Role.MODEL]
+    assert 'nope' in model_texts
+
+
+@pytest.mark.asyncio
+async def test_detach_blocked_keeps_blocked_finish_reason() -> None:
+    """A detached safety refusal stays blocked on the snapshot."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    store = InMemorySessionStore()
+    ai.define_prompt(name='blockedDetach', model='programmableModel')
+    agent = ai.define_prompt_agent(name='blockedDetach', store=store)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+        )
+    )
+
+    chat = agent.chat()
+    task = await chat.detach('hi')
+    snap = await task.wait(interval=0.05)
+    assert snap.status == SnapshotStatus.COMPLETED
+    assert snap.finish_reason == AgentFinishReason.BLOCKED
+    assert snap.error is None
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+        )
+    )
+    resumed = await agent.chat(snapshot_id=task.snapshot_id).send('again')
+    assert resumed.finish_reason == AgentFinishReason.STOP
+    assert resumed.text == 'ok'

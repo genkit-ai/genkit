@@ -17,11 +17,25 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from '../src/part.js';
-import { A2UI_MIME_TYPE, type A2uiEnvelope } from '../src/types.js';
+import {
+  A2UI_MIME_TYPE,
+  type A2uiEnvelope,
+  type ActionEnvelope,
+} from '../src/types.js';
 
 const sampleEnvelope: A2uiEnvelope = {
   createSurface: { surfaceId: 's1', catalogId: 'c1' },
   version: 'v0.9',
+};
+
+const sampleActionEnvelope: ActionEnvelope = {
+  action: {
+    name: 'submit',
+    surfaceId: 's1',
+    sourceComponentId: 'btn',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    context: {},
+  },
 };
 
 describe('a2uiPart', () => {
@@ -107,5 +121,29 @@ describe('a2uiEnvelopesFromParts', () => {
   it('returns [] for a nullish parts list', () => {
     assert.deepStrictEqual(a2uiEnvelopesFromParts(null), []);
     assert.deepStrictEqual(a2uiEnvelopesFromParts(undefined), []);
+  });
+
+  it('filters out inbound action envelopes, keeping only server envelopes', () => {
+    const content = [
+      a2uiPart([sampleActionEnvelope, sampleEnvelope, sampleActionEnvelope]),
+    ];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), [sampleEnvelope]);
+  });
+
+  it('returns [] for a part carrying only action envelopes', () => {
+    const content = [a2uiPart([sampleActionEnvelope])];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), []);
+  });
+
+  it('drops null / non-object / array / non-envelope elements without throwing', () => {
+    // Malformed model output: envelopes should never contain these, but the
+    // positive server-envelope check must not throw and must keep only real
+    // surface envelopes. Arrays are `typeof 'object'`, and a stray object like
+    // `{ foo: 1 }` carries no surface discriminant, so both are dropped.
+    const part = {
+      data: { envelopes: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
   });
 });

@@ -17,8 +17,6 @@
 package ai
 
 import (
-	"maps"
-
 	"github.com/firebase/genkit/go/core"
 )
 
@@ -108,41 +106,30 @@ func NewTextMessage(role Role, text string) *Message {
 
 // WithCacheTTL adds cache TTL configuration for the desired message
 func (m *Message) WithCacheTTL(ttlSeconds int) *Message {
-	metadata := make(map[string]any)
-
-	if m.Metadata != nil {
-		metadata = m.Metadata
-	}
-
-	cache := map[string]any{
-		"cache": map[string]any{
-			"ttlSeconds": ttlSeconds,
-		},
-	}
-	maps.Copy(metadata, cache)
-
-	return &Message{
-		Content:  m.Content,
-		Role:     m.Role,
-		Metadata: metadata,
-	}
+	return m.withCacheMetadata("ttlSeconds", ttlSeconds)
 }
 
 // WithCacheName adds cache name to use in the generate request
 func (m *Message) WithCacheName(n string) *Message {
-	metadata := make(map[string]any)
+	return m.withCacheMetadata("name", n)
+}
 
+// withCacheMetadata sets one key of the message's "cache" metadata and leaves
+// the rest of that map alone, so a message can carry both the ttl that builds
+// a cache and the name of the one an earlier turn already built. Replacing the
+// whole map instead would make the two setters cancel each other out.
+func (m *Message) withCacheMetadata(key string, value any) *Message {
+	metadata := make(map[string]any)
 	if m.Metadata != nil {
 		metadata = m.Metadata
 	}
 
-	cache := map[string]any{
-		"cache": map[string]any{
-			"name": n,
-		},
+	cache, _ := metadata["cache"].(map[string]any)
+	if cache == nil {
+		cache = make(map[string]any)
 	}
-
-	maps.Copy(metadata, cache)
+	cache[key] = value
+	metadata["cache"] = cache
 
 	return &Message{
 		Content:  m.Content,

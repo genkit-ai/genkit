@@ -17,9 +17,9 @@
 
 """No store: you own the conversation state on the client.
 
-Without a store the agent keeps nothing between sessions — snapshot_id and
-session_id stay None. You capture messages + custom state yourself, then hand
-them back through chat(messages=..., artifacts=..., state=...) to resume.
+Without a store there is no snapshot_id to persist. Capture messages, state,
+and artifacts yourself, then hand them back through
+chat(messages=..., artifacts=..., state=...) to resume.
 Requires GEMINI_API_KEY.
 """
 
@@ -33,7 +33,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 agent = ai.define_agent(
     name='echoNoStore',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='Echo assistant. Answer briefly and remember context.',
 )
 
@@ -47,8 +47,8 @@ async def main() -> None:
     out = await turn.response
     assert out.text
 
-    # → no server-managed ids — resume by passing the state blob you saved
-    assert chat.session_id is None
+    # No store means no snapshot to reload. Resume by handing back the
+    # messages / state / artifacts you kept.
     assert chat.snapshot_id is None
 
     # You own the state: capture the conversation (messages + custom state +

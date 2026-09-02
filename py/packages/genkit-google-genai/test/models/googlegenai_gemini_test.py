@@ -37,6 +37,7 @@ from genkit_google_genai.models.gemini import (
     GemmaConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
+    _to_finish_reason,
     get_model_config_schema,
     google_model_info,
     is_image_model,
@@ -44,6 +45,7 @@ from genkit_google_genai.models.gemini import (
 )
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 from pytest_mock import MockerFixture
 
@@ -1148,3 +1150,87 @@ async def test_gemini_model__build_messages_maps_tool_role_to_user(
     assert contents[0].role == 'user'
     assert contents[1].role == 'model'
     assert contents[2].role == 'user'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status'),
+    [
+        (400, 'INVALID_ARGUMENT'),
+        (503, 'UNAVAILABLE'),
+    ],
+)
+async def test_streaming_generate_classifies_error_on_first_chunk(
+    mocker: MockerFixture, code: int, status: str
+) -> None:
+    """The HTTP call is the first iteration, not the await that created the generator."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+    )
+
+    async def failing_stream() -> Any:  # noqa: ANN401
+        raise APIError(code, {'error': {'message': 'provider failed'}})
+        if False:
+            yield  # pragma: no cover
+
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content_stream.return_value = failing_stream()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(request, ctx)
+    assert raised.value.status == status
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixture) -> None:
+    """A 503 after the first chunk is still UNAVAILABLE so retry can wait it out."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+    )
+    first = genai.types.GenerateContentResponse(
+        candidates=[genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='Hello')]))]
+    )
+
+    async def mid_stream_fail() -> Any:  # noqa: ANN401
+        yield first
+        raise APIError(503, {'error': {'message': 'overloaded'}})
+
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content_stream.return_value = mid_stream_fail()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(request, ctx)
+    assert raised.value.status == 'UNAVAILABLE'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> None:
+    """A provider 503 must stay retryable, not collapse to INTERNAL."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content.side_effect = APIError(503, {'error': {'message': 'overloaded'}})
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(request, ActionRunContext())
+    assert raised.value.status == 'UNAVAILABLE'
+
+
+def test_to_finish_reason_image_policy() -> None:
+    """Image-policy refusals stay blocked so a leftover is not labeled a schema miss."""
+    assert _to_finish_reason('IMAGE_SAFETY') == FinishReason.BLOCKED
+    assert _to_finish_reason('IMAGE_PROHIBITED_CONTENT') == FinishReason.BLOCKED
+    assert _to_finish_reason('IMAGE_RECITATION') == FinishReason.BLOCKED
+
+
+def test_to_finish_reason_image_other_and_unexpected_tool() -> None:
+    """No-image / unspecified image stop / bad tool call are other, not unknown."""
+    assert _to_finish_reason('NO_IMAGE') == FinishReason.OTHER
+    assert _to_finish_reason('IMAGE_OTHER') == FinishReason.OTHER
+    assert _to_finish_reason('UNEXPECTED_TOOL_CALL') == FinishReason.OTHER

@@ -50,7 +50,7 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfigSchema, VeoModel
 
-from genkit import ActionKind, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
 from genkit.plugin_api import Action, to_json_schema
 
@@ -561,6 +561,21 @@ async def test_vertexai_resolve_veo_as_model_returns_none(mock_list_models: Magi
     action = await plugin.resolve(ActionKind.MODEL, 'vertexai/veo-3.0-generate-001')
 
     assert action is None
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """resolve(MODEL, veo) is None so resolve_model can see the background start action."""
+    mock_list_models.return_value = GenaiModels()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    action = await ai.registry.resolve_model('googleai/veo-3.0-generate-001')
+
+    assert action is not None
+    assert action.kind == ActionKind.BACKGROUND_MODEL
+    assert action.name == 'googleai/veo-3.0-generate-001'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')

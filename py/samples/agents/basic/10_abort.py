@@ -46,7 +46,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
 
 agent = ai.define_agent(
     name='longTaskAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,

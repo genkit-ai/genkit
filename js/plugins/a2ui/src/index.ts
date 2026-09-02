@@ -51,6 +51,8 @@ export {
   type A2uiComponent,
   type A2uiEnvelope,
   type A2uiPart,
+  type A2uiServerEnvelope,
+  type ActionEnvelope,
   type CreateSurfaceEnvelope,
   type DeleteSurfaceEnvelope,
   type UpdateComponentsEnvelope,

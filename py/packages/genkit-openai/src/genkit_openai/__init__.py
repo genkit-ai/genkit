@@ -29,9 +29,9 @@ Example:
     # 1. Initialize Genkit with OpenAI plugin
     ai = Genkit(plugins=[OpenAI()])
 
-    # 2. Generate content using GPT-4o
+    # 2. Generate content using GPT-5.2
     res = await ai.generate(
-        model='openai/gpt-4o',
+        model=OpenAI.gpt_model('gpt-5.2'),
         prompt='Suggest 2 catchy names for an AI newsletter.',
     )
 

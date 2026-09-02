@@ -66,6 +66,17 @@ func TestData(t *testing.T) {
 			input:   ai.NewTextPart("e"),
 			wantErr: true,
 		},
+		{
+			// A data part carrying a data URI on Data (not Text) still converts.
+			input:    ai.NewDataPart("data:text/plain;base64,ZA=="),
+			wantType: "text/plain",
+			wantData: "d",
+		},
+		{
+			input:    ai.NewDataPart("data:image/png;base64,aGVsbG8="),
+			wantType: "image/png",
+			wantData: "hello",
+		},
 	}
 
 	for i, test := range tests {

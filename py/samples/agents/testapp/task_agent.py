@@ -79,7 +79,9 @@ async def add_task(input: AddTaskInput) -> TaskItem:
 
     if sess := ai.current_session():
         await sess.update_custom(mutate)
-    return created  # type: ignore[return-value]
+    if created is None:
+        raise RuntimeError('add_task needs a live session')
+    return created
 
 
 @ai.tool(name='toggleTask', description='Toggle a task done/not-done by id.')
