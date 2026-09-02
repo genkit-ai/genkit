@@ -18,7 +18,6 @@ package exp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -105,7 +104,7 @@ func (s *flakyStore) GetSnapshot(ctx context.Context, snapshotID string) (*aix.S
 // runs one delegation to commit a conversation, and plants a dead worker's
 // pending row on top of it. It returns the dead task's handle and the
 // committed (parent) snapshot ID.
-func seedDeadKeeperTask(t *testing.T, g *genkit.Genkit, store *flakyStore, keeperModel ai.Model) (deadTask, committedID string) {
+func seedDeadKeeperTask(t *testing.T, g *genkit.Genkit, store aix.SessionStore[any], keeperModel ai.Model) (deadTask, committedID string) {
 	t.Helper()
 	genkitx.DefineAgent[any](g, "keeper",
 		aix.InlinePrompt{ai.WithModel(keeperModel)},
@@ -127,7 +126,7 @@ func seedDeadKeeperTask(t *testing.T, g *genkit.Genkit, store *flakyStore, keepe
 	if err != nil || committed == nil {
 		t.Fatalf("read committed snapshot %q: %v", committedID, err)
 	}
-	pending, err := saveDeadPendingRow(store.InMemorySessionStore, committed.SessionID, committed.SnapshotID)
+	pending, err := saveDeadPendingRow(store, committed.SessionID, committed.SnapshotID)
 	if err != nil {
 		t.Fatalf("SaveSnapshot pending row: %v", err)
 	}
@@ -135,26 +134,14 @@ func seedDeadKeeperTask(t *testing.T, g *genkit.Genkit, store *flakyStore, keepe
 }
 
 // lastDelegationOutput decodes the newest tool response for toolName in msgs.
-// It is for model functions (no *testing.T in scope); decode problems surface
-// as ok=false and fail the scripted expectation that follows.
+// It is for model functions (no *testing.T in scope): ok is false when there
+// is none, which fails the scripted expectation that follows.
 func lastDelegationOutput(msgs []*ai.Message, toolName string) (delegationResult, bool) {
-	var out delegationResult
-	found := false
-	for _, m := range msgs {
-		for _, p := range m.Content {
-			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == toolName {
-				b, err := json.Marshal(p.ToolResponse.Output)
-				if err != nil {
-					continue
-				}
-				var decoded delegationResult
-				if json.Unmarshal(b, &decoded) == nil {
-					out, found = decoded, true
-				}
-			}
-		}
+	outs := toolOutputs(msgs, toolName)
+	if len(outs) == 0 {
+		return delegationResult{}, false
 	}
-	return out, found
+	return lenientDelegation(outs[len(outs)-1]), true
 }
 
 // failNTimesModel returns a model that errors its first n calls and then
@@ -302,12 +289,8 @@ func TestAgentsContinueCompletedTask(t *testing.T) {
 		resumes := 0
 		var lastResume delegationResult
 		for _, v := range toolOutputs(req.Messages, "continue_task") {
-			b, _ := json.Marshal(v)
-			var r delegationResult
-			if json.Unmarshal(b, &r) == nil {
-				lastResume = r
-				resumes++
-			}
+			lastResume = lenientDelegation(v)
+			resumes++
 		}
 		delegated, ok := lastDelegationOutput(req.Messages, "delegate_to_helper")
 		switch {
@@ -415,37 +398,13 @@ func TestAgentsContinueExpiredRecoversCommittedProgress(t *testing.T) {
 	// whatever the run persisted before it detached.
 	g := newTestGenkit(t)
 
-	store := localstore.NewInMemorySessionStore[any]()
-	var seen [][]*ai.Message
-	genkitx.DefineAgent[any](g, "keeper",
-		aix.InlinePrompt{ai.WithModel(failNTimesModel(t, g, "test/keeper", 0, "kept going", &seen))},
-		aix.WithSessionStore[any](store),
-	)
-
 	// A committed conversation to recover, then a dead worker's pending row
 	// as the session tip.
-	first, err := genkit.Generate(ctx, g,
-		ai.WithModel(delegateOnceModel(t, g, "test/seed", "delegate_to_keeper", "start X")),
-		ai.WithPrompt("go"),
-		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	seeded := delegationResponses(t, first.History(), "delegate_to_keeper")
-	if len(seeded) != 1 || seeded[0].TaskID == "" {
-		t.Fatalf("expected a seeded delegation with a handle, got %+v", seeded)
-	}
-	committedID := strings.TrimPrefix(seeded[0].TaskID, "keeper:")
-	committed, err := store.GetSnapshot(ctx, committedID)
-	if err != nil || committed == nil {
-		t.Fatalf("read committed snapshot %q: %v", committedID, err)
-	}
-	pending, err := saveDeadPendingRow(store, committed.SessionID, committed.SnapshotID)
-	if err != nil {
-		t.Fatalf("SaveSnapshot pending row: %v", err)
-	}
+	store := localstore.NewInMemorySessionStore[any]()
+	var seen [][]*ai.Message
+	deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", &seen))
+	pendingID := strings.TrimPrefix(deadTask, "keeper:")
 
-	deadTask := "keeper:" + pending.SnapshotID
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if res, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done: "+res.Response), nil
@@ -466,7 +425,7 @@ func TestAgentsContinueExpiredRecoversCommittedProgress(t *testing.T) {
 	// The fence flipped the dead pending row so a slow worker cannot race the
 	// recovered session. No worker is behind it to finalize, so the raw row
 	// stays at the flip.
-	fenced, err := store.GetSnapshot(ctx, pending.SnapshotID)
+	fenced, err := store.GetSnapshot(ctx, pendingID)
 	if err != nil || fenced == nil {
 		t.Fatalf("read fenced row: %v", err)
 	}
@@ -529,7 +488,7 @@ func TestAgentsContinueExpiredWithNothingSavedRefused(t *testing.T) {
 // saveDeadPendingRow writes a dead worker's pending row the way the detach
 // handler mints one: created now (newer than every committed row in the
 // session) with a heartbeat that went stale.
-func saveDeadPendingRow(store *localstore.InMemorySessionStore[any], sessionID, parentID string) (*aix.SessionSnapshot[any], error) {
+func saveDeadPendingRow(store aix.SnapshotWriter[any], sessionID, parentID string) (*aix.SessionSnapshot[any], error) {
 	now := time.Now()
 	stale := now.Add(-10 * time.Minute)
 	return store.SaveSnapshot(ctx, "", func(_ *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], error) {
@@ -550,31 +509,8 @@ func TestAgentsContinueExpiredFinishedParentRequiresInstructions(t *testing.T) {
 	// input would re-run the finished turn instead of continuing the work.
 	g := newTestGenkit(t)
 
-	store := localstore.NewInMemorySessionStore[any]()
-	genkitx.DefineAgent[any](g, "keeper",
-		aix.InlinePrompt{ai.WithModel(failNTimesModel(t, g, "test/keeper", 0, "kept", nil))},
-		aix.WithSessionStore[any](store),
-	)
-
-	first, err := genkit.Generate(ctx, g,
-		ai.WithModel(delegateOnceModel(t, g, "test/seed", "delegate_to_keeper", "start X")),
-		ai.WithPrompt("go"),
-		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	seeded := delegationResponses(t, first.History(), "delegate_to_keeper")
-	committedID := strings.TrimPrefix(seeded[0].TaskID, "keeper:")
-	committed, err := store.GetSnapshot(ctx, committedID)
-	if err != nil || committed == nil {
-		t.Fatalf("read committed snapshot %q: %v", committedID, err)
-	}
-	pending, err := saveDeadPendingRow(store, committed.SessionID, committed.SnapshotID)
-	if err != nil {
-		t.Fatalf("SaveSnapshot pending row: %v", err)
-	}
-
-	deadTask := "keeper:" + pending.SnapshotID
+	deadTask, _ := seedDeadKeeperTask(t, g, localstore.NewInMemorySessionStore[any](),
+		failNTimesModel(t, g, "test/keeper", 0, "kept", nil))
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if _, ok := lastDelegationOutput(req.Messages, "continue_task"); ok {
 			return textResp(req, "done"), nil
@@ -734,7 +670,7 @@ func TestAgentsContinueParentReadBlipRefundsSlot(t *testing.T) {
 
 func TestAgentsContinueExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 	// A worker that is alive after all observes the fence and keeps beating
-	// while it drains, so the post-fence re-read shapes the row as pending.
+	// while it drains, so the post-fence re-read shapes the row as aborting.
 	// The resume must not fall back to the parent (that would race the
 	// finalize and re-buy committed turns): it refuses, names the retry, and
 	// returns its slot. Once the row settles the same handle resumes.

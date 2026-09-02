@@ -853,7 +853,7 @@ func TestAgentsBackgroundLaunchEchoesLabel(t *testing.T) {
 // TestAgentsAbortReportsAbortingWhileWindingDown pins the abort report's
 // honesty without any waiting inside the abort: aborted is a promise the row
 // is settled and resumable, so a worker that has not finalized reports the
-// report-only "aborting" (the stop was delivered, the row is winding down),
+// "aborting" (the stop was delivered, the row is winding down),
 // and the settled aborted row arrives through the wait tool once the worker
 // lets go. That the wait settles at all also proves "aborting" was never
 // cached: a cached report would be returned without following the row.
@@ -1004,7 +1004,7 @@ func TestFoldDelegationNonAnswerReasons(t *testing.T) {
 	} {
 		t.Run(string(reason), func(t *testing.T) {
 			got := a.foldDelegationOutput(t.Context(), ref,
-				&aix.AgentOutput[json.RawMessage]{FinishReason: reason, Message: tip}, "researcher_x")
+				&aix.AgentOutput[json.RawMessage]{FinishReason: reason, Message: tip}, 0)
 			if !strings.Contains(got.Response, "Error calling agent") {
 				t.Errorf("Response = %q, want it reported as a failure", got.Response)
 			}
@@ -1024,14 +1024,14 @@ func TestFoldDelegationNonAnswerReasons(t *testing.T) {
 		FinishReason: aix.AgentFinishReasonFailed,
 		Message:      tip,
 		Error:        &status.Error{Status: status.Internal, Message: "upstream model refused"},
-	}, "researcher_x")
+	}, 0)
 	if !strings.Contains(got.Response, "upstream model refused") {
 		t.Errorf("Response = %q, want the structured failure preferred", got.Response)
 	}
 
 	// A reason that does carry a result is untouched.
 	got = a.foldDelegationOutput(t.Context(), ref,
-		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: tip}, "researcher_x")
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: tip}, 0)
 	if got.Response != "partial notes: found 3 of 5 sources" {
 		t.Errorf("Response = %q, want the message reported as the answer", got.Response)
 	}
@@ -1053,12 +1053,12 @@ func TestFoldDelegationNoFinalMessage(t *testing.T) {
 
 	// A silent success must read as a success, and say where the result is.
 	got := a.foldDelegationOutput(t.Context(), ref,
-		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop}, "researcher_x")
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop}, 0)
 	if !strings.Contains(got.Response, "completed") || !strings.Contains(got.Response, "no final message") || !strings.Contains(got.Response, "no artifacts") {
 		t.Errorf("Response = %q, want a completed-without-message notice naming the missing artifacts", got.Response)
 	}
 	got = a.foldDelegationOutput(t.Context(), ref,
-		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: toolOnly, Artifacts: arts(2)}, "researcher_x")
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Message: toolOnly, Artifacts: arts(2)}, 0)
 	if !strings.Contains(got.Response, "no final message") || !strings.Contains(got.Response, "2 artifacts") {
 		t.Errorf("Response = %q, want the notice to point at the 2 artifacts", got.Response)
 	}
@@ -1066,7 +1066,7 @@ func TestFoldDelegationNoFinalMessage(t *testing.T) {
 		t.Errorf("Artifacts = %d, want 2 surfaced alongside the notice", len(got.Artifacts))
 	}
 	got = a.foldDelegationOutput(t.Context(), ref,
-		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Artifacts: arts(1)}, "researcher_x")
+		&aix.AgentOutput[json.RawMessage]{FinishReason: aix.AgentFinishReasonStop, Artifacts: arts(1)}, 0)
 	if !strings.Contains(got.Response, "one artifact") {
 		t.Errorf("Response = %q, want the notice to point at the one artifact", got.Response)
 	}

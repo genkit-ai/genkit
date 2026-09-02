@@ -173,7 +173,7 @@ type Agents struct {
 	// the default they emit the same bare names, and the generate call is
 	// rejected for duplicate tools. New rejects colliding names within one
 	// instance; it cannot see a sibling.
-	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the async background-task tools."`
+	ToolPrefix *string `json:"toolPrefix,omitempty" jsonschema_description:"Prefix for generated delegation tool names. Defaults to \"delegate_to\", so tools become delegate_to_<agent>. Set it to the empty string to use bare agent names. A non-empty prefix also namespaces the shared background-task and continue tools."`
 	// MaxDelegations caps the number of sub-agent delegations per generate call,
 	// preventing runaway delegation loops. 0 means unlimited.
 	MaxDelegations int `json:"maxDelegations,omitempty" jsonschema_description:"Caps the number of sub-agent delegations per generate call, preventing runaway delegation loops. Defaults to 0, which means unlimited."`
@@ -233,6 +233,13 @@ type agentsState struct {
 	// since edited). Pending, expired, and unresolvable reports are never
 	// cached; those can still change.
 	settledReports map[string]backgroundTaskReport
+	// agents holds the handles New resolved for the configured sub-agents,
+	// by name. The registry is fixed for the generate call, so resolving once
+	// spares every delegation and task report a lookup plus a fresh handle
+	// whose metadata (a deep copy of the agent's state schema) would be
+	// derived again. Written once by New and read-only afterwards; an agent
+	// absent here is resolved on demand (see agentFrom).
+	agents map[string]*aix.AgentHandle
 }
 
 // New validates the configuration and returns the hooks: a delegation tool per
@@ -307,16 +314,17 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	// Like the delegation tools, its input schema depends on whether
 	// background execution exists.
 	g := genkit.FromContext(ctx)
-	continuable := a.anyContinuableAgent(g)
+	st.agents = a.resolveHandles(g)
+	continuable := a.anyContinuableAgent(st.agents)
 	if continuable {
 		continueName := a.continueToolName()
 		if err := claimName(continueName, "the continue tool"); err != nil {
 			return nil, err
 		}
 		if a.Async {
-			tools = append(tools, aix.NewTool(continueName, continueToolDescription(), a.continueTaskAsync(st)))
+			tools = append(tools, aix.NewTool(continueName, continueToolDescription, a.continueTaskAsync(st)))
 		} else {
-			tools = append(tools, aix.NewTool(continueName, continueToolDescription(), a.continueTask(st)))
+			tools = append(tools, aix.NewTool(continueName, continueToolDescription, a.continueTask(st)))
 		}
 	}
 
@@ -373,8 +381,8 @@ type delegationResult struct {
 	TaskID string `json:"taskId,omitempty"`
 	// Status is the outcome behind TaskID: "pending" when a background
 	// delegation was started, and the settled outcome ("completed", "failed",
-	// "aborted", or the finish reason for the rest) for a synchronous
-	// delegation that carries a handle. Empty whenever TaskID is.
+	// or "aborted", the vocabulary background-task reports use) for a
+	// synchronous delegation that carries a handle. Empty whenever TaskID is.
 	Status string `json:"status,omitempty"`
 	// Name echoes the caller-chosen label for this delegation, when one was
 	// given (see delegateInput.Name). A continued task keeps its label.
@@ -414,7 +422,7 @@ func (a *Agents) beginDelegation(ctx context.Context, ref aix.AgentRef, st *agen
 			"Delegation limit reached (%d). Complete the task using information already gathered.", a.MaxDelegations)}
 	}
 
-	agent, err := resolveAgent(genkit.FromContext(ctx), ref)
+	agent, err := a.agentFrom(genkit.FromContext(ctx), st, ref)
 	if err != nil {
 		logger.Warn(ctx, "sub-agent resolution failed", "agent", ref.Name, "error", err)
 		return 0, nil, nil, &delegationResult{Response: "Error: " + err.Error()}
@@ -442,7 +450,11 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 	logger.Debug(ctx, "delegating to sub-agent",
 		"agent", ref.Name, "invocation", invocationNum, "historyMessages", len(history))
 	start := time.Now()
-	out, err := runSubAgent(ctx, agent, task, history, false)
+	var opts []aix.InvocationOption[json.RawMessage]
+	if len(history) > 0 {
+		opts = append(opts, aix.WithState(&aix.SessionState[json.RawMessage]{Messages: history}))
+	}
+	out, err := runSubAgent(ctx, agent, ai.NewUserTextMessage(task), false, opts...)
 	if err != nil {
 		// The agent runtime resolves failures and interrupts gracefully (see
 		// foldDelegationOutput), so this only fires for exceptions outside
@@ -453,7 +465,7 @@ func (a *Agents) runDelegation(ctx context.Context, ref aix.AgentRef, st *agents
 		return delegationResult{Response: fmt.Sprintf("Error calling agent %q: %v", ref.Name, err)}, nil
 	}
 
-	result := a.foldDelegationOutput(ctx, ref, out, invocationID(ref, out, invocationNum))
+	result := a.foldDelegationOutput(ctx, ref, out, invocationNum)
 	a.labelTask(st, &result, name)
 	logger.Debug(ctx, "sub-agent delegation finished",
 		"agent", ref.Name, "finishReason", string(out.FinishReason),
@@ -500,15 +512,21 @@ func (a *Agents) releaseDelegation(st *agentsState) {
 
 // foldDelegationOutput turns a settled sub-agent output into a delegation tool
 // result: interrupts and failures become explanatory text, and artifacts are
-// merged into the parent session under invocationID and surfaced per the
-// configured strategy.
+// merged into the parent session and surfaced per the configured strategy.
+//
 // A server-managed output names the run's last committed snapshot, so every
 // settled result but an interrupt is stamped with the same
 // "<agent>:<snapshotId>" handle background delegations mint, plus the outcome
 // it settled in. The handle is what makes a delegation addressable after the
-// fact: the background-task tools accept it, and it is the currency a continuation
-// spends.
-func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationID string) delegationResult {
+// fact: the background-task tools accept it, and it is the currency a
+// continuation spends. The same snapshot namespaces the run's artifacts, the
+// deterministic namespace the background-task report path folds under too, so
+// one run merges identical artifact names no matter which path folds it, and
+// AddArtifacts' replace-by-name makes a later re-check of the run's handle
+// idempotent instead of duplicative. A run with no snapshot behind it (a
+// client-managed sub-agent) is namespaced by invocationNum, its per-call
+// invocation number.
+func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationNum int) delegationResult {
 	// Interrupted first: it is one of the reasons that carry no result, and it
 	// is the one with an explanation of its own worth giving. It is also the
 	// one settled outcome that carries no handle: continuing past it means
@@ -519,9 +537,11 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 		return delegationResult{Response: interruptedResponse(ref.Name)}
 	}
 	var result delegationResult
-	if out.SnapshotID != "" && out.FinishReason != aix.AgentFinishReasonDetached {
-		result.TaskID = formatTaskID(ref.Name, out.SnapshotID)
+	namespace := fmt.Sprintf("%s_%d", ref.Name, invocationNum)
+	if id := settledSnapshotID(out); id != "" {
+		result.TaskID = formatTaskID(ref.Name, id)
 		result.Status = settledStatus(out.FinishReason)
+		namespace = snapshotNamespace(ref.Name, id)
 	}
 	if !out.FinishReason.CarriesResult() {
 		// Blocked, truncated, aborted, or failed. The turn's last message is
@@ -545,10 +565,26 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 	if len(subArtifacts) > 0 {
 		// Merge into the parent session under both strategies (no-op if there
 		// is no active session, e.g. a plain genkit.Generate call).
-		mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
-		result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
+		mergeArtifacts(ctx, ref.Name, namespace, subArtifacts)
+		result.Artifacts = delegatedArtifacts(namespace, subArtifacts, a.strategy())
 	}
 	return result
+}
+
+// settledSnapshotID returns the snapshot a settled output names, or "" when
+// nothing durable stands behind it: a client-managed run, or a detached one,
+// whose SnapshotID names a pending row rather than a settled turn.
+func settledSnapshotID(out *aix.AgentOutput[json.RawMessage]) string {
+	if out.FinishReason == aix.AgentFinishReasonDetached {
+		return ""
+	}
+	return out.SnapshotID
+}
+
+// snapshotNamespace is the artifact namespace of a server-managed run: the
+// agent's name and the run's snapshot ID, shortened.
+func snapshotNamespace(agentName, snapshotID string) string {
+	return fmt.Sprintf("%s_%s", agentName, shortSnapshotID(snapshotID))
 }
 
 // noFinalMessageResponse is the tool text reported for a run that settled on a
@@ -592,30 +628,35 @@ func (a *Agents) taskLabel(st *agentsState, taskID string) string {
 	return st.labels[taskID]
 }
 
-// invocationID returns the artifact namespace for a settled delegation
-// output. A server-managed run is namespaced by its snapshot ID, the same
-// deterministic namespace the background-task report path folds under, so one
-// run merges identical artifact names no matter which path folds it, and
-// AddArtifacts' replace-by-name makes a later re-check of the run's handle
-// idempotent instead of duplicative. A run with no snapshot behind it (a
-// client-managed sub-agent) falls back to the per-call invocation number.
-func invocationID(ref aix.AgentRef, out *aix.AgentOutput[json.RawMessage], invocationNum int) string {
-	if out.SnapshotID != "" && out.FinishReason != aix.AgentFinishReasonDetached {
-		return fmt.Sprintf("%s_%s", ref.Name, shortSnapshotID(out.SnapshotID))
+// settledStatus maps a settled finish reason onto the snapshot-status
+// vocabulary that delegation results and background-task reports share:
+// "completed" for every reason that carries a result, "aborted" for an
+// aborted run, and "failed" for the rest. A blocked or length-truncated turn
+// commits a completed row, but it carries no answer, and a model told
+// "completed" moves on without reading the explanation; the finish reason
+// itself is named in that explanation.
+func settledStatus(reason aix.AgentFinishReason) string {
+	switch {
+	case reason.CarriesResult():
+		return string(aix.SnapshotStatusCompleted)
+	case reason == aix.AgentFinishReasonAborted:
+		return string(aix.SnapshotStatusAborted)
+	default:
+		return string(aix.SnapshotStatusFailed)
 	}
-	return fmt.Sprintf("%s_%d", ref.Name, invocationNum)
 }
 
-// settledStatus maps a settled finish reason onto the status vocabulary the
-// background-task reports use: "completed" for every reason that carries a
-// result, and the reason itself for the rest, which matches the snapshot
-// status for failed and aborted runs and stays honest (e.g. "blocked",
-// "length") for reasons that have no snapshot-status counterpart.
-func settledStatus(reason aix.AgentFinishReason) string {
-	if reason.CarriesResult() {
-		return string(aix.SnapshotStatusCompleted)
-	}
-	return string(reason)
+// deadEndRead reports whether a snapshot read failure cannot be helped by
+// retrying: the row is gone or the request itself is rejected. Anything else
+// (a store blip, a timed-out read) is presumed transient. It is the policy the
+// runtime's own wait applies to its re-reads, matched by status name
+// ([status.Classified]) rather than sentinel identity, per the handle's
+// contract: an error that crossed a wire carries a status name and nothing
+// else, and a subtype classifies as its base ([aix.ErrSnapshotNotFound] is a
+// NOT_FOUND).
+func deadEndRead(err error) bool {
+	s, ok := status.Classified(err)
+	return ok && (s == status.NotFound || s == status.FailedPrecondition || s == status.InvalidArgument)
 }
 
 // interruptedResponse is the tool text reported when a sub-agent interrupted
@@ -651,37 +692,58 @@ func subAgentFailureMessage(reason aix.AgentFinishReason, err *status.Error, las
 	return msg + "."
 }
 
-// runSubAgent runs the agent one-shot with the task. With no history the
-// invocation starts a fresh session; with history the messages ride as
-// client-managed init state ([aix.WithState]), which callers forward only to
-// client-managed agents. With detach set, the input asks the sub-agent
-// runtime to move the work to the background immediately: the returned output
-// then carries the pending snapshot's ID and [aix.AgentFinishReasonDetached]
-// while the sub-agent keeps working. Custom state is json.RawMessage
-// throughout ([aix.AgentHandle]) since the sub-agent's State is unknown here.
-func runSubAgent(ctx context.Context, agent *aix.AgentHandle, task string, history []*ai.Message, detach bool) (*aix.AgentOutput[json.RawMessage], error) {
-	var opts []aix.InvocationOption[json.RawMessage]
-	if len(history) > 0 {
-		opts = append(opts, aix.WithState(&aix.SessionState[json.RawMessage]{Messages: history}))
+// runSubAgent runs one turn of the agent: msg is the turn's user message (nil
+// for a payload-less input), detach asks the sub-agent runtime to move the
+// work to the background immediately (the returned output then carries the
+// pending snapshot's ID and [aix.AgentFinishReasonDetached] while the
+// sub-agent keeps working), and opts name the session source: none for a
+// fresh session, [aix.WithState] for forwarded history (which only
+// client-managed agents accept), [aix.WithSnapshotID] for a continuation.
+// Custom state is json.RawMessage throughout ([aix.AgentHandle]) since the
+// sub-agent's State is unknown here.
+func runSubAgent(ctx context.Context, agent *aix.AgentHandle, msg *ai.Message, detach bool, opts ...aix.InvocationOption[json.RawMessage]) (*aix.AgentOutput[json.RawMessage], error) {
+	return agent.Run(ctx, &aix.AgentInput{Detach: detach, Message: msg}, opts...)
+}
+
+// resolveHandles resolves every configured sub-agent's handle through g, by
+// name. An agent the registry does not hold is left out, and a nil g (New ran
+// outside a generate call) resolves nothing; both are resolved on demand by
+// agentFrom, which is also where a miss is reported.
+func (a *Agents) resolveHandles(g *genkit.Genkit) map[string]*aix.AgentHandle {
+	handles := make(map[string]*aix.AgentHandle, len(a.Agents))
+	if g == nil {
+		return handles
 	}
-	return agent.Run(ctx, &aix.AgentInput{Detach: detach, Message: ai.NewUserTextMessage(task)}, opts...)
+	for _, ref := range a.Agents {
+		if h := genkitx.LookupAgent(g, ref.Name); h != nil {
+			handles[ref.Name] = h
+		}
+	}
+	return handles
+}
+
+// agentFrom returns the handle New resolved for ref (see agentsState.agents),
+// or resolves it through g now, reporting a miss the way every delegation
+// does.
+func (a *Agents) agentFrom(g *genkit.Genkit, st *agentsState, ref aix.AgentRef) (*aix.AgentHandle, error) {
+	if h := st.agents[ref.Name]; h != nil {
+		return h, nil
+	}
+	return resolveAgent(g, ref)
 }
 
 // anyContinuableAgent reports whether any configured sub-agent can leave a
 // continuable task handle behind, which is what justifies registering the
 // shared continue tool: only server-managed sub-agents (those with a session
-// store) commit durable snapshots. An agent that cannot be resolved here, or
-// that publishes no metadata, counts as continuable, the same safe default
-// isClientManaged applies: the tool stays available for an agent that may
-// well have a store, and a wrong guess costs a refusal at call time rather
-// than a silently missing tool.
-func (a *Agents) anyContinuableAgent(g *genkit.Genkit) bool {
+// store) commit durable snapshots. An agent that was not resolved (absent
+// from handles), or that publishes no metadata, counts as continuable, the
+// same safe default isClientManaged applies: the tool stays available for an
+// agent that may well have a store, and a wrong guess costs a refusal at call
+// time rather than a silently missing tool.
+func (a *Agents) anyContinuableAgent(handles map[string]*aix.AgentHandle) bool {
 	for _, ref := range a.Agents {
-		if g == nil {
-			return true
-		}
-		agent := genkitx.LookupAgent(g, ref.Name)
-		if agent == nil || !isClientManaged(agent) {
+		h, ok := handles[ref.Name]
+		if !ok || !isClientManaged(h) {
 			return true
 		}
 	}
@@ -754,18 +816,24 @@ type taskToolNames struct{ check, wait, abort string }
 // all returns the names in a fixed order, for collision checking.
 func (n taskToolNames) all() []string { return []string{n.check, n.wait, n.abort} }
 
-// backgroundToolNames returns the names of the shared background-task tools
-// for this configuration. They are the bare well-known names by default and
-// prefixed with an explicitly set [Agents.ToolPrefix], so two Async instances
-// with distinct prefixes can coexist on one generate call without colliding
-// on the shared names (the default delegate_to prefix is a delegation verb,
-// not an instance namespace, so it is deliberately not applied here, and a
-// nil prefix is therefore the same as an empty one).
-func (a *Agents) backgroundToolNames() taskToolNames {
-	prefix := ""
+// sharedToolPrefix is the prefix applied to the shared tools (the
+// background-task tools and the continue tool): an explicitly set
+// [Agents.ToolPrefix], and none by default, so two instances with distinct
+// prefixes can coexist on one generate call without colliding on the shared
+// names. The default delegate_to prefix is a delegation verb, not an instance
+// namespace, so it is deliberately not applied here, and a nil prefix is
+// therefore the same as an empty one.
+func (a *Agents) sharedToolPrefix() string {
 	if a.ToolPrefix != nil {
-		prefix = *a.ToolPrefix
+		return *a.ToolPrefix
 	}
+	return ""
+}
+
+// backgroundToolNames returns the names of the shared background-task tools
+// for this configuration (see sharedToolPrefix).
+func (a *Agents) backgroundToolNames() taskToolNames {
+	prefix := a.sharedToolPrefix()
 	return taskToolNames{
 		check: makeToolName(prefix, checkBackgroundTasksToolName),
 		wait:  makeToolName(prefix, waitBackgroundTasksToolName),

@@ -47,9 +47,11 @@ import (
 )
 
 // continueTaskToolName is the well-known name of the shared continue tool,
-// namespaced by an explicitly set [Agents.ToolPrefix] like the
-// background-task tools (see backgroundToolNames for the rationale).
+// namespaced like the background-task tools (see sharedToolPrefix).
 const continueTaskToolName = "continue_task"
+
+// continueToolDescription is the continue tool's model-facing description.
+const continueToolDescription = "Continues a sub-agent task by its taskId: a failed or aborted task picks up from its last saved progress (omit instructions to retry it as it stood, or pass instructions to steer it), and a completed task accepts follow-up instructions inside its own session. A task that stopped on an interrupt cannot be continued."
 
 // continueInput is the continue tool's input.
 type continueInput struct {
@@ -64,19 +66,9 @@ type asyncContinueInput struct {
 	Background bool `json:"background,omitempty" jsonschema_description:"Continue the task in the background. The tool returns immediately with a new taskId; collect the result later with the background-task tools."`
 }
 
-// continueToolName returns the continue tool's name for this configuration,
-// following the background-task tools' prefix rule.
+// continueToolName returns the continue tool's name for this configuration.
 func (a *Agents) continueToolName() string {
-	prefix := ""
-	if a.ToolPrefix != nil {
-		prefix = *a.ToolPrefix
-	}
-	return makeToolName(prefix, continueTaskToolName)
-}
-
-// continueToolDescription renders the continue tool's model-facing description.
-func continueToolDescription() string {
-	return "Continues a sub-agent task by its taskId: a failed or aborted task picks up from its last saved progress (omit instructions to retry it as it stood, or pass instructions to steer it), and a completed task accepts follow-up instructions inside its own session. A task that stopped on an interrupt cannot be continued."
+	return makeToolName(a.sharedToolPrefix(), continueTaskToolName)
 }
 
 // continueTask builds the continue tool function ([Agents.Async] unset).
@@ -136,11 +128,12 @@ func (a *Agents) continueFromStore(ctx context.Context, ref aix.AgentRef, st *ag
 	snap, err := agent.GetSnapshot(ctx, snapshotID, aix.WithMetadataOnly())
 	if err != nil {
 		logger.Debug(ctx, "continue read failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
+		s, _ := status.Classified(err)
 		switch {
-		case errors.Is(err, status.ErrNotFound):
+		case s == status.NotFound:
 			return delegationResult{Response: fmt.Sprintf(
 				"Error: no record of task %q exists (%v). Delegate the task again if the work is still needed.", in.TaskID, err)}, nil
-		case errors.Is(err, status.ErrFailedPrecondition), errors.Is(err, status.ErrInvalidArgument):
+		case deadEndRead(err):
 			return delegationResult{Response: fmt.Sprintf("Error continuing task %q: %v", in.TaskID, err)}, nil
 		default:
 			a.releaseDelegation(st)
@@ -149,8 +142,10 @@ func (a *Agents) continueFromStore(ctx context.Context, ref aix.AgentRef, st *ag
 		}
 	}
 
-	switch snap.Status {
-	case aix.SnapshotStatusPending:
+	// Expired before terminal: expiry is a terminal verdict on the row, but
+	// its recovery has its own path.
+	switch {
+	case snap.Status == aix.SnapshotStatusPending:
 		a.releaseDelegation(st)
 		hint := ""
 		if a.Async {
@@ -158,27 +153,14 @@ func (a *Agents) continueFromStore(ctx context.Context, ref aix.AgentRef, st *ag
 			hint = fmt.Sprintf(" Collect it with %s or %s, or stop it with %s first.", names.check, names.wait, names.abort)
 		}
 		return delegationResult{Response: fmt.Sprintf("Task %q is still running; only a settled task can be continued.%s", in.TaskID, hint)}, nil
-
-	case aix.SnapshotStatusAborting:
-		// The stop landed and the worker is draining toward the finalize that
-		// makes the row a continuation point; the same ID is the thing to
-		// retry, and the refund reflects that.
-		a.releaseDelegation(st)
-		hint := ""
-		if a.Async {
-			hint = fmt.Sprintf(" Collect its settled state with %s, then continue that.", a.backgroundToolNames().wait)
-		}
-		return delegationResult{Response: fmt.Sprintf(
-			"Task %q is winding down after a stop signal; its progress is being saved. Retry this taskId once it settles.%s", in.TaskID, hint)}, nil
-
-	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
-		return a.continueSettled(ctx, ref, st, agent, invocationNum, in, snapshotID, snap, background)
-
-	case aix.SnapshotStatusExpired:
+	case snap.Status == aix.SnapshotStatusExpired:
 		return a.continueExpired(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
+	case snap.Status.Terminal():
+		return a.continueSettled(ctx, ref, st, agent, invocationNum, in, snapshotID, snap, background)
+	default:
+		// Aborting, the one other in-flight status.
+		return a.windingDownRefusal(st, in.TaskID), nil
 	}
-	a.releaseDelegation(st)
-	return delegationResult{Response: fmt.Sprintf("Error: task %q is in an unexpected state (%q) and cannot be continued.", in.TaskID, snap.Status)}, nil
 }
 
 // continueSettled continues a handle whose shaped row is settled (completed,
@@ -199,7 +181,7 @@ func (a *Agents) continueSettled(ctx context.Context, ref aix.AgentRef, st *agen
 		"Task %q already completed. To follow up in the sub-agent's session, call this tool again with instructions; re-running it without instructions would only repeat the finished work.", in.TaskID)); refusal != nil {
 		return *refusal, nil
 	}
-	return a.runContinueFromSnapshot(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
+	return a.runContinueFrom(ctx, ref, st, agent, invocationNum, in, snapshotID, background)
 }
 
 // continueExpired recovers a task whose worker is presumed dead. "Presumed" is
@@ -208,6 +190,9 @@ func (a *Agents) continueSettled(ctx context.Context, ref aix.AgentRef, st *agen
 // (a live worker observes the flip and stops; a dead one is unaffected), and
 // one shaped re-read then decides the recovery point:
 //
+//   - Still expired: the worker really is gone, and the recovery falls back
+//     to the dead row's parent, the last snapshot committed before the
+//     detach.
 //   - A settled row (completed, failed, or aborted): a finalize landed in the
 //     window, so the worker was alive after all and the row itself holds the
 //     run's full state. It continues like any settled handle, completed rows
@@ -216,9 +201,6 @@ func (a *Agents) continueSettled(ctx context.Context, ref aix.AgentRef, st *agen
 //     row reading as aborting because its finalize is coming. That settled
 //     row will be the continuation point, so the refusal names the retry and
 //     returns the slot.
-//   - Still expired: the worker really is gone, and the recovery falls back
-//     to the dead row's parent, the last snapshot committed before the
-//     detach.
 //
 // The fence is the one write standing between the recovery and a live
 // worker, so a fence that fails is a refusal, not a log line: proceeding
@@ -239,21 +221,30 @@ func (a *Agents) continueExpired(ctx context.Context, ref aix.AgentRef, st *agen
 		return delegationResult{Response: fmt.Sprintf(
 			"Error: could not read task %q after fencing it (%v). Try again later.", in.TaskID, err)}, nil
 	}
-	switch cur.Status {
-	case aix.SnapshotStatusCompleted, aix.SnapshotStatusFailed, aix.SnapshotStatusAborted:
+	switch {
+	case cur.Status == aix.SnapshotStatusExpired:
+		return a.continueFromParent(ctx, ref, st, agent, invocationNum, in, cur.ParentID, background)
+	case cur.Status.Terminal():
 		return a.continueSettled(ctx, ref, st, agent, invocationNum, in, snapshotID, cur, background)
-	case aix.SnapshotStatusPending, aix.SnapshotStatusAborting:
+	default:
 		// The fence reached a live worker: it beat after the flip, so its
 		// finalize is coming and the parent must not be raced.
-		a.releaseDelegation(st)
-		hint := ""
-		if a.Async {
-			hint = fmt.Sprintf(" Collect its settled state with %s, then continue that.", a.backgroundToolNames().wait)
-		}
-		return delegationResult{Response: fmt.Sprintf(
-			"Task %q is still winding down after the stop signal reached it; its progress is being saved. Retry this taskId once it settles.%s", in.TaskID, hint)}, nil
+		return a.windingDownRefusal(st, in.TaskID), nil
 	}
-	return a.continueFromParent(ctx, ref, st, agent, invocationNum, in, cur.ParentID, background)
+}
+
+// windingDownRefusal refuses to continue a task whose row is aborting: the
+// stop landed and the worker is draining toward the finalize that makes the
+// row a continuation point, so the same handle is the thing to retry, and the
+// refund reflects that.
+func (a *Agents) windingDownRefusal(st *agentsState, taskID string) delegationResult {
+	a.releaseDelegation(st)
+	hint := ""
+	if a.Async {
+		hint = fmt.Sprintf(" Collect its settled state with %s, then continue that.", a.backgroundToolNames().wait)
+	}
+	return delegationResult{Response: fmt.Sprintf(
+		"Task %q is winding down after a stop signal; its progress is being saved. Retry this taskId once it settles.%s", taskID, hint)}
 }
 
 // refuseEmptyFollowUp refuses an instructions-less continuation of a snapshot whose
@@ -270,13 +261,6 @@ func (a *Agents) refuseEmptyFollowUp(st *agentsState, snap *aix.SessionSnapshot[
 	}
 	a.releaseDelegation(st)
 	return &delegationResult{Response: msg}
-}
-
-// runContinueFromSnapshot runs the sub-agent from the named snapshot and folds
-// the outcome like a synchronous delegation (or launches it in the
-// background, like a background delegation).
-func (a *Agents) runContinueFromSnapshot(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in continueInput, snapshotID string, background bool) (delegationResult, error) {
-	return a.runContinueWith(ctx, ref, st, agent, invocationNum, in, background, aix.WithSnapshotID[json.RawMessage](snapshotID))
 }
 
 // continueFromParent recovers a dead task from its pending row's parent: the
@@ -296,11 +280,11 @@ func (a *Agents) continueFromParent(ctx context.Context, ref aix.AgentRef, st *a
 	}
 	parent, err := agent.GetSnapshot(ctx, parentID, aix.WithMetadataOnly())
 	if err != nil {
-		if !errors.Is(err, status.ErrNotFound) && !errors.Is(err, status.ErrFailedPrecondition) && !errors.Is(err, status.ErrInvalidArgument) {
+		if !deadEndRead(err) {
 			// Transient, and the refusal names a retry that can succeed, so
 			// the slot comes back, the same refund continueFromStore applies to
-			// its own transient read failures. The dead-end classes (a
-			// deleted parent, a rejected request) keep their slot.
+			// its own transient read failures. The dead ends (a deleted
+			// parent, a rejected request) keep their slot.
 			a.releaseDelegation(st)
 		}
 		return delegationResult{Response: fmt.Sprintf(
@@ -310,87 +294,71 @@ func (a *Agents) continueFromParent(ctx context.Context, ref aix.AgentRef, st *a
 		"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)); refusal != nil {
 		return *refusal, nil
 	}
-	return a.runContinueFromSnapshot(ctx, ref, st, agent, invocationNum, in, parentID, background)
+	return a.runContinueFrom(ctx, ref, st, agent, invocationNum, in, parentID, background)
 }
 
-// runContinueWith is the shared tail of every store-backed continuation: the optional
-// background pre-flight, the run itself, and the folding of its outcome.
-func (a *Agents) runContinueWith(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in continueInput, background bool, opt aix.InvocationOption[json.RawMessage]) (delegationResult, error) {
+// runContinueFrom is the shared tail of every store-backed continuation: it
+// runs the sub-agent from the named snapshot, with the instructions as the
+// turn's user message, and folds the outcome like a synchronous delegation,
+// or launches it in the background through the same launch protocol as a
+// background delegation (refuseUndetachable, then foldDetachOutcome).
+func (a *Agents) runContinueFrom(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in continueInput, snapshotID string, background bool) (delegationResult, error) {
+	words := launchWords{
+		errPrefix:         fmt.Sprintf("Error continuing task %q", in.TaskID),
+		withoutBackground: "continue it without \"background\" instead",
+		started: func(taskID string) string {
+			return fmt.Sprintf("Task %s continued in the background as %s.", in.TaskID, taskID)
+		},
+		// The continuation is the same undertaking; its label follows the
+		// handle.
+		label:         a.taskLabel(st, in.TaskID),
+		continuedFrom: in.TaskID,
+	}
 	if background {
-		// Same pre-flight as launchDelegation: a genkit-defined agent that
-		// cannot detach is refused deterministically, and the refusal names
-		// the synchronous retry, so it returns its slot.
-		if meta := agent.Metadata(); meta != nil && !meta.Abortable {
-			a.releaseDelegation(st)
-			return delegationResult{Response: fmt.Sprintf(
-				"Error continuing task %q: this agent lacks a session store that supports background work. Continue it without \"background\" instead.", in.TaskID)}, nil
+		if refusal := a.refuseUndetachable(ctx, ref, st, agent, words); refusal != nil {
+			return *refusal, nil
 		}
 	}
 
 	logger.Debug(ctx, "continuing sub-agent task",
 		"agent", ref.Name, "taskId", in.TaskID, "invocation", invocationNum, "background", background)
-	out, err := runContinuedSubAgent(ctx, agent, in.Instructions, background, opt)
+	out, err := runSubAgent(ctx, agent, continueMessage(in.Instructions, background), background,
+		aix.WithSnapshotID[json.RawMessage](snapshotID))
 	if err != nil {
 		logger.Warn(ctx, "sub-agent continuation failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
 		if errors.Is(err, status.ErrFailedPrecondition) {
 			// The runtime rejected the resume point itself (nothing behind
 			// it, or a still-live worker); its message says which.
 			return delegationResult{Response: fmt.Sprintf(
-				"Error continuing task %q: %v. If no progress was saved, delegate the task again.", in.TaskID, err)}, nil
+				"%s: %v. If no progress was saved, delegate the task again.", words.errPrefix, err)}, nil
 		}
-		return delegationResult{Response: fmt.Sprintf("Error continuing task %q: %v", in.TaskID, err)}, nil
+		return delegationResult{Response: fmt.Sprintf("%s: %v", words.errPrefix, err)}, nil
 	}
-
-	if background && out.FinishReason == aix.AgentFinishReasonFailed && maybeDetachRejection(agent, out) {
-		// launchDelegation's hedge, mirrored: only a metadata-less agent
-		// reaches the runtime's detach rejection (the pre-flight above
-		// refused a genkit-defined agent that cannot detach), and the
-		// refusal names the synchronous retry, so it returns its slot.
-		a.releaseDelegation(st)
-		return delegationResult{Response: fmt.Sprintf(
-			"Error continuing task %q: %s If this agent lacks a session store that supports background work, continue it without \"background\" instead.",
-			in.TaskID, subAgentFailureMessage(out.FinishReason, out.Error, out.Message))}, nil
+	if background {
+		return a.foldDetachOutcome(ctx, ref, st, agent, invocationNum, out, words), nil
 	}
-
-	if out.FinishReason == aix.AgentFinishReasonDetached {
-		taskID := formatTaskID(ref.Name, out.SnapshotID)
-		names := a.backgroundToolNames()
-		logger.Debug(ctx, "background continuation started",
-			"agent", ref.Name, "taskId", taskID, "continuedFrom", in.TaskID, "sessionId", out.SessionID)
-		result := delegationResult{
-			TaskID: taskID,
-			Status: string(aix.SnapshotStatusPending),
-			Response: fmt.Sprintf(
-				"Task %s continued in the background as %s. Collect the result with %s or %s, or stop it with %s.",
-				in.TaskID, taskID, names.check, names.wait, names.abort),
-		}
-		a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
-		return result, nil
-	}
-	result := a.foldDelegationOutput(ctx, ref, out, invocationID(ref, out, invocationNum))
-	// The continuation is the same undertaking; its label follows the handle.
-	a.labelTask(st, &result, a.taskLabel(st, in.TaskID))
+	result := a.foldDelegationOutput(ctx, ref, out, invocationNum)
+	a.labelTask(st, &result, words.label)
 	return result, nil
 }
 
-// runContinuedSubAgent runs the agent with the resume init option and the
-// instructions as the turn's user message. No instructions means no message:
-// the runtime re-attempts the conversation as committed, which is the retry
-// semantics for a run that stopped short.
+// continueMessage is the user message a continuation delivers: the
+// instructions when given, otherwise none, so the runtime re-attempts the
+// conversation as committed, which is the retry semantics for a run that
+// stopped short.
 //
 // The exception is a background retry. A detached input with no payload of
 // its own is a pure detach signal to the runtime and runs no turn (see
-// hasInputPayload in ai/exp), so an empty background continuation would finalize
-// the loaded state untouched instead of retrying it. It gets the smallest
-// honest payload instead: a continue message, which also documents in the
-// sub-agent's transcript why the run picked back up.
-func runContinuedSubAgent(ctx context.Context, agent *aix.AgentHandle, instructions string, detach bool, opts ...aix.InvocationOption[json.RawMessage]) (*aix.AgentOutput[json.RawMessage], error) {
-	if detach && instructions == "" {
+// hasInputPayload in ai/exp), so an empty background continuation would
+// finalize the loaded state untouched instead of retrying it. It gets the
+// smallest honest payload instead: a continue message, which also documents
+// in the sub-agent's transcript why the run picked back up.
+func continueMessage(instructions string, detach bool) *ai.Message {
+	if instructions == "" {
+		if !detach {
+			return nil
+		}
 		instructions = "Continue the task from where it stopped."
 	}
-	input := &aix.AgentInput{Detach: detach}
-	if instructions != "" {
-		input.Message = ai.NewUserTextMessage(instructions)
-	}
-	return agent.Run(ctx, input, opts...)
+	return ai.NewUserTextMessage(instructions)
 }
