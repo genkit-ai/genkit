@@ -830,7 +830,7 @@ func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
 	// the tools first would cache its report, and the abort would then answer
 	// from that cache without ever dispatching the call under test.
 	h := genkitx.LookupAgent(g, "researcher")
-	task, err := h.Start(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("dig into X")})
+	task, err := h.RunDetached(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("dig into X")})
 	if err != nil {
 		t.Fatal(err)
 	}
