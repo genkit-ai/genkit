@@ -21,7 +21,7 @@ import contextlib
 import copy
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -53,7 +53,7 @@ from genkit._core._background import (
     missing_operation_error,
     stamp_operation_action,
 )
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -105,6 +105,21 @@ class StreamingCallbackError(Exception):
     def __init__(self, cause: Exception) -> None:
         super().__init__(str(cause))
         self.cause = cause
+
+
+def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
+    """Find the caller exception carried through action error wrappers."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, StreamingCallbackError):
+            return current.cause
+        if isinstance(current, GenkitError) and current.cause is not None:
+            current = current.cause
+        else:
+            current = current.__cause__
+    return None
 
 
 class ModelContractError(GenkitError):
@@ -689,13 +704,19 @@ async def generate_with_request(
             resolved['middleware'] = [middleware_name(m) for m in middleware]
         logger.debug('generate request resolved', **resolved)
 
-    return await _generate_action_turn(
-        registry=registry,
-        raw_request=raw_request,
-        mw_pipeline=mw_pipeline,
-        message_index=message_index,
-        current_turn=current_turn,
-    )
+    try:
+        return await _generate_action_turn(
+            registry=registry,
+            raw_request=raw_request,
+            mw_pipeline=mw_pipeline,
+            message_index=message_index,
+            current_turn=current_turn,
+        )
+    except Exception as exc:
+        callback_cause = streaming_callback_cause(exc=exc)
+        if callback_cause is not None:
+            raise callback_cause from None
+        raise
 
 
 class ChunkAccumulator:
@@ -857,9 +878,13 @@ def closed_round_from_exc(
     messages: list[Message],
     exc: BaseException,
     caller_stopped: bool,
+    reason: RuntimeErrorReason | None = None,
 ) -> ModelResponse:
-    if isinstance(exc, StreamingCallbackError):
-        raise exc.cause
+    callback_cause = streaming_callback_cause(exc=exc)
+    if callback_cause is not None:
+        if isinstance(exc, StreamingCallbackError):
+            raise exc
+        raise StreamingCallbackError(callback_cause) from callback_cause
     if isinstance(exc, MissingOperationError | ModelContractError):
         raise exc
     if isinstance(exc, GenkitError) and isinstance(exc.cause, ValidationError):
@@ -867,15 +892,18 @@ def closed_round_from_exc(
     if isinstance(exc, Interrupt):
         raise
     finish_message = str(exc) or type(exc).__name__
-    if isinstance(exc, GenkitError):
+    if caller_stopped:
+        status = 'CANCELLED'
+        details = exc.details if isinstance(exc, GenkitError) else None
+    elif isinstance(exc, GenkitError):
         status = exc.status
         details = exc.details
-    elif isinstance(exc, asyncio.CancelledError):
-        status = 'CANCELLED'
-        details = None
     else:
         status = 'INTERNAL'
         details = None
+    if reason is not None and not caller_stopped:
+        details = dict(details) if isinstance(details, Mapping) else {}
+        details['reason'] = reason.value
     return closed_round_failure(
         response=response,
         messages=messages,
@@ -902,7 +930,7 @@ async def _generate_action_turn(
             messages=list(raw_request.messages or []),
             finish_reason=FinishReason.ABORTED,
             finish_message='Generation aborted.',
-            error=GenkitRuntimeError(status='ABORTED', message='Generation aborted.'),
+            error=GenkitRuntimeError(status='CANCELLED', message='Generation aborted.'),
         )
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
@@ -1160,7 +1188,11 @@ async def _generate_action_turn(
         if current_turn + 1 > max_iters:
             response.finish_reason = FinishReason.ABORTED
             response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
-            response.error = GenkitRuntimeError(status='ABORTED', message=response.finish_message)
+            response.error = GenkitRuntimeError(
+                status='ABORTED',
+                message=response.finish_message,
+                details={'reason': RuntimeErrorReason.MAX_TURNS_EXCEEDED.value},
+            )
             log_responded()
             # This model call opened a tool round we will not run. Only
             # closed rounds are history, so the unanswered request is dropped.
@@ -1173,7 +1205,7 @@ async def _generate_action_turn(
                 messages=list(turn_options.messages),
                 finish_reason=FinishReason.ABORTED,
                 finish_message='Generation aborted.',
-                error=GenkitRuntimeError(status='ABORTED', message='Generation aborted.'),
+                error=GenkitRuntimeError(status='CANCELLED', message='Generation aborted.'),
             )
 
         known_tools = {t.name for t in turn_tools}
@@ -1190,7 +1222,11 @@ async def _generate_action_turn(
         if missing_tool is not None:
             response.finish_reason = FinishReason.FAILED
             response.finish_message = f'Tool {missing_tool} not found'
-            response.error = GenkitRuntimeError(status='NOT_FOUND', message=response.finish_message)
+            response.error = GenkitRuntimeError(
+                status='NOT_FOUND',
+                message=response.finish_message,
+                details={'reason': RuntimeErrorReason.TOOL_NOT_FOUND.value},
+            )
             log_responded()
             response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
@@ -1204,11 +1240,13 @@ async def _generate_action_turn(
                 abort_signal=ctx.abort_signal,
             )
         except (Exception, asyncio.CancelledError) as exc:
+            caller_stopped = ctx.abort_signal.is_set() or isinstance(exc, asyncio.CancelledError)
             return closed_round_from_exc(
                 response=response,
                 messages=list(turn_options.messages),
                 exc=exc,
-                caller_stopped=ctx.abort_signal.is_set() or isinstance(exc, asyncio.CancelledError),
+                caller_stopped=caller_stopped,
+                reason=RuntimeErrorReason.TOOL_FAILED,
             )
 
         # if an interrupt message is returned, stop the tool loop and return a

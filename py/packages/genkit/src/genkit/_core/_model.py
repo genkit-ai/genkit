@@ -34,7 +34,7 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -72,8 +72,8 @@ from genkit._core._typing import (
 ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
-# The model's own reason stays on the response. A leftover that failed
-# schema on a normal stop becomes ERROR instead.
+# The model's own reason stays on the response. Output validation is
+# post-processing, so its failure is carried separately on ``error``.
 _KEEP_MODEL_FINISH_REASONS = frozenset({
     FinishReason.BLOCKED,
     FinishReason.ABORTED,
@@ -529,20 +529,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         """No-op. A blocked or empty reply is still a response the caller can read."""
 
     def _mark_invalid_output(self, message: str) -> None:
-        self.finish_reason = FinishReason.FAILED
-        self.finish_message = message
-        self.error = GenkitRuntimeError(status='INTERNAL', message=message)
+        self.error = GenkitRuntimeError(
+            status='INTERNAL',
+            message=message,
+            details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
+        )
 
     def assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
         A leftover echo or a wrong-shape JSON is not a Recipe. generate()
-        still returns so the leftover stays on ``.text``; we set
-        ``finish_reason=error`` and ``.output`` is None.
+        still returns so the leftover stays on ``.text``; the model's finish
+        reason stays intact and ``error`` records the post-processing failure.
+        ``.output`` is None.
         A blocked/aborted/interrupted/other finish keeps the model's reason.
         """
         schema = self.request.output_schema if self.request is not None else None
         if schema is None and self._schema_type is None:
+            return
+        if self.error is not None:
             return
         if self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
             return
@@ -617,7 +622,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         """Parsed structured output, or None when the reply is not that shape.
 
         generate() does not throw on a leftover string. If you asked for a
-        schema and this is not it, read ``finish_reason`` / ``.text`` instead.
+        schema and this is not it, read ``error`` / ``.text`` instead.
         """
         schema = self.request.output_schema if self.request is not None else None
         wants_schema = schema is not None or self._schema_type is not None

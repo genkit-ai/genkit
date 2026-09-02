@@ -9,11 +9,11 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import Genkit, Message, ModelResponse, ModelResponseChunk
 from genkit._ai._generate import generate_action
 from genkit._ai._model import resolve_model_arg
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, restart_tool
+from genkit._ai._tools import Interrupt, respond_to_interrupt, restart_tool
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._error import GenkitError
 from genkit._core._logger import GENKIT_LOG, get_logger
@@ -125,8 +125,8 @@ async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The breadcrumb uses the stamped finish, not the model's original stop."""
+async def test_leftover_logs_model_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Output validation does not replace the model's reason in its breadcrumb."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
@@ -141,11 +141,12 @@ async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatc
 
     with capture_logs() as entries:
         response = await ai.generate(prompt='hi', output_schema={'type': 'object'})
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
 
     responded = [entry for entry in entries if entry['event'] == 'model responded']
     assert len(responded) == 1
-    assert responded[0]['finish_reason'] == FinishReason.FAILED
+    assert responded[0]['finish_reason'] == FinishReason.STOP
 
 
 @pytest.mark.asyncio
@@ -397,6 +398,83 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
                 model='programmableModel',
                 messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
                 tools=['echo'],
+            ),
+            on_chunk=on_chunk,
+        )
+
+
+@pytest.mark.asyncio
+async def test_model_stream_callback_failure_raises_original_exception() -> None:
+    """A model chunk sink failure stays a caller exception, not a model response."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='done')]),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[TextPart(text='partial')])]]
+
+    def on_chunk(_: object) -> None:
+        raise RuntimeError('model sink closed')
+
+    with pytest.raises(RuntimeError, match='model sink closed'):
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            ),
+            on_chunk=on_chunk,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resumed_tool_stream_callback_failure_raises_original_exception() -> None:
+    """A resumed tool chunk uses the same caller-exception boundary."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        ),
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='done')]),
+            finish_reason=FinishReason.STOP,
+        ),
+    ]
+    first = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            tools=['hold'],
+        ),
+    )
+
+    def on_chunk(chunk: object) -> None:
+        if getattr(chunk, 'role', None) == Role.TOOL:
+            raise RuntimeError('resume sink closed')
+
+    reply = respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])
+    with pytest.raises(RuntimeError, match='resume sink closed'):
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=list(first.messages),
+                tools=['hold'],
+                resume=Resume(respond=[reply]),
             ),
             on_chunk=on_chunk,
         )

@@ -24,7 +24,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -114,6 +114,14 @@ async def test_simple_text_generate_request(
     )
 
     assert response.text == 'bye'
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
+    assert response.error is None
+    assert response.message is not None
+    assert response.message.text == 'bye'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'hi'
+    assert response.messages[1] == response.message
 
 
 @pytest.mark.asyncio
@@ -1453,7 +1461,12 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         ),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
+    assert response.finish_message == 'One or more tool calls resulted in interrupts.'
+    assert response.error is None
     assert response.message is not None
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'do it'
+    assert response.messages[1] == response.message
     interrupt_parts = [
         p
         for p in response.message.content
@@ -1892,7 +1905,26 @@ async def test_parallel_tool_requests_all_complete() -> None:
     )
 
     assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
     assert response.text == 'after_tools'
+    assert response.error is None
+    assert response.message is not None
+    assert response.message.text == 'after_tools'
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.MODEL,
+    ]
+    assert response.messages[-1] == response.message
+    tool_responses = [
+        part.root.tool_response for part in response.messages[2].content if isinstance(part.root, ToolResponsePart)
+    ]
+    assert [(part.name, part.ref, part.output) for part in tool_responses] == [
+        ('tool_a', 'ref-a', 'a_ok'),
+        ('tool_b', 'ref-b', 'b_ok'),
+        ('tool_c', 'ref-c', 'c_ok'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -2462,8 +2494,37 @@ async def test_generate_returns_on_blocked_finish() -> None:
 
     response = await ai.generate(prompt='hi')
     assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
     assert response.text == 'nope'
     assert response.output is None
+    assert response.error is None
+    assert response.message is not None
+    assert response.message.text == 'nope'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'hi'
+    assert response.messages[1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_without_message_keeps_prior_history() -> None:
+    """A provider can block without returning refusal content."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
+    assert response.message is None
+    assert response.error is None
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'hi'
 
 
 @pytest.mark.asyncio
@@ -2483,14 +2544,20 @@ async def test_generate_returns_error_finish_when_output_does_not_match_schema()
     ]
 
     response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
     assert response.text == 'not json'
     assert response.output is None
-    assert response.finish_message is not None
-    assert 'not valid JSON' in response.finish_message
+    assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.message == response.finish_message
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+    assert response.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert response.message is not None
+    assert response.message.text == 'not json'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'give me a recipe'
+    assert response.messages[1] == response.message
 
 
 def _model_calls_tool(*, name: str, ref: str) -> ModelResponse:
@@ -2508,6 +2575,38 @@ def _tool_output(message: Message) -> object:
     assert isinstance(part, ToolResponsePart)
     assert part.tool_response is not None
     return part.tool_response.output
+
+
+@pytest.mark.asyncio
+async def test_return_tool_requests_keeps_model_message_without_running_tool() -> None:
+    """The caller can deliberately take responsibility for an open tool request."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    called = False
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        nonlocal called
+        called = True
+        return '72F'
+
+    pm.responses = [_model_calls_tool(name='lookup', ref='r1')]
+
+    response = await ai.generate(
+        prompt='let me run it',
+        tools=['lookup'],
+        return_tool_requests=True,
+    )
+
+    assert called is False
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
+    assert response.error is None
+    assert response.message is not None
+    assert response.message.tool_requests[0].tool_request == ToolRequest(name='lookup', input={}, ref='r1')
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'let me run it'
+    assert response.messages[1] == response.message
 
 
 @pytest.mark.asyncio
@@ -2537,9 +2636,17 @@ async def test_leftover_after_tool_turn_keeps_intermediate_messages() -> None:
         output_instructions=False,
         tools=['lookup'],
     )
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
     assert response.text == 'not json'
     assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid JSON' in response.error.message
+    assert response.message is not None
+    assert response.message.text == 'not json'
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
     assert _tool_output(response.messages[2]) == '72F'
@@ -2567,6 +2674,8 @@ async def test_max_turns_after_tool_turn_keeps_intermediate_messages() -> None:
     assert 'maximum tool call iterations' in response.finish_message
     assert response.error is not None
     assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2594,6 +2703,8 @@ async def test_unknown_tool_after_tool_turn_keeps_intermediate_messages() -> Non
     assert response.finish_message == 'Tool ghost not found'
     assert response.error is not None
     assert response.error.status == 'NOT_FOUND'
+    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.details == {'reason': 'TOOL_NOT_FOUND'}
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2627,10 +2738,90 @@ async def test_tool_failure_after_tool_turn_keeps_closed_rounds() -> None:
     assert 'db down' in response.finish_message
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert isinstance(response.error.details, dict)
+    assert response.error.details['reason'] == 'TOOL_FAILED'
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_output(response.messages[2]) == '72F'
+
+
+@pytest.mark.asyncio
+async def test_output_schema_does_not_replace_tool_failure() -> None:
+    """Output validation cannot mask the runtime failure that ended generation."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    @ai.tool(name='broken')
+    async def broken() -> str:
+        raise RuntimeError('db down')
+
+    pm.responses = [_model_calls_tool(name='broken', ref='r1')]
+
+    response = await ai.generate(
+        prompt='make a recipe',
+        tools=['broken'],
+        output_schema=Recipe,
+        output_instructions=False,
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert 'db down' in response.finish_message
+    assert response.message is None
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
+    """A partial set of tool responses is not a resendable conversation round."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    stable_calls = 0
+
+    @ai.tool(name='stable')
+    async def stable() -> str:
+        nonlocal stable_calls
+        stable_calls += 1
+        return f'ok-{stable_calls}'
+
+    @ai.tool(name='broken')
+    async def broken() -> str:
+        raise RuntimeError('db down')
+
+    pm.responses = [
+        _model_calls_tool(name='stable', ref='closed'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='stable', input={}, ref='ok'))),
+                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='broken', input={}, ref='bad'))),
+                ],
+            ),
+        ),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['stable', 'broken'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'closed'
+    assert _tool_output(response.messages[2]) == 'ok-1'
 
 
 @pytest.mark.asyncio
@@ -2660,6 +2851,9 @@ async def test_model_failure_after_tool_turn_keeps_closed_rounds() -> None:
     assert 'stream died' in response.finish_message
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert isinstance(response.error.details, dict)
+    assert 'reason' not in response.error.details
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2695,7 +2889,9 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
     assert response.error is not None
-    assert response.error.status == 'ABORTED'
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2734,8 +2930,12 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
     abort_signal.set()
     response = await asyncio.wait_for(task, timeout=2.0)
     assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message is not None
+    assert 'aborted' in response.finish_message.lower()
     assert response.error is not None
-    assert response.error.status == 'ABORTED'
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.details is not None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -2768,6 +2968,7 @@ async def test_provider_status_failure_keeps_closed_rounds(status: str) -> None:
     assert 'provider stopped' in response.finish_message
     assert response.error is not None
     assert response.error.status == status
+    assert response.error.reason is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2806,6 +3007,8 @@ async def test_generate_middleware_failure_keeps_closed_rounds() -> None:
     assert response.finish_message == 'hook denied'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2848,6 +3051,8 @@ async def test_generate_middleware_dropping_failure_still_keeps_closed_rounds() 
     assert response.finish_message == 'hook discarded failure'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -2872,7 +3077,13 @@ async def test_generate_returns_typed_output_when_schema_matches() -> None:
 
     response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
     assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
+    assert response.error is None
     assert response.output.title == 'Soup'
+    assert response.message is not None
+    assert response.message.text == '{"title": "Soup"}'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[1] == response.message
 
 
 @pytest.mark.asyncio
@@ -2892,9 +3103,16 @@ async def test_generate_enum_off_list_is_error_finish() -> None:
         output_format='enum',
         output_schema={'type': 'string', 'enum': ['POSITIVE', 'NEGATIVE', 'NEUTRAL']},
     )
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
     assert response.output is None
     assert response.text == 'MAYBE'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert response.message is not None
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[1] == response.message
 
 
 @pytest.mark.asyncio
@@ -2915,6 +3133,8 @@ async def test_generate_array_of_scalars() -> None:
         output_schema={'type': 'array', 'items': {'type': 'string'}},
     )
     assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
+    assert response.error is None
     assert response.output == ['a', 'b']
 
 

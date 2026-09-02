@@ -26,12 +26,62 @@ from genkit._core._error import (
     GenkitError,
     PublicError,
     ReflectionError,
+    RuntimeErrorReason,
     get_callable_json,
     get_error_stack,
     get_http_status,
     parse_retry_after_ms,
     wrap_http_error,
 )
+from genkit._core._typing import GenkitRuntimeError
+
+
+def test_runtime_error_reasons_cover_go_builtin_subtypes() -> None:
+    assert {reason.value for reason in RuntimeErrorReason} == {
+        'INVALID_SCHEMA',
+        'INVALID_INPUT',
+        'INVALID_OUTPUT',
+        'ACTION_NOT_FOUND',
+        'PANIC',
+        'MODEL_NOT_FOUND',
+        'TOOL_NOT_FOUND',
+        'MAX_TURNS_EXCEEDED',
+        'TOOL_FAILED',
+        'UNSUPPORTED_BY_MODEL',
+        'INVALID_PART',
+        'INPUT_TYPE_MISMATCH',
+        'UNRESOLVED_TOOL_REQUEST',
+        'GENERATION_BLOCKED',
+        'SNAPSHOT_NOT_FOUND',
+        'SESSION_STORE_NOT_CONFIGURED',
+        'SESSION_ID_REQUIRED',
+        'STREAM_NOT_FOUND',
+        'STREAM_ALREADY_EXISTS',
+        'STREAM_WRITER_CLOSED',
+        'STREAM_COMPLETED',
+        'STREAM_TIMEOUT',
+        'CONNECTION_CLOSED',
+        'ACTION_COMPLETED',
+    }
+
+
+def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
+    error = GenkitRuntimeError(
+        status='ABORTED',
+        message='stopped',
+        details={'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
+    )
+
+    assert error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert error.model_dump(exclude_none=True) == {
+        'status': 'ABORTED',
+        'message': 'stopped',
+        'details': {'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
+    }
+    assert GenkitRuntimeError(message='bad', details={'reason': 5}).reason is None
+    assert GenkitRuntimeError(message='bad', details={'reason': 'not-valid'}).reason is None
+    with pytest.raises(AttributeError):
+        error.reason = RuntimeErrorReason.TOOL_FAILED  # type: ignore[misc]
 
 
 def test_genkit_error() -> None:
