@@ -19,9 +19,7 @@
 from __future__ import annotations
 
 import pytest
-from genkit_google_genai._interactions.options import ClientOptions
 from genkit_google_genai.models.interactions_utils import (
-    client_options_for_operation,
     extract_version,
     partition_keys,
     require_interaction_steps,
@@ -72,23 +70,3 @@ def test_require_interaction_steps_rejects_empty() -> None:
 def test_require_interaction_steps_passes_through() -> None:
     steps = [{'type': 'user_input', 'content': [{'type': 'text', 'text': 'hi'}]}]
     assert require_interaction_steps(steps) is steps
-
-
-def test_client_options_for_operation_drops_key_and_host() -> None:
-    persisted = client_options_for_operation(
-        ClientOptions(
-            api_key='secret',
-            base_url='https://evil.test',
-            api_version='v1beta',
-            timeout=1500,
-            custom_headers={'x-custom': '1'},
-        )
-    )
-    assert persisted.api_key is None
-    assert persisted.base_url is None
-    assert persisted.api_version == 'v1beta'
-    assert persisted.timeout == 1500
-    assert persisted.custom_headers == {'x-custom': '1'}
-    dumped = persisted.to_metadata_dict()
-    assert 'apiKey' not in dumped
-    assert 'baseUrl' not in dumped

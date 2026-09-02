@@ -119,20 +119,6 @@ def require_interaction_steps(steps: list[Any]) -> list[Any]:
     return steps
 
 
-def client_options_for_operation(client_options: ClientOptions) -> ClientOptions:
-    """Transport knobs that may ride on a ticket. Never the key or the host.
-
-    A ticket is shared; a tenant key and an attacker-chosen base_url
-    must not travel with it. Check/cancel re-read secrets on the run
-    and keep the plugin's own host.
-    """
-    return ClientOptions(
-        api_version=client_options.api_version,
-        timeout=client_options.timeout,
-        custom_headers=client_options.custom_headers,
-    )
-
-
 def lowercase_choice(value: object) -> object:
     """Accept AUTO/NONE-style labels the same as auto/none."""
     return value.lower() if isinstance(value, str) else value

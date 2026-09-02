@@ -44,7 +44,6 @@ from genkit_google_genai.models._secrets import reject_request_config_api_key
 from genkit_google_genai.models.interactions_registry import deep_research_model_info
 from genkit_google_genai.models.interactions_utils import (
     api_key_for_context,
-    client_options_for_operation,
     client_overrides_from_config,
     extract_version,
     lowercase_choice,
@@ -239,21 +238,21 @@ def create_deep_research_background_action(
             create_kwargs['response_format'] = response_format
 
         interaction = await create_interaction(api_key, create_kwargs, options)
-        return persist(from_interaction(interaction, client_options_for_operation(options)))
+        return persist(from_interaction(interaction))
 
     async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
-        stored = ClientOptions.from_metadata(operation.metadata)
-        options = client_options.merge(stored)
+        call_config = ctx.context.get('config')
+        options = client_options.merge(call_config if isinstance(call_config, dict) else None)
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         interaction = await get_interaction(api_key, operation.id, options)
-        return persist(from_interaction(interaction, client_options_for_operation(options)))
+        return persist(from_interaction(interaction))
 
     async def cancel(operation: Operation, ctx: ActionRunContext) -> Operation:
-        stored = ClientOptions.from_metadata(operation.metadata)
-        options = client_options.merge(stored)
+        call_config = ctx.context.get('config')
+        options = client_options.merge(call_config if isinstance(call_config, dict) else None)
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         interaction = await cancel_interaction(api_key, operation.id, options)
-        return persist(from_interaction(interaction, client_options_for_operation(options)))
+        return persist(from_interaction(interaction))
 
     start_action = Action(
         kind=ActionKind.BACKGROUND_MODEL,

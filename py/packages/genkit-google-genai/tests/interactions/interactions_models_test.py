@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from genkit_google_genai._interactions.converters import split_system_instruction
 from genkit_google_genai._interactions.options import ClientOptions
-from genkit_google_genai.google import GoogleAI, VertexAI, googleai_name
+from genkit_google_genai.google import GenaiModels, GoogleAI, VertexAI, googleai_name
 from genkit_google_genai.models.antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai.models.deep_research import (
     DeepResearchConfig,
@@ -36,7 +36,7 @@ from genkit_google_genai.models.interactions_lyria import LyriaConfig, create_ly
 from genkit_google_genai.models.interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
-from genkit import ActionKind, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
 
 
@@ -134,14 +134,26 @@ async def test_deep_research_start_sends_background_request() -> None:
     action = create_deep_research_background_action(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
-        client_options=ClientOptions(),
+        client_options=ClientOptions(
+            base_url='https://plugin.example',
+            api_version='v1',
+            timeout=1000,
+            custom_headers={'x-request-id': 'plugin'},
+        ),
     )
     request = ModelRequest(
         messages=[
             Message(role=Role.SYSTEM, content=[Part(TextPart(text='sys'))]),
             Message(role=Role.USER, content=[Part(TextPart(text='research this'))]),
         ],
-        config={'thinking_summaries': 'auto', 'google_search': True},
+        config={
+            'thinking_summaries': 'auto',
+            'google_search': True,
+            'base_url': 'https://start.example',
+            'api_version': 'v1',
+            'timeout': 1500,
+            'custom_headers': {'x-request-id': 'start'},
+        },
     )
     with patcher:
         operation = await action.start(request)
@@ -162,9 +174,16 @@ async def test_deep_research_start_sends_background_request() -> None:
     ]
     assert operation.id == 'dr-1'
     assert operation.done is False
-    persisted = (operation.metadata or {}).get('clientOptions') or {}
-    assert 'apiKey' not in persisted
-    assert 'baseUrl' not in persisted
+    assert not operation.metadata
+    options = captured['client_options']
+    assert options.base_url == 'https://start.example'
+    assert options.api_version == 'v1'
+    assert options.timeout == 1500
+    assert options.custom_headers == {'x-request-id': 'start'}
+    assert 'base_url' not in body
+    assert 'api_version' not in body
+    assert 'timeout' not in body
+    assert 'custom_headers' not in body
 
 
 @pytest.mark.asyncio
@@ -182,18 +201,39 @@ async def test_deep_research_check_reads_secrets_not_ticket() -> None:
     action = create_deep_research_background_action(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
-        client_options=ClientOptions(),
+        client_options=ClientOptions(
+            base_url='https://plugin.example',
+            api_version='v1',
+            timeout=1000,
+            custom_headers={'x-request-id': 'plugin'},
+        ),
     )
     operation = Operation.model_construct(
         id='dr-1',
         metadata={'clientOptions': {'baseUrl': 'https://evil.test', 'apiKey': 'ticket-key'}},
     )
     with patcher:
-        updated = await action.check(operation, context={'secrets': {'api_key': 'tenant-key'}})
+        updated = await action.check(
+            operation,
+            context={
+                'secrets': {'api_key': 'tenant-key'},
+                'config': {
+                    'base_url': 'https://poll.example',
+                    'api_version': 'v1beta',
+                    'timeout': 2000,
+                    'custom_headers': {'x-request-id': 'check'},
+                },
+            },
+        )
 
     assert captured['api_key'] == 'tenant-key'
-    assert captured['client_options'].base_url is None
+    options = captured['client_options']
+    assert options.base_url == 'https://poll.example'
+    assert options.api_version == 'v1beta'
+    assert options.timeout == 2000
+    assert options.custom_headers == {'x-request-id': 'check'}
     assert get_calls == ['dr-1']
+    assert not updated.metadata
     assert updated.done is True
     assert updated.output is not None
     assert updated.output.message is not None
@@ -220,13 +260,29 @@ async def test_deep_research_cancel_reads_secrets_not_ticket() -> None:
         metadata={'clientOptions': {'baseUrl': 'https://evil.test', 'apiKey': 'ticket-key'}},
     )
     with patcher:
-        updated = await action.cancel(operation, context={'secrets': {'api_key': 'tenant-key'}})
+        updated = await action.cancel(
+            operation,
+            context={
+                'secrets': {'api_key': 'tenant-key'},
+                'config': {
+                    'base_url': 'https://cancel.example',
+                    'api_version': 'v1alpha',
+                    'timeout': 2500,
+                    'custom_headers': {'x-request-id': 'cancel'},
+                },
+            },
+        )
 
     assert captured['api_key'] == 'tenant-key'
-    assert captured['client_options'].base_url is None
+    options = captured['client_options']
+    assert options.base_url == 'https://cancel.example'
+    assert options.api_version == 'v1alpha'
+    assert options.timeout == 2500
+    assert options.custom_headers == {'x-request-id': 'cancel'}
     assert cancel_calls == ['dr-1']
     assert updated.done is True
     assert updated.id == 'dr-1'
+    assert not updated.metadata
 
 
 @pytest.mark.asyncio
@@ -864,3 +920,241 @@ async def test_lyria_rejects_config_api_key() -> None:
                 )
             )
     assert create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_antigravity_generate_uses_context_secrets() -> None:
+    captured: dict[str, Any] = {}
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.antigravity',
+        create_result={
+            'id': 'ag-secret',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'ok'}]}],
+        },
+        captured=captured,
+    )
+    action = create_antigravity_action(
+        'antigravity-preview-05-2026',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='plan'))])]),
+            context={'secrets': {'api_key': 'tenant-key'}},
+        )
+
+    assert captured['api_key'] == 'tenant-key'
+    assert create_calls[0]['agent'] == 'antigravity-preview-05-2026'
+
+
+@pytest.mark.asyncio
+async def test_lyria_generate_uses_context_secrets() -> None:
+    captured: dict[str, Any] = {}
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.interactions_lyria',
+        create_result={'id': 'ly-secret', 'status': 'completed', 'steps': []},
+        captured=captured,
+    )
+    action = create_lyria_action(
+        'lyria-3-clip-preview',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='sting'))])]),
+            context={'secrets': {'api_key': 'tenant-key'}},
+        )
+
+    assert captured['api_key'] == 'tenant-key'
+    assert create_calls[0]['model'] == 'lyria-3-clip-preview'
+
+
+@pytest.mark.asyncio
+async def test_lyria_002_hits_interactions_wire() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.interactions_lyria',
+        create_result={'id': 'ly-002', 'status': 'completed', 'steps': []},
+    )
+    action = create_lyria_action(
+        'lyria-002',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='sting'))])]))
+
+    assert create_calls[0]['model'] == 'lyria-002'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_ai_generate_operation_deep_research_uses_context_secrets(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    mock_list_models.return_value = GenaiModels()
+    captured: dict[str, Any] = {}
+    patcher, create_calls, get_calls, cancel_calls = patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        create_result={'id': 'dr-ai-1', 'status': 'in_progress'},
+        get_result={
+            'id': 'dr-ai-1',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'report'}]}],
+        },
+        cancel_result={'id': 'dr-ai-1', 'status': 'cancelled'},
+        captured=captured,
+    )
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    tenant = {'secrets': {'api_key': 'tenant-key'}}
+    with patcher:
+        operation = await ai.generate_operation(
+            model=GoogleAI.deep_research_model('deep-research-preview-04-2026'),
+            prompt='Summarize recent advances in quantum error correction.',
+            config={
+                'base_url': 'https://start.example',
+                'api_version': 'v1',
+                'timeout': 1500,
+                'custom_headers': {'x-request-id': 'start'},
+            },
+            context=tenant,
+        )
+        assert captured['api_key'] == 'tenant-key'
+        assert captured['client_options'] == ClientOptions(
+            base_url='https://start.example',
+            api_version='v1',
+            timeout=1500,
+            custom_headers={'x-request-id': 'start'},
+        )
+        assert create_calls[0]['background'] is True
+        assert operation.id == 'dr-ai-1'
+        assert operation.done is False
+        assert not operation.metadata
+
+        updated = await ai.check_operation(
+            operation,
+            context=tenant,
+            config={
+                'base_url': 'https://poll.example',
+                'api_version': 'v1beta',
+                'timeout': 2000,
+                'custom_headers': {'x-request-id': 'check'},
+            },
+        )
+        assert captured['client_options'] == ClientOptions(
+            base_url='https://poll.example',
+            api_version='v1beta',
+            timeout=2000,
+            custom_headers={'x-request-id': 'check'},
+        )
+
+        cancelled = await ai.cancel_operation(
+            operation,
+            context=tenant,
+            config={
+                'base_url': 'https://cancel.example',
+                'api_version': 'v1alpha',
+                'timeout': 2500,
+                'custom_headers': {'x-request-id': 'cancel'},
+            },
+        )
+
+    assert captured['api_key'] == 'tenant-key'
+    assert captured['client_options'] == ClientOptions(
+        base_url='https://cancel.example',
+        api_version='v1alpha',
+        timeout=2500,
+        custom_headers={'x-request-id': 'cancel'},
+    )
+    assert get_calls == ['dr-ai-1']
+    assert cancel_calls == ['dr-ai-1']
+    assert updated.done is True
+    assert cancelled.done is True
+    assert not updated.metadata
+    assert not cancelled.metadata
+    assert updated.output is not None
+    assert updated.output.message is not None
+    assert updated.output.message.content[0].root.text == 'report'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_ai_generate_antigravity_uses_context_secrets(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    mock_list_models.return_value = GenaiModels()
+    captured: dict[str, Any] = {}
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.antigravity',
+        create_result={
+            'id': 'ag-ai-1',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'hello'}]}],
+        },
+        captured=captured,
+    )
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    with patcher:
+        response = await ai.generate(
+            model=GoogleAI.antigravity_model('antigravity-preview-05-2026'),
+            prompt='Plan a three-day itinerary',
+            config={
+                'base_url': 'https://antigravity.example',
+                'api_version': 'v1',
+                'timeout': 1500,
+                'custom_headers': {'x-request-id': 'antigravity'},
+            },
+            context={'secrets': {'api_key': 'tenant-key'}},
+        )
+
+    assert captured['api_key'] == 'tenant-key'
+    assert captured['client_options'] == ClientOptions(
+        base_url='https://antigravity.example',
+        api_version='v1',
+        timeout=1500,
+        custom_headers={'x-request-id': 'antigravity'},
+    )
+    assert create_calls[0]['agent'] == 'antigravity-preview-05-2026'
+    assert 'background' not in create_calls[0]
+    assert response.text == 'hello'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_ai_generate_lyria_002_hits_interactions_with_tenant_key(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    mock_list_models.return_value = GenaiModels()
+    captured: dict[str, Any] = {}
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.interactions_lyria',
+        create_result={'id': 'ly-ai-002', 'status': 'completed', 'steps': []},
+        captured=captured,
+    )
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    with patcher:
+        await ai.generate(
+            model=GoogleAI.lyria_model('lyria-002'),
+            prompt='a short cinematic sting',
+            config={
+                'base_url': 'https://lyria.example',
+                'api_version': 'v1beta',
+                'timeout': 2000,
+                'custom_headers': {'x-request-id': 'lyria'},
+            },
+            context={'secrets': {'api_key': 'tenant-key'}},
+        )
+
+    assert captured['api_key'] == 'tenant-key'
+    assert captured['client_options'] == ClientOptions(
+        base_url='https://lyria.example',
+        api_version='v1beta',
+        timeout=2000,
+        custom_headers={'x-request-id': 'lyria'},
+    )
+    assert create_calls[0]['model'] == 'lyria-002'
