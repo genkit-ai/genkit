@@ -139,8 +139,8 @@ func TestLookupAgent(t *testing.T) {
 }
 
 // fakeDescAction is an api.Action stub carrying only a descriptor, for
-// AgentMetadataOf's decode paths. The embedded nil interface covers the
-// methods AgentMetadataOf never calls.
+// agentMetadataOf's decode paths. The embedded nil interface covers the
+// methods agentMetadataOf never calls.
 type fakeDescAction struct {
 	api.Action
 	desc api.ActionDesc
@@ -150,17 +150,17 @@ func (f fakeDescAction) Desc() api.ActionDesc { return f.desc }
 
 func TestAgentMetadataOf(t *testing.T) {
 	t.Run("nil action", func(t *testing.T) {
-		if got := AgentMetadataOf(nil); got != nil {
-			t.Fatalf("AgentMetadataOf(nil) = %+v, want nil", got)
+		if got := agentMetadataOf(nil); got != nil {
+			t.Fatalf("agentMetadataOf(nil) = %+v, want nil", got)
 		}
 	})
 
 	t.Run("typed value from a live agent", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		agent := defineEchoAgent(t, reg, "typed")
-		meta := AgentMetadataOf(agent)
+		meta := agentMetadataOf(agent)
 		if meta == nil {
-			t.Fatal("AgentMetadataOf = nil, want metadata")
+			t.Fatal("agentMetadataOf = nil, want metadata")
 		}
 		if meta.StateManagement != AgentStateManagementClient {
 			t.Errorf("StateManagement = %q, want %q", meta.StateManagement, AgentStateManagementClient)
@@ -174,9 +174,9 @@ func TestAgentMetadataOf(t *testing.T) {
 		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{
 			"agent": &AgentMetadata{StateManagement: AgentStateManagementServer, Abortable: true},
 		}}}
-		meta := AgentMetadataOf(a)
+		meta := agentMetadataOf(a)
 		if meta == nil || meta.StateManagement != AgentStateManagementServer || !meta.Abortable {
-			t.Fatalf("AgentMetadataOf = %+v, want server-managed abortable", meta)
+			t.Fatalf("agentMetadataOf = %+v, want server-managed abortable", meta)
 		}
 	})
 
@@ -193,9 +193,9 @@ func TestAgentMetadataOf(t *testing.T) {
 		if err := json.Unmarshal(b, &decoded); err != nil {
 			t.Fatalf("unmarshal metadata: %v", err)
 		}
-		meta := AgentMetadataOf(fakeDescAction{desc: api.ActionDesc{Metadata: decoded}})
+		meta := agentMetadataOf(fakeDescAction{desc: api.ActionDesc{Metadata: decoded}})
 		if meta == nil {
-			t.Fatal("AgentMetadataOf = nil, want metadata decoded from map")
+			t.Fatal("agentMetadataOf = nil, want metadata decoded from map")
 		}
 		if meta.StateManagement != AgentStateManagementClient {
 			t.Errorf("StateManagement = %q, want %q", meta.StateManagement, AgentStateManagementClient)
@@ -211,8 +211,8 @@ func TestAgentMetadataOf(t *testing.T) {
 		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{
 			"agent": map[string]any{"stateManagement": "client", "abortable": "true"},
 		}}}
-		if meta := AgentMetadataOf(a); meta != nil {
-			t.Fatalf("AgentMetadataOf = %+v, want nil for a descriptor that did not decode", meta)
+		if meta := agentMetadataOf(a); meta != nil {
+			t.Fatalf("agentMetadataOf = %+v, want nil for a descriptor that did not decode", meta)
 		}
 	})
 
@@ -223,9 +223,9 @@ func TestAgentMetadataOf(t *testing.T) {
 		desc := api.ActionDesc{Metadata: map[string]any{
 			"agent": AgentMetadata{StateSchema: map[string]any{"type": "object"}},
 		}}
-		meta := AgentMetadataOf(fakeDescAction{desc: desc})
+		meta := agentMetadataOf(fakeDescAction{desc: desc})
 		if meta == nil {
-			t.Fatal("AgentMetadataOf = nil, want typed metadata")
+			t.Fatal("agentMetadataOf = nil, want typed metadata")
 		}
 		meta.StateSchema["type"] = "tampered"
 		original := desc.Metadata["agent"].(AgentMetadata)
@@ -236,8 +236,8 @@ func TestAgentMetadataOf(t *testing.T) {
 
 	t.Run("action without agent metadata", func(t *testing.T) {
 		a := fakeDescAction{desc: api.ActionDesc{Metadata: map[string]any{"other": true}}}
-		if got := AgentMetadataOf(a); got != nil {
-			t.Fatalf("AgentMetadataOf = %+v, want nil", got)
+		if got := agentMetadataOf(a); got != nil {
+			t.Fatalf("agentMetadataOf = %+v, want nil", got)
 		}
 	})
 }

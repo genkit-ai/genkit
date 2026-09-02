@@ -150,12 +150,11 @@ func (a *Agent[State]) Handle() *AgentHandle {
 	}
 }
 
-// AgentMetadataOf extracts the [AgentMetadata] an agent's action descriptor
+// agentMetadataOf extracts the [AgentMetadata] an agent's action descriptor
 // carries under its "agent" metadata key, or nil when a is not an agent action
 // or carries none. It handles both in-process descriptors (typed metadata) and
-// descriptors decoded from JSON (map form), so callers can inspect an agent's
-// capabilities ([AgentMetadata.StateManagement], [AgentMetadata.Abortable])
-// without knowing where the action came from.
+// descriptors decoded from JSON (map form), so [AgentHandle.Metadata] reads an
+// agent's capabilities without knowing where the action came from.
 //
 // The returned value is a copy: mutating its fields, [AgentMetadata.StateSchema]
 // and anything nested inside it included, does not affect the descriptor.
@@ -166,7 +165,7 @@ func (a *Agent[State]) Handle() *AgentHandle {
 // refused background work it can do, and told why in terms that are not true.
 // Absent metadata is the honest answer, and callers already treat it as
 // "unknown" and fall back to asking the runtime.
-func AgentMetadataOf(a api.Action) *AgentMetadata {
+func agentMetadataOf(a api.Action) *AgentMetadata {
 	if a == nil {
 		return nil
 	}
@@ -209,7 +208,7 @@ func (h *AgentHandle) Metadata() *AgentMetadata {
 		// remoteAgent filling stateManagement) keeps what it was built with;
 		// running the derivation over a nil source would clobber it to nil.
 		if h.metaSrc != nil {
-			h.meta, h.metaSrc = AgentMetadataOf(h.metaSrc), nil
+			h.meta, h.metaSrc = agentMetadataOf(h.metaSrc), nil
 		}
 	})
 	return h.meta
