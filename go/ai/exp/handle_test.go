@@ -132,6 +132,9 @@ func TestLookupAgent(t *testing.T) {
 		if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "nil handle") {
 			t.Errorf("Run on a nil handle = %v, want INVALID_ARGUMENT naming the nil handle", err)
 		}
+		if _, err := h.RunText(context.Background(), "hi"); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("RunText on a nil handle = %v, want INVALID_ARGUMENT", err)
+		}
 		if _, err := h.Start(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
 			t.Errorf("Start on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
@@ -273,6 +276,27 @@ func TestAgentHandle_Run(t *testing.T) {
 			t.Fatalf("Run with WithState: %v", err)
 		}
 		// Two seeded messages plus this turn's user message.
+		if got, want := out.Message.Text(), "echo:again n:3"; got != want {
+			t.Errorf("Message.Text() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("RunText delivers a user text message", func(t *testing.T) {
+		out, err := h.RunText(context.Background(), "hi")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if got, want := out.Message.Text(), "echo:hi n:1"; got != want {
+			t.Errorf("Message.Text() = %q, want %q", got, want)
+		}
+		out, err = h.RunText(context.Background(), "again",
+			WithState(&SessionState[json.RawMessage]{Messages: []*ai.Message{
+				ai.NewUserTextMessage("earlier question"),
+				ai.NewModelTextMessage("earlier answer"),
+			}}))
+		if err != nil {
+			t.Fatalf("RunText with WithState: %v", err)
+		}
 		if got, want := out.Message.Text(), "echo:again n:3"; got != want {
 			t.Errorf("Message.Text() = %q, want %q", got, want)
 		}

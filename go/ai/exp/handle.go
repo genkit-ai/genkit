@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
@@ -225,8 +226,7 @@ func (h *AgentHandle) Metadata() *AgentMetadata {
 // result.
 func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...InvocationOption[json.RawMessage]) (*AgentOutput[json.RawMessage], error) {
 	if h == nil {
-		return nil, status.Errorf(status.ErrInvalidArgument,
-			"AgentHandle.Run: called on a nil handle; check that LookupAgent found the agent")
+		return nil, nilHandleError("Run")
 	}
 	if input == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: input must not be nil", h.name)
@@ -239,6 +239,23 @@ func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...Invoca
 	// transport takes one because a turn is streamed at that level whatever
 	// carries it, so a streaming surface on the handle needs no new seam.
 	return h.transport.Run(ctx, input, init, nil)
+}
+
+// RunText is [AgentHandle.Run] with a user text message as the input, the way
+// [Agent.RunText] is for [Agent.Run].
+func (h *AgentHandle) RunText(ctx context.Context, text string, opts ...InvocationOption[json.RawMessage]) (*AgentOutput[json.RawMessage], error) {
+	if h == nil {
+		return nil, nilHandleError("RunText")
+	}
+	return h.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage(text)}, opts...)
+}
+
+// nilHandleError is what a method reports on a nil receiver, so a caller that
+// skipped the nil check after [LookupAgent] reads the cause rather than a
+// panic. method names the caller.
+func nilHandleError(method string) error {
+	return status.Errorf(status.ErrInvalidArgument,
+		"AgentHandle.%s: called on a nil handle; check that LookupAgent found the agent", method)
 }
 
 // Start launches input as a detached (background) invocation and returns the
