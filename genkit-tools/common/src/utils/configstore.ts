@@ -15,9 +15,13 @@
  */
 
 import Configstore from 'configstore';
+import * as fs from 'fs';
+import * as path from 'path';
 import { toolsPackage } from './package';
+import { findProjectRoot } from './utils';
 
 const USER_SETTINGS_TAG = 'userSettings';
+const PROJECT_SETTINGS_TAG = 'projectSettings';
 
 export const configstore = new Configstore(toolsPackage.name);
 
@@ -27,4 +31,35 @@ export function getUserSettings(): Record<string, string | boolean | number> {
 
 export function setUserSettings(s: Record<string, string | boolean | number>) {
   configstore.set(USER_SETTINGS_TAG, s);
+}
+
+export async function getProjectConfigStore(): Promise<Configstore> {
+  const projectRoot = await findProjectRoot();
+  const dotGenkitDir = path.join(projectRoot, '.genkit');
+  const configFilePath = path.join(dotGenkitDir, 'genkit.json');
+  return new Configstore('genkit-config', {}, { configPath: configFilePath });
+}
+
+export async function getProjectSettings(): Promise<
+  Record<string, string | boolean | number>
+> {
+  const projectRoot = await findProjectRoot();
+  const dotGenkitDir = path.join(projectRoot, '.genkit');
+  if (!fs.existsSync(dotGenkitDir)) {
+    return {};
+  }
+  const store = await getProjectConfigStore();
+  return store.get(PROJECT_SETTINGS_TAG) || {};
+}
+
+export async function setProjectSettings(
+  s: Record<string, string | boolean | number>
+) {
+  const projectRoot = await findProjectRoot();
+  const dotGenkitDir = path.join(projectRoot, '.genkit');
+  if (!fs.existsSync(dotGenkitDir)) {
+    fs.mkdirSync(dotGenkitDir, { recursive: true });
+  }
+  const store = await getProjectConfigStore();
+  store.set(PROJECT_SETTINGS_TAG, s);
 }
