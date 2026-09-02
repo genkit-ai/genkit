@@ -77,7 +77,6 @@ async def main() -> None:
                 prompt=prompt,
                 messages=messages,
                 resume_restart=restart,
-                max_turns=20,
                 use=middleware,
             )
             messages = response.messages

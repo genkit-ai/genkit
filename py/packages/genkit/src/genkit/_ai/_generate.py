@@ -91,7 +91,7 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 
-DEFAULT_MAX_TURNS = 5
+DEFAULT_MAX_TURNS = 50
 
 logger = get_logger(__name__)
 
@@ -1756,6 +1756,10 @@ def _to_pending_response(request: ToolRequestPart, response: ToolResponsePart) -
     """Mark a tool request as pending with its response stored in metadata."""
     metadata = dict(request.metadata) if request.metadata else {}
     metadata['pendingOutput'] = response.tool_response.output
+    if response.tool_response.content:
+        metadata['pendingContent'] = response.tool_response.content
+    if response.metadata:
+        metadata['pendingMetadata'] = response.metadata
     # Part is a RootModel, so we pass content via 'root' parameter
     return Part(
         root=ToolRequestPart(
@@ -1873,25 +1877,26 @@ async def _resolve_resume_options(
             ),
         )
 
-    i = 0
-    tool_responses = []
     # Build updated_content in a new list — do NOT mutate last_message.content
     # directly; the caller's raw_request object must remain unchanged.
     updated_content = list(last_message.content)
-    for part in last_message.content:
-        if not isinstance(part.root, ToolRequestPart):
-            i += 1
-            continue
-
-        resumed_request, resumed_response = await _resolve_resumed_tool_request(
+    indexed_requests = [
+        (index, part) for index, part in enumerate(last_message.content) if isinstance(part.root, ToolRequestPart)
+    ]
+    resolved = await asyncio.gather(*[
+        _resolve_resumed_tool_request(
             registry=registry,
             raw_request=raw_request,
             tool_request_part=part,
             mw_pipeline=mw_pipeline,
         )
+        for _, part in indexed_requests
+    ])
+
+    tool_responses = []
+    for (index, _), (resumed_request, resumed_response) in zip(indexed_requests, resolved, strict=True):
         tool_responses.append(Part(root=resumed_response))
-        updated_content[i] = Part(root=resumed_request)
-        i += 1
+        updated_content[index] = Part(root=resumed_request)
 
     if len(tool_responses) != len(tool_requests):
         raise GenkitError(
@@ -1937,15 +1942,16 @@ async def _resolve_resumed_tool_request(
     tool_req_root = tool_request_part.root
 
     if tool_req_root.metadata and 'pendingOutput' in tool_req_root.metadata:
-        # resolveResumedToolRequest: strip pendingOutput from the model TRP; reconstruct
-        # output on the tool message with metadata { ...rest, source: 'pending' }.
         trp_metadata = dict(tool_req_root.metadata)
         pending_output = trp_metadata.pop('pendingOutput')
+        pending_content = trp_metadata.pop('pendingContent', None)
+        pending_metadata = trp_metadata.pop('pendingMetadata', None)
         revised_trp = ToolRequestPart(
             tool_request=tool_req_root.tool_request,
             metadata=trp_metadata if trp_metadata else None,
         )
-        response_metadata = {**trp_metadata, 'source': 'pending'}
+        response_metadata = dict(pending_metadata) if isinstance(pending_metadata, dict) else {}
+        response_metadata['source'] = 'pending'
         return (
             revised_trp,
             ToolResponsePart(
@@ -1953,6 +1959,11 @@ async def _resolve_resumed_tool_request(
                     name=tool_req_root.tool_request.name,
                     ref=tool_req_root.tool_request.ref,
                     output=pending_output.model_dump() if isinstance(pending_output, BaseModel) else pending_output,
+                    content=(
+                        [Part.model_validate(part).model_dump() for part in pending_content]
+                        if pending_content
+                        else None
+                    ),
                 ),
                 metadata=response_metadata,
             ),

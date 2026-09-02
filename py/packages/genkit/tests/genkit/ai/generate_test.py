@@ -24,6 +24,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
+from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
@@ -2610,6 +2611,83 @@ async def test_return_tool_requests_keeps_model_message_without_running_tool() -
 
 
 @pytest.mark.asyncio
+async def test_default_max_turns_allows_fifty_tool_rounds_to_finish() -> None:
+    """The default leaves room for fifty completed tool rounds and a final reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    tool_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return 'ok'
+
+    pm.responses = [
+        *[_model_calls_tool(name='step', ref=str(index)) for index in range(50)],
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='done'))]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='finish the work', tools=['step'])
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'done'
+    assert response.error is None
+    assert tool_calls == 50
+    assert pm.request_count == 51
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        *[role for _ in range(50) for role in (Role.MODEL, Role.TOOL)],
+        Role.MODEL,
+    ]
+    assert [response.messages[index].tool_requests[0].tool_request.ref for index in range(1, 101, 2)] == [
+        str(index) for index in range(50)
+    ]
+    assert [_tool_output(response.messages[index]) for index in range(2, 102, 2)] == ['ok'] * 50
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_default_max_turns_drops_fifty_first_tool_round() -> None:
+    """The fifty-first open tool round is excluded from resendable history."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    tool_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return 'ok'
+
+    pm.responses = [_model_calls_tool(name='step', ref=str(index)) for index in range(51)]
+
+    response = await ai.generate(prompt='keep going', tools=['step'])
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
+    assert response.error.message == response.finish_message
+    assert tool_calls == 50
+    assert pm.request_count == 51
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        *[role for _ in range(50) for role in (Role.MODEL, Role.TOOL)],
+    ]
+    assert [response.messages[index].tool_requests[0].tool_request.ref for index in range(1, 101, 2)] == [
+        str(index) for index in range(50)
+    ]
+    assert [_tool_output(response.messages[index]) for index in range(2, 101, 2)] == ['ok'] * 50
+
+
+@pytest.mark.asyncio
 async def test_leftover_after_tool_turn_keeps_intermediate_messages() -> None:
     """A leftover after a tool turn still has that tool request and reply on .messages."""
     ai = Genkit(model='programmableModel')
@@ -2858,6 +2936,260 @@ async def test_model_failure_after_tool_turn_keeps_closed_rounds() -> None:
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_output(response.messages[2]) == '72F'
+
+
+@pytest.mark.asyncio
+async def test_failed_history_can_be_reused_without_rerunning_closed_tool() -> None:
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    tool_calls = 0
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return '72F'
+
+    def fail_after_tool(_request: ModelRequest) -> ModelResponse:
+        if pm.request_count == 1:
+            return _model_calls_tool(name='lookup', ref='r1')
+        raise RuntimeError('provider disconnected')
+
+    pm.response_cb = fail_after_tool
+    failed = await ai.generate(prompt='start', tools=['lookup'])
+
+    assert failed.finish_reason == FinishReason.FAILED
+    assert failed.message is None
+    assert failed.error is not None
+    assert failed.error.status == 'INTERNAL'
+    assert [message.role for message in failed.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert failed.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(failed.messages[2]) == '72F'
+    assert tool_calls == 1
+    assert pm.request_count == 2
+
+    pm.response_cb = lambda _request: ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='recovered'))]),
+    )
+    recovered = await ai.generate(messages=failed.messages, prompt='try again', tools=['lookup'])
+
+    assert recovered.finish_reason == FinishReason.STOP
+    assert recovered.finish_message is None
+    assert recovered.error is None
+    assert recovered.message is not None
+    assert recovered.message.text == 'recovered'
+    assert [message.role for message in recovered.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.USER,
+        Role.MODEL,
+    ]
+    assert recovered.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(recovered.messages[2]) == '72F'
+    assert pm.last_request is not None
+    assert [message.role for message in pm.last_request.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.USER,
+    ]
+    assert pm.last_request.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(pm.last_request.messages[2]) == '72F'
+    assert pm.last_request.messages[3].text == 'try again'
+    assert tool_calls == 1
+    assert pm.request_count == 3
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_closes_with_structured_max_turns_response() -> None:
+    ai = Genkit(model='streamLimitModel')
+    model_calls = 0
+    tool_calls = 0
+
+    class Recipe(BaseModel):
+        title: str
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return '72F'
+
+    async def stream_limit_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='first'))]))
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='second'))]))
+        return _model_calls_tool(name='lookup', ref='unopened')
+
+    ai.define_model(name='streamLimitModel', fn=stream_limit_model)
+    stream = ai.generate_stream(
+        prompt='make a recipe',
+        tools=['lookup'],
+        max_turns=0,
+        output_schema=Recipe,
+        output_instructions=False,
+    )
+
+    chunks = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert [text_from_content(chunk.content) for chunk in chunks] == ['first', 'second']
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (0.0)'
+    assert response.message is None
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'make a recipe'
+    assert model_calls == 1
+    assert tool_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -> None:
+    ai = Genkit(model='midstreamFailureModel')
+    model_calls = 0
+    tool_calls = 0
+    chunks: list[ModelResponseChunk] = []
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return '72F'
+
+    async def midstream_failure_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return _model_calls_tool(name='lookup', ref='closed')
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='partial-1'))]))
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='partial-2'))]))
+        raise RuntimeError('stream broke')
+
+    ai.define_model(name='midstreamFailureModel', fn=midstream_failure_model)
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='midstreamFailureModel',
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='start'))])],
+            tools=['lookup'],
+        ),
+        on_chunk=chunks.append,
+    )
+
+    model_chunks = [chunk for chunk in chunks if chunk.role == Role.MODEL]
+    assert [text_from_content(chunk.content) for chunk in model_chunks] == ['partial-1', 'partial-2']
+    assert [chunk.role for chunk in chunks] == [Role.TOOL, Role.MODEL, Role.MODEL]
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert 'stream broke' in response.finish_message
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'closed'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert model_calls == 2
+    assert tool_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_first_turn_task_cancellation_returns_structured_response() -> None:
+    ai = Genkit(model='waitingModel')
+    started = asyncio.Event()
+    model_calls = 0
+
+    async def waiting_model(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError('unreachable')
+
+    ai.define_model(name='waitingModel', fn=waiting_model)
+    task = asyncio.create_task(ai.generate(prompt='wait'))
+    await started.wait()
+    task.cancel()
+    response = await task
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'CancelledError'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.details is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'wait'
+    assert model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_recovered_middleware_failure_uses_latest_closed_history() -> None:
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    tool_calls = 0
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        return '72F'
+
+    class Config(BaseModel):
+        pass
+
+    @ai.middleware(name='recover_once')
+    class RecoverOnce(BaseMiddleware[Config]):
+        recovered = False
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            try:
+                return await next_fn(params, ctx)
+            except Exception:
+                if self.recovered:
+                    raise
+                self.recovered = True
+                return _model_calls_tool(name='lookup', ref='recovered-round')
+
+    def always_fail(_request: ModelRequest) -> ModelResponse:
+        if pm.request_count == 1:
+            raise RuntimeError('transient failure')
+        raise RuntimeError('later failure')
+
+    pm.response_cb = always_fail
+    response = await ai.generate(prompt='start', tools=['lookup'], use=[RecoverOnce()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert 'later failure' in response.finish_message
+    assert 'transient failure' not in response.finish_message
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'recovered-round'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert pm.request_count == 2
+    assert tool_calls == 1
 
 
 @pytest.mark.asyncio

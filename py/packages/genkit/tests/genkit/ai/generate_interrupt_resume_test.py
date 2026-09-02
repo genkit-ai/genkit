@@ -5,17 +5,35 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import Genkit, Message, MiddlewareRef, ModelResponse
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import Interrupt, ToolRunContext, respond_to_interrupt, restart_tool
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions
-from genkit._core._typing import FinishReason, Resume
+from genkit._core._typing import (
+    FinishReason,
+    Media,
+    MediaPart,
+    Part,
+    Resume,
+    Role,
+    ToolRequestPart,
+    ToolResponsePart,
+)
+from genkit.middleware import (
+    BaseMiddleware,
+    GenerateMiddlewareContext,
+    MultipartToolResponse,
+    ToolHookParams,
+)
 
 
 def _wire(messages: list[Message]) -> list[dict[str, Any]]:
@@ -760,6 +778,206 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
         },
         {'role': 'model', 'content': [{'text': 'done'}]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_pending_multipart_response_survives_wire_round_trip() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    media_calls = 0
+
+    @ai.tool(name='pause')
+    async def pause(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'approval'})
+
+    @ai.tool(name='media')
+    async def media() -> str:
+        nonlocal media_calls
+        media_calls += 1
+        return 'described'
+
+    @ai.middleware(name='multipart_media')
+    class MultipartMedia(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            response = await next_fn(params, ctx)
+            if params.tool_request_part.tool_request.name != 'media':
+                return response
+            return MultipartToolResponse(
+                output=response.output,
+                content=[Part(root=MediaPart(media=Media(url='data:image/png;base64,AAA', content_type='image/png')))],
+                metadata={'traceId': 'media-1'},
+            )
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [
+                    {'toolRequest': {'ref': 'pause-1', 'name': 'pause', 'input': {}}},
+                    {
+                        'toolRequest': {'ref': 'media-1', 'name': 'media', 'input': {}},
+                        'metadata': {'requestTag': 'keep'},
+                    },
+                ],
+            }),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.model_validate({'text': 'done'})]),
+        ),
+    ]
+    options = GenerateActionOptions(
+        model='programmableModel',
+        messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'start'}]})],
+        tools=['pause', 'media'],
+        use=[MiddlewareRef(name='multipart_media')],
+    )
+
+    first = await generate_action(ai.registry, options)
+
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    assert first.message is not None
+    pending = next(
+        part
+        for part in first.message.content
+        if isinstance(part.root, ToolRequestPart) and part.root.tool_request.name == 'media'
+    )
+    assert isinstance(pending.root, ToolRequestPart)
+    assert pending.root.metadata is not None
+    assert pending.root.metadata['requestTag'] == 'keep'
+    assert pending.root.metadata['pendingOutput'] == 'described'
+    assert pending.root.metadata['pendingMetadata'] == {'traceId': 'media-1'}
+    pending_content = pending.root.metadata['pendingContent']
+    assert isinstance(pending_content, list)
+    pending_media = Part.model_validate(pending_content[0]).root
+    assert isinstance(pending_media, MediaPart)
+    assert pending_media.media == Media(url='data:image/png;base64,AAA', content_type='image/png')
+
+    messages = [Message.model_validate(message) for message in json.loads(json.dumps(_wire(first.messages)))]
+    interrupt = next(
+        part
+        for part in messages[-1].content
+        if isinstance(part.root, ToolRequestPart) and part.root.tool_request.name == 'pause'
+    )
+    assert isinstance(interrupt.root, ToolRequestPart)
+    second = await generate_action(
+        ai.registry,
+        options.model_copy(
+            update={
+                'messages': messages,
+                'resume': Resume(respond=[respond_to_interrupt('approved', interrupt=interrupt.root)]),
+            }
+        ),
+    )
+
+    assert second.finish_reason == FinishReason.STOP
+    assert media_calls == 1
+    revised_media = next(
+        part
+        for part in second.messages[1].content
+        if isinstance(part.root, ToolRequestPart) and part.root.tool_request.name == 'media'
+    )
+    assert isinstance(revised_media.root, ToolRequestPart)
+    assert revised_media.root.metadata == {'requestTag': 'keep'}
+    tool_message = second.messages[2]
+    media_response = next(
+        part
+        for part in tool_message.content
+        if isinstance(part.root, ToolResponsePart) and part.root.tool_response.name == 'media'
+    )
+    assert isinstance(media_response.root, ToolResponsePart)
+    assert media_response.root.tool_response.output == 'described'
+    assert media_response.root.tool_response.content is not None
+    replayed_media = Part.model_validate(media_response.root.tool_response.content[0]).root
+    assert isinstance(replayed_media, MediaPart)
+    assert replayed_media.media == Media(url='data:image/png;base64,AAA', content_type='image/png')
+    assert media_response.root.metadata == {'traceId': 'media-1', 'source': 'pending'}
+    assert not {'pendingOutput', 'pendingContent', 'pendingMetadata'} & set(media_response.root.metadata)
+
+
+@pytest.mark.asyncio
+async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    beta_done = asyncio.Event()
+    calls: list[str] = []
+
+    @ai.tool(name='alpha')
+    async def alpha(inp: dict) -> str:
+        calls.append('alpha')
+        if not inp.get('restart'):
+            raise Interrupt({'tool': 'alpha'})
+        await beta_done.wait()
+        return 'A'
+
+    @ai.tool(name='beta')
+    async def beta(inp: dict) -> str:
+        calls.append('beta')
+        if not inp.get('restart'):
+            raise Interrupt({'tool': 'beta'})
+        beta_done.set()
+        return 'B'
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [
+                    {'toolRequest': {'ref': 'alpha-1', 'name': 'alpha', 'input': {}}},
+                    {'toolRequest': {'ref': 'beta-1', 'name': 'beta', 'input': {}}},
+                ],
+            }),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.model_validate({'text': 'done'})]),
+        ),
+    ]
+    first = await generate_action(
+        ai.registry,
+        _gen_opts(
+            ai,
+            tools=['alpha', 'beta'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'start'}]})],
+        ),
+    )
+    interrupts = {part.tool_request.name: part for part in first.interrupts}
+
+    second = await asyncio.wait_for(
+        generate_action(
+            ai.registry,
+            _gen_opts(
+                ai,
+                tools=['alpha', 'beta'],
+                messages=list(first.messages),
+                resume=Resume(
+                    restart=[
+                        restart_tool(interrupt=interrupts['alpha'], replace_input={'restart': True}),
+                        restart_tool(interrupt=interrupts['beta'], replace_input={'restart': True}),
+                    ]
+                ),
+            ),
+        ),
+        timeout=2,
+    )
+
+    assert second.finish_reason == FinishReason.STOP
+    assert calls.count('alpha') == 2
+    assert calls.count('beta') == 2
+    tool_message = next(message for message in second.messages if message.role == Role.TOOL)
+    tool_responses = []
+    for part in tool_message.content:
+        assert isinstance(part.root, ToolResponsePart)
+        tool_responses.append(part.root.tool_response)
+    assert [response.name for response in tool_responses] == ['alpha', 'beta']
+    assert [response.output for response in tool_responses] == ['A', 'B']
 
 
 @pytest.mark.asyncio
