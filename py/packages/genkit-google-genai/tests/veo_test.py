@@ -356,6 +356,74 @@ class TestVeoContextClient:
         assert 'apiKey' not in dumped
 
     @pytest.mark.asyncio
+    async def test_start_config_routes_client_and_stays_out_of_model_parameters(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+        request = _text_request(
+            config=VeoConfigSchema.model_validate({
+                'aspectRatio': '16:9',
+                'baseUrl': 'https://request.example',
+                'apiVersion': 'v1',
+                'fooBar': 1,
+            }),
+        )
+        ctx = ActionRunContext(context={'config': {'base_url': 'https://context.example'}})
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(request, ctx)
+
+        kwargs = ctor.call_args.kwargs
+        assert _http_option_base_url(kwargs) == 'https://request.example'
+        assert kwargs['http_options'].api_version == 'v1'
+        start_call = override.aio.models.generate_videos.await_args
+        assert start_call is not None
+        cfg = start_call.kwargs['config']
+        assert cfg.aspect_ratio == '16:9'
+        assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
+        plugin.aio.models.generate_videos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_config_routes_vertex_location(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={'vertexai': True, 'project': 'p', 'location': 'us-central1'},
+        )
+        request = _text_request(config=VeoConfigSchema(location='eu'))
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(request, ActionRunContext())
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['location'] == 'eu'
+        assert _http_option_base_url(kwargs) == multi_regional_base_url('eu')
+
+    @pytest.mark.asyncio
+    async def test_check_without_tenant_context_returns_to_plugin_client(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override):
+            ticket = await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+        await veo.check(ticket, ActionRunContext())
+
+        override.aio.models.generate_videos.assert_awaited_once()
+        plugin.aio.operations.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_secrets_apikey_alias(self) -> None:
         plugin = MagicMock()
         override = MagicMock()
@@ -542,6 +610,19 @@ class TestVeoContextClient:
             )
 
         assert raised.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_secret_api_key_must_be_a_string(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 123}}),
+            )
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert 'must be a string' in str(raised.value)
 
     @pytest.mark.asyncio
     async def test_api_version_overlay(self) -> None:

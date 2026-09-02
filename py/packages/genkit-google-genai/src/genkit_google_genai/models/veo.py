@@ -20,6 +20,7 @@ Veo is Google's video generation model that creates videos from text prompts.
 """
 
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 if sys.version_info < (3, 11):
@@ -96,6 +97,11 @@ class VeoConfigSchema(BaseModel):
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
+    base_url: str | None = Field(default=None, alias='baseUrl', description='Override the API endpoint for this call.')
+    api_version: str | None = Field(
+        default=None, alias='apiVersion', description='Override the API version for this call.'
+    )
+    location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
 
 
 # Alias for backwards compatibility with __init__.py exports
@@ -110,6 +116,8 @@ DEFAULT_VEO_SUPPORT = Supports(
     output=['media'],
     long_running=True,
 )
+
+_CLIENT_OPTION_KEYS = frozenset({'base_url', 'baseUrl', 'api_version', 'apiVersion', 'location'})
 
 
 def veo_model_info(version: str) -> ModelInfo:
@@ -231,7 +239,12 @@ class VeoModel:
         self._client = client
         self._client_kwargs = client_kwargs
 
-    def _client_for_context(self, ctx: ActionRunContext) -> genai.Client:
+    def _client_for_context(
+        self,
+        ctx: ActionRunContext,
+        *,
+        config: Mapping[str, Any] | None = None,
+    ) -> genai.Client:
         """Plugin client, or a request-scoped one when secrets/config are set.
 
         The ticket is just an id. A per-request key or endpoint has to be
@@ -239,11 +252,22 @@ class VeoModel:
         """
         context = ctx.context
         api_key = context_api_key(context)
-        extra = context.get('config')
-        extra = extra if isinstance(extra, dict) else {}
-        base_url = extra.get('base_url') or extra.get('baseUrl')
-        api_version = extra.get('api_version') or extra.get('apiVersion')
-        location = extra.get('location')
+        context_config = context.get('config')
+        context_config = context_config if isinstance(context_config, dict) else {}
+        request_config = config or {}
+        base_url = (
+            request_config.get('base_url')
+            or request_config.get('baseUrl')
+            or context_config.get('base_url')
+            or context_config.get('baseUrl')
+        )
+        api_version = (
+            request_config.get('api_version')
+            or request_config.get('apiVersion')
+            or context_config.get('api_version')
+            or context_config.get('apiVersion')
+        )
+        location = request_config.get('location') or context_config.get('location')
         is_vertex = bool(getattr(self._client, 'vertexai', False) or (self._client_kwargs or {}).get('vertexai'))
         if location and not is_vertex:
             # Location is a Vertex concept; ignore it on the Gemini API backend.
@@ -299,8 +323,16 @@ class VeoModel:
         if not prompt:
             raise GenkitError(status='INVALID_ARGUMENT', message='Veo requires a text prompt')
 
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=VeoConfigSchema,
+            action_name=self._version,
+        )
+        if dumped and (dumped.get('api_key') is not None or dumped.get('apiKey') is not None):
+            raise misplaced_key_error()
+
         try:
-            response = await self._client_for_context(ctx).aio.models.generate_videos(
+            response = await self._client_for_context(ctx, config=dumped).aio.models.generate_videos(
                 model=self._version,
                 prompt=prompt,
                 config=self._get_config(request),
@@ -358,6 +390,10 @@ class VeoModel:
             return None
         if dumped.get('api_key') is not None or dumped.get('apiKey') is not None:
             raise misplaced_key_error()
+        for key in _CLIENT_OPTION_KEYS:
+            dumped.pop(key, None)
+        if not dumped:
+            return None
 
         known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
         try:

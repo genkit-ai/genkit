@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, TypeVar
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
@@ -63,7 +63,7 @@ CancelModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
 def operation_context(
     *,
     context: dict[str, Any] | None = None,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Fold check/cancel ``config=`` into the context bag the plugin reads.
 
@@ -72,16 +72,15 @@ def operation_context(
     ``config=`` wins when both are set so the caller's explicit override is
     what the plugin sees.
 
-    ``config=`` alone is the whole bag — a parent flow's ``secrets`` do
-    not ride along. Pass ``context={'secrets': ...}`` again if this poll
-    still needs the tenant key. Both omitted returns ``None`` so
-    ``Action.run`` still inherits.
+    Supplying only ``config=`` keeps the current action context. An explicit
+    ``context={}`` still clears it. Both omitted returns ``None`` so
+    ``Action.run`` inherits directly.
     """
     if context is None and config is None:
         return None
-    folded = dict(context) if context is not None else {}
+    folded = dict(context if context is not None else (get_current_context() or {}))
     if config is not None:
-        folded['config'] = config
+        folded['config'] = dict(config)
     return folded
 
 
@@ -459,7 +458,7 @@ async def check_operation(
     operation: Operation,
     *,
     context: dict[str, Any] | None = None,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> Operation:
     """Check the status of a background operation.
 
@@ -490,7 +489,7 @@ async def cancel_operation(
     operation: Operation,
     *,
     context: dict[str, Any] | None = None,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> Operation:
     """Cancel a background operation.
 

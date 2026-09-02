@@ -1713,7 +1713,7 @@ class Genkit:
         operation: Operation,
         *,
         context: dict[str, Any] | None = None,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> Operation:
         """Poll a background job.
 
@@ -1728,7 +1728,7 @@ class Genkit:
         operation: Operation,
         *,
         context: dict[str, Any] | None = None,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> Operation:
         """Cancel a background job.
 
