@@ -17,6 +17,7 @@
 
 """Tests for OpenAI compatible model implementation."""
 
+import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
@@ -38,8 +39,10 @@ from genkit import (
     ModelResponse,
     ModelResponseChunk,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
+    ToolRequestPart,
 )
 from genkit._core._model import OutputConfig
 from genkit.plugin_api import ActionRunContext, ModelConfig
@@ -851,6 +854,151 @@ _SAMPLE_SCHEMA: dict[str, object] = {
     },
     'required': ['name', 'level'],
 }
+
+
+def _delta_chunk(make_chunk: Callable[..., ChatCompletionChunk], **delta: Any) -> ChatCompletionChunk:
+    """A chunk whose delta carries exactly the given fields."""
+    return make_chunk(choice={'delta': delta})
+
+
+def _roots(chunk: ModelResponseChunk) -> list[Any]:
+    """The part roots of a streamed chunk."""
+    return [part.root for part in chunk.content]
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_emits_reasoning_text_and_tool_call_from_one_chunk(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """A delta carrying all three kinds of content yields all three parts."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            content='Checking.',
+            reasoning_content='Need the weather.',
+            tool_calls=[
+                {
+                    'index': 0,
+                    'id': 'call_1',
+                    'type': 'function',
+                    'function': {'name': 'get_weather', 'arguments': '{"city": "NYC"}'},
+                }
+            ],
+        )
+    ])
+
+    model = OpenAIModel(model='deepseek-reasoner', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    assert len(collected) == 1
+    streamed = _roots(collected[0])
+    assert len(streamed) == 3
+    assert isinstance(streamed[0], ReasoningPart)
+    assert streamed[0].reasoning == 'Need the weather.'
+    assert isinstance(streamed[1], TextPart)
+    assert streamed[1].text == 'Checking.'
+    assert isinstance(streamed[2], ToolRequestPart)
+    assert streamed[2].tool_request.name == 'get_weather'
+    assert streamed[2].tool_request.ref == 'call_1'
+
+    assert response.message is not None
+    final = [part.root for part in response.message.content]
+    assert len(final) == 3
+    assert isinstance(final[0], ReasoningPart)
+    assert isinstance(final[1], TextPart)
+    assert isinstance(final[2], ToolRequestPart)
+    assert final[2].tool_request.input == {'city': 'NYC'}
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_keeps_reasoning_interleaved_with_content(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """Reasoning and text that share a delta both reach the callback and the aggregate."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(make_chunk, reasoning_content='Think'),
+        _delta_chunk(make_chunk, reasoning_content=' harder.', content='The'),
+        _delta_chunk(make_chunk, content=' answer.'),
+    ])
+
+    model = OpenAIModel(model='deepseek-reasoner', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    assert [[type(root).__name__ for root in _roots(chunk)] for chunk in collected] == [
+        ['ReasoningPart'],
+        ['ReasoningPart', 'TextPart'],
+        ['TextPart'],
+    ]
+    assert response.message is not None
+    final = [part.root for part in response.message.content]
+    assert [root.reasoning for root in final if isinstance(root, ReasoningPart)] == ['Think', ' harder.']
+    assert [root.text for root in final if isinstance(root, TextPart)] == ['The', ' answer.']
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_keeps_text_riding_with_tool_call_arguments(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """Text sharing a delta with an argument fragment is emitted and the arguments still accumulate."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'index': 0, 'id': 'tool123', 'type': 'function', 'function': {'name': 'tool_fn', 'arguments': ''}}
+            ],
+        ),
+        _delta_chunk(make_chunk, content='Calling', tool_calls=[{'index': 0, 'function': {'arguments': '{"a": '}}]),
+        _delta_chunk(make_chunk, content=' the tool.', tool_calls=[{'index': 0, 'function': {'arguments': '1}'}}]),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    streamed = [root for chunk in collected for root in _roots(chunk)]
+    assert [root.text for root in streamed if isinstance(root, TextPart)] == ['Calling', ' the tool.']
+    fragments = [root for root in streamed if isinstance(root, ToolRequestPart)]
+    assert len(fragments) == 3
+    assert all(root.tool_request.name == 'tool_fn' for root in fragments)
+    assert all(root.tool_request.ref == 'tool123' for root in fragments)
+    assert json.loads(''.join(str(root.tool_request.input) for root in fragments)) == {'a': 1}
+
+    assert response.message is not None
+    final = [part.root for part in response.message.content]
+    assert [root.text for root in final if isinstance(root, TextPart)] == ['Calling', ' the tool.']
+    requests = [root.tool_request for root in final if isinstance(root, ToolRequestPart)]
+    assert len(requests) == 1
+    assert requests[0].input == {'a': 1}
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_skips_a_delta_with_nothing_to_report(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """A delta with no content, reasoning or tool calls emits no chunk."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(make_chunk, content='Hi'),
+        _delta_chunk(make_chunk),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    assert len(collected) == 1
+    assert collected[0].content[0].root.text == 'Hi'
+    assert response.message is not None
+    assert len(response.message.content) == 1
 
 
 class TestNeedsSchemaInPrompt:

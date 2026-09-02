@@ -523,10 +523,10 @@ class TestMessageConverterReasoningContent:
         with pytest.raises(ValueError, match='Unable to determine content part'):
             MessageConverter.to_genkit(adapter)
 
-    def test_tool_calls_take_precedence_over_reasoning(self) -> None:
-        """Tool calls take precedence; reasoning_content is ignored."""
+    def test_reasoning_text_and_tool_calls_are_all_kept(self) -> None:
+        """Keep reasoning, text, and tool call parts together, in that order."""
         adapter = DictMessageAdapter({
-            'content': None,
+            'content': 'Checking the weather.',
             'reasoning_content': 'Some reasoning',
             'tool_calls': [
                 {
@@ -540,10 +540,37 @@ class TestMessageConverterReasoningContent:
             'role': 'assistant',
         })
         msg = MessageConverter.to_genkit(adapter)
-        # Should produce tool request parts, not reasoning.
-        assert len(msg.content) == 1
+        assert len(msg.content) == 3
+        assert isinstance(msg.content[0].root, ReasoningPart)
+        assert msg.content[0].root.reasoning == 'Some reasoning'
+        assert isinstance(msg.content[1].root, TextPart)
+        assert msg.content[1].root.text == 'Checking the weather.'
+        assert isinstance(msg.content[2].root, ToolRequestPart)
+        assert msg.content[2].root.tool_request.ref == 'call_1'
+        assert msg.content[2].root.tool_request.name == 'get_weather'
+        assert msg.content[2].root.tool_request.input == {'location': 'NYC'}
 
-        assert isinstance(msg.content[0].root, ToolRequestPart)
+    def test_text_and_tool_calls_without_reasoning(self) -> None:
+        """Keep text alongside tool calls when there is no reasoning."""
+        adapter = DictMessageAdapter({
+            'content': 'Let me look that up.',
+            'tool_calls': [
+                {
+                    'id': 'call_1',
+                    'function': {
+                        'name': 'get_weather',
+                        'arguments': '{"location": "NYC"}',
+                    },
+                }
+            ],
+            'role': 'assistant',
+        })
+        msg = MessageConverter.to_genkit(adapter)
+        assert len(msg.content) == 2
+        assert isinstance(msg.content[0].root, TextPart)
+        assert msg.content[0].root.text == 'Let me look that up.'
+        assert isinstance(msg.content[1].root, ToolRequestPart)
+        assert msg.content[1].root.tool_request.input == {'location': 'NYC'}
 
     def test_role_defaults_to_model(self) -> None:
         """Default role should be MODEL when not provided."""
