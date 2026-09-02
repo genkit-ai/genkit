@@ -58,8 +58,8 @@ export const ToolResponsesOptionsSchema = z.object({
 export const ContextCompressionOptionsSchema = z
   .object({
     /**
-     * Compression triggers when estimated tokens or previous turn usage
-     * exceeds this threshold.
+     * Compression triggers when the previous turn's `inputTokens` exceeds
+     * this threshold. On turn 0, token count is estimated from messages.
      */
     maxInputTokens: z
       .number()
