@@ -431,12 +431,46 @@ async def test_action_context_telemetry_redacts_auth_and_secrets(exporter: InMem
 
     span = _by_name(exporter.get_finished_spans(), 'redactContext')
     attrs = dict(span.attributes or {})
-    context_json = json.loads(attrs['genkit:metadata:context'])
+    raw_context = attrs['genkit:metadata:context']
+    assert isinstance(raw_context, str)
+    context_json = json.loads(raw_context)
 
     assert context_json['auth'] == '<redacted>'
     assert context_json['secrets'] == '<redacted>'
     assert context_json['locale'] == 'en-US'
     assert context_json['nested']['auth'] == 'this stays'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_whole_bag_redaction(exporter: InMemorySpanExporter) -> None:
+    """Top-level auth and secrets bags are replaced in full regardless of key names."""
+
+    async def noop(_input: object, _ctx: ActionRunContext) -> str:
+        return 'ok'
+
+    action = Action(
+        name='multiSecretFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+    )
+
+    await action.run(
+        context={
+            'auth': {'uid': '123', 'roles': ['admin'], 'custom': {'nested': True}},
+            'secrets': {'api_key': 'k1', 'signing_key': 'k2', 'token_data': {'hash': 'abc'}},
+            'request_id': 'req-987',
+        }
+    )
+
+    span = _by_name(exporter.get_finished_spans(), 'multiSecretFlow')
+    attrs = dict(span.attributes or {})
+    raw_context = attrs['genkit:metadata:context']
+    assert isinstance(raw_context, str)
+    context_json = json.loads(raw_context)
+
+    assert context_json['auth'] == '<redacted>'
+    assert context_json['secrets'] == '<redacted>'
+    assert context_json['request_id'] == 'req-987'
 
 
 @pytest.mark.asyncio

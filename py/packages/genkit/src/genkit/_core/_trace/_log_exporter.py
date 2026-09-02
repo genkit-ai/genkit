@@ -193,7 +193,7 @@ def _otlp_attributes(*, attrs: dict[str, object]) -> tuple[list[dict[str, object
             dropped += 1
             continue
         if _should_redact(key=name):
-            encoded.append({'key': name, 'value': {'stringValue': '[redacted]'}})
+            encoded.append({'key': name, 'value': {'stringValue': '<redacted>'}})
             continue
         encoded.append({'key': name, 'value': _otlp_value(value=value)})
     return encoded, dropped

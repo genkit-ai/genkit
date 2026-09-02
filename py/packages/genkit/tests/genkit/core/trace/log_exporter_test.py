@@ -348,7 +348,7 @@ def test_build_log_record_bounds_and_redacts_attrs() -> None:
     assert len(raw_attrs) == MAX_ATTRIBUTES
     assert record['droppedAttributesCount'] == extra - (MAX_ATTRIBUTES - 2)
     keys = {item['key']: item['value'] for item in raw_attrs if isinstance(item, dict)}
-    assert keys['api_key'] == {'stringValue': '[redacted]'}
+    assert keys['api_key'] == {'stringValue': '<redacted>'}
     prompt_value = keys['prompt']
     assert isinstance(prompt_value, dict)
     prompt = prompt_value['stringValue']
@@ -358,18 +358,27 @@ def test_build_log_record_bounds_and_redacts_attrs() -> None:
 
 
 def test_build_log_record_redacts_camel_case_secrets() -> None:
-    """apiKey / authToken / apikey must not POST in cleartext to /api/otlp."""
+    """apiKey / authToken / apikey / passwords must not POST in cleartext to /api/otlp."""
     record = build_log_record(
         level=logging.DEBUG,
         event='calling provider',
-        attrs={'apiKey': 'sk-secret', 'authToken': 'tok', 'apikey': 'sk-2', 'city': 'Paris'},
+        attrs={
+            'apiKey': 'sk-secret',
+            'authToken': 'tok',
+            'apikey': 'sk-2',
+            'database_password': 'secret-pass',
+            'custom_secret': 'opaque-token',
+            'city': 'Paris',
+        },
     )
     raw_attrs = record['attributes']
     assert isinstance(raw_attrs, list)
     keys = {item['key']: item['value'] for item in raw_attrs if isinstance(item, dict)}
-    assert keys['apiKey'] == {'stringValue': '[redacted]'}
-    assert keys['authToken'] == {'stringValue': '[redacted]'}
-    assert keys['apikey'] == {'stringValue': '[redacted]'}
+    assert keys['apiKey'] == {'stringValue': '<redacted>'}
+    assert keys['authToken'] == {'stringValue': '<redacted>'}
+    assert keys['apikey'] == {'stringValue': '<redacted>'}
+    assert keys['database_password'] == {'stringValue': '<redacted>'}
+    assert keys['custom_secret'] == {'stringValue': '<redacted>'}
     assert keys['city'] == {'stringValue': 'Paris'}
 
 
