@@ -758,10 +758,9 @@ func (a *Agent[State]) Store() SessionStore[State] {
 
 // GetSnapshot fetches a session snapshot by ID through the agent, applying the
 // configured [WithStateTransform] and the same read-time shaping the getSnapshot
-// companion action performs (a stale-heartbeat pending row is surfaced as
-// [SnapshotStatusExpired]; an aborted row not yet finalized reads as pending
-// while its worker winds down, or expired once the worker is presumed dead;
-// an empty status or zero UpdatedAt is defaulted).
+// companion action performs (a pending or aborting row whose heartbeat went
+// stale is surfaced as [SnapshotStatusExpired]; an empty status or zero
+// UpdatedAt is defaulted).
 // Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
 // state. Pass [WithMetadataOnly] to read the shaped metadata without the state.
 //
@@ -1850,10 +1849,12 @@ func (rt *agentRuntime[State]) handleDetach(
 			// the worker dead the moment the flip lands. The fnDone goroutine
 			// below stops the beats right before the finalize; the budget
 			// bounds a worker whose fn never observes the cancellation, so a
-			// truly wedged run still goes stale and reads as expired. A timer
-			// firing after the fnDone stop re-cancels an already-cancelled
-			// context, which is a no-op.
-			time.AfterFunc(windDownHeartbeatBudget, stopHeartbeat)
+			// truly wedged run still goes stale and reads as expired. The
+			// timer is released as soon as the heartbeat stops for any
+			// reason, so a normal wind-down does not keep it (and the
+			// contexts it holds) alive for the whole budget.
+			budget := time.AfterFunc(windDownHeartbeatBudget, stopHeartbeat)
+			context.AfterFunc(hbCtx, func() { budget.Stop() })
 			cancelWork()
 			return
 		}

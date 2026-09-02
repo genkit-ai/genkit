@@ -479,7 +479,7 @@ func TestAgentHandle_AbortLifecycle(t *testing.T) {
 func TestAgentHandle_GetSnapshotMetadataOnly(t *testing.T) {
 	// The metadata read shapes exactly as the full read and drops only the
 	// state payload: a settled row reports its status with a nil State, and a
-	// row inside the abort wind-down window reads as pending through both.
+	// row inside the abort wind-down window reads as aborting through both.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "metaRead", WithSessionStore(store))

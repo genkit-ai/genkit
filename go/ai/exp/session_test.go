@@ -233,6 +233,77 @@ func TestWaitSnapshot_RereadsWithoutSubscriber(t *testing.T) {
 	}
 }
 
+// metadataPollStore is an unsubscribable store with the metadata capability
+// that counts each kind of read, so a polled wait's re-read pattern is
+// observable: metadata-only while the row is in flight, one full read once it
+// settles.
+type metadataPollStore struct {
+	unsubscribableStore[any]
+	mu                       sync.Mutex
+	fullReads, metadataReads int
+}
+
+func (s *metadataPollStore) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
+	s.mu.Lock()
+	s.fullReads++
+	s.mu.Unlock()
+	return s.unsubscribableStore.GetSnapshot(ctx, snapshotID)
+}
+
+func (s *metadataPollStore) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SessionSnapshot[any], error) {
+	s.mu.Lock()
+	s.metadataReads++
+	s.mu.Unlock()
+	snap, err := s.unsubscribableStore.GetSnapshot(ctx, snapshotID)
+	if snap == nil {
+		return nil, err
+	}
+	meta := *snap
+	meta.State = nil
+	return &meta, err
+}
+
+func (s *metadataPollStore) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*SessionSnapshot[any], error) {
+	return nil, errors.New("metadataPollStore: GetLatestSnapshotMetadata is not exercised")
+}
+
+func TestWaitSnapshot_RereadsMetadataOnlyWhereTheStoreCan(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	store := &metadataPollStore{unsubscribableStore: unsubscribableStore[any]{SessionStore: newTestInMemStore[any]()}}
+	beat := time.Now()
+	putSnapshot[any](t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		settleSnapshot[any](t, store, "running", SnapshotStatusCompleted)
+	}()
+
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "")
+	if err != nil {
+		t.Fatalf("waitSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusCompleted {
+		t.Fatalf("status = %q, want %q", got.Status, SnapshotStatusCompleted)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	// The initial read and the one at settle are the only full reads; every
+	// re-read in between asked for the metadata alone.
+	if store.fullReads != 2 {
+		t.Errorf("full reads = %d, want 2 (initial, settled)", store.fullReads)
+	}
+	if store.metadataReads == 0 {
+		t.Error("metadata reads = 0, want the in-wait re-reads to be metadata-only")
+	}
+}
+
 func TestWaitSnapshot_ExpiredHeartbeatEndsTheWait(t *testing.T) {
 	store := newTestInMemStore[any]()
 	// A worker that died before the wait even started: the read shaping

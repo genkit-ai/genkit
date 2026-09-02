@@ -269,9 +269,9 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // operation the read serves, so a failure reports the caller's own name rather
 // than always the read's.
 //
-// With omitState set the response carries the shaped metadata only: the
-// shaping above still consults the stored state (the abort-window rules key
-// on its presence), but the state is dropped instead of cloned and
+// With metadataOnly set the response carries the shaped metadata only: the
+// shaping above needs nothing but the metadata (status defaulting and
+// heartbeat expiry), so the state is dropped instead of cloned and
 // transformed. The transform never runs, which matches a stateless row's full
 // read: the transform shapes outbound state, and none goes out.
 func readSnapshot[State any](
@@ -451,10 +451,10 @@ func waitSnapshot[State any](
 	transform StateTransform[State],
 	op, snapshotID, sessionID string,
 ) (*SessionSnapshot[State], error) {
-	read := func(snapshotID, sessionID string) (*SessionSnapshot[State], error) {
+	read := func(metadataOnly bool) (*SessionSnapshot[State], error) {
 		readCtx, cancel := context.WithTimeout(ctx, snapshotWaitReadTimeout)
 		defer cancel()
-		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID, false)
+		return readSnapshot(readCtx, store, transform, op, snapshotID, sessionID, metadataOnly)
 	}
 
 	// retryRead decides what a failed read inside a wait means: a dead end or
@@ -478,7 +478,7 @@ func waitSnapshot[State any](
 	// unknown snapshot); a transient failure falls into the wait below and is
 	// retried there on the wait's own cadence, because a store blip at the
 	// moment a wait starts is no more fatal than one in the middle of it.
-	snap, err := read(snapshotID, sessionID)
+	snap, err := read(false)
 	if err == nil && snap.Status.Terminal() {
 		return snap, nil
 	}
@@ -494,6 +494,7 @@ func waitSnapshot[State any](
 		defer cancel()
 		statusCh = sub.OnSnapshotStatusChange(subCtx, snapshotID)
 	}
+	_, metaOnly := store.(SnapshotMetadataReader[State])
 	interval := snapshotWaitPollInterval
 	if statusCh != nil {
 		interval = snapshotWaitLivenessInterval
@@ -540,7 +541,23 @@ func waitSnapshot[State any](
 		// just its first read, and it settles the wait only on a row that says
 		// so: a store may notify before the write is visible to a reader, and
 		// answering a wait with a pending row would break its contract.
-		cur, err := read(snapshotID, sessionID)
+		//
+		// The re-read is metadata-only where the store can serve one: the
+		// loop dispatches on status alone, and a full read of an in-flight
+		// row would materialize a state the row does not carry yet (on a
+		// store that reconstructs it, the whole parent chain), once per tick
+		// for as long as the work runs. Once the metadata says the row
+		// settled, one full read fetches the row the caller gets back, and
+		// that row settles the wait on its own say-so: expiry is a verdict on
+		// the heartbeat rather than a write, so a row that read as expired a
+		// moment ago reads as in flight again if a slow worker beat in
+		// between, and the wait then goes on. A store without the capability
+		// would load the state on the fallback anyway, so it is read in full
+		// once instead.
+		cur, err := read(metaOnly)
+		if err == nil && metaOnly && cur.Status.Terminal() {
+			cur, err = read(false)
+		}
 		if err != nil {
 			if err := retryRead(err); err != nil {
 				return nil, err
