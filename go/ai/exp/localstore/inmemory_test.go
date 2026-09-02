@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 func TestInMemorySessionStore(t *testing.T) {
@@ -180,6 +181,44 @@ func TestInMemorySessionStore_Heartbeat(t *testing.T) {
 func TestInMemorySessionStore_Metadata(t *testing.T) {
 	runMetadataStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
 		return NewInMemorySessionStore[testState]()
+	})
+
+	t.Run("MetadataReadOwnsItsError", func(t *testing.T) {
+		// A metadata read hands back the same ownership a full read does:
+		// editing its Error must not reach the store's row.
+		ctx := context.Background()
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(ctx, "failed",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusFailed,
+					Error:     status.Errorf(status.ErrInternal, "boom").WithDetails(map[string]any{"step": "one"}),
+				}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		for name, read := range map[string]func() (*exp.SessionSnapshot[testState], error){
+			"GetSnapshotMetadata":       func() (*exp.SessionSnapshot[testState], error) { return store.GetSnapshotMetadata(ctx, "failed") },
+			"GetLatestSnapshotMetadata": func() (*exp.SessionSnapshot[testState], error) { return store.GetLatestSnapshotMetadata(ctx, "sess-1") },
+		} {
+			meta, err := read()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if meta == nil || meta.Error == nil {
+				t.Fatalf("%s: expected a row carrying its error, got %+v", name, meta)
+			}
+			meta.Error.Message = "tampered"
+			meta.Error.Details["step"] = "tampered"
+			again, err := read()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if again.Error.Message != "boom" || again.Error.Details["step"] != "one" {
+				t.Errorf("%s: edits to the returned Error reached the store: %+v", name, again.Error)
+			}
+		}
 	})
 }
 

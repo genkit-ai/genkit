@@ -68,10 +68,8 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 }
 
 // GetSnapshotMetadata retrieves a snapshot by ID without its state, per
-// [exp.SnapshotMetadataReader]. Returns nil if not found. The
-// returned row is a copy with State nil; unlike a full read it is not a deep
-// copy, so its Error shares memory with the store's row, which the reader
-// contract permits. Treat it as read-only.
+// [exp.SnapshotMetadataReader]. Returns nil if not found. The returned row
+// has State nil and, like a full read, owns everything else it carries.
 func (s *InMemorySessionStore[State]) GetSnapshotMetadata(_ context.Context, snapshotID string) (*exp.SessionSnapshot[State], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -79,7 +77,7 @@ func (s *InMemorySessionStore[State]) GetSnapshotMetadata(_ context.Context, sna
 	if !ok {
 		return nil, nil
 	}
-	return snapshotMetadata(snap), nil
+	return snapshotMetadata(snap)
 }
 
 // GetLatestSnapshot returns the session's most recently created snapshot
@@ -113,7 +111,7 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshotMetadata(_ context.Contex
 	if latest == nil {
 		return nil, nil
 	}
-	return snapshotMetadata(latest), nil
+	return snapshotMetadata(latest)
 }
 
 // latestLocked returns the session's most recently created row, ties broken
@@ -132,16 +130,29 @@ func (s *InMemorySessionStore[State]) latestLocked(sessionID string) *exp.Sessio
 	return latest
 }
 
-// snapshotMetadata returns snap without its state: a shallow copy with State
-// nil and its own HeartbeatAt value.
-func snapshotMetadata[State any](snap *exp.SessionSnapshot[State]) *exp.SessionSnapshot[State] {
+// snapshotMetadata returns snap without its state, owning everything else it
+// carries: a copy with State nil, its own HeartbeatAt value, and its Error
+// copied the way a full read copies the whole row, so a caller that edits
+// either result never reaches the store's row.
+func snapshotMetadata[State any](snap *exp.SessionSnapshot[State]) (*exp.SessionSnapshot[State], error) {
 	meta := *snap
 	meta.State = nil
 	if snap.HeartbeatAt != nil {
 		hb := *snap.HeartbeatAt
 		meta.HeartbeatAt = &hb
 	}
-	return &meta
+	if snap.Error != nil {
+		bytes, err := json.Marshal(snap.Error)
+		if err != nil {
+			return nil, fmt.Errorf("copy snapshot error: marshal: %w", err)
+		}
+		var copied status.Error
+		if err := json.Unmarshal(bytes, &copied); err != nil {
+			return nil, fmt.Errorf("copy snapshot error: unmarshal: %w", err)
+		}
+		meta.Error = &copied
+	}
+	return &meta, nil
 }
 
 // SaveSnapshot atomically reads, applies fn, and persists. See
