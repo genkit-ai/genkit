@@ -18,11 +18,14 @@ package a2ui
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/schematest"
 )
 
 var ctx = context.Background()
@@ -636,5 +639,75 @@ func TestSurfacesRejectsUnsupportedVersion(t *testing.T) {
 func TestSurfacesRejectsInvalidInstructions(t *testing.T) {
 	if _, err := (&Surfaces{Instructions: "prompt"}).New(ctx); err == nil {
 		t.Fatal("expected an error for invalid Instructions")
+	}
+}
+
+// The plugin exists only to register the middleware so it can be resolved by
+// name: from the Dev UI, from another runtime, or from a prompt file's `use:`
+// list. Its descriptor must carry the name the middleware answers to, a
+// description, a fully documented schema, and exactly the serializable
+// options (Catalog is code-only).
+func TestPluginDescribesMiddleware(t *testing.T) {
+	descs, err := (&A2UI{}).Middlewares(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(descs) != 1 {
+		t.Fatalf("got %d middleware descriptors, want 1", len(descs))
+	}
+	d := descs[0]
+	if d.Name != provider || (&A2UI{}).Name() != provider {
+		t.Errorf("descriptor name = %q, plugin name = %q; both must be %q", d.Name, (&A2UI{}).Name(), provider)
+	}
+	if d.Description == "" {
+		t.Error("middleware has no description")
+	}
+	schematest.AssertDescribed(t, d.Name, d.ConfigSchema)
+
+	props, _ := d.ConfigSchema["properties"].(map[string]any)
+	got := slices.Sorted(maps.Keys(props))
+	want := []string{"catalogId", "instructions", "surfaceId", "validate", "version"}
+	if !slices.Equal(got, want) {
+		t.Errorf("config schema properties = %v, want %v", got, want)
+	}
+}
+
+// TestDescriptionsUseTheDedicatedTag guards against the inline
+// `jsonschema:"description=..."` form, which the schema library truncates at
+// the first comma; see [schematest.AssertNoInlineDescriptions].
+func TestDescriptionsUseTheDedicatedTag(t *testing.T) {
+	schematest.AssertNoInlineDescriptions(t, ".")
+}
+
+// Every JSON-dispatched call (Dev UI, another runtime, a prompt file) builds
+// its own config off the registered prototype, so an option one call sets must
+// not leak into the next.
+func TestJSONDispatchDoesNotLeakConfigBetweenCalls(t *testing.T) {
+	r := newTestRegistry(t)
+	m, captured := echoModel(t, r, "test/echo", "ok")
+	descs, err := (&A2UI{}).Middlewares(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descs[0].Register(r)
+
+	injectedSystem := func(config map[string]any) bool {
+		t.Helper()
+		_, err := ai.GenerateWithRequest(t.Context(), r, &ai.GenerateActionOptions{
+			Model:    m.Name(),
+			Messages: []*ai.Message{ai.NewUserTextMessage("hi")},
+			Use:      []*ai.MiddlewareRef{{Name: provider, Config: config}},
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(*captured, func(msg *ai.Message) bool { return msg.Role == ai.RoleSystem })
+	}
+
+	if injectedSystem(map[string]any{"instructions": InstructionsNone}) {
+		t.Error("instructions=none still injected a system message")
+	}
+	if !injectedSystem(map[string]any{}) {
+		t.Error("default dispatch injected no system message: instructions=none leaked from the previous call")
 	}
 }

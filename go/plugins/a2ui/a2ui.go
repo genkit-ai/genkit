@@ -75,12 +75,12 @@ type Surfaces struct {
 	// The middleware resolves it from the registry at call time. Defaults to
 	// [DefaultCatalogID] (the bundled basic catalog) when neither Catalog nor
 	// CatalogID is set.
-	CatalogID string `json:"catalogId,omitempty"`
+	CatalogID string `json:"catalogId,omitempty" jsonschema_description:"Id of a catalog registered with LoadCatalog, resolved from the registry at call time. Defaults to \"basic\", the bundled basic catalog."`
 
 	// Instructions controls where the catalog's capabilities are injected.
 	// InstructionsSystem (default) appends A2UI instructions to the system
 	// prompt; InstructionsNone injects nothing.
-	Instructions string `json:"instructions,omitempty"`
+	Instructions string `json:"instructions,omitempty" jsonschema:"enum=system,enum=none" jsonschema_description:"Where the catalog's capabilities are injected. \"system\" appends A2UI instructions to the system prompt; \"none\" injects nothing. Defaults to \"system\"."`
 
 	// Validate controls validation of emitted envelopes against the catalog.
 	// ValidateWarn (default) logs and drops bad blocks; ValidateStrict returns
@@ -93,15 +93,15 @@ type Surfaces struct {
 	// Markdown, any other prop) pass through untouched. Prop sanitization is the
 	// renderer/catalog's responsibility, and hosts should CSP-restrict remote
 	// sources. See the "Security and the trust boundary" section of the README.
-	Validate ValidateMode `json:"validate,omitempty"`
+	Validate ValidateMode `json:"validate,omitempty" jsonschema:"enum=strict,enum=warn,enum=off" jsonschema_description:"Validation of emitted envelopes against the catalog. \"warn\" logs and drops bad blocks; \"strict\" returns an error; \"off\" skips checking. This checks structure and component names only, never prop values. Defaults to \"warn\"."`
 
 	// SurfaceID sets the surface-id policy. Provide a fixed id to reuse for
 	// every surface; leave empty for a fresh UUID per surface.
-	SurfaceID string `json:"surfaceId,omitempty"`
+	SurfaceID string `json:"surfaceId,omitempty" jsonschema_description:"Fixed id to reuse for every surface. Defaults to a fresh UUID per surface."`
 
 	// Version is the protocol version stamped on emitted envelopes. Defaults to
 	// [DefaultVersion].
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty" jsonschema_description:"Protocol version stamped on emitted envelopes. Defaults to \"v0.9\"."`
 }
 
 // Name returns the middleware's stable identifier.
