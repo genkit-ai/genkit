@@ -18,9 +18,8 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
@@ -86,26 +85,6 @@ def operation_context(
     return folded
 
 
-def _accepts_run_context(fn: Callable[..., Any]) -> bool:
-    """A one-arg ``check(op)`` still polls. New fns take ``ctx`` too."""
-    try:
-        sig = inspect.signature(fn)
-    except (TypeError, ValueError):
-        return True
-    params = [
-        p
-        for p in sig.parameters.values()
-        if p.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-        and p.name not in ('self', 'cls')
-    ]
-    return len(params) >= 2
-
-
 class BackgroundAction(Generic[OutputT]):
     """A background action that can run for a long time.
 
@@ -158,18 +137,22 @@ class BackgroundAction(Generic[OutputT]):
     async def start(
         self,
         input: ModelRequest | None = None,
-        options: dict[str, Any] | None = None,
+        *,
+        context: dict[str, Any] | None = None,
     ) -> Operation:
         """Start a background operation.
 
         Args:
             input: The input request.
-            options: Optional run options.
+            context: Optional run context. Per-request keys go in
+                ``context['secrets']``.
 
         Returns:
             An Operation with an ID to track the job.
         """
-        result = await self.start_action.run(input)
+        # Same pocket as check/cancel — a tenant key on start has to
+        # reach the plugin, not die on this wrapper.
+        result = await self.start_action.run(input, context=context)
         return _ensure_operation(response=result.response, name=self.start_action.name)
 
     async def check(
@@ -327,10 +310,7 @@ def define_background_model(
         return op
 
     async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
-        if _accepts_run_context(check):
-            updated = await check(op, ctx)
-        else:
-            updated = await cast(Callable[[Operation], Awaitable[Operation]], check)(op)
+        updated = await check(op, ctx)
         # Preserve action key
         updated.action = action_key
         return updated
@@ -360,10 +340,7 @@ def define_background_model(
         cancel_fn = cancel
 
         async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
-            if _accepts_run_context(cancel_fn):
-                cancelled = await cancel_fn(op, ctx)
-            else:
-                cancelled = await cast(Callable[[Operation], Awaitable[Operation]], cancel_fn)(op)
+            cancelled = await cancel_fn(op, ctx)
             cancelled.action = action_key
             return cancelled
 

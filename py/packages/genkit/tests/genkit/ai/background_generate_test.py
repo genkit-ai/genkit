@@ -501,6 +501,28 @@ async def test_generate_operation_passes_context_to_start(ai: Genkit) -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_action_start_passes_context(ai: Genkit) -> None:
+    """Holding the wrapper and calling start() still delivers the tenant key."""
+    seen: dict[str, Any] = {}
+
+    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        seen['start'] = dict(ctx.context)
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    bg = ai.define_background_model(name='bg-model', start=start, check=check)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat'))])],
+    )
+
+    await bg.start(request, context={'secrets': {'api_key': 'tenant'}})
+
+    assert seen['start']['secrets']['api_key'] == 'tenant'
+
+
+@pytest.mark.asyncio
 async def test_check_and_cancel_pass_folded_context(ai: Genkit) -> None:
     """check/cancel hand the plugin secrets and fold config= into context['config']."""
     seen: dict[str, dict[str, Any]] = {}
@@ -578,21 +600,6 @@ async def test_check_config_wipes_ambient_context(ai: Genkit) -> None:
         _action_context.reset(token)
 
     assert seen['check'] == {'config': {'base_url': 'https://x'}}
-
-
-@pytest.mark.asyncio
-async def test_one_arg_check_still_polls(ai: Genkit) -> None:
-    """A leftover check(op) still polls. Do not fail as INTERNAL."""
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        return Operation(id='bg-op-1', done=False)
-
-    async def check(op: Operation) -> Operation:
-        return Operation(id=op.id, done=True)
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
-    updated = await ai.check_operation(await ai.generate_operation(model='bg-model', prompt='a cat'))
-    assert updated.done is True
 
 
 @pytest.mark.asyncio
