@@ -92,6 +92,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
+from genkit._core._error import RuntimeErrorReason, runtime_error_reason
 
 '''
 
@@ -334,6 +335,14 @@ def _emit_model(
         lines.extend([
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
+        ])
+    if name == 'GenkitRuntimeError':
+        lines.extend([
+            '',
+            '    @property',
+            '    def reason(self) -> RuntimeErrorReason | None:',
+            '        """Stable framework reason nested in details, when recognized."""',
+            '        return runtime_error_reason(self.details)',
         ])
     return lines + ['']
 

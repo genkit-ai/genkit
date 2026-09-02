@@ -1053,12 +1053,20 @@ async def generate_prompt_agent_turn(
         )
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
 
-    if response.message:
-        await persist_turn_messages(
-            session_runner=session_runner,
-            history=history,
-            response_message=response.message,
-            response=response,
+    # Max-turns abort has no leftover message (the refused round was
+    # dropped) but request.messages still has the closed tool turns.
+    await persist_turn_messages(
+        session_runner=session_runner,
+        history=history,
+        response_message=response.message,
+        response=response,
+    )
+
+    if response.error is not None:
+        raise GenkitError(
+            message=response.error.message,
+            status=cast(Any, response.error.status),
+            details=response.error.details,
         )
 
     # Return the turn result wrapping the model finish reason

@@ -169,9 +169,13 @@ class BackgroundAction(Generic[OutputT]):
         return _ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
-def missing_operation_error(*, name: str) -> GenkitError:
+class MissingOperationError(GenkitError):
+    """A background action lost the operation handle it created."""
+
+
+def missing_operation_error(*, name: str) -> MissingOperationError:
     """The caller asked for a handle and this action did not return one."""
-    return GenkitError(
+    return MissingOperationError(
         status='FAILED_PRECONDITION',
         message=f"'{name}' did not return an operation.",
     )

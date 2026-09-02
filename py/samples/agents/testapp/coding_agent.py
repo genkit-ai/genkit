@@ -58,7 +58,6 @@ coding_agent = ai.define_agent(
         Filesystem(root_dir=str(WORKSPACE_DIR), allow_write_access=True),
     ],
     store=FileSessionStore('./.snapshots-coding'),
-    max_turns=30,
 )
 
 

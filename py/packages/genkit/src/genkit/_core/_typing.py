@@ -27,6 +27,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
+from genkit._core._error import RuntimeErrorReason, runtime_error_reason
 
 
 class AgentFinishReason(StrEnum):
@@ -348,6 +349,11 @@ class GenkitRuntimeError(GenkitModel):
     status: str | None = None
     message: str = Field(...)
     details: Any | None = Field(default=None)
+
+    @property
+    def reason(self) -> RuntimeErrorReason | None:
+        """Stable framework reason nested in details, when recognized."""
+        return runtime_error_reason(self.details)
 
 
 class MiddlewareDesc(GenkitModel):

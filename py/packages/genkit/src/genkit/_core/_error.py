@@ -18,12 +18,15 @@
 
 import math
 import time
+from collections.abc import Mapping
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
-from typing import Any, ClassVar, Literal, TypedDict
+from typing import Any, ClassVar, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
+
+from genkit._core._compat import StrEnum
 
 
 class StatusCodes(IntEnum):
@@ -68,6 +71,49 @@ StatusName = Literal[
     'UNAVAILABLE',
     'DATA_LOSS',
 ]
+
+
+class RuntimeErrorReason(StrEnum):
+    """Stable reasons for framework-classified runtime failures."""
+
+    INVALID_SCHEMA = 'INVALID_SCHEMA'
+    INVALID_INPUT = 'INVALID_INPUT'
+    INVALID_OUTPUT = 'INVALID_OUTPUT'
+    ACTION_NOT_FOUND = 'ACTION_NOT_FOUND'
+    PANIC = 'PANIC'
+    MODEL_NOT_FOUND = 'MODEL_NOT_FOUND'
+    TOOL_NOT_FOUND = 'TOOL_NOT_FOUND'
+    MAX_TURNS_EXCEEDED = 'MAX_TURNS_EXCEEDED'
+    TOOL_FAILED = 'TOOL_FAILED'
+    UNSUPPORTED_BY_MODEL = 'UNSUPPORTED_BY_MODEL'
+    INVALID_PART = 'INVALID_PART'
+    INPUT_TYPE_MISMATCH = 'INPUT_TYPE_MISMATCH'
+    UNRESOLVED_TOOL_REQUEST = 'UNRESOLVED_TOOL_REQUEST'
+    GENERATION_BLOCKED = 'GENERATION_BLOCKED'
+    SNAPSHOT_NOT_FOUND = 'SNAPSHOT_NOT_FOUND'
+    SESSION_STORE_NOT_CONFIGURED = 'SESSION_STORE_NOT_CONFIGURED'
+    SESSION_ID_REQUIRED = 'SESSION_ID_REQUIRED'
+    STREAM_NOT_FOUND = 'STREAM_NOT_FOUND'
+    STREAM_ALREADY_EXISTS = 'STREAM_ALREADY_EXISTS'
+    STREAM_WRITER_CLOSED = 'STREAM_WRITER_CLOSED'
+    STREAM_COMPLETED = 'STREAM_COMPLETED'
+    STREAM_TIMEOUT = 'STREAM_TIMEOUT'
+    CONNECTION_CLOSED = 'CONNECTION_CLOSED'
+    ACTION_COMPLETED = 'ACTION_COMPLETED'
+
+
+def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
+    """Read a known stable reason from runtime error details."""
+    if not isinstance(details, Mapping):
+        return None
+    value = cast(Mapping[str, object], details).get('reason')
+    if not isinstance(value, str):
+        return None
+    try:
+        return cast(RuntimeErrorReason, RuntimeErrorReason(value))
+    except ValueError:
+        return None
+
 
 # Mapping of status names to HTTP status codes
 _STATUS_CODE_MAP: dict[StatusName, int] = {

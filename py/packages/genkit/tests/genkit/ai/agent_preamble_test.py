@@ -341,7 +341,7 @@ async def test_prompt_agent_schema_miss_keeps_invalid_argument() -> None:
 
     with pytest.raises(AgentError) as raised:
         await agent.chat().send('give me a recipe')
-    assert raised.value.status == 'UNKNOWN'
+    assert raised.value.status == 'INTERNAL'
 
 
 @pytest.mark.asyncio
