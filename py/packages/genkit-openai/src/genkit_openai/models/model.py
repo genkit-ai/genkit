@@ -27,6 +27,7 @@ from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import (
+    GenkitError,
     Message,
     ModelRequest,
     ModelResponse,
@@ -403,6 +404,9 @@ class OpenAIModel:
             finish_reason=str(response.choices[0].finish_reason) if response.choices else None,
         )
 
+        if not response.choices:
+            raise GenkitError(status='INTERNAL', message='No choices in completion.')
+
         result = ModelResponse(
             request=request,
             message=MessageConverter.to_genkit(MessageAdapter(response.choices[0].message)),
@@ -434,6 +438,7 @@ class OpenAIModel:
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
         usage: CompletionUsage | None = None
+        saw_choice = False
         async for chunk in stream:  # type: ignore
             # Usage rides on a final chunk that carries no choices.
             if chunk.usage is not None:
@@ -441,6 +446,7 @@ class OpenAIModel:
             if not chunk.choices:
                 continue
 
+            saw_choice = True
             delta = chunk.choices[0].delta
 
             # Text content chunk
@@ -485,6 +491,9 @@ class OpenAIModel:
                     for tool_call in delta.tool_calls
                 ]
                 callback(ModelResponseChunk(role=Role.MODEL, content=content))
+
+        if not saw_choice:
+            raise GenkitError(status='INTERNAL', message='No choices in completion.')
 
         if tool_calls:
             message = MessageConverter.to_genkit(
