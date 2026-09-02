@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -621,6 +622,65 @@ func TestAgentsContinueExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 	}
 	if resumes[1].Response != "kept going" {
 		t.Errorf("expected the retried resume to recover, got %+v", resumes[1])
+	}
+}
+
+func TestAgentsContinueExpiredDeadEndsKeepTheSlot(t *testing.T) {
+	// A fence or post-fence re-read that fails with a classified dead end
+	// refuses without a retry hint and keeps its slot, like every other read
+	// on the ladder: the retry fails identically, so a refund would let the
+	// model spend forever on a call that cannot succeed. MaxDelegations of 1
+	// pins the kept slot: the retried call trips the cap.
+	for _, tc := range []struct {
+		name    string
+		arm     func(store *flakyStore, pendingID string)
+		refusal string
+	}{
+		{"fence refused", func(store *flakyStore, pendingID string) {
+			store.setSaveFailure(pendingID, status.Errorf(status.ErrFailedPrecondition, "store cannot fence"))
+		}, "could not fence"},
+		{"row gone after the fence", func(store *flakyStore, pendingID string) {
+			// The pre-read sees the dead pending row; the fence flips it to
+			// aborting; the re-read then finds it gone, which the companion
+			// action reports as NOT_FOUND.
+			store.setGetHook(func(id string, snap *aix.SessionSnapshot[any], err error) (*aix.SessionSnapshot[any], error) {
+				if id == pendingID && snap != nil && snap.Status == aix.SnapshotStatusAborting {
+					return nil, nil
+				}
+				return snap, err
+			})
+		}, "could not read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTestGenkit(t)
+			store := newFlakyStore()
+			deadTask, _ := seedDeadKeeperTask(t, g, store, failNTimesModel(t, g, "test/keeper", 0, "kept going", nil))
+			tc.arm(store, strings.TrimPrefix(deadTask, "keeper:"))
+
+			orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				resume := &ai.ToolRequest{Name: "continue_task",
+					Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}
+				if len(toolOutputs(req.Messages, "continue_task")) < 2 {
+					return toolReqResp(req, resume), nil
+				}
+				return textResp(req, "done"), nil
+			})
+			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+				ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resumes := delegationResponses(t, resp.History(), "continue_task")
+			if len(resumes) != 2 {
+				t.Fatalf("expected 2 resume responses, got %+v", resumes)
+			}
+			if !strings.Contains(resumes[0].Response, tc.refusal) || strings.Contains(resumes[0].Response, "Try again later") {
+				t.Errorf("expected a dead-end refusal without a retry hint, got %q", resumes[0].Response)
+			}
+			if !strings.Contains(resumes[1].Response, "Delegation limit reached") {
+				t.Errorf("expected the kept slot to trip the cap on retry, got %q", resumes[1].Response)
+			}
+		})
 	}
 }
 

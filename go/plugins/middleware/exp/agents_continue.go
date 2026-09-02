@@ -204,22 +204,20 @@ func (a *Agents) continueSettled(ctx context.Context, ref aix.AgentRef, st *agen
 //
 // The fence is the one write standing between the recovery and a live
 // worker, so a fence that fails is a refusal, not a log line: proceeding
-// without it risks two live branches of one session. Fence and re-read
-// failures are transient (the retried call can succeed), so both refusals
-// return their slot.
+// without it risks two live branches of one session. A failed fence or
+// re-read refuses through refuseRead, so its slot follows the failure's kind
+// like every other read on the ladder.
 func (a *Agents) continueExpired(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, in continueInput, snapshotID string, background bool) (delegationResult, error) {
 	if _, err := agent.Abort(ctx, snapshotID); err != nil {
 		logger.Debug(ctx, "continue fence abort failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
-		a.releaseDelegation(st)
-		return delegationResult{Response: fmt.Sprintf(
-			"Error: could not fence task %q before recovering it (%v). Try again later.", in.TaskID, err)}, nil
+		return a.refuseRead(st, err, fmt.Sprintf(
+			"Error: could not fence task %q before recovering it (%v).", in.TaskID, err)), nil
 	}
 	cur, err := agent.GetSnapshot(ctx, snapshotID, aix.WithMetadataOnly())
 	if err != nil {
 		logger.Debug(ctx, "continue fence re-read failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
-		a.releaseDelegation(st)
-		return delegationResult{Response: fmt.Sprintf(
-			"Error: could not read task %q after fencing it (%v). Try again later.", in.TaskID, err)}, nil
+		return a.refuseRead(st, err, fmt.Sprintf(
+			"Error: could not read task %q after fencing it (%v).", in.TaskID, err)), nil
 	}
 	switch {
 	case cur.Status == aix.SnapshotStatusExpired:
@@ -231,6 +229,20 @@ func (a *Agents) continueExpired(ctx context.Context, ref aix.AgentRef, st *agen
 		// finalize is coming and the parent must not be raced.
 		return a.windingDownRefusal(st, in.TaskID), nil
 	}
+}
+
+// refuseRead turns a failed pre-read, fence, or parent read into the refusal
+// msg, with the slot following the failure's kind, the one rule every read on
+// the ladder applies: a transient failure names a retry that can succeed, so
+// the refusal says so and returns the slot; a classified dead end (a row that
+// is gone, an agent that cannot fence, a rejected request) fails identically
+// on retry and keeps it, so the cap can still bite.
+func (a *Agents) refuseRead(st *agentsState, err error, msg string) delegationResult {
+	if deadEndRead(err) {
+		return delegationResult{Response: msg}
+	}
+	a.releaseDelegation(st)
+	return delegationResult{Response: msg + " Try again later."}
 }
 
 // windingDownRefusal refuses to continue a task whose row is aborting: the
@@ -280,15 +292,8 @@ func (a *Agents) continueFromParent(ctx context.Context, ref aix.AgentRef, st *a
 	}
 	parent, err := agent.GetSnapshot(ctx, parentID, aix.WithMetadataOnly())
 	if err != nil {
-		if !deadEndRead(err) {
-			// Transient, and the refusal names a retry that can succeed, so
-			// the slot comes back, the same refund continueFromStore applies to
-			// its own transient read failures. The dead ends (a deleted
-			// parent, a rejected request) keep their slot.
-			a.releaseDelegation(st)
-		}
-		return delegationResult{Response: fmt.Sprintf(
-			"Error: task %q kept its progress in snapshot %q, which could not be read (%v). Try again later.", in.TaskID, parentID, err)}, nil
+		return a.refuseRead(st, err, fmt.Sprintf(
+			"Error: task %q kept its progress in snapshot %q, which could not be read (%v).", in.TaskID, parentID, err)), nil
 	}
 	if refusal := a.refuseEmptyFollowUp(st, parent, in, fmt.Sprintf(
 		"Task %q kept progress only up to its last finished turn (from before the background work started). Call this tool again with instructions to continue from there; an empty retry would only re-run that finished turn.", in.TaskID)); refusal != nil {
