@@ -8594,3 +8594,46 @@ func TestAgent_ResumeRejectsAbortingRow(t *testing.T) {
 		})
 	}
 }
+
+func TestAgent_GetSnapshotMetadataOnly(t *testing.T) {
+	// The read option is the typed owner's too: every typed read surface
+	// drops the state and nothing else, exactly as the handle's does.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "typedMetaRead", WithSessionStore(store))
+
+	out, err := af.RunText(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	full, err := af.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if full.State == nil {
+		t.Fatal("full read returned no state")
+	}
+
+	for name, read := range map[string]func() (*SessionSnapshot[testState], error){
+		"GetSnapshot": func() (*SessionSnapshot[testState], error) {
+			return af.GetSnapshot(context.Background(), out.SnapshotID, WithMetadataOnly())
+		},
+		"GetLatestSnapshot": func() (*SessionSnapshot[testState], error) {
+			return af.GetLatestSnapshot(context.Background(), out.SessionID, WithMetadataOnly())
+		},
+		"DetachedTask.Poll": func() (*SessionSnapshot[testState], error) {
+			return af.Task(out.SnapshotID).Poll(context.Background(), WithMetadataOnly())
+		},
+	} {
+		meta, err := read()
+		if err != nil {
+			t.Fatalf("%s(WithMetadataOnly): %v", name, err)
+		}
+		if meta.State != nil {
+			t.Errorf("%s: meta read returned state: %+v", name, meta.State)
+		}
+		if meta.Status != full.Status || meta.SessionID != full.SessionID || meta.FinishReason != full.FinishReason {
+			t.Errorf("%s: meta read shaped differently from the full read: meta=%+v full=%+v", name, meta, full)
+		}
+	}
+}
