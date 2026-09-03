@@ -20,6 +20,7 @@
 import asyncio
 import queue
 import threading
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -45,7 +46,7 @@ async def test_openai_plugin_init() -> None:
 
     gpt_image = next(a for a in result if a.name == 'openai/gpt-image-1')
     assert gpt_image.metadata is not None
-    gpt_image_model = gpt_image.metadata['model']
+    gpt_image_model = cast(dict[str, Any], gpt_image.metadata['model'])
     assert gpt_image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
     assert 'configSchema' not in gpt_image_model
 
@@ -111,7 +112,7 @@ async def test_openai_plugin_list_actions() -> None:
 
     image = next(a for a in actions if a.name == 'openai/gpt-image-1')
     assert image.metadata is not None
-    image_model = image.metadata['model']
+    image_model = cast(dict[str, Any], image.metadata['model'])
     assert image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
     assert 'configSchema' not in image_model
 
