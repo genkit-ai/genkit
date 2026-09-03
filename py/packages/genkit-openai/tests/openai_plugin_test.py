@@ -43,6 +43,12 @@ async def test_openai_plugin_init() -> None:
         "All actions should be namespaced with 'openai/'"
     )
 
+    gpt_image = next(a for a in result if a.name == 'openai/gpt-image-1')
+    assert gpt_image.metadata is not None
+    gpt_image_model = gpt_image.metadata['model']
+    assert gpt_image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
+    assert 'configSchema' not in gpt_image_model
+
     # Verify we have both models and embedders
     model_actions = [a for a in result if a.kind == ActionKind.MODEL]
     embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
@@ -73,6 +79,7 @@ async def test_openai_plugin_list_actions() -> None:
         Model(id='gpt-4-0613', created=1686588896, object='model', owned_by='openai'),
         Model(id='gpt-4', created=1687882411, object='model', owned_by='openai'),
         Model(id='gpt-3.5-turbo', created=1677610602, object='model', owned_by='openai'),
+        Model(id='gpt-image-1', created=1744060800, object='model', owned_by='openai'),
         Model(id='o4-mini-deep-research-2025-06-26', created=1750866121, object='model', owned_by='system'),
         Model(id='codex-mini-latest', created=1746673257, object='model', owned_by='system'),
         Model(id='text-embedding-ada-002', created=1671217299, object='model', owned_by='openai-internal'),
@@ -101,6 +108,12 @@ async def test_openai_plugin_list_actions() -> None:
     chat_props = chat.metadata['model']['customOptions']['properties']
     assert 'frequencyPenalty' in chat_props
     assert 'maxTokens' in chat_props
+
+    image = next(a for a in actions if a.name == 'openai/gpt-image-1')
+    assert image.metadata is not None
+    image_model = image.metadata['model']
+    assert image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
+    assert 'configSchema' not in image_model
 
     embed = next(a for a in actions if a.name == 'openai/text-embedding-ada-002')
     assert embed.metadata is not None
