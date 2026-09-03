@@ -463,6 +463,10 @@ async def test_generate_classifies_bad_config_type() -> None:
         ),
         (
             None,
+            OpenAIConfig(),
+        ),
+        (
+            42,
             Exception(),
         ),
     ],
