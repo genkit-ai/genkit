@@ -454,4 +454,220 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(resp1.custom.contextCompression.messagesAfter, 2);
     assert.strictEqual(resp2.custom?.contextCompression, undefined);
   });
+
+  it('compresses tool responses with deduplication and truncation', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'A'.repeat(500)}`
+    );
+
+    const pm = ai.defineModel({ name: 'loopModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'test' } } },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'test' } } },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'Search multiple times',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'finished');
+    assert.strictEqual(capturedRequests.length, 3);
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.ok(toolMessages.length >= 2);
+    const firstToolOutput = toolMessages[0].content[0].toolResponse?.output;
+    assert.match(String(firstToolOutput), /Deduplicated/);
+  });
+
+  it('deduplicates tool responses by correlating tool call IDs (ref) to tool inputs', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'A'.repeat(200)}`
+    );
+
+    const pm = ai.defineModel({ name: 'refDedupModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  ref: 'call_unique_1',
+                  input: { query: 'same-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  ref: 'call_unique_2', // Distinct call id, but identical tool input
+                  input: { query: 'same-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'Search multiple times with refs',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'finished');
+    assert.strictEqual(capturedRequests.length, 3);
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.ok(toolMessages.length >= 2);
+    const firstToolOutput = toolMessages[0].content[0].toolResponse?.output;
+    assert.match(String(firstToolOutput), /Deduplicated/);
+  });
+
+  it('preserves distinct calls with different arguments when matchBy is name-and-input', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'B'.repeat(50)}`
+    );
+
+    const pm = ai.defineModel({ name: 'distinctArgsModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'first-query' } } },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'second-query' } } },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      prompt: 'Search with distinct queries',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+        }),
+      ],
+    });
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.strictEqual(toolMessages.length, 2);
+    // Neither should be deduplicated because arguments differ
+    assert.strictEqual(String(toolMessages[0].content[0].toolResponse?.output).includes('Deduplicated'), false);
+    assert.strictEqual(String(toolMessages[1].content[0].toolResponse?.output).includes('Deduplicated'), false);
+  });
 });
