@@ -1295,12 +1295,13 @@ function defineGatedResearcher(
   opts: {
     text?: string;
     artifacts?: { name: string; parts: { text: string }[] }[];
-    finishReason?: 'stop' | 'failed';
+    finishReason?: 'stop' | 'failed' | 'aborted';
     onAbort?: () => void;
+    store?: InMemorySessionStore;
   } = {}
 ) {
   return ai.defineCustomAgent(
-    { name, store: new InMemorySessionStore() },
+    { name, store: opts.store ?? new InMemorySessionStore() },
     async (sess, { abortSignal }) => {
       await sess.run(async () => {
         await Promise.race([
@@ -1514,6 +1515,43 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(task.response, undefined);
   });
 
+  it('reports a task that committed as aborted under that status', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // The turn commits (the row is `completed`) but declares `aborted`.
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      text: 'stopped early',
+      finishReason: 'aborted',
+    });
+    const orchestrator = ai.defineModel(
+      { name: 'orch-aborted-reason-' + Math.random() },
+      async (req) => {
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          gate.release();
+          return toolRequest(WAIT_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    const task = wait.tasks[0];
+    assert.strictEqual(task.status, 'aborted');
+    assert.match(task.error, /stopped early/);
+    assert.strictEqual(task.response, undefined);
+  });
+
   it('reports a settled task on a deadline that beats the follow', async () => {
     const ai = genkit({});
     const researcher = defineGatedResearcher(
@@ -1540,6 +1578,30 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(out.tasks[0].status, 'completed');
     assert.strictEqual(out.tasks[0].response, 'research complete');
     assert.strictEqual(out.timedOut, undefined);
+  });
+
+  it('says when an abort cannot reach the worker', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // A store without a change feed: the runtime can flip the row but has no
+    // way to signal the worker, and publishes the agent as not abortable.
+    const store = new InMemorySessionStore();
+    Object.defineProperty(store, 'onSnapshotStateChange', { value: undefined });
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened, {
+      store,
+    });
+    const task = await researcher.chat().detach('dig');
+
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
+    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
+    assert.strictEqual(out.tasks[0].status, 'aborted');
+    assert.match(out.tasks[0].error, /cannot signal its worker/);
+    gate.release();
   });
 
   it('does not advertise task handles on a synchronous instance', async () => {

@@ -517,6 +517,15 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         return agent.__action?.metadata?.agent?.stateManagement;
       }
 
+      /**
+       * Whether the agent's store can signal a running worker to stop, from
+       * its action metadata; undefined when the agent publishes none.
+       */
+      function abortableOf(agent: Agent): boolean | undefined {
+        const abortable = agent.__action?.metadata?.agent?.abortable;
+        return typeof abortable === 'boolean' ? abortable : undefined;
+      }
+
       // -- Schemas ------------------------------------------------------------
 
       const inlineArtifactSchema = z.object({
@@ -1162,8 +1171,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               // outcome the reader has to act on, not the row's bookkeeping:
               // a model that sees "completed" moves on and never reads the
               // error. Which reason it was, and what the agent last said, is
-              // in the folded text.
-              report.status = 'failed';
+              // in the folded text. An aborted turn keeps its own status.
+              report.status =
+                snapshot.finishReason === 'aborted' ? 'aborted' : 'failed';
               report.error = folded.response;
             }
             break;
@@ -1176,7 +1186,16 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             );
             break;
           case 'aborted':
-            report.error = 'The task was aborted before it finished.';
+            // The runtime stops a worker through its store's change feed.
+            // Where the store has none, the flip still lands and the run's
+            // result is discarded, but the worker itself is not reached; say
+            // so, or a model that aborted to save cost would assume it did.
+            report.error =
+              abortableOf(agent) === false
+                ? 'The task was marked aborted and its result is discarded, ' +
+                  "but this agent's store cannot signal its worker, so the " +
+                  'work may run to completion.'
+                : 'The task was aborted before it finished.';
             break;
           case 'expired':
             report.error =
