@@ -84,8 +84,44 @@ export interface AgentAPI<State = unknown> {
     lookup: string | SnapshotLookup
   ): Promise<SessionSnapshot<State> | undefined>;
 
+  /**
+   * Blocks until a snapshot settles (`completed`, `failed`, `aborted`, or
+   * `expired`) and returns it, or `undefined` when no such snapshot exists.
+   * Requires a server store. The blocking counterpart of {@link getSnapshot}:
+   * the waiting happens next to the store, so a caller follows a detached turn
+   * in one call instead of a read per tick. Bound the wait with
+   * `abortSignal` (e.g. `AbortSignal.timeout(ms)`); on abort the promise
+   * rejects with the signal's reason and {@link getSnapshot} then reports where
+   * the snapshot stands.
+   */
+  waitForSnapshot(
+    snapshotId: string,
+    opts?: WaitForSnapshotOptions
+  ): Promise<SessionSnapshot<State> | undefined>;
+
   /** Aborts a running snapshot. Requires a server store. */
   abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
+}
+
+/**
+ * Options for waiting on a snapshot ({@link AgentAPI.waitForSnapshot},
+ * {@link DetachedTask.wait}).
+ */
+export interface WaitForSnapshotOptions {
+  /**
+   * Ends the wait early. The promise rejects with the signal's reason (an
+   * `AbortError`, or a `TimeoutError` from `AbortSignal.timeout`), and the
+   * snapshot keeps whatever status it has.
+   */
+  abortSignal?: AbortSignal;
+  /**
+   * How often (ms) the wait re-reads the snapshot. In process it is the
+   * cadence at which a wait re-reads a pending snapshot to notice a stale
+   * heartbeat or, on a store without change notifications, a settled row;
+   * over a transport that cannot wait server-side it is the polling interval.
+   * Defaults to the transport's own cadence.
+   */
+  intervalMs?: number;
 }
 
 /**
@@ -228,8 +264,15 @@ export interface DetachedTask<State = unknown> {
   /** Yields status until a terminal state. */
   poll(opts?: { intervalMs?: number }): AsyncIterable<SessionSnapshot<State>>;
 
-  /** Resolves when the task reaches a terminal state. */
-  wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>>;
+  /**
+   * Resolves with the terminal snapshot once the task settles. A task that
+   * failed, aborted, or expired still resolves with its snapshot (inspect
+   * `status` and `error`), so a rejection means the wait itself could not
+   * proceed: the snapshot is gone, or `abortSignal` ended the wait. The wait
+   * runs server-side where the transport supports it and falls back to
+   * polling {@link AgentTransport.getSnapshot} otherwise.
+   */
+  wait(opts?: WaitForSnapshotOptions): Promise<SessionSnapshot<State>>;
 
   /** Aborts the task. */
   abort(): Promise<SessionSnapshot['status'] | undefined>;
@@ -298,6 +341,17 @@ export interface AgentTransport {
     lookup: SnapshotLookup
   ): Promise<SessionSnapshot<any> | undefined>;
 
+  /**
+   * Blocks until a snapshot settles and returns it (`undefined` when it does
+   * not exist). Optional: a transport that cannot wait server-side omits it,
+   * and {@link AgentAPI.waitForSnapshot} / {@link DetachedTask.wait} then poll
+   * {@link getSnapshot} instead.
+   */
+  waitForSnapshot?(
+    snapshotId: string,
+    opts?: WaitForSnapshotOptions
+  ): Promise<SessionSnapshot<any> | undefined>;
+
   /** Aborts a running snapshot. Requires a server store. */
   abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
 }
@@ -309,8 +363,56 @@ const TERMINAL_STATUSES = new Set([
   'expired',
 ]);
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Sleeps for `ms`, rejecting with the signal's reason if `signal` aborts
+ * first.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Waits for a snapshot to settle through `transport`: server-side where the
+ * transport supports it, otherwise by polling {@link AgentTransport.getSnapshot}
+ * every `intervalMs` (default 1s). Resolves `undefined` when the snapshot does
+ * not exist, and rejects with the signal's reason when `abortSignal` ends the
+ * wait first.
+ */
+async function waitForSnapshotViaTransport<State>(
+  transport: AgentTransport,
+  snapshotId: string,
+  opts?: WaitForSnapshotOptions
+): Promise<SessionSnapshot<State> | undefined> {
+  if (transport.waitForSnapshot) {
+    return transport.waitForSnapshot(snapshotId, opts) as Promise<
+      SessionSnapshot<State> | undefined
+    >;
+  }
+  const intervalMs = opts?.intervalMs ?? 1000;
+  while (true) {
+    opts?.abortSignal?.throwIfAborted();
+    const snap = (await transport.getSnapshot({ snapshotId })) as
+      | SessionSnapshot<State>
+      | undefined;
+    if (!snap || (snap.status && TERMINAL_STATUSES.has(snap.status))) {
+      return snap;
+    }
+    await sleep(intervalMs, opts?.abortSignal);
+  }
 }
 
 function toAgentInput(input: string | AgentInput): AgentInput {
@@ -582,17 +684,16 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
     }
   }
 
-  async wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>> {
-    let last: SessionSnapshot<State> | undefined;
-    for await (const snap of this.poll(opts)) {
-      last = snap;
+  async wait(opts?: WaitForSnapshotOptions): Promise<SessionSnapshot<State>> {
+    const snap = await waitForSnapshotViaTransport<State>(
+      this.transport,
+      this.snapshotId,
+      opts
+    );
+    if (!snap) {
+      throw new Error(`Snapshot ${this.snapshotId} not found.`);
     }
-    if (!last) {
-      throw new Error(
-        `Detached task ${this.snapshotId} did not produce a snapshot.`
-      );
-    }
-    return last;
+    return snap;
   }
 
   abort(): Promise<SessionSnapshot['status'] | undefined> {
@@ -999,8 +1100,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
 /**
  * Composes the {@link AgentAPI} surface (`chat`/`loadChat`/`getSnapshot`/
- * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent
- * and the HTTP `remoteAgent`.
+ * `waitForSnapshot`/`abort`) over a {@link AgentTransport}. Shared by the
+ * in-process server agent and the HTTP `remoteAgent`.
  */
 export function createAgentAPI<State = unknown>(
   transport: AgentTransport
@@ -1032,6 +1133,13 @@ export function createAgentAPI<State = unknown>(
       return transport.getSnapshot(normalized) as Promise<
         SessionSnapshot<State> | undefined
       >;
+    },
+
+    waitForSnapshot(
+      snapshotId: string,
+      opts?: WaitForSnapshotOptions
+    ): Promise<SessionSnapshot<State> | undefined> {
+      return waitForSnapshotViaTransport<State>(transport, snapshotId, opts);
     },
 
     abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined> {

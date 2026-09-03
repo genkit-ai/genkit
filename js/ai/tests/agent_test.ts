@@ -23,13 +23,18 @@ import { describe, it } from 'node:test';
 
 import { GenkitError, z } from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
-import { AgentError } from '../src/agent-core.js';
+import {
+  AgentError,
+  createAgentAPI,
+  type AgentTransport,
+} from '../src/agent-core.js';
 import {
   AgentStreamChunk,
   SessionRunner,
   defineAgent,
   defineCustomAgent,
   definePromptAgent,
+  type Agent,
 } from '../src/agent.js';
 import { definePrompt } from '../src/prompt.js';
 import { InMemorySessionStore } from '../src/session-stores.js';
@@ -37,6 +42,7 @@ import {
   Session,
   reserveSnapshotId,
   type SessionSnapshot,
+  type SessionStore,
 } from '../src/session.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import {
@@ -2261,6 +2267,349 @@ describe('Agent', () => {
       assert.strictEqual(processedCount, 2);
 
       session.close();
+    });
+  });
+
+  describe('waitForSnapshot', () => {
+    type S = { foo: string };
+
+    /**
+     * Defines a store-backed custom agent whose turn blocks until `release()`
+     * is called (or the invocation is aborted), so a detached invocation stays
+     * pending for exactly as long as a test needs.
+     */
+    function defineGatedAgent(name: string, store: SessionStore<S>) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const agent = defineCustomAgent<S>(
+        new Registry(),
+        { name, store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            await Promise.race([
+              gate,
+              new Promise<never>((_, reject) =>
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('aborted')),
+                  { once: true }
+                )
+              ),
+            ]);
+            sess.addMessages([{ role: 'model', content: [{ text: 'done' }] }]);
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+      return { agent, release };
+    }
+
+    /** Starts a detached invocation and returns its pending snapshot id. */
+    async function detach(agent: Agent<S>): Promise<string> {
+      const session = agent.streamBidi({});
+      session.send({
+        message: { role: 'user', content: [{ text: 'hi' }] },
+        detach: true,
+      });
+      session.close();
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'detached');
+      assert.ok(output.snapshotId);
+      return output.snapshotId!;
+    }
+
+    it('returns an already-settled snapshot without waiting', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitSettled', store);
+      release();
+      const chat = agent.chat();
+      await chat.send('hi');
+      const snapshotId = chat.snapshotId!;
+
+      const snap = await agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(snap?.snapshotId, snapshotId);
+      assert.strictEqual(snap?.status, 'completed');
+    });
+
+    it('follows a pending detached snapshot until it settles', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitPending', store);
+      const snapshotId = await detach(agent);
+
+      let settled = false;
+      const waiting = agent.waitForSnapshotData({ snapshotId }).then((snap) => {
+        settled = true;
+        return snap;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.strictEqual(settled, false, 'the wait must block while pending');
+      const raw = await store.getSnapshot({ snapshotId });
+      assert.strictEqual(raw?.status, 'pending');
+
+      release();
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'completed');
+      const messages = snap?.state?.messages ?? [];
+      assert.strictEqual(
+        messages[messages.length - 1]?.content[0].text,
+        'done'
+      );
+    });
+
+    it('resolves with the aborted snapshot when the task is aborted', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitAborted', store);
+      const snapshotId = await detach(agent);
+
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(await agent.abort(snapshotId), 'pending');
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'aborted');
+    });
+
+    it('polls a store that cannot push status changes', async () => {
+      const base = new InMemorySessionStore<S>();
+      // The same store minus `onSnapshotStateChange`: the wait has to notice
+      // the settled row by re-reading it.
+      const store: SessionStore<S> = {
+        getSnapshot: (opts) => base.getSnapshot(opts),
+        saveSnapshot: (id, mutator, options) =>
+          base.saveSnapshot(id, mutator, options),
+      };
+      const { agent, release } = defineGatedAgent('waitPolling', store);
+      const snapshotId = await detach(agent);
+
+      const waiting = agent.waitForSnapshotData({
+        snapshotId,
+        pollIntervalMs: 5,
+      });
+      release();
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'completed');
+    });
+
+    it('reports a pending snapshot whose heartbeat went stale as expired', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitExpired', store);
+      const stale = new Date(Date.now() - 120_000).toISOString();
+      const snapshotId = await store.saveSnapshot(undefined, () => ({
+        createdAt: stale,
+        updatedAt: stale,
+        heartbeatAt: stale,
+        status: 'pending',
+        state: { sessionId: 'sess-expired' },
+      }));
+
+      // Expiry is computed on read, so the wait settles on its first read.
+      const snap = await agent.waitForSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(snap?.status, 'expired');
+    });
+
+    it('notices a heartbeat that goes stale while waiting', async () => {
+      // A row that reads as fresh once and stale afterwards, on a store that
+      // cannot notify: only the liveness re-read can see the worker die.
+      const fresh = new Date().toISOString();
+      const stale = new Date(Date.now() - 120_000).toISOString();
+      let reads = 0;
+      const store: SessionStore<S> = {
+        async getSnapshot({ snapshotId }) {
+          reads++;
+          return {
+            snapshotId: snapshotId!,
+            createdAt: fresh,
+            status: 'pending',
+            heartbeatAt: reads === 1 ? fresh : stale,
+          };
+        },
+        async saveSnapshot() {
+          throw new Error('unused');
+        },
+      };
+      const { agent } = defineGatedAgent('waitGoesStale', store);
+
+      const snap = await agent.waitForSnapshotData({
+        snapshotId: 'row',
+        pollIntervalMs: 5,
+      });
+      assert.strictEqual(snap?.status, 'expired');
+      assert.strictEqual(reads, 2);
+    });
+
+    it('returns undefined for a missing snapshot and NOT_FOUND via the companion action', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitMissing', store);
+
+      assert.strictEqual(
+        await agent.waitForSnapshotData({ snapshotId: 'nope' }),
+        undefined
+      );
+      await assert.rejects(
+        agent.waitForSnapshotAction({ snapshotId: 'nope' }),
+        (e: any) => e.status === 'NOT_FOUND'
+      );
+      // The action takes getSnapshot's request but requires the snapshot id:
+      // a session's latest snapshot can change under a wait.
+      await assert.rejects(
+        agent.waitForSnapshotAction({ sessionId: 'some-session' }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+    });
+
+    it('requires a store', async () => {
+      const agent = defineCustomAgent<S>(
+        new Registry(),
+        { name: 'waitNoStore' },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { artifacts: [] };
+        }
+      );
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId: 'x' }),
+        (e: any) => e.status === 'FAILED_PRECONDITION'
+      );
+    });
+
+    it('ends the wait when the abort signal fires and leaves the snapshot pending', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitAbortSignal', store);
+      const snapshotId = await detach(agent);
+
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId,
+          abortSignal: AbortSignal.timeout(20),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+      const pending = await agent.getSnapshotData({ snapshotId });
+      assert.strictEqual(pending?.status, 'pending');
+
+      release();
+      const settled = await agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(settled?.status, 'completed');
+    });
+
+    it('rides out transient read failures and surfaces dead ends at once', async () => {
+      const base = new InMemorySessionStore<S>();
+      let failures: unknown[] = [];
+      const store: SessionStore<S> = {
+        getSnapshot(opts) {
+          const failure = failures.shift();
+          return failure ? Promise.reject(failure) : base.getSnapshot(opts);
+        },
+        saveSnapshot: (id, mutator, options) =>
+          base.saveSnapshot(id, mutator, options),
+        onSnapshotStateChange: (id, callback, options) =>
+          base.onSnapshotStateChange(id, callback, options),
+      };
+      const { agent, release } = defineGatedAgent('waitFlaky', store);
+      release();
+      const chat = agent.chat();
+      await chat.send('hi');
+      const snapshotId = chat.snapshotId!;
+
+      // Two blips, then the settled row.
+      failures = [new Error('blip'), new Error('blip')];
+      const snap = await agent.waitForSnapshotData({
+        snapshotId,
+        pollIntervalMs: 5,
+      });
+      assert.strictEqual(snap?.status, 'completed');
+
+      // A rejected request is a dead end: no retry, the error surfaces as is.
+      failures = [
+        new GenkitError({ status: 'INVALID_ARGUMENT', message: 'bad' }),
+      ];
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId, pollIntervalMs: 5 }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+
+      // Past the retry budget the failure surfaces too.
+      failures = Array.from({ length: 5 }, () => new Error('down'));
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId, pollIntervalMs: 5 }),
+        /down/
+      );
+      assert.strictEqual(failures.length, 1, 'four consecutive failures');
+    });
+
+    it('waits through the chat surface (DetachedTask.wait, AgentAPI.waitForSnapshot)', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitChat', store);
+      const chat = agent.chat();
+      const task = await chat.detach('hi');
+
+      const waiting = task.wait();
+      release();
+      assert.strictEqual((await waiting).status, 'completed');
+      const again = await agent.waitForSnapshot(task.snapshotId);
+      assert.strictEqual(again?.status, 'completed');
+    });
+
+    it('falls back to polling when the transport cannot wait server-side', async () => {
+      const statuses: SessionSnapshot['status'][] = [
+        'pending',
+        'pending',
+        'completed',
+      ];
+      let reads = 0;
+      const snapshot = (
+        status: SessionSnapshot['status']
+      ): SessionSnapshot => ({
+        snapshotId: 'x',
+        createdAt: '2026',
+        status,
+      });
+      const transport: AgentTransport = {
+        runTurn() {
+          throw new Error('unused');
+        },
+        async getSnapshot() {
+          reads++;
+          return snapshot(statuses.shift() ?? 'completed');
+        },
+        async abort() {
+          return undefined;
+        },
+      };
+
+      const api = createAgentAPI(transport);
+      const snap = await api.waitForSnapshot('x', { intervalMs: 1 });
+      assert.strictEqual(snap?.status, 'completed');
+      assert.strictEqual(reads, 3);
+
+      // A missing snapshot resolves undefined rather than polling forever.
+      const missing = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return undefined;
+        },
+      });
+      assert.strictEqual(await missing.waitForSnapshot('gone'), undefined);
+
+      // The abort signal ends a polling wait too.
+      const stuck = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return snapshot('pending');
+        },
+      });
+      await assert.rejects(
+        stuck.waitForSnapshot('x', {
+          intervalMs: 1,
+          abortSignal: AbortSignal.timeout(10),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
     });
   });
 

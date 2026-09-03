@@ -412,7 +412,8 @@ export interface SessionSnapshot<S = unknown> {
 
 /**
  * Schema for the input of an agent's `getSnapshot` companion action. Provide
- * exactly one of `snapshotId` or `sessionId`.
+ * exactly one of `snapshotId` or `sessionId`. The `waitForSnapshot` companion
+ * action takes the same request but requires `snapshotId`.
  */
 export const GetSnapshotRequestSchema = z.object({
   snapshotId: z.string().optional(),
