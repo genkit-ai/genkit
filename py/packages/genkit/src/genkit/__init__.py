@@ -77,6 +77,7 @@ from genkit._core._typing import (
 
 # Import embedder-related types from the embedder namespace
 from genkit.embedder import (
+    EmbedderInfo,
     EmbedderOptions,
     EmbedderRef,
     Embedding,
@@ -113,6 +114,7 @@ __all__ = [
     'StreamResponse',
     'EmbedRequest',
     'EmbedResponse',
+    'EmbedderInfo',
     'EmbedderOptions',
     'EmbedderRef',
     'ModelConfigDict',

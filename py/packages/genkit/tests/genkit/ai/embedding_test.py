@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from genkit import Document, Genkit
 from genkit._ai._embedding import (
+    EmbedderInfo,
     EmbedderOptions,
     EmbedderSupports,
     create_embedder_ref,
@@ -36,12 +37,17 @@ from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, Embedding, EmbedRequest, EmbedResponse
 
 
+def test_embedder_options_is_embedder_info() -> None:
+    """The catalog card is EmbedderInfo; EmbedderOptions is the same type."""
+    assert EmbedderOptions is EmbedderInfo
+
+
 def test_embedder_action_metadata() -> None:
-    """Test for embedder_action_metadata with basic options."""
-    options = EmbedderOptions(label='Test Embedder', dimensions=128)
+    """Test for embedder_action_metadata with a catalog card."""
+    info = EmbedderInfo(label='Test Embedder', dimensions=128)
     action_metadata = embedder_action_metadata(
         name='test_model',
-        options=options,
+        info=info,
     )
 
     assert isinstance(action_metadata, ActionMetadata)
@@ -49,8 +55,8 @@ def test_embedder_action_metadata() -> None:
     assert action_metadata.output_json_schema is not None
     assert action_metadata.metadata == {
         'embedder': {
-            'label': options.label,
-            'dimensions': options.dimensions,
+            'label': info.label,
+            'dimensions': info.dimensions,
             'customOptions': None,
         }
     }
@@ -63,7 +69,7 @@ def test_embedder_action_metadata_with_supports_and_config_schema() -> None:
         param1: str
         param2: int
 
-    options = EmbedderOptions(
+    info = EmbedderInfo(
         label='Advanced Embedder',
         dimensions=256,
         supports=EmbedderSupports(input=['text', 'image']),
@@ -71,14 +77,14 @@ def test_embedder_action_metadata_with_supports_and_config_schema() -> None:
     )
     action_metadata = embedder_action_metadata(
         name='advanced_model',
-        options=options,
+        info=info,
     )
     assert isinstance(action_metadata, ActionMetadata)
     assert action_metadata.metadata is not None
     metadata = action_metadata.metadata
     embedder_meta = cast(dict[str, Any], metadata['embedder'])
     assert embedder_meta['label'] == 'Advanced Embedder'
-    assert embedder_meta['dimensions'] == options.dimensions
+    assert embedder_meta['dimensions'] == info.dimensions
     assert embedder_meta['supports'] == {
         'input': ['text', 'image'],
     }
@@ -220,7 +226,7 @@ async def test_embed_with_embedder_ref(
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
         return EmbedResponse(embeddings=[Embedding(embedding=[1.0, 2.0, 3.0])])
 
-    embedder_options = EmbedderOptions(
+    embedder_info = EmbedderInfo(
         label='Fake Embedder',
         dimensions=3,
         supports=EmbedderSupports(input=['text']),
@@ -230,7 +236,7 @@ async def test_embed_with_embedder_ref(
         name='my-plugin/my-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('my-plugin/my-embedder', options=embedder_options).metadata,
+        metadata=embedder_action_metadata('my-plugin/my-embedder', info=embedder_info).metadata,
         description='A fake embedder for testing',
     )
     embedder_ref = create_embedder_ref('my-plugin/my-embedder', config={'param': 'value'}, version='v1')
@@ -262,12 +268,12 @@ async def test_embed_with_string_name_and_options(
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
         return EmbedResponse(embeddings=[Embedding(embedding=[4.0, 5.0, 6.0])])
 
-    embedder_options = EmbedderOptions(label='Another Fake', dimensions=3)
+    embedder_info = EmbedderInfo(label='Another Fake', dimensions=3)
     registry.register_action(
         name='another-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('another-embedder', options=embedder_options).metadata,
+        metadata=embedder_action_metadata('another-embedder', info=embedder_info).metadata,
         description='Another fake embedder',
     )
 

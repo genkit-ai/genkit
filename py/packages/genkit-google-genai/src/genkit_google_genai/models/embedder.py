@@ -30,7 +30,7 @@ from google.genai import types as genai_types
 
 from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
 from genkit._core._typing import DocumentData, MediaPart, TextPart
-from genkit.embedder import EmbedderOptions, EmbedderSupports
+from genkit.embedder import EmbedderInfo, EmbedderSupports
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 
@@ -113,8 +113,8 @@ def _base_name(name: str) -> str:
     return name.split('@', 1)[0]
 
 
-def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderOptions:
-    """Return EmbedderOptions metadata for a discovered embedder model.
+def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderInfo:
+    """Return catalog info for a discovered embedder model.
 
     Args:
         name: The bare (unprefixed) model name, e.g. 'gemini-embedding-2'.
@@ -122,14 +122,14 @@ def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> Embe
         is_vertex: True when resolving for the Vertex backend.
 
     Returns:
-        EmbedderOptions describing the model's label, supported inputs and
+        EmbedderInfo describing the model's label, supported inputs and
         static dimensions.
     """
     base = _base_name(name)
     supports_map = VERTEX_EMBEDDER_INPUT_SUPPORTS if is_vertex else GOOGLEAI_EMBEDDER_INPUT_SUPPORTS
     supports = supports_map.get(name) or supports_map.get(base) or ['text']
     dimensions = EMBEDDER_DIMENSIONS.get(name) or EMBEDDER_DIMENSIONS.get(base)
-    return EmbedderOptions(
+    return EmbedderInfo(
         label=label,
         supports=EmbedderSupports(input=supports),
         dimensions=dimensions,

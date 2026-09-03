@@ -24,7 +24,7 @@ from openai import AsyncOpenAI
 from openai.types import Model
 
 from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder, embedder_action_metadata
+from genkit.embedder import EmbedderInfo, EmbedderSupports, embedder, embedder_action_metadata
 from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
@@ -499,7 +499,7 @@ class OpenAI(Plugin):
             embed_fn,
             metadata=embedder_action_metadata(
                 name=name,
-                options=EmbedderOptions(
+                info=EmbedderInfo(
                     label=embedder_info['label'],
                     supports=EmbedderSupports(input=embedder_info['supports']['input']),
                     dimensions=embedder_info.get('dimensions'),
@@ -531,7 +531,7 @@ class OpenAI(Plugin):
                 actions.append(
                     embedder_action_metadata(
                         name=open_ai_name(name),
-                        options=EmbedderOptions(
+                        info=EmbedderInfo(
                             label=f'OpenAI Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),
                         ),

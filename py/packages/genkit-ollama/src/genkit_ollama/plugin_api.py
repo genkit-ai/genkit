@@ -27,7 +27,7 @@ import structlog
 
 from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import (
-    EmbedderOptions,
+    EmbedderInfo,
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
@@ -392,7 +392,7 @@ class Ollama(Plugin):
         return create_embedder(
             name,
             _run,
-            options=EmbedderOptions(
+            info=EmbedderInfo(
                 label=f'Ollama Embedding - {clean_name}',
                 dimensions=embedder_ref.dimensions,
                 supports=EmbedderSupports(input=['text']),
@@ -423,7 +423,7 @@ class Ollama(Plugin):
                 actions.append(
                     embedder_action_metadata(
                         name=ollama_name(name),
-                        options=EmbedderOptions(
+                        info=EmbedderInfo(
                             config_schema=to_json_schema(ollama_api.Options),
                             label=f'Ollama Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),

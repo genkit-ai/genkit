@@ -30,6 +30,7 @@ Example:
 """
 
 from genkit._ai._embedding import (
+    EmbedderInfo,
     EmbedderOptions,
     EmbedderRef,
     EmbedderSupports,
@@ -56,5 +57,6 @@ __all__ = [
     'EmbedderRef',
     # Options and capabilities
     'EmbedderSupports',
+    'EmbedderInfo',
     'EmbedderOptions',
 ]

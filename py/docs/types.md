@@ -70,6 +70,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.EmbedderRef
 
+::: genkit.EmbedderInfo
+
 ::: genkit.EmbedderOptions
 
 ::: genkit.Embedding
@@ -151,6 +153,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 ::: genkit.embedder.EmbedderRef
 
 ::: genkit.embedder.EmbedderSupports
+
+::: genkit.embedder.EmbedderInfo
 
 ::: genkit.embedder.EmbedderOptions
 

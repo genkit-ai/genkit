@@ -327,7 +327,7 @@ def _create_embedder_action(
     label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
     action_metadata = embedder_action_metadata(
         name=full_name,
-        options=get_embedder_options(
+        info=get_embedder_options(
             name=clean_name,
             label=label,
             is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
@@ -837,7 +837,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=googleai_name(name),
-                    options=get_embedder_options(
+                    info=get_embedder_options(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[GOOGLEAI_PLUGIN_NAME]} - {name}',
                     ),
@@ -1271,7 +1271,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=vertexai_name(name),
-                    options=get_embedder_options(
+                    info=get_embedder_options(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
                         is_vertex=True,

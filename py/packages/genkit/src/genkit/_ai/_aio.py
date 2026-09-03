@@ -44,7 +44,7 @@ from genkit._ai._agents._base import (
 from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, StateT, get_current_session
 from genkit._ai._agents._types import ChunkTransform, StateTransform
-from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
+from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
     EvaluatorFn,
@@ -472,12 +472,12 @@ class Genkit:
         self,
         name: str,
         fn: EmbedderFn,
-        options: EmbedderOptions | None = None,
+        info: EmbedderInfo | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> Action:
         """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, options, metadata, description)
+        return define_embedder(self.registry, name, fn, info, metadata, description)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""

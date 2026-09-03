@@ -47,7 +47,7 @@ from genkit import MediaPart, TextPart
 # DocumentData has no public re-export yet; the embedder protocol is built on it.
 from genkit._core._typing import DocumentData
 from genkit.embedder import (
-    EmbedderOptions,
+    EmbedderInfo,
     EmbedderSupports,
     Embedding,
     EmbedRequest,
@@ -97,20 +97,20 @@ _FAMILY_INPUTS: dict[EmbeddingFamily, tuple[str, ...]] = {
 }
 
 
-class EmbedderInfo(NamedTuple):
+class _PublishedEmbedder(NamedTuple):
     """Published capabilities of a Bedrock embedding model."""
 
     dimensions: int
     input: tuple[str, ...]
 
 
-EMBEDDER_INFO: dict[str, EmbedderInfo] = {
-    'amazon.titan-embed-text-v1': EmbedderInfo(dimensions=1536, input=TEXT_ONLY),
-    'amazon.titan-embed-text-v2:0': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'amazon.titan-embed-image-v1': EmbedderInfo(dimensions=1024, input=TEXT_AND_IMAGE),
-    'cohere.embed-english-v3': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'cohere.embed-multilingual-v3': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'amazon.nova-2-multimodal-embeddings-v1:0': EmbedderInfo(dimensions=3072, input=TEXT_ONLY),
+EMBEDDER_INFO: dict[str, _PublishedEmbedder] = {
+    'amazon.titan-embed-text-v1': _PublishedEmbedder(dimensions=1536, input=TEXT_ONLY),
+    'amazon.titan-embed-text-v2:0': _PublishedEmbedder(dimensions=1024, input=TEXT_ONLY),
+    'amazon.titan-embed-image-v1': _PublishedEmbedder(dimensions=1024, input=TEXT_AND_IMAGE),
+    'cohere.embed-english-v3': _PublishedEmbedder(dimensions=1024, input=TEXT_ONLY),
+    'cohere.embed-multilingual-v3': _PublishedEmbedder(dimensions=1024, input=TEXT_ONLY),
+    'amazon.nova-2-multimodal-embeddings-v1:0': _PublishedEmbedder(dimensions=3072, input=TEXT_ONLY),
 }
 
 
@@ -159,7 +159,7 @@ def looks_like_embedding_model(model_id: str) -> bool:
     return 'embed' in strip_inference_profile_prefix(model_id)
 
 
-def get_embedder_options(model_id: str) -> EmbedderOptions:
+def get_embedder_options(model_id: str) -> EmbedderInfo:
     """Builds the Genkit embedder metadata for a Bedrock embedding model.
 
     Single source for both ``resolve`` and ``list_actions`` so the two can
@@ -169,7 +169,7 @@ def get_embedder_options(model_id: str) -> EmbedderOptions:
         model_id: Bedrock model ID, inference-profile ID, or ARN.
 
     Returns:
-        EmbedderOptions with registry dimensions, or unset dimensions and
+        EmbedderInfo with registry dimensions, or unset dimensions and
         family-default modalities for a routable ID that is not registered.
     """
     info = EMBEDDER_INFO.get(strip_inference_profile_prefix(model_id))
@@ -180,7 +180,7 @@ def get_embedder_options(model_id: str) -> EmbedderOptions:
         inputs = _FAMILY_INPUTS[family]
     else:
         inputs = TEXT_ONLY
-    return EmbedderOptions(
+    return EmbedderInfo(
         # The label keeps the prefix: it names what the caller asked for.
         label=model_label(model_id),
         dimensions=info.dimensions if info is not None else None,
