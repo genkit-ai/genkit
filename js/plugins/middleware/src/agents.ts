@@ -196,20 +196,12 @@ function carriesResult(reason?: AgentFinishReason): boolean {
 }
 
 /**
- * Whether a snapshot status is settled. `pending` is the only status that can
- * still change on its own; an absent status is the `completed` default.
+ * Whether a snapshot or task-report status can no longer change on its own,
+ * which is the rule the wait tool counts by. `pending` is the only status
+ * that can; an absent status is the `completed` default, and the report-only
+ * `unknown` is settled too (see {@link TASK_STATUS_UNKNOWN}).
  */
-function isTerminalStatus(status: SessionSnapshot['status']): boolean {
-  return status !== 'pending';
-}
-
-/**
- * Whether a task report's status can no longer change on its own, which is
- * the rule the wait tool counts by. Report statuses are the snapshot statuses
- * plus `unknown`, and `unknown` is settled too (see
- * {@link TASK_STATUS_UNKNOWN}).
- */
-function reportSettled(status: string): boolean {
+function isSettled(status: string | undefined): boolean {
   return status !== 'pending';
 }
 
@@ -930,24 +922,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         try {
           out = await runSubAgent(agent, task, { detach: true });
         } catch (e: unknown) {
-          // FAILED_PRECONDITION is how the runtime rejects a detach on an agent
-          // that cannot support it. Only a metadata-less agent reaches this
-          // (one that publishes metadata and cannot detach was refused above),
-          // and only this failure earns its slot back: the retry it points at
-          // is the synchronous launch. Every other failure keeps the slot.
-          if (
-            stateManagement === undefined &&
-            errorStatus(e) === 'FAILED_PRECONDITION'
-          ) {
-            releaseDelegation();
-            return {
-              response:
-                `Error calling agent '${ref.name}': ${errorMessage(e)} If this ` +
-                `agent has no session store, it cannot run in the background. ${withoutBackground}`,
-            };
-          }
-          return {
-            response: `Error calling agent '${ref.name}': ${errorMessage(e)}`,
+          // A thrown rejection (e.g. a schema parse error on `run`) carries
+          // the same status a graceful one does, so it takes the failed shape
+          // and is judged once below.
+          out = {
+            finishReason: 'failed',
+            error: { status: errorStatus(e), message: errorMessage(e) },
           };
         }
 
@@ -969,8 +949,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             };
           }
           case 'failed': {
-            // A graceful rejection carries the same status a thrown one does,
-            // and earns the same refund under the same conditions.
+            // FAILED_PRECONDITION is how the runtime rejects a detach on an
+            // agent that cannot support it. Only a metadata-less agent reaches
+            // this (one that publishes metadata and cannot detach was refused
+            // above), and only this failure earns its slot back: the retry it
+            // points at is the synchronous launch. Every other failure keeps
+            // the slot.
             const msg = subAgentFailureMessage(
               out.finishReason,
               out.error,
@@ -1032,7 +1016,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       // settled needs no abort at all and is answered from the row alone.
       const abortSnapshot: SnapshotFetch = async (agent, snapshotId) => {
         const current = await readSnapshotOnce(agent, snapshotId);
-        if (isTerminalStatus(current.status)) {
+        if (isSettled(current.status)) {
           return current;
         }
         const { result } = await agent.abortAgentAction.run({ snapshotId });
@@ -1166,7 +1150,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             // Fold the settled snapshot exactly as a synchronous delegation
             // folds its output, under the deterministic namespace of the run.
             // The response is what the sub-agent last said, not whatever the
-            // transcript happens to end on.
+            // transcript happens to end on. One caveat: this reads through
+            // the sub-agent's companion action, so a sub-agent with a
+            // `clientTransform.state` has already shaped what is read here,
+            // while the synchronous path sees the output unshaped.
             const folded = foldDelegationOutput(
               ref,
               {
@@ -1210,7 +1197,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // Expired is the one terminal read that can still change its mind:
         // the worker may be alive and merely slow to beat, so a later read can
         // find it settled properly. Everything else terminal is final.
-        if (isTerminalStatus(snapshotStatus) && snapshotStatus !== 'expired') {
+        if (isSettled(snapshotStatus) && snapshotStatus !== 'expired') {
           shared.settledReports.set(taskId, report);
         }
         return { report };
@@ -1237,11 +1224,17 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         return taskIds.map((id) => fetched.get(id)!);
       }
 
-      /** One report per task with a single fetch each; no waiting. */
+      /**
+       * One report per task with a single fetch each; no waiting. The body of
+       * the check and abort tools, and the wait tool's don't-wait path.
+       */
       async function reportTasks(
         taskIds: string[],
         fetch: SnapshotFetch
       ): Promise<BackgroundTasksResult> {
+        if (taskIds.length === 0) {
+          return { note: NO_TASK_IDS_NOTE };
+        }
         return {
           tasks: await collectReports(
             taskIds,
@@ -1324,7 +1317,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
 
         const reports = await collectReports(taskIds, async (taskId) => {
           const report = await awaitTask(taskId, controller.signal);
-          if (first && reportSettled(report.status)) {
+          if (first && isSettled(report.status)) {
             controller.abort(
               new DOMException('first task settled', 'AbortError')
             );
@@ -1336,7 +1329,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // the tool call rather than dressing it up as a settled result.
         toolSignal?.throwIfAborted();
 
-        const pending = reports.filter((r) => !reportSettled(r.status)).length;
+        const pending = reports.filter((r) => !isSettled(r.status)).length;
         if (pending === 0) {
           return { tasks: reports };
         }
@@ -1354,92 +1347,67 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         };
       }
 
-      /** A non-blocking background-task tool: one dispatch per task, then a report of where that left it. */
-      function taskReport(
-        input: z.infer<typeof backgroundTasksInputSchema>,
-        fetch: SnapshotFetch
-      ): Promise<BackgroundTasksResult> {
-        const taskIds = input.taskIds ?? [];
-        if (taskIds.length === 0) {
-          return Promise.resolve({ note: NO_TASK_IDS_NOTE });
-        }
-        return reportTasks(taskIds, fetch);
-      }
-
       // ── Per-agent delegation tools ────────────────────────────────────
 
       const delegationTools = agentRefs.map((ref) => {
         const toolName = makeToolName(prefix, ref.name);
         claimName(toolName, `agent '${ref.name}'`);
-        const staticDescription =
-          ref.description ?? `Delegates a task to the "${ref.name}" sub-agent.`;
-
-        if (async) {
-          return tool(
-            {
-              name: toolName,
-              description: staticDescription,
-              inputSchema: asyncDelegateInputSchema,
-              outputSchema: delegationResultSchema,
-            },
-            (input) =>
-              input.background
-                ? launchDelegation(ref, input.task)
-                : runDelegation(ref, input.task)
-          );
-        }
         return tool(
           {
             name: toolName,
-            description: staticDescription,
-            inputSchema: delegateInputSchema,
+            description:
+              ref.description ??
+              `Delegates a task to the "${ref.name}" sub-agent.`,
+            inputSchema: async ? asyncDelegateInputSchema : delegateInputSchema,
             outputSchema: delegationResultSchema,
           },
-          (input) => runDelegation(ref, input.task)
+          (input: z.infer<typeof asyncDelegateInputSchema>) =>
+            input.background
+              ? launchDelegation(ref, input.task)
+              : runDelegation(ref, input.task)
         );
       });
 
       // ── Shared background-task tools ──────────────────────────────────
 
-      const backgroundTools = async
-        ? (() => {
-            for (const name of Object.values(taskTools)) {
-              claimName(name, 'the background-task tools');
-            }
-            return [
-              tool(
-                {
-                  name: taskTools.check,
-                  description:
-                    'Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.',
-                  inputSchema: backgroundTasksInputSchema,
-                  outputSchema: backgroundTasksResultSchema,
-                },
-                (input) => taskReport(input, readSnapshotOnce)
-              ),
-              tool(
-                {
-                  name: taskTools.wait,
-                  description:
-                    'Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to "first" to return as soon as any one task settles.',
-                  inputSchema: waitBackgroundTasksInputSchema,
-                  outputSchema: backgroundTasksResultSchema,
-                },
-                (input, ctx) => waitForBackgroundTasks(input, ctx.abortSignal)
-              ),
-              tool(
-                {
-                  name: taskTools.abort,
-                  description:
-                    'Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.',
-                  inputSchema: backgroundTasksInputSchema,
-                  outputSchema: backgroundTasksResultSchema,
-                },
-                (input) => taskReport(input, abortSnapshot)
-              ),
-            ];
-          })()
-        : [];
+      function defineBackgroundTools() {
+        for (const name of Object.values(taskTools)) {
+          claimName(name, 'the background-task tools');
+        }
+        return [
+          tool(
+            {
+              name: taskTools.check,
+              description:
+                'Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.',
+              inputSchema: backgroundTasksInputSchema,
+              outputSchema: backgroundTasksResultSchema,
+            },
+            (input) => reportTasks(input.taskIds ?? [], readSnapshotOnce)
+          ),
+          tool(
+            {
+              name: taskTools.wait,
+              description:
+                'Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to "first" to return as soon as any one task settles.',
+              inputSchema: waitBackgroundTasksInputSchema,
+              outputSchema: backgroundTasksResultSchema,
+            },
+            (input, ctx) => waitForBackgroundTasks(input, ctx.abortSignal)
+          ),
+          tool(
+            {
+              name: taskTools.abort,
+              description:
+                'Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.',
+              inputSchema: backgroundTasksInputSchema,
+              outputSchema: backgroundTasksResultSchema,
+            },
+            (input) => reportTasks(input.taskIds ?? [], abortSnapshot)
+          ),
+        ];
+      }
+      const backgroundTools = async ? defineBackgroundTools() : [];
 
       return {
         tools: [...delegationTools, ...backgroundTools],
