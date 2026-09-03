@@ -41,3 +41,10 @@ class RealtimeSpanProcessor(SimpleSpanProcessor):
         if suppress_telemetry.get():
             return
         super().on_end(span)
+
+    @override
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Forward force_flush to exporter if supported (e.g. TraceServerExporter)."""
+        if hasattr(self.span_exporter, 'force_flush'):
+            return bool(self.span_exporter.force_flush(timeout_millis=timeout_millis))
+        return True

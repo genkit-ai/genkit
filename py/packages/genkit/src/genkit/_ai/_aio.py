@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import os
 import signal
@@ -105,6 +104,7 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
+from genkit._core._instrumentation import configure_instrumentation, run_in_new_span
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -112,12 +112,12 @@ from genkit._core._middleware import (
     _validate_middleware_key_segment,
 )
 from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT
+from genkit._core._otel_instrumentation import genkit_dev_instrumentation
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -188,6 +188,10 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
+        if is_dev_environment():
+            dev_instrumentation = genkit_dev_instrumentation()
+            if dev_instrumentation is not None:
+                configure_instrumentation(dev_instrumentation)
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
@@ -1690,23 +1694,10 @@ class Genkit:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError('fn must be a coroutine function')
 
-        span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
-        with run_in_new_span(span_metadata) as span:
-            try:
-                result = await fn()
-                output = (
-                    result.model_dump_json(by_alias=True, exclude_none=True)
-                    if isinstance(result, BaseModel)
-                    else json.dumps(result)
-                )
-                span.set_attribute('genkit:output', output)
-                return result
-            except Exception:
-                # We catch all exceptions here to ensure they are captured by
-                # the trace span context manager before being re-raised.
-                # The run_in_new_span context manager handles recording
-                # the exception details.
-                raise
+        async def body(_span: object) -> T:
+            return await fn()
+
+        return await run_in_new_span(name, body, action_type='flowStep', metadata=metadata)
 
     async def check_operation(self, operation: Operation) -> Operation:
         """Check the status of a long-running background operation."""

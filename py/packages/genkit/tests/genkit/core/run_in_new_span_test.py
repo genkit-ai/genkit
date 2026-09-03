@@ -26,9 +26,12 @@ from genkit import ActionKind, Genkit
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action
 from genkit._core._error import GenkitError
+from genkit._core._instrumentation import reset_instrumentation, run_in_new_span
+from genkit._core._otel_instrumentation import OtelInstrumentation, add_custom_exporter, start_attributes
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
-from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
+from genkit._core._tracing import SpanMetadata, _parent_path_context
+from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +46,7 @@ def _reset_parent_path() -> Generator[None, None, None]:
 
 @pytest.fixture
 def exporter() -> Generator[InMemorySpanExporter, None, None]:
-    """Provide an in-memory span exporter wired into the global tracer provider."""
+    """In-memory exporter plus the OTel renderer (default-off otherwise)."""
     provider = trace_api.get_tracer_provider()
     if not isinstance(provider, TracerProvider):
         provider = TracerProvider()
@@ -51,10 +54,19 @@ def exporter() -> Generator[InMemorySpanExporter, None, None]:
     exp = InMemorySpanExporter()
     processor = SimpleSpanProcessor(exp)
     provider.add_span_processor(processor)
+    reset_instrumentation()
+    configure_instrumentation(OtelInstrumentation(tracer_provider=provider))
     try:
         yield exp
     finally:
         exp.clear()
+        reset_instrumentation()
+
+
+def test_add_custom_exporter_does_not_register_renderer() -> None:
+    reset_instrumentation()
+    add_custom_exporter(InMemorySpanExporter(), 'test')
+    assert not is_instrumented_by(OtelInstrumentation)
 
 
 def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
@@ -68,10 +80,9 @@ def test_start_attributes_includes_input_excludes_outcome() -> None:
     attrs = start_attributes(
         SpanMetadata(
             name='myTool',
-            type='action',
+            action_type='action',
             subtype='tool',
             input='in',
-            output='out',
             is_root=True,
             metadata={'key': 'value'},
         ),
@@ -93,7 +104,7 @@ def test_start_attributes_includes_input_excludes_outcome() -> None:
 
 def test_start_attributes_json_input() -> None:
     attrs = start_attributes(
-        SpanMetadata(name='echo', type='action', input={'msg': 'hi'}),
+        SpanMetadata(name='echo', action_type='action', input={'msg': 'hi'}),
         qualified_path='/{echo,t:action}',
     )
     assert attrs['genkit:input'] == '{"msg": "hi"}'
@@ -101,7 +112,7 @@ def test_start_attributes_json_input() -> None:
 
 def test_start_attributes_json_init() -> None:
     attrs = start_attributes(
-        SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'}),
+        SpanMetadata(name='agentRun', action_type='action', init={'sessionId': 'session-123'}),
         qualified_path='/{agentRun,t:action}',
     )
     assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
@@ -131,7 +142,7 @@ def test_realtime_on_start_export_carries_identity_attrs(
     tracer = provider.get_tracer('test_tracer')
     meta = SpanMetadata(
         name='liveAction',
-        type='action',
+        action_type='action',
         subtype='flow',
         input={'prompt': 'hi'},
         metadata={'flow:name': 'liveAction'},
@@ -156,9 +167,12 @@ def test_realtime_on_start_export_carries_identity_attrs(
         provider.shutdown()
 
 
-def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='hello', type='util')):
-        pass
+@pytest.mark.asyncio
+async def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
+    async def body(_span: object) -> None:
+        return None
+
+    await run_in_new_span('hello', body, action_type='util')
 
     span = _by_name(exporter.get_finished_spans(), 'hello')
     attrs = dict(span.attributes or {})
@@ -167,14 +181,18 @@ def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> N
     assert attrs['genkit:state'] == 'success'
     assert attrs['genkit:path'] == '/{hello,t:util}'
     assert attrs['genkit:qualifiedPath'] == '/{hello,t:util}'
+    assert 'genkit:output' not in attrs
 
 
-def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
+@pytest.mark.asyncio
+async def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     class Payload(BaseModel):
         msg: str
 
-    with run_in_new_span(SpanMetadata(name='echo', type='action', subtype='tool', input=Payload(msg='hi'))):
-        pass
+    async def body(_span: object) -> None:
+        return None
+
+    await run_in_new_span('echo', body, action_type='action', subtype='tool', input=Payload(msg='hi'))
 
     span = _by_name(exporter.get_finished_spans(), 'echo')
     attrs = dict(span.attributes or {})
@@ -183,19 +201,24 @@ def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     assert attrs['genkit:metadata:subtype'] == 'tool'
 
 
-def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'})):
-        pass
+@pytest.mark.asyncio
+async def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
+    async def body(_span: object) -> None:
+        return None
+
+    await run_in_new_span('agentRun', body, action_type='action', init={'sessionId': 'session-123'})
 
     span = _by_name(exporter.get_finished_spans(), 'agentRun')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
 
 
-def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) -> None:
-    meta = SpanMetadata(name='answer', type='util')
-    with run_in_new_span(meta):
-        meta.output = {'result': 42}
+@pytest.mark.asyncio
+async def test_writes_output_from_return_value_on_success(exporter: InMemorySpanExporter) -> None:
+    async def body(_span: object) -> dict[str, int]:
+        return {'result': 42}
+
+    await run_in_new_span('answer', body, action_type='util')
 
     span = _by_name(exporter.get_finished_spans(), 'answer')
     attrs = dict(span.attributes or {})
@@ -203,10 +226,13 @@ def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) 
     assert attrs['genkit:state'] == 'success'
 
 
-def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
+@pytest.mark.asyncio
+async def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
+    async def body(_span: object) -> None:
+        raise RuntimeError('boom')
+
     with pytest.raises(RuntimeError, match='boom'):
-        with run_in_new_span(SpanMetadata(name='broken', type='util')):
-            raise RuntimeError('boom')
+        await run_in_new_span('broken', body, action_type='util')
 
     span = _by_name(exporter.get_finished_spans(), 'broken')
     attrs = dict(span.attributes or {})
@@ -215,12 +241,18 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert span.status.status_code == trace_api.StatusCode.ERROR
 
 
-def test_cancelled_span_leaves_state_unset(exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_cancelled_span_leaves_state_unset(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
     """Abort/timeout is unfinished work — neither success nor error."""
+
+    async def body(_span: object) -> None:
+        raise asyncio.CancelledError()
+
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(asyncio.CancelledError):
-            with run_in_new_span(SpanMetadata(name='abortedTurn', type='util')):
-                raise asyncio.CancelledError()
+            await run_in_new_span('abortedTurn', body, action_type='util')
 
     span = _by_name(exporter.get_finished_spans(), 'abortedTurn')
     attrs = dict(span.attributes or {})
@@ -264,28 +296,35 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(
     assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
 
 
-def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='outer', type='flow')):
-        with run_in_new_span(SpanMetadata(name='inner', type='flowStep')):
-            pass
+@pytest.mark.asyncio
+async def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:
+    async def inner(_span: object) -> None:
+        return None
 
-    inner = _by_name(exporter.get_finished_spans(), 'inner')
-    inner_attrs = dict(inner.attributes or {})
+    async def outer(_span: object) -> None:
+        await run_in_new_span('inner', inner, action_type='flowStep')
+
+    await run_in_new_span('outer', outer, action_type='flow')
+
+    inner_span = _by_name(exporter.get_finished_spans(), 'inner')
+    inner_attrs = dict(inner_span.attributes or {})
     assert inner_attrs['genkit:qualifiedPath'] == '/{outer,t:flow}/{inner,t:flowStep}'
 
 
-def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
+@pytest.mark.asyncio
+async def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
     exporter: InMemorySpanExporter,
 ) -> None:
-    with run_in_new_span(
-        SpanMetadata(
-            name='step',
-            type='flowStep',
-            metadata={'flow:name': 'pipeline', 'attempt': 2},
-            telemetry_labels={'genkit:custom:tag': 'foo'},
-        )
-    ):
-        pass
+    async def body(_span: object) -> None:
+        return None
+
+    await run_in_new_span(
+        'step',
+        body,
+        action_type='flowStep',
+        metadata={'flow:name': 'pipeline', 'attempt': 2},
+        attributes={'genkit:custom:tag': 'foo'},
+    )
 
     span = _by_name(exporter.get_finished_spans(), 'step')
     attrs = dict(span.attributes or {})
@@ -442,7 +481,7 @@ def test_metadata_key_prevents_double_prefix() -> None:
 def test_start_attributes_precedence_over_telemetry_labels() -> None:
     meta = SpanMetadata(
         name='realName',
-        telemetry_labels={
+        attributes={
             'genkit:name': 'fakeName',
             'genkit:path': 'fakePath',
             'user:label': 'custom',

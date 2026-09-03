@@ -45,11 +45,10 @@ from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError
+from genkit._core._instrumentation import SpanContext, run_in_new_span
 from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
-from genkit._core._trace._attrs import metadata_key
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
@@ -159,14 +158,10 @@ class SessionRunner(Generic[StateT]):
             if self.on_begin_turn is not None:
                 await self.on_begin_turn()
 
-            span_meta = SpanMetadata(
-                name=f'runTurn-{self.turn_index + 1}',
-                type='flowStep',
-                input=inp,
-            )
             try:
-                with run_in_new_span(span_meta) as span:
-                    turn_result = await fn(inp, turn_ctx)
+
+                async def body(span: SpanContext, turn_input: AgentInput = inp, ctx: TurnContext = turn_ctx) -> object:
+                    turn_result = await fn(turn_input, ctx)
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
@@ -179,13 +174,19 @@ class SessionRunner(Generic[StateT]):
                     # (messages, artifacts, custom) so a trace can show what
                     # changed without reading the client response.
                     state = await self.session.state()
-                    span_meta.output = {
+                    span.set_output({
                         'state': state.model_dump(by_alias=True, exclude_none=True, mode='json'),
-                    }
-                    # Tag with the id this turn actually persisted under
-                    # (server-managed only; omitted when nothing was written).
-                    if snapshot_id and span.is_recording():
-                        span.set_attribute(metadata_key('agent:snapshotId'), snapshot_id)
+                    })
+                    if snapshot_id:
+                        span.set_metadata({'agent:snapshotId': snapshot_id})
+                    return turn_result
+
+                await run_in_new_span(
+                    f'runTurn-{self.turn_index + 1}',
+                    body,
+                    action_type='flowStep',
+                    input=inp,
+                )
 
                 self.last_good_state = await self.session.state()
                 self.last_good_state_version = self.session.version
