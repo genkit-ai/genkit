@@ -72,7 +72,7 @@ class EmbeddingTaskType(StrEnum):
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
 # discovery returns the bare name on some accounts/regions; lookups strip the
-# '@version' suffix before matching (see get_embedder_options).
+# '@version' suffix before matching (see get_embedder_info).
 EMBEDDER_DIMENSIONS: dict[str, int] = {
     # Google AI
     'gemini-embedding-2-preview': 3072,
@@ -113,7 +113,7 @@ def _base_name(name: str) -> str:
     return name.split('@', 1)[0]
 
 
-def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderInfo:
+def get_embedder_info(name: str, label: str, is_vertex: bool = False) -> EmbedderInfo:
     """Return catalog info for a discovered embedder model.
 
     Args:

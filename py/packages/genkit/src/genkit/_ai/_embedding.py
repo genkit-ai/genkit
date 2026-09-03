@@ -141,12 +141,10 @@ def embedder(
     if info:
         if info.label:
             embedder_info['label'] = info.label
-        if info.dimensions:
-            embedder_info['dimensions'] = info.dimensions
+        embedder_info['dimensions'] = info.dimensions
         if info.supports:
             embedder_info['supports'] = info.supports.model_dump(exclude_none=True, by_alias=True)
-        if info.config_schema:
-            embedder_info['customOptions'] = info.config_schema
+        embedder_info['customOptions'] = info.config_schema if info.config_schema else None
 
     if 'label' not in embedder_info or not embedder_info['label']:
         embedder_info['label'] = name

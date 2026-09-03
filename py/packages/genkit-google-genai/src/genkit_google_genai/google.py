@@ -88,7 +88,7 @@ from genkit_google_genai.models._routing import is_unroutable_model_id
 from genkit_google_genai.models.embedder import (
     VERTEX_KNOWN_EMBEDDERS,
     Embedder,
-    get_embedder_options,
+    get_embedder_info,
 )
 from genkit_google_genai.models.gemini import (
     SUPPORTED_MODELS,
@@ -325,13 +325,10 @@ def _create_embedder_action(
     clean_name = name.replace(f'{plugin_name}/', '') if name.startswith(plugin_name) else name
     full_name = f'{plugin_name}/{clean_name}'
     label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
-    action_metadata = embedder_action_metadata(
-        name=full_name,
-        info=get_embedder_options(
-            name=clean_name,
-            label=label,
-            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
-        ),
+    embed_info = get_embedder_info(
+        name=clean_name,
+        label=label,
+        is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
     )
 
     async def _run(request: Any) -> Any:  # noqa: ANN401
@@ -342,13 +339,7 @@ def _create_embedder_action(
         )
         return await embedder.generate(request)
 
-    action = embedder(full_name, _run, metadata=action_metadata.metadata)
-
-    # Explicitly set schemas (no 'if' needed as they are always present in metadata)
-    action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
-    action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
-
-    return action
+    return embedder(full_name, _run, info=embed_info)
 
 
 def _create_veo_background_action(
@@ -837,7 +828,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=googleai_name(name),
-                    info=get_embedder_options(
+                    info=get_embedder_info(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[GOOGLEAI_PLUGIN_NAME]} - {name}',
                     ),
@@ -1271,7 +1262,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=vertexai_name(name),
-                    info=get_embedder_options(
+                    info=get_embedder_info(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
                         is_vertex=True,
