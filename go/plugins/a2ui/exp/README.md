@@ -5,7 +5,8 @@ is a transport-agnostic, JSON-based streaming UI protocol. An A2UI-enabled agent
 can stream not just prose, but rich, interactive UI **surfaces** that a client
 renders incrementally.
 
-> Status: experimental.
+> Status: in preview. The package lives under `go/plugins/a2ui/exp` and its
+> APIs may change in any minor version release. Samples import it as `a2uix`.
 
 ## Design principle: one representation
 
@@ -28,7 +29,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/a2ui"
+	a2uix "github.com/firebase/genkit/go/plugins/a2ui/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
@@ -40,11 +41,11 @@ func main() {
 		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-flash-latest")),
 		ai.WithSystem("You help users. Render UI when it is clearer than prose."),
 		ai.WithPrompt("show me the weather in Tokyo"),
-		ai.WithUse(&a2ui.Surfaces{}), // defaults to the bundled 'basic' catalog
+		ai.WithUse(&a2uix.Surfaces{}), // defaults to the bundled 'basic' catalog
 	)
 
 	// A2UI envelopes ride as data parts on the response message.
-	envelopes := a2ui.EnvelopesFromParts(resp.Message.Content)
+	envelopes := a2uix.EnvelopesFromParts(resp.Message.Content)
 	_ = envelopes
 }
 ```
@@ -56,7 +57,7 @@ a2ui data parts.
 
 ### Options
 
-`a2ui.Surfaces` fields:
+`a2uix.Surfaces` fields:
 
 | Field          | Default            | Description                                                                                       |
 | -------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
@@ -85,31 +86,31 @@ line up; match on the catalog's `id` value instead.
 
 
 ```go
-catalog, err := a2ui.LoadCatalogFile(g, "./my-catalog.json")
+catalog, err := a2uix.LoadCatalogFile(g, "./my-catalog.json")
 if err != nil { /* ... */ }
 
 resp, _ := genkit.Generate(ctx, g,
 	ai.WithModel(m),
 	ai.WithPrompt("..."),
-	ai.WithUse(&a2ui.Surfaces{CatalogID: catalog.ID}),
+	ai.WithUse(&a2uix.Surfaces{CatalogID: catalog.ID}),
 )
 ```
 
 Or construct and register one in memory:
 
 ```go
-myCatalog := &a2ui.Catalog{
+myCatalog := &a2uix.Catalog{
 	ID: "https://my-app.org/catalogs/custom.json",
-	Components: []a2ui.CatalogComponent{
+	Components: []a2uix.CatalogComponent{
 		{Name: "Banner", Description: "A prominent alert banner.", Props: "title: string (required)."},
 	},
 }
-a2ui.LoadCatalog(g, myCatalog)
-// ... ai.WithUse(&a2ui.Surfaces{CatalogID: myCatalog.ID})
+a2uix.LoadCatalog(g, myCatalog)
+// ... ai.WithUse(&a2uix.Surfaces{CatalogID: myCatalog.ID})
 ```
 
 Register the bundled basic catalog too (so it shows up in the Dev UI) with
-`a2ui.RegisterBasicCatalog(g)`.
+`a2uix.RegisterBasicCatalog(g)`.
 
 The middleware resolves the catalog for each turn in this order: an inline
 `Surfaces.Catalog` (code-defined only), then `Surfaces.CatalogID` looked up from the
@@ -134,17 +135,17 @@ When the user interacts with a surface (e.g. presses a `Button`), the client
 renderer emits an action. Send it back as the next turn: put the action's name
 as the user message text, and attach the full action as an a2ui data part. The
 middleware sanitizes inbound a2ui parts into a short text summary so the model
-can reason about them, and `a2ui.EnvelopesFromParts` reads envelopes back off
+can reason about them, and `a2uix.EnvelopesFromParts` reads envelopes back off
 any message/chunk content.
 
 ## Registering as a plugin (optional)
 
-Passing `&a2ui.Surfaces{}` to `ai.WithUse` is all you need. If you also want the
+Passing `&a2uix.Surfaces{}` to `ai.WithUse` is all you need. If you also want the
 middleware to appear in the Dev UI and be referenceable by name, register the
 plugin during init:
 
 ```go
-g := genkit.Init(ctx, genkit.WithPlugins(&a2ui.A2UI{}, &googlegenai.GoogleAI{}))
+g := genkit.Init(ctx, genkit.WithPlugins(&a2uix.A2UI{}, &googlegenai.GoogleAI{}))
 ```
 
 ## Try it with the web UI
@@ -195,7 +196,7 @@ The A2UI team is standardizing prompt formatting, catalog management, and
 inference inside official SDKs (a2ui-core / a2ui-agent). Those are the eventual
 home for the prompt-rendering, parsing, and validation this plugin does today,
 so treat those internals as thin and replaceable. The stable surface is the
-`a2ui.Surfaces` entrypoint and the spec-defined wire part
+`a2uix.Surfaces` entrypoint and the spec-defined wire part
 (`application/a2ui+json`), both of which are unaffected by an SDK swap.
 
 

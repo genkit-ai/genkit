@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"fmt"
@@ -41,9 +41,9 @@ import (
 //
 // Example:
 //
-//	a2ui.LoadCatalog(g, myCatalog)
+//	a2uix.LoadCatalog(g, myCatalog)
 //	// ... then reference it by id:
-//	ai.WithUse(&a2ui.Surfaces{CatalogID: myCatalog.ID})
+//	ai.WithUse(&a2uix.Surfaces{CatalogID: myCatalog.ID})
 func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 	if catalog == nil {
 		return fmt.Errorf("a2ui: LoadCatalog: catalog is nil")
@@ -127,7 +127,7 @@ func resolveCatalog(g *genkit.Genkit, catalog *Catalog, catalogID string) (*Cata
 			if c, ok := v.(*Catalog); ok {
 				return c, nil
 			}
-			return nil, fmt.Errorf("a2ui: registry value %q is not an *a2ui.Catalog", catalogRegistryKey(id))
+			return nil, fmt.Errorf("a2ui: registry value %q is not an A2UI catalog", catalogRegistryKey(id))
 		}
 	}
 	// Fall back to the bundled basic catalog for the default id (and also when
@@ -136,6 +136,6 @@ func resolveCatalog(g *genkit.Genkit, catalog *Catalog, catalogID string) (*Cata
 		return BasicCatalog(), nil
 	}
 	return nil, fmt.Errorf(
-		"a2ui: no catalog registered under id %q; register one with a2ui.LoadCatalog(g, catalog) or use the default %q catalog",
+		"a2ui: no catalog registered under id %q; register one with LoadCatalog(g, catalog) or use the default %q catalog",
 		id, DefaultCatalogID)
 }

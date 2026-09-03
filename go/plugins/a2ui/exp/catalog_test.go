@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"context"
@@ -97,7 +97,7 @@ func TestLoadCatalogFile(t *testing.T) {
 		t.Fatal("catalog was not registered in the registry")
 	}
 	if _, ok := v.(*Catalog); !ok {
-		t.Errorf("registered value type = %T, want *a2ui.Catalog", v)
+		t.Errorf("registered value type = %T, want %T", v, (*Catalog)(nil))
 	}
 }
 

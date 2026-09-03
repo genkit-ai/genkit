@@ -14,7 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package a2ui adds A2UI ("Agent to UI") support to Genkit agents.
+// Package exp provides in-preview A2UI ("Agent to UI") support for Genkit
+// agents.
 //
 // A2UI is a transport-agnostic, JSON-based streaming UI protocol
 // (https://a2ui.org/). An A2UI-enabled agent can stream not just prose, but
@@ -27,8 +28,13 @@
 // chunks and the final message), extracts a2ui fenced blocks, validates them
 // against the catalog, and rewrites them into a2ui data parts.
 //
-// This is an experimental package.
-package a2ui
+// Examples here import this package as a2uix
+// ("github.com/firebase/genkit/go/plugins/a2ui/exp"), the alias used across the
+// Genkit docs and samples.
+//
+// APIs in this package are under active development and may change in any
+// minor version release.
+package exp
 
 // A2UIMimeType identifies an A2UI payload. It is stamped onto the
 // metadata.mimeType of the Genkit data part that carries A2UI envelopes,

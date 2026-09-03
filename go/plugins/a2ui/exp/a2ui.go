@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"cmp"
@@ -52,14 +52,14 @@ const (
 //	resp, err := genkit.Generate(ctx, g,
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("show me the weather in Tokyo"),
-//	    ai.WithUse(&a2ui.Surfaces{}), // defaults to the bundled basic catalog
+//	    ai.WithUse(&a2uix.Surfaces{}), // defaults to the bundled basic catalog
 //	)
 //
 // Middleware ordering: A2UI keeps per-turn streaming state (a stream parser and
 // its minted surface ids) for the model call it wraps. Place any retrying or
 // fallback middleware (which re-invokes the model) OUTSIDE A2UI so each attempt
-// gets a fresh A2UI turn, i.e. WithUse(retry, &a2ui.Surfaces{}) rather than
-// WithUse(&a2ui.Surfaces{}, retry). WithUse(A, B) means A wraps B.
+// gets a fresh A2UI turn, i.e. WithUse(retry, &a2uix.Surfaces{}) rather than
+// WithUse(&a2uix.Surfaces{}, retry). WithUse(A, B) means A wraps B.
 //
 // Every field is per-call configuration; the [A2UI] plugin only registers the
 // middleware by name and carries no settings of its own.
@@ -236,7 +236,7 @@ func (c *Surfaces) New(ctx context.Context) (*ai.Hooks, error) {
 // passed directly to [ai.WithUse]. Register it with
 // [github.com/firebase/genkit/go/genkit.WithPlugins] during Init:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&a2ui.A2UI{}))
+//	g := genkit.Init(ctx, genkit.WithPlugins(&a2uix.A2UI{}))
 //
 // The plugin carries no settings; every option lives on the per-call [Surfaces].
 type A2UI struct{}

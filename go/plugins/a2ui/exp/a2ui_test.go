@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"context"
