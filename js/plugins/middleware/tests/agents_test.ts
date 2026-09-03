@@ -15,8 +15,8 @@
  */
 
 import * as assert from 'assert';
-import { z } from 'genkit';
-import { genkit, Session } from 'genkit/beta';
+import { z, type MessageData } from 'genkit';
+import { InMemorySessionStore, Session, genkit } from 'genkit/beta';
 import { describe, it } from 'node:test';
 import { agents } from '../src/agents.js';
 import { artifacts } from '../src/artifacts.js';
@@ -1099,5 +1099,836 @@ describe('agents middleware', () => {
       result.text.includes('recovered'),
       'Orchestrator should be able to recover after the failure'
     );
+  });
+
+  it("reports every non-answer finish reason as a failure that keeps the agent's last words", async () => {
+    const ai = genkit({});
+    const reasons = ['failed', 'blocked', 'length', 'aborted'] as const;
+    for (const reason of reasons) {
+      // A custom sub-agent that ends its turn on `reason` after saying
+      // something partial, without throwing.
+      ai.defineCustomAgent({ name: `ender_${reason}` }, async (sess) => {
+        await sess.run(async () => {
+          sess.addMessages([
+            {
+              role: 'model',
+              content: [{ text: 'partial notes: found 3 of 5 sources' }],
+            },
+          ]);
+          return { finishReason: reason };
+        });
+        const msgs = sess.getMessages();
+        return { message: msgs[msgs.length - 1], finishReason: reason };
+      });
+    }
+
+    for (const reason of reasons) {
+      let mainTurn = 0;
+      let capturedToolOutput: any;
+      const mainModel = ai.defineModel(
+        { name: `main-reason-${reason}-` + Math.random() },
+        async (req) => {
+          mainTurn++;
+          if (mainTurn === 1) {
+            return {
+              message: {
+                role: 'model' as const,
+                content: [
+                  {
+                    toolRequest: {
+                      name: `delegate_to_ender_${reason}`,
+                      input: { task: 'dig' },
+                    },
+                  },
+                ],
+              },
+            };
+          }
+          const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+          capturedToolOutput = toolMsg?.content.find((p: any) => p.toolResponse)
+            ?.toolResponse?.output;
+          return {
+            message: { role: 'model' as const, content: [{ text: 'ok' }] },
+          };
+        }
+      );
+      await ai.generate({
+        model: mainModel,
+        prompt: 'go',
+        use: [agents({ agents: [`ender_${reason}`] })],
+      });
+      // Reported as a failure that names the reason and keeps the agent's
+      // last words: they explain the outcome, and losing them leaves the
+      // model with nothing it can act on.
+      assert.match(capturedToolOutput.response, /Error calling agent/);
+      assert.ok(
+        capturedToolOutput.response.includes(`'${reason}'`),
+        `response should name the finish reason: ${capturedToolOutput.response}`
+      );
+      assert.ok(
+        capturedToolOutput.response.includes('found 3 of 5 sources'),
+        `response should keep the last message: ${capturedToolOutput.response}`
+      );
+    }
+  });
+
+  it('says outright when a sub-agent completed without a final message', async () => {
+    const ai = genkit({});
+    // Ends on a model message holding only a tool request, after saving one
+    // artifact: there is no answer text, and the result is in the artifact.
+    ai.defineCustomAgent({ name: 'silent' }, async (sess) => {
+      await sess.run(async () => {
+        sess.addArtifacts([{ name: 'report.md', parts: [{ text: 'body' }] }]);
+        sess.addMessages([
+          {
+            role: 'model',
+            content: [{ toolRequest: { name: 'search', input: { q: 'x' } } }],
+          },
+        ]);
+        return { finishReason: 'stop' };
+      });
+      const msgs = sess.getMessages();
+      return {
+        message: msgs[msgs.length - 1],
+        artifacts: sess.getArtifacts(),
+        finishReason: 'stop',
+      };
+    });
+
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-silent-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_silent',
+                    input: { task: 'go' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        capturedToolOutput = toolMsg?.content.find((p: any) => p.toolResponse)
+          ?.toolResponse?.output;
+        return {
+          message: { role: 'model' as const, content: [{ text: 'ok' }] },
+        };
+      }
+    );
+    await ai.generate({
+      model: mainModel,
+      prompt: 'go',
+      use: [agents({ agents: ['silent'] })],
+    });
+    assert.match(capturedToolOutput.response, /completed/);
+    assert.match(capturedToolOutput.response, /no final message/);
+    assert.match(capturedToolOutput.response, /one artifact/);
+    assert.strictEqual(capturedToolOutput.artifacts.length, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Background delegation (`async: true`)
+// ---------------------------------------------------------------------------
+
+const CHECK_TOOL = 'check_background_tasks';
+const WAIT_TOOL = 'wait_for_background_tasks';
+const ABORT_TOOL = 'abort_background_tasks';
+
+/** Outputs of every tool response named `toolName` in `messages`. */
+function toolOutputs(messages: MessageData[] | undefined, toolName: string) {
+  return (messages ?? [])
+    .flatMap((m) => m.content)
+    .filter((p) => p.toolResponse?.name === toolName)
+    .map((p) => p.toolResponse!.output as any);
+}
+
+/** The text of the system message in `messages`, if any. */
+function systemText(messages: MessageData[] | undefined): string {
+  return (messages ?? [])
+    .filter((m) => m.role === 'system')
+    .flatMap((m) => m.content)
+    .map((p) => p.text ?? '')
+    .join('\n');
+}
+
+function toolRequest(name: string, input: unknown) {
+  return {
+    message: {
+      role: 'model' as const,
+      content: [{ toolRequest: { name, input } }],
+    },
+  };
+}
+
+function textResponse(text: string) {
+  return { message: { role: 'model' as const, content: [{ text }] } };
+}
+
+/** A gate a test opens to let a sub-agent turn finish. */
+function makeGate() {
+  let release!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { opened, release };
+}
+
+/**
+ * Defines a store-backed custom sub-agent whose single turn waits for `gate`
+ * (or the invocation's abort), then says `text` and saves the given
+ * artifacts. Modeled on the gated agents the Go conformance tests use.
+ */
+function defineGatedResearcher(
+  ai: ReturnType<typeof genkit>,
+  name: string,
+  gate: Promise<void>,
+  opts: {
+    text?: string;
+    artifacts?: { name: string; parts: { text: string }[] }[];
+    finishReason?: 'stop' | 'failed';
+    onAbort?: () => void;
+  } = {}
+) {
+  return ai.defineCustomAgent(
+    { name, store: new InMemorySessionStore() },
+    async (sess, { abortSignal }) => {
+      await sess.run(async () => {
+        await Promise.race([
+          gate,
+          new Promise<never>((_, reject) =>
+            abortSignal?.addEventListener(
+              'abort',
+              () => {
+                opts.onAbort?.();
+                reject(new Error('aborted'));
+              },
+              { once: true }
+            )
+          ),
+        ]);
+        if (opts.artifacts) sess.addArtifacts(opts.artifacts);
+        sess.addMessages([
+          {
+            role: 'model',
+            content: [{ text: opts.text ?? 'research complete' }],
+          },
+        ]);
+        return { finishReason: opts.finishReason ?? 'stop' };
+      });
+      const msgs = sess.getMessages();
+      return {
+        message: msgs[msgs.length - 1],
+        artifacts: sess.getArtifacts(),
+        finishReason: opts.finishReason ?? 'stop',
+      };
+    }
+  );
+}
+
+describe('agents middleware (async)', () => {
+  it('launches, checks, and collects a background delegation in one generate call', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      artifacts: [
+        { name: 'findings.md', parts: [{ text: 'the findings body' }] },
+      ],
+    });
+
+    // Scripted orchestrator: launch in background, check, release the gate,
+    // wait, then finish. Each step keys off the tool responses so far.
+    let capturedSystem = '';
+    const orchestrator = ai.defineModel(
+      { name: 'orch-async-' + Math.random() },
+      async (req) => {
+        capturedSystem = systemText(req.messages);
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        const checks = toolOutputs(req.messages, CHECK_TOOL);
+        const waits = toolOutputs(req.messages, WAIT_TOOL);
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig into X',
+            background: true,
+          });
+        }
+        if (checks.length === 0) {
+          return toolRequest(CHECK_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        if (waits.length === 0) {
+          gate.release();
+          return toolRequest(WAIT_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'research X',
+      maxTurns: 10,
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    assert.strictEqual(result.text, 'done');
+
+    for (const want of ['background', CHECK_TOOL, WAIT_TOOL, ABORT_TOOL]) {
+      assert.ok(
+        capturedSystem.includes(want),
+        `async system prompt should mention ${want}: ${capturedSystem}`
+      );
+    }
+
+    const [launch] = toolOutputs(result.messages, 'delegate_to_researcher');
+    assert.strictEqual(launch.status, 'pending');
+    assert.ok(launch.taskId.startsWith('researcher:'), launch.taskId);
+    assert.match(launch.response, /Background task .* started/);
+
+    const [check] = toolOutputs(result.messages, CHECK_TOOL);
+    assert.strictEqual(check.tasks.length, 1);
+    assert.strictEqual(check.tasks[0].status, 'pending');
+
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks.length, 1);
+    const task = wait.tasks[0];
+    assert.strictEqual(task.status, 'completed');
+    assert.strictEqual(task.agent, 'researcher');
+    assert.strictEqual(task.response, 'research complete');
+    const snapshotId = launch.taskId.slice('researcher:'.length);
+    assert.strictEqual(
+      task.artifacts[0].name,
+      `researcher_${snapshotId.slice(0, 8)}/findings.md`
+    );
+    assert.ok(task.artifacts[0].content.includes('the findings body'));
+    assert.strictEqual(wait.timedOut, undefined);
+  });
+
+  it('collects a task launched by an earlier generate call from its ID alone', async () => {
+    const ai = genkit({});
+    const subModel = ai.defineModel(
+      { name: 'researcher-bg-' + Math.random() },
+      async () => textResponse('background answer')
+    );
+    ai.defineAgent({
+      name: 'researcher',
+      model: subModel,
+      system: 'You research.',
+      store: new InMemorySessionStore(),
+    });
+
+    // First call: launch in the background and stop without waiting.
+    const launcher = ai.defineModel(
+      { name: 'orch-launch-' + Math.random() },
+      async (req) =>
+        toolOutputs(req.messages, 'delegate_to_researcher').length === 0
+          ? toolRequest('delegate_to_researcher', {
+              task: 'long dig',
+              background: true,
+            })
+          : textResponse('launched')
+    );
+    const first = await ai.generate({
+      model: launcher,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [launch] = toolOutputs(first.messages, 'delegate_to_researcher');
+    assert.ok(launch.taskId);
+
+    // Second call, fresh middleware instance: wait on the recorded task ID
+    // plus a missing snapshot and an unconfigured agent, which must be
+    // reported in isolation from one another.
+    const waiter = ai.defineModel(
+      { name: 'orch-wait-' + Math.random() },
+      async (req) =>
+        toolOutputs(req.messages, WAIT_TOOL).length === 0
+          ? toolRequest(WAIT_TOOL, {
+              taskIds: [
+                launch.taskId,
+                'researcher:no-such-snapshot',
+                'ghost:whatever',
+              ],
+            })
+          : textResponse('collected')
+    );
+    const second = await ai.generate({
+      model: waiter,
+      prompt: 'collect',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(second.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks.length, 3);
+    assert.strictEqual(wait.tasks[0].status, 'completed');
+    assert.strictEqual(wait.tasks[0].response, 'background answer');
+    assert.strictEqual(wait.tasks[1].status, 'unknown');
+    assert.match(wait.tasks[1].error, /not found/);
+    assert.match(wait.tasks[1].error, /Delegate the task again/);
+    assert.strictEqual(wait.tasks[2].status, 'unknown');
+    assert.match(wait.tasks[2].error, /does not match any configured agent/);
+    assert.strictEqual(wait.timedOut, undefined);
+  });
+
+  it('reports a task that committed without an answer as failed', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // The turn commits (the row is `completed`) but declares `failed`.
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      text: 'partial notes',
+      finishReason: 'failed',
+    });
+    const orchestrator = ai.defineModel(
+      { name: 'orch-no-answer-' + Math.random() },
+      async (req) => {
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          gate.release();
+          return toolRequest(WAIT_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    const task = wait.tasks[0];
+    assert.strictEqual(task.status, 'failed');
+    assert.ok(task.error, 'the report must explain why there is no answer');
+    assert.match(task.error, /partial notes/);
+    assert.strictEqual(task.response, undefined);
+  });
+
+  it('times out a wait, reporting running tasks as pending and keeping unresolvable errors', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // Never released: the task is pending for the whole wait.
+    defineGatedResearcher(ai, 'researcher', gate.opened);
+    const orchestrator = ai.defineModel(
+      { name: 'orch-timeout-' + Math.random() },
+      async (req) => {
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          return toolRequest(WAIT_TOOL, {
+            taskIds: [launches[0].taskId, 'ghost:whatever'],
+            timeoutSeconds: 0.2,
+          });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(wait.timedOut, true);
+    assert.strictEqual(wait.tasks.length, 2);
+    assert.strictEqual(wait.tasks[0].status, 'pending');
+    assert.strictEqual(wait.tasks[0].error, undefined);
+    // Nothing about the deadline makes an unresolvable handle more likely to
+    // settle later; reporting it as pending would send the model back to
+    // re-check it forever.
+    assert.strictEqual(wait.tasks[1].status, 'unknown');
+    assert.match(wait.tasks[1].error, /does not match any configured agent/);
+    gate.release();
+  });
+
+  it('treats a timeout too large for a timer as unbounded', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'researcher',
+      model: ai.defineModel(
+        { name: 'researcher-overflow-' + Math.random() },
+        async () => textResponse('unused')
+      ),
+      system: 'unused',
+      store: new InMemorySessionStore(),
+    });
+    // A missing snapshot settles on the first pass (NOT_FOUND is a dead end),
+    // so the wait returns without waiting out the absurd timeout; a deadline
+    // that overflowed into an immediate timer would instead come back timed
+    // out with a read that never happened.
+    const waiter = ai.defineModel(
+      { name: 'orch-overflow-' + Math.random() },
+      async (req) =>
+        toolOutputs(req.messages, WAIT_TOOL).length === 0
+          ? toolRequest(WAIT_TOOL, {
+              taskIds: ['researcher:no-such-snapshot'],
+              timeoutSeconds: 10_000_000_000,
+            })
+          : textResponse('collected')
+    );
+    const result = await ai.generate({
+      model: waiter,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(wait.timedOut, undefined);
+    assert.strictEqual(wait.tasks[0].status, 'unknown');
+    assert.match(wait.tasks[0].error, /not found/);
+  });
+
+  it('returns on the first settled task with waitFor "first"', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'quick',
+      model: ai.defineModel({ name: 'quick-' + Math.random() }, async () =>
+        textResponse('quick answer')
+      ),
+      system: 'unused',
+      store: new InMemorySessionStore(),
+    });
+    // The slow sub-agent finishes only when released, so the race can only
+    // be won by the quick one.
+    const gate = makeGate();
+    defineGatedResearcher(ai, 'slow', gate.opened);
+
+    const orchestrator = ai.defineModel(
+      { name: 'orch-race-' + Math.random() },
+      async (req) => {
+        const slow = toolOutputs(req.messages, 'delegate_to_slow');
+        const quick = toolOutputs(req.messages, 'delegate_to_quick');
+        if (slow.length === 0) {
+          return toolRequest('delegate_to_slow', {
+            task: 'dig forever',
+            background: true,
+          });
+        }
+        if (quick.length === 0) {
+          return toolRequest('delegate_to_quick', {
+            task: 'answer fast',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          // The slow task first in the list, so a settled result in slot 1
+          // proves the join raced instead of following input order.
+          return toolRequest(WAIT_TOOL, {
+            taskIds: [slow[0].taskId, quick[0].taskId],
+            waitFor: 'first',
+          });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      maxTurns: 10,
+      use: [agents({ agents: ['quick', 'slow'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(wait.timedOut, undefined, 'a won race is not a timeout');
+    assert.strictEqual(wait.tasks[0].status, 'pending');
+    assert.strictEqual(wait.tasks[1].status, 'completed');
+    assert.strictEqual(wait.tasks[1].response, 'quick answer');
+    assert.match(wait.note, /first settled/);
+    gate.release();
+  });
+
+  it('answers an unknown waitFor value with guidance', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'quick',
+      model: ai.defineModel({ name: 'quick2-' + Math.random() }, async () =>
+        textResponse('unused')
+      ),
+      system: 'unused',
+      store: new InMemorySessionStore(),
+    });
+    const orchestrator = ai.defineModel(
+      { name: 'orch-badjoin-' + Math.random() },
+      async (req) =>
+        toolOutputs(req.messages, WAIT_TOOL).length === 0
+          ? toolRequest(WAIT_TOOL, {
+              taskIds: ['quick:whatever'],
+              waitFor: 'any',
+            })
+          : textResponse('done')
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['quick'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.match(wait.note, /'first'/);
+    assert.strictEqual(wait.tasks, undefined);
+  });
+
+  it('aborts a running background task and reports it aborted afterwards', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    let stopped = false;
+    // Never released: the abort is the only thing that can end this task.
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      onAbort: () => {
+        stopped = true;
+      },
+    });
+    const orchestrator = ai.defineModel(
+      { name: 'orch-abort-' + Math.random() },
+      async (req) => {
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, ABORT_TOOL).length === 0) {
+          return toolRequest(ABORT_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        if (toolOutputs(req.messages, CHECK_TOOL).length === 0) {
+          return toolRequest(CHECK_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      maxTurns: 10,
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [aborted] = toolOutputs(result.messages, ABORT_TOOL);
+    assert.strictEqual(aborted.tasks[0].status, 'aborted');
+    assert.ok(aborted.tasks[0].error);
+    // The row said aborted; the runtime observes that flip and cancels the
+    // work, which is the half a status write alone would not prove.
+    assert.strictEqual(stopped, true, 'the sub-agent was never cancelled');
+    const [checked] = toolOutputs(result.messages, CHECK_TOOL);
+    assert.strictEqual(checked.tasks[0].status, 'aborted');
+  });
+
+  it('reports the result when aborting a task that had already finished', async () => {
+    const ai = genkit({});
+    const researcher = defineGatedResearcher(
+      ai,
+      'researcher',
+      Promise.resolve(),
+      {
+        artifacts: [
+          { name: 'findings.md', parts: [{ text: 'the findings body' }] },
+        ],
+      }
+    );
+    // Launch and settle the task outside the middleware, so nothing has
+    // cached its report before the abort tool runs.
+    const task = await researcher.chat().detach('dig into X');
+    await task.wait();
+
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
+    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
+    const report = out.tasks[0];
+    assert.strictEqual(report.status, 'completed');
+    assert.strictEqual(report.response, 'research complete');
+    assert.strictEqual(
+      report.artifacts[0].name,
+      `researcher_${task.snapshotId.slice(0, 8)}/findings.md`
+    );
+    assert.ok(report.artifacts[0].content.includes('the findings body'));
+  });
+
+  it('refuses a background launch on a sub-agent without a store and refunds the slot', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'researcher',
+      model: ai.defineModel(
+        { name: 'researcher-nostore-' + Math.random() },
+        async () => textResponse('synchronous answer')
+      ),
+      system: 'unused',
+    });
+    // Launch in the background (refused), then synchronously: with a cap of
+    // one, the retry only succeeds if the refusal returned its slot.
+    const orchestrator = ai.defineModel(
+      { name: 'orch-nostore-' + Math.random() },
+      async (req) => {
+        const results = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (results.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (results.length === 1) {
+          return toolRequest('delegate_to_researcher', { task: 'dig' });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true, maxDelegations: 1 })],
+    });
+    const [refused, retried] = toolOutputs(
+      result.messages,
+      'delegate_to_researcher'
+    );
+    assert.strictEqual(refused.taskId, undefined);
+    assert.match(refused.response, /Error calling agent/);
+    assert.match(refused.response, /no session store/);
+    assert.match(refused.response, /without "background"/);
+    assert.strictEqual(retried.response, 'synchronous answer');
+  });
+
+  it('lets two async instances with distinct prefixes share one generate call', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'researcher',
+      model: ai.defineModel(
+        { name: 'researcher-coexist-' + Math.random() },
+        async () => textResponse('unused')
+      ),
+      system: 'unused',
+      store: new InMemorySessionStore(),
+    });
+    const model = ai.defineModel(
+      { name: 'orch-coexist-' + Math.random() },
+      async () => textResponse('done')
+    );
+    const result = await ai.generate({
+      model,
+      prompt: 'go',
+      use: [
+        agents({ agents: ['researcher'], toolPrefix: 'research', async: true }),
+        agents({ agents: ['researcher'], toolPrefix: 'code', async: true }),
+      ],
+    });
+    assert.strictEqual(result.text, 'done');
+  });
+
+  it('rejects colliding tool names at instantiation', () => {
+    const ai = genkit({});
+    assert.throws(
+      () =>
+        agents.instantiate({
+          config: {
+            agents: ['check_background_tasks'],
+            toolPrefix: '',
+            async: true,
+          },
+          ai,
+          pluginConfig: undefined,
+        }),
+      /collides/
+    );
+  });
+
+  it('parses task IDs against the longest configured agent name', async () => {
+    const ai = genkit({});
+    const def = agents.instantiate({
+      config: { agents: ['a', 'a:b'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
+    // Neither agent is registered, so each report fails at resolution and
+    // names the agent the handle was parsed to.
+    const out = await checkTool({ taskIds: ['a:b:1234', 'a:5678', 'a:'] });
+    assert.strictEqual(out.tasks[0].agent, 'a:b');
+    assert.strictEqual(out.tasks[1].agent, 'a');
+    assert.match(out.tasks[1].error, /not registered/);
+    assert.strictEqual(out.tasks[2].status, 'unknown');
+    assert.match(out.tasks[2].error, /does not match any configured agent/);
+  });
+
+  it('answers a background-task tool called without task IDs with guidance', async () => {
+    const ai = genkit({});
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    for (const name of [CHECK_TOOL, WAIT_TOOL, ABORT_TOOL]) {
+      const t = def.tools!.find((t) => t.__action.name === name);
+      assert.ok(t, `tool ${name} should be registered`);
+      // An omitted taskIds must decode: a required field would fail the whole
+      // generate call rather than a turn the model can correct.
+      const out = await t!({});
+      assert.match(out.note, /No task IDs given/);
+    }
+  });
+
+  it('reports what the sub-agent last said, not whatever the transcript ends on', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // The transcript ends on a tool response after the model spoke.
+    ai.defineCustomAgent(
+      { name: 'researcher', store: new InMemorySessionStore() },
+      async (sess) => {
+        await sess.run(async () => {
+          await gate.opened;
+          sess.addMessages([
+            { role: 'model', content: [{ text: 'working on it' }] },
+            {
+              role: 'tool',
+              content: [
+                { toolResponse: { name: 'search', output: 'raw results' } },
+              ],
+            },
+          ]);
+          return { finishReason: 'stop' };
+        });
+        return { artifacts: sess.getArtifacts(), finishReason: 'stop' };
+      }
+    );
+    const orchestrator = ai.defineModel(
+      { name: 'orch-last-model-' + Math.random() },
+      async (req) => {
+        const launches = toolOutputs(req.messages, 'delegate_to_researcher');
+        if (launches.length === 0) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig',
+            background: true,
+          });
+        }
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          gate.release();
+          return toolRequest(WAIT_TOOL, { taskIds: [launches[0].taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const result = await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'], async: true })],
+    });
+    const [wait] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks[0].status, 'completed');
+    assert.strictEqual(wait.tasks[0].response, 'working on it');
+    assert.strictEqual(wait.tasks[0].error, undefined);
   });
 });

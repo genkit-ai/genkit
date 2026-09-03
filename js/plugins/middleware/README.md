@@ -17,21 +17,23 @@ pnpm add @genkit-ai/middleware
 Enables sub-agent delegation. For each configured agent the middleware injects a dedicated delegation tool (e.g. `delegate_to_researcher`) and appends a `<sub-agents>` block to the system prompt listing the available agents and their descriptions. When the model calls a delegation tool, the middleware resolves the target agent from the registry, runs it via its `run()` method, and returns the sub-agent's response as the tool result.
 
 **Key behaviors:**
+
 - Injects **one delegation tool per agent**, named `<toolPrefix>_<agentName>` (default prefix: `delegate_to`).
 - Agent descriptions are auto-discovered from the registry (or can be overridden per-agent) and surfaced in the system prompt.
 - Sub-agent interrupts and failures are returned as tool responses (not thrown), allowing the orchestrator to self-correct. (Interactive, stateful back-and-forth with an interrupted sub-agent is a future feature.)
-
 - Sub-agent artifacts are merged into the parent session and/or returned inline, controlled by `artifactStrategy`.
+- With `async: true`, delegations can run in the background and be collected later (see below).
 
 **Options:**
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `agents` | `(string \| { name, description? })[]` | — (required) | Agents available for delegation. A string is the agent name; the object form lets you override the description. |
-| `toolPrefix` | `string` | `'delegate_to'` | Prefix for generated delegation tool names. Set to `''` to use bare agent names. |
-| `maxDelegations` | `number` | unlimited | Maximum sub-agent delegations allowed per generate call. Prevents runaway delegation loops. |
-| `historyLength` | `number` | `0` | Number of recent conversation messages (user/model only) to forward to sub-agents as context. |
-| `artifactStrategy` | `'inline' \| 'session'` | `'inline'` | `inline`: artifact content is included in the tool result **and** merged into the parent session. `session`: artifacts are merged into the parent session only (the tool result lists names only). Pair `session` with the `artifacts` middleware. |
+| Option             | Type                                   | Default         | Description                                                                                                                                                                                                                                                             |
+| ------------------ | -------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents`           | `(string \| { name, description? })[]` | — (required)    | Agents available for delegation. A string is the agent name; the object form lets you override the description.                                                                                                                                                         |
+| `toolPrefix`       | `string`                               | `'delegate_to'` | Prefix for generated delegation tool names. Set to `''` to use bare agent names.                                                                                                                                                                                        |
+| `maxDelegations`   | `number`                               | unlimited       | Maximum sub-agent delegations allowed per generate call. Prevents runaway delegation loops.                                                                                                                                                                             |
+| `historyLength`    | `number`                               | `0`             | Number of recent conversation messages (user/model only) to forward to sub-agents as context.                                                                                                                                                                           |
+| `artifactStrategy` | `'inline' \| 'session'`                | `'inline'`      | `inline`: artifact content is included in the tool result **and** merged into the parent session. `session`: artifacts are merged into the parent session only (the tool result lists names only). Pair `session` with the `artifacts` middleware.                      |
+| `async`            | `boolean`                              | `false`         | Enables background delegation: delegation tools accept a `background` flag that returns a task ID immediately, and the `check_background_tasks`, `wait_for_background_tasks`, and `abort_background_tasks` tools are added. Requires sub-agents defined with a `store`. |
 
 ```typescript
 import { genkit } from 'genkit';
@@ -79,22 +81,48 @@ use: [
     ],
     maxDelegations: 5,
     historyLength: 4,
-  })
-]
+  }),
+];
 ```
+
+Set `async: true` to let the orchestrator keep working while a sub-agent runs. Each delegation tool gains a `background` flag that returns a task ID instead of waiting, and three shared tools give the orchestrator one control per thing it can do with a launched task: `check_background_tasks` reads statuses without waiting, `wait_for_background_tasks` blocks until they settle, and `abort_background_tasks` stops the ones whose results are no longer needed. The _sub-agent_ is what needs the session store here: background work is tracked by a snapshot, so a sub-agent without a `store` can only be delegated to synchronously.
+
+```typescript
+import { InMemorySessionStore } from 'genkit/beta';
+
+// The sub-agent needs its own store to be delegated to in the background.
+const researcher = ai.defineAgent({
+  name: 'researcher',
+  model: 'gemini-2.5-flash',
+  description: 'Researches a topic and summarizes well-sourced findings.',
+  system: 'You are a thorough research assistant.',
+  store: new InMemorySessionStore(),
+});
+
+const orchestrator = ai.defineAgent({
+  name: 'orchestrator',
+  model: 'gemini-2.5-flash',
+  system:
+    'Delegate research in the background and post an update while it runs.',
+  use: [agents({ agents: ['researcher'], async: true })],
+});
+```
+
+The orchestrator then launches with `{ "task": "...", "background": true }`, posts an update while the sub-agent runs, and collects the result later. Task IDs (`<agent>:<snapshotId>`) ride in the delegation tool result, so they are recorded in the conversation and a re-instantiated orchestrator can collect them from its history alone. `wait_for_background_tasks` takes an optional `timeoutSeconds`, so a slow task becomes an interim answer instead of a blocked turn, and `waitFor: "first"` turns the join into a race: the tool returns as soon as any listed task settles while the rest keep running. An abort is safe to call on any task: one that had already finished is left alone and reports its result, so the orchestrator never loses an answer by giving up on it.
 
 ### 2. Artifacts Middleware (`artifacts`)
 
 Gives the model tools to interact with session artifacts and injects an `<artifacts>` listing into the system prompt each turn. Useful standalone (e.g. a workspace-builder agent that produces files as artifacts) or combined with the `agents` middleware using `artifactStrategy: 'session'`, so the orchestrator can read artifacts produced by sub-agents.
 
 **Tools provided:**
+
 - `read_artifact` — reads a named artifact from the session and returns its text content.
 - `write_artifact` — creates or updates a named artifact (deduplicated by name). Omitted when `readonly: true`.
 
 **Options:**
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
+| Option     | Type      | Default | Description                                           |
+| ---------- | --------- | ------- | ----------------------------------------------------- |
 | `readonly` | `boolean` | `false` | When true, only the `read_artifact` tool is provided. |
 
 ```typescript
@@ -144,7 +172,6 @@ const response = await ai.generate({
 
 ### 4. Skills Middleware (`skills`)
 
-
 Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
 
 ```typescript
@@ -162,7 +189,6 @@ const response = await ai.generate({
 ```
 
 ### 5. Tool Approval Middleware (`toolApproval`)
-
 
 Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptError` allowing you to prompt the user for manual confirmation before resuming.
 
@@ -183,14 +209,14 @@ const response = await ai.generate({
 
 if (response.finishReason === 'interrupted') {
   const interrupt = response.interrupts[0];
-  
+
   // 2. Ask user for approval, then recreate the tool request with approval
   const approvedPart = restartTool(interrupt, { toolApproved: true });
 
   // 3. Resume execution
   const resumedResponse = await ai.generate({
     messages: response.messages,
-    resume: { restart: [approvedPart] }, 
+    resume: { restart: [approvedPart] },
     use: [
       toolApproval({ approved: [] })
     ]
@@ -199,7 +225,6 @@ if (response.finishReason === 'interrupted') {
 ```
 
 ### 6. Retry Middleware (`retry`)
-
 
 Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
 
@@ -223,7 +248,6 @@ const response = await ai.generate({
 ```
 
 ### 7. Fallback Middleware (`fallback`)
-
 
 Automatically switches to a different model if the primary model fails on a specific set of error codes. Useful for falling back to a smaller/faster model when a large model exceeds quota limits.
 
