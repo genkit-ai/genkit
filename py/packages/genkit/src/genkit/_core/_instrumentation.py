@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
@@ -177,11 +178,13 @@ class CompositeSpanContext:
 
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         for span in self._spans:
-            span.set_metadata(metadata)
+            with contextlib.suppress(Exception):
+                span.set_metadata(metadata)
 
     def set_output(self, value: object) -> None:
         for span in self._spans:
-            span.set_output(value)
+            with contextlib.suppress(Exception):
+                span.set_output(value)
 
     def _first_non_empty(self, get: Callable[[SpanContext], str]) -> str:
         for span in self._spans:

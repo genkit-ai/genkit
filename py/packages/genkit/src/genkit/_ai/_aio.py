@@ -104,7 +104,7 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
-from genkit._core._instrumentation import configure_instrumentation, is_instrumented_by, run_in_new_span
+from genkit._core._instrumentation import configure_instrumentation, run_in_new_span
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -112,7 +112,7 @@ from genkit._core._middleware import (
     _validate_middleware_key_segment,
 )
 from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT
-from genkit._core._otel_instrumentation import OtelInstrumentation, genkit_dev_instrumentation
+from genkit._core._otel_instrumentation import genkit_dev_instrumentation
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -188,11 +188,7 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
-        # GENKIT_ENV=dev + a collector URL in env installs OTel so the
-        # Traces tab works. A URL that arrives later on the reflection
-        # handshake does the same. Production stays off unless they
-        # configure a provider.
-        if is_dev_environment() and not is_instrumented_by(OtelInstrumentation):
+        if is_dev_environment():
             dev_instrumentation = genkit_dev_instrumentation()
             if dev_instrumentation is not None:
                 configure_instrumentation(dev_instrumentation)

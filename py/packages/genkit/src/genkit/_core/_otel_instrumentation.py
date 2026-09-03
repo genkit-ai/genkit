@@ -307,33 +307,18 @@ def reset_developer_ui_collector() -> None:
 
 def otel_for_collector(*, url: str) -> OtelInstrumentation:
     """Mint Genkit spans and POST them to this Developer UI collector."""
-    provider = init_provider()
+    provider = TracerProvider()
     provider.add_span_processor(create_span_processor(TraceServerExporter(telemetry_server_url=url)))
     return OtelInstrumentation(tracer_provider=provider)
 
 
 def connect_developer_ui_collector(*, url: str) -> None:
-    """Point the Developer UI collector at this URL.
-
-    ``GENKIT_ENV=dev`` and nothing minting yet: turn tracing on and hang
-    the mailbox. Already minting with no collector in env (Cloud
-    ``force_dev_export=True`` first): hang the mailbox only — someone is
-    already writing spans. ``GENKIT_TELEMETRY_SERVER`` already set: leave
-    it; that process already owns the mailbox.
-    """
+    """Point the Developer UI collector at this URL."""
     global developer_ui_collector_connected
     if not url or developer_ui_collector_connected:
         return
     developer_ui_collector_connected = True
-    if is_instrumented_by(OtelInstrumentation):
-        if os.environ.get('GENKIT_TELEMETRY_SERVER'):
-            return
-        add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'developer_ui')
-        return
-    if is_dev_environment():
-        configure_instrumentation(otel_for_collector(url=url))
-        return
-    add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'developer_ui')
+    configure_instrumentation(otel_for_collector(url=url))
 
 
 def genkit_dev_instrumentation() -> Instrumentation | None:
@@ -345,7 +330,7 @@ def genkit_dev_instrumentation() -> Instrumentation | None:
     exporter = init_telemetry_server_exporter()
     if exporter is None:
         return None
-    provider = init_provider()
+    provider = TracerProvider()
     provider.add_span_processor(create_span_processor(exporter))
     return OtelInstrumentation(tracer_provider=provider)
 
