@@ -76,6 +76,8 @@ from genkit_google_genai.google import (
     GoogleAI,
     VertexAI,
 )
+from genkit_google_genai.models.antigravity import AntigravityConfig
+from genkit_google_genai.models.deep_research import DeepResearchConfig
 from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
     GeminiEmbeddingModels,
@@ -94,7 +96,8 @@ from genkit_google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
-from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
+from genkit_google_genai.models.interactions_lyria import LyriaConfig
+from genkit_google_genai.models.interactions_registry import LyriaVersion
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 
@@ -114,6 +117,8 @@ __all__ = [
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
     'GemmaConfigSchema',
+    'AntigravityConfig',
+    'DeepResearchConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenConfigSchema',

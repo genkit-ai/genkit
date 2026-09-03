@@ -18,8 +18,9 @@
 
 Families with no generate path here resolve to nothing: Veo is
 background-only, embedders are a different action kind, and retired or
-unimplemented image ids must not fall through. Lyria, Deep Research, and
-Antigravity fail closed until those families have a generate action here.
+unimplemented image ids must not fall through. Vertex keeps Lyria, Deep
+Research, and Antigravity closed; Google AI routes those families through
+Interactions.
 """
 
 from genkit_google_genai.models.gemini import (
