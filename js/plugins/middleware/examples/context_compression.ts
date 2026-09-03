@@ -124,6 +124,11 @@ export const researchAgent = ai.defineAgent({
         maxChars: 120, // Truncate verbose tool responses beyond 120 chars
         preserveRecent: 1, // Keep most recent tool response intact
       },
+      summarize: {
+        model: vertexAI.model('gemini-flash-latest'),
+        preserveRecent: 2,
+      },
+      skipSummarizationThreshold: 0.3, // Skip LLM summarization if cheap strategies save >= 30%
       maxMessages: 10,
     }),
   ],
