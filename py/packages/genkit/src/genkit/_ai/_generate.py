@@ -713,10 +713,14 @@ async def generate_with_request(
             current_turn=current_turn,
         )
     except Exception as exc:
-        callback_cause = streaming_callback_cause(exc=exc)
-        if callback_cause is not None:
-            raise callback_cause from None
-        raise
+        if streaming_callback_cause(exc=exc) is None:
+            raise
+        return closed_round_from_exc(
+            response=None,
+            messages=list(mw_pipeline.latest_messages),
+            exc=exc,
+            caller_stopped=False,
+        )
 
 
 class ChunkAccumulator:
@@ -882,9 +886,10 @@ def closed_round_from_exc(
 ) -> ModelResponse:
     callback_cause = streaming_callback_cause(exc=exc)
     if callback_cause is not None:
-        if isinstance(exc, StreamingCallbackError):
-            raise exc
-        raise StreamingCallbackError(callback_cause) from callback_cause
+        # The stream pipe is framework plumbing, not a tool or model
+        # sentinel. Keep the sink's wording; drop any loop reason.
+        exc = callback_cause
+        reason = None
     if isinstance(exc, MissingOperationError | ModelContractError):
         raise exc
     if isinstance(exc, GenkitError) and isinstance(exc.cause, ValidationError):
@@ -972,6 +977,9 @@ async def _generate_action_turn(
             details={'message': interrupted_response.message},
         )
     raw_request = revised_request
+    # Resume already closed the pending tool round. A later pipe
+    # failure still has that history to resend.
+    mw_pipeline.latest_messages = list(raw_request.messages or [])
 
     chunks = ChunkAccumulator(message_index, formatter)
 
@@ -1265,6 +1273,16 @@ async def _generate_action_turn(
             return _persist_threaded_conversation(interrupted_resp, turn_options.messages)
 
         log_responded()
+        next_request = copy.copy(turn_options)
+        next_messages = copy.copy(turn_options.messages)
+        next_messages.append(generated_msg)
+        if tool_msg:
+            next_messages.append(tool_msg)
+        next_request.messages = next_messages
+        # Tools already ran. A later pipe failure still has this
+        # closed round to resend.
+        mw_pipeline.latest_messages = list(next_messages)
+
         # If the loop will continue, stream out the tool response message...
         if tool_msg:
             chunks.stream_chunk(
@@ -1275,13 +1293,6 @@ async def _generate_action_turn(
                 role=Role.TOOL,
                 ctx=run_ctx,
             )
-
-        next_request = copy.copy(turn_options)
-        next_messages = copy.copy(turn_options.messages)
-        next_messages.append(generated_msg)
-        if tool_msg:
-            next_messages.append(tool_msg)
-        next_request.messages = next_messages
 
         return await _generate_action_turn(
             registry=registry,

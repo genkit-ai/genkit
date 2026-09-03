@@ -363,7 +363,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A sinking callback fails generate the same way a model-chunk sink does."""
+    """A sinking tool-chunk pipe returns the closed tool round, not a raise."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
@@ -391,21 +391,28 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
         if getattr(chunk, 'role', None) == Role.TOOL:
             raise RuntimeError('sink closed')
 
-    with pytest.raises(RuntimeError, match='sink closed'):
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
-                tools=['echo'],
-            ),
-            on_chunk=on_chunk,
-        )
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            tools=['echo'],
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
 
 
 @pytest.mark.asyncio
-async def test_model_stream_callback_failure_raises_original_exception() -> None:
-    """A model chunk sink failure stays a caller exception, not a model response."""
+async def test_model_stream_callback_failure_returns_closed_history() -> None:
+    """A model chunk pipe failure returns the conversation entering that turn."""
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
     pm.responses = [
@@ -419,20 +426,27 @@ async def test_model_stream_callback_failure_raises_original_exception() -> None
     def on_chunk(_: object) -> None:
         raise RuntimeError('model sink closed')
 
-    with pytest.raises(RuntimeError, match='model sink closed'):
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
-            ),
-            on_chunk=on_chunk,
-        )
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER]
 
 
 @pytest.mark.asyncio
-async def test_resumed_tool_stream_callback_failure_raises_original_exception() -> None:
-    """A resumed tool chunk uses the same caller-exception boundary."""
+async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> None:
+    """A resumed tool chunk pipe failure keeps the conversation that already closed."""
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
@@ -467,14 +481,21 @@ async def test_resumed_tool_stream_callback_failure_raises_original_exception() 
             raise RuntimeError('resume sink closed')
 
     reply = respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])
-    with pytest.raises(RuntimeError, match='resume sink closed'):
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=list(first.messages),
-                tools=['hold'],
-                resume=Resume(respond=[reply]),
-            ),
-            on_chunk=on_chunk,
-        )
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=list(first.messages),
+            tools=['hold'],
+            resume=Resume(respond=[reply]),
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'resume sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
