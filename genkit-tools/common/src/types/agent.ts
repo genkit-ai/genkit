@@ -43,6 +43,13 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   The snapshot's state is empty until the background work finishes, at
  *   which point it is rewritten with the cumulative final state and a
  *   terminal status.
+ * - `aborting`: the `abort` companion action stopped a detached invocation
+ *   and its worker is winding down toward the write that stamps the state
+ *   on the row. Not terminal and not yet resumable: the worker keeps
+ *   refreshing `heartbeatAt` while it drains, and the row settles as
+ *   `aborted`. Written by runtimes whose abort stops the work before the
+ *   state is recorded; a runtime that records both in one write goes to
+ *   `aborted` directly.
  * - `completed`: the snapshot captures a settled state.
  * - `aborted`: the snapshot's invocation was aborted via the
  *   `abort` companion action while detached.
@@ -51,13 +58,14 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   it: the conversation trimmed back to the last completed tool round.
  *   Resume is permitted, so whether the failure is worth another attempt is
  *   the client's decision, taken from `error.status`.
- * - `expired`: a `pending` snapshot whose detached background worker is
- *   presumed dead because its heartbeat went stale. Computed on read from a
- *   stale `heartbeatAt`; never persisted (the dead worker can no longer write
- *   a terminal status itself).
+ * - `expired`: a `pending` or `aborting` snapshot whose detached background
+ *   worker is presumed dead because its heartbeat went stale. Computed on
+ *   read from a stale `heartbeatAt`; never persisted (the dead worker can no
+ *   longer write a terminal status itself).
  */
 export const SnapshotStatusSchema = z.enum([
   'pending',
+  'aborting',
   'completed',
   'aborted',
   'failed',
@@ -441,6 +449,16 @@ export const GetSnapshotRequestSchema = z.object({
    * aborted included).
    */
   sessionId: z.string().optional(),
+  /**
+   * Returns the snapshot's metadata only: status, finish reason, parent,
+   * session, timestamps, and error, with no state payload. The read is
+   * shaped exactly as a full read (status defaulting and heartbeat expiry
+   * need only the metadata), and a store that can read a row without
+   * loading its state does so. For callers that dispatch on where a task
+   * stands, this skips loading and serializing a potentially large
+   * conversation history.
+   */
+  metadataOnly: z.boolean().optional(),
 });
 export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 
@@ -460,9 +478,11 @@ export const AgentAbortResponseSchema = z.object({
   /** Identifies the snapshot the abort attempt targeted. */
   snapshotId: z.string(),
   /**
-   * Snapshot's status after the abort attempt. For a pending snapshot
-   * this is `aborted`. For an already-terminal snapshot this is the
-   * existing terminal status (the abort is a no-op).
+   * Snapshot's status after the abort attempt. For a pending snapshot this
+   * is `aborting` when the runtime stops the work before it records the
+   * state, or `aborted` when it records both in one write. For an
+   * already-terminal snapshot this is the existing terminal status (the
+   * abort is a no-op).
    */
   status: SnapshotStatusSchema.optional(),
 });

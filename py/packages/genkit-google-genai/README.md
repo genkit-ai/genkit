@@ -60,6 +60,49 @@ config = GeminiConfigSchema.model_validate({
 })
 ```
 
+### Video generation (Veo)
+
+Video is a job, not a round-trip. `generate_operation` hands back a ticket;
+`check_operation` is how you find out when the video is ready. When the job
+finishes, `operation.output` has a playable `media.url` — Studio sends a
+download URL, Vertex often sends the mp4 inline.
+
+**With `GoogleAI`:**
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+operation = await ai.generate_operation(
+    model=GoogleAI.veo_model('veo-3.1-fast-generate-preview'),
+    prompt='A paper airplane gliding through a bright classroom',
+)
+while not operation.done:
+    operation = await ai.check_operation(operation)
+print(operation.output)
+```
+
+**With `VertexAI`:**
+
+```python
+from genkit import Genkit
+from genkit_google_genai import VertexAI
+
+ai = Genkit(plugins=[VertexAI()])
+
+operation = await ai.generate_operation(
+    model=VertexAI.veo_model('veo-3.1-generate-001'),
+    prompt='A paper airplane gliding through a bright classroom',
+)
+while not operation.done:
+    operation = await ai.check_operation(operation)
+print(operation.output)
+```
+
+Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media).
+
 ### Vertex AI Evaluators
 
 Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:

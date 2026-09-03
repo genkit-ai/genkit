@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates the agent APIs by defining six agents in different
+// This sample demonstrates the agent APIs by defining seven agents in different
 // styles, one per file, behind a single CLI:
 //
 //   - pirate (pirate.go): DefineAgent with the prompt declared inline.
@@ -27,11 +27,16 @@
 //     reads it back, so each turn knows what earlier ones established.
 //   - orchestrator (orchestrator.go): delegates to sub-agents through
 //     per-agent tools, merging their artifacts into its own session.
+//   - commander (commander.go): the same middleware with Async set, so an
+//     incident commander starts its investigators in the background, keeps
+//     posting status updates while they work, and collects the results after.
 //
 // cli.go holds the CLI: it lists the agents, streams each turn, renders tool
 // calls as they happen, and routes interrupts. Conversation state persists to a
 // per-agent FileSessionStore under ./.genkit/snapshots/<agent>/, except for the
-// orchestrator's sub-agents, which run statelessly per delegation.
+// orchestrator's sub-agents, which run statelessly per delegation. The
+// commander's investigators do keep stores, which is what lets them run in the
+// background.
 //
 // Run it:
 //
@@ -54,11 +59,13 @@
 //	/back              return to the agent list
 //	/quit              exit
 //
-// Three worth trying: "/detach write me a long pirate story", then re-pick
+// Four worth trying: "/detach write me a long pirate story", then re-pick
 // pirate to wait on it; banker with "send $200 to alice" (over the $150
-// balance) or "send $120 to bob" (large enough to need approval); and barista,
+// balance) or "send $120 to bob" (large enough to need approval); barista,
 // where ordering a drink and later asking "what have I ordered?" is answered
-// from session state rather than from the transcript.
+// from session state rather than from the transcript; and commander with
+// "checkout-api is throwing 500s and customers can't pay", which posts its
+// first status update while its investigators are still running.
 package main
 
 import (
@@ -105,6 +112,7 @@ func main() {
 		newEntry(defineBankerAgent(g), handleTransferInterrupt),
 		newEntry(defineBaristaAgent(g), nil),
 		newEntry(defineOrchestratorAgent(g), nil),
+		newEntry(defineCommanderAgent(g), nil),
 	}
 
 	if err := runCLI(ctx, agents); err != nil {

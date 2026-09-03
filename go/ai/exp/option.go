@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // --- AgentOption ---
@@ -265,7 +266,7 @@ type invocationOptions[State any] struct {
 // applyInvocation merges o into opts, rejecting duplicate options.
 // Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
 // checked once, after all options are applied, in
-// [Agent.resolveOptions].
+// resolveInvocationInit.
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
 		if opts.state != nil {
@@ -332,4 +333,83 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 // error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
+}
+
+// resolveInvocationInit merges opts into the invocation's [AgentInit],
+// enforcing the per-option duplicate checks and the mutual-exclusivity rules:
+// WithState excludes both WithSessionID and WithSnapshotID (a client-managed
+// conversation's identity rides inside the state itself), while WithSessionID
+// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] and
+// [AgentHandle.Run], so typed and untyped callers reject the same inputs with
+// the same wording; name is the agent's, woven into the errors.
+//
+// It returns (nil, nil) when no option set anything: "no init" is decided
+// here, next to the merge a new option must extend, so a caller-side field
+// check cannot silently drop a future [AgentInit] field. A nil init runs the
+// invocation with a fresh session, identical to a zero-valued one.
+func resolveInvocationInit[State any](name string, opts []InvocationOption[State]) (*AgentInit[State], error) {
+	invOpts := &invocationOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyInvocation(invOpts); err != nil {
+			return nil, fmt.Errorf("Agent %q: %w", name, err)
+		}
+	}
+
+	if invOpts.state != nil && invOpts.snapshotID != "" {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", name)
+	}
+	if invOpts.state != nil && invOpts.sessionIDSet {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", name)
+	}
+
+	if invOpts.state == nil && invOpts.snapshotID == "" && !invOpts.sessionIDSet {
+		return nil, nil
+	}
+
+	return &AgentInit[State]{
+		SessionID:  invOpts.sessionID,
+		SnapshotID: invOpts.snapshotID,
+		State:      invOpts.state,
+	}, nil
+}
+
+// --- SnapshotReadOption ---
+
+// SnapshotReadOption configures how a snapshot read projects its result. It
+// applies to the reads that answer at once: [Agent.GetSnapshot],
+// [Agent.GetLatestSnapshot], their [AgentHandle] twins, and [DetachedTask.Poll].
+type SnapshotReadOption interface {
+	applySnapshotRead(*GetSnapshotRequest)
+}
+
+type snapshotReadOptions struct {
+	metadataOnly bool
+}
+
+func (o snapshotReadOptions) applySnapshotRead(req *GetSnapshotRequest) {
+	if o.metadataOnly {
+		req.MetadataOnly = true
+	}
+}
+
+// WithMetadataOnly reads a snapshot's metadata only: the returned snapshot
+// carries the shaped status, finish reason, parent, session, timestamps, and
+// error, and its State is nil. The shaping is identical to a full read (status
+// defaulting and heartbeat expiry need only the metadata), and a store that
+// implements [SnapshotMetadataReader] answers without loading the state at
+// all; any other store is read in full and the state dropped. Use it to
+// dispatch on where a task stands without serializing a potentially large
+// conversation history; the state transform does not run, exactly as on a
+// full read of a stateless row.
+func WithMetadataOnly() SnapshotReadOption {
+	return snapshotReadOptions{metadataOnly: true}
+}
+
+// resolveSnapshotRead applies opts to req and returns it, for the handle
+// methods that answer a read with one wire request.
+func resolveSnapshotRead(req *GetSnapshotRequest, opts []SnapshotReadOption) *GetSnapshotRequest {
+	for _, opt := range opts {
+		opt.applySnapshotRead(req)
+	}
+	return req
 }

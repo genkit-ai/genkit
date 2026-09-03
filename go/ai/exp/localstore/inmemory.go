@@ -67,6 +67,19 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
+// GetSnapshotMetadata retrieves a snapshot by ID without its state, per
+// [exp.SnapshotMetadataReader]. Returns nil if not found. The returned row
+// has State nil and, like a full read, owns everything else it carries.
+func (s *InMemorySessionStore[State]) GetSnapshotMetadata(_ context.Context, snapshotID string) (*exp.SessionSnapshot[State], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap, ok := s.snapshots[snapshotID]
+	if !ok {
+		return nil, nil
+	}
+	return snapshotMetadata(snap)
+}
+
 // GetLatestSnapshot returns the session's most recently created snapshot
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
 // contract. Ties on CreatedAt are broken by SnapshotID so resolution is
@@ -77,6 +90,33 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	latest := s.latestLocked(sessionID)
+	if latest == nil {
+		return nil, nil
+	}
+	return copySnapshot(latest)
+}
+
+// GetLatestSnapshotMetadata is [InMemorySessionStore.GetLatestSnapshot]
+// without the state, per [exp.SnapshotMetadataReader]: the
+// same resolution, and a row copied the way
+// [InMemorySessionStore.GetSnapshotMetadata] copies one.
+func (s *InMemorySessionStore[State]) GetLatestSnapshotMetadata(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("InMemorySessionStore: session ID is empty")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	latest := s.latestLocked(sessionID)
+	if latest == nil {
+		return nil, nil
+	}
+	return snapshotMetadata(latest)
+}
+
+// latestLocked returns the session's most recently created row, ties broken
+// by SnapshotID, or nil when the session has none. Caller must hold s.mu.
+func (s *InMemorySessionStore[State]) latestLocked(sessionID string) *exp.SessionSnapshot[State] {
 	var latest *exp.SessionSnapshot[State]
 	for _, snap := range s.snapshots {
 		if snap.SessionID != sessionID {
@@ -87,10 +127,32 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 			latest = snap
 		}
 	}
-	if latest == nil {
-		return nil, nil
+	return latest
+}
+
+// snapshotMetadata returns snap without its state, owning everything else it
+// carries: a copy with State nil, its own HeartbeatAt value, and its Error
+// copied the way a full read copies the whole row, so a caller that edits
+// either result never reaches the store's row.
+func snapshotMetadata[State any](snap *exp.SessionSnapshot[State]) (*exp.SessionSnapshot[State], error) {
+	meta := *snap
+	meta.State = nil
+	if snap.HeartbeatAt != nil {
+		hb := *snap.HeartbeatAt
+		meta.HeartbeatAt = &hb
 	}
-	return copySnapshot(latest)
+	if snap.Error != nil {
+		bytes, err := json.Marshal(snap.Error)
+		if err != nil {
+			return nil, fmt.Errorf("copy snapshot error: marshal: %w", err)
+		}
+		var copied status.Error
+		if err := json.Unmarshal(bytes, &copied); err != nil {
+			return nil, fmt.Errorf("copy snapshot error: unmarshal: %w", err)
+		}
+		meta.Error = &copied
+	}
+	return &meta, nil
 }
 
 // SaveSnapshot atomically reads, applies fn, and persists. See
@@ -109,12 +171,17 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	}
 
 	var existing *exp.SessionSnapshot[State]
+	var prevStatus exp.SnapshotStatus
 	if stored, ok := s.snapshots[id]; ok {
 		copied, err := copySnapshot(stored)
 		if err != nil {
 			return nil, err
 		}
 		existing = copied
+		// Captured before fn runs: fn may edit existing in place and return
+		// it, and comparing against the same object afterwards would hide the
+		// status change from subscribers.
+		prevStatus = existing.Status
 	}
 
 	next, err := fn(existing)
@@ -146,7 +213,7 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 		return nil, err
 	}
 	s.snapshots[id] = copied
-	if existing == nil || existing.Status != next.Status {
+	if existing == nil || prevStatus != next.Status {
 		s.notifyLocked(id, next.Status)
 	}
 	// Return next (the freshly-allocated struct from fn) rather than

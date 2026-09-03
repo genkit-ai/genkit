@@ -553,6 +553,16 @@ func TestFileSessionStore_Heartbeat(t *testing.T) {
 	})
 }
 
+func TestFileSessionStore_Metadata(t *testing.T) {
+	runMetadataStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		store, err := NewFileSessionStore[testState](t.TempDir())
+		if err != nil {
+			t.Fatalf("NewFileSessionStore: %v", err)
+		}
+		return store
+	})
+}
+
 func TestFileSessionStore_GetLatestSnapshot_SkipsUnparseableFiles(t *testing.T) {
 	// A stray unparseable .json file (crash artifact, partial copy,
 	// hand-edited row) must not poison session resolution for the healthy

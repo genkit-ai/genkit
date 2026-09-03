@@ -210,6 +210,9 @@
         },
         "sessionId": {
           "type": "string"
+        },
+        "metadataOnly": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -317,6 +320,7 @@
       "type": "string",
       "enum": [
         "pending",
+        "aborting",
         "completed",
         "aborted",
         "failed",

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 func TestInMemorySessionStore(t *testing.T) {
@@ -177,6 +178,50 @@ func TestInMemorySessionStore_Heartbeat(t *testing.T) {
 	})
 }
 
+func TestInMemorySessionStore_Metadata(t *testing.T) {
+	runMetadataStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		return NewInMemorySessionStore[testState]()
+	})
+
+	t.Run("MetadataReadOwnsItsError", func(t *testing.T) {
+		// A metadata read hands back the same ownership a full read does:
+		// editing its Error must not reach the store's row.
+		ctx := context.Background()
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(ctx, "failed",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusFailed,
+					Error:     status.Errorf(status.ErrInternal, "boom").WithDetails(map[string]any{"step": "one"}),
+				}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		for name, read := range map[string]func() (*exp.SessionSnapshot[testState], error){
+			"GetSnapshotMetadata":       func() (*exp.SessionSnapshot[testState], error) { return store.GetSnapshotMetadata(ctx, "failed") },
+			"GetLatestSnapshotMetadata": func() (*exp.SessionSnapshot[testState], error) { return store.GetLatestSnapshotMetadata(ctx, "sess-1") },
+		} {
+			meta, err := read()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if meta == nil || meta.Error == nil {
+				t.Fatalf("%s: expected a row carrying its error, got %+v", name, meta)
+			}
+			meta.Error.Message = "tampered"
+			meta.Error.Details["step"] = "tampered"
+			again, err := read()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if again.Error.Message != "boom" || again.Error.Details["step"] != "one" {
+				t.Errorf("%s: edits to the returned Error reached the store: %+v", name, again.Error)
+			}
+		}
+	})
+}
+
 func TestInMemorySessionStore_SessionIDs(t *testing.T) {
 	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
 		return NewInMemorySessionStore[testState]()
@@ -211,4 +256,41 @@ func TestInMemorySessionStore_SessionIDs(t *testing.T) {
 			t.Errorf("expected isolated copy with counter=1, got %+v", second)
 		}
 	})
+}
+
+func TestInMemorySessionStore_NotifiesInPlaceStatusChange(t *testing.T) {
+	// A mutator may edit the row it is handed and return it. The status
+	// change must still reach subscribers: the abort protocol's flip is
+	// exactly such a change, and a subscriber that missed it would never
+	// cancel the work.
+	ctx := context.Background()
+	store := NewInMemorySessionStore[testState]()
+	now := time.Now()
+	if _, err := store.SaveSnapshot(ctx, "row",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := store.OnSnapshotStatusChange(subCtx, "row")
+	if first := <-ch; first != exp.SnapshotStatusPending {
+		t.Fatalf("initial status = %q, want pending", first)
+	}
+	if _, err := store.SaveSnapshot(ctx, "row",
+		func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			existing.Status = exp.SnapshotStatusAborting
+			return existing, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot flip: %v", err)
+	}
+	select {
+	case got := <-ch:
+		if got != exp.SnapshotStatusAborting {
+			t.Errorf("notified status = %q, want aborting", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-place status change was not delivered to the subscriber")
+	}
 }

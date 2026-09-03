@@ -42,6 +42,25 @@ from genkit.model import FinishReason
 from genkit.plugin_api import ActionRunContext
 from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
 
+# GPT Image 1 has a different configuration surface from DALL-E models.
+_GPT_IMAGE_1_CONFIG_SCHEMA: dict[str, Any] = {
+    'type': 'object',
+    'properties': {
+        'size': {
+            'type': 'string',
+            'enum': ['1024x1024', '1536x1024', '1024x1536', 'auto'],
+        },
+        'style': {'type': 'string', 'enum': ['vivid', 'natural']},
+        'user': {'type': 'string'},
+        'n': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'default': 1},
+        'quality': {'type': 'string', 'enum': ['low', 'medium', 'high']},
+        'background': {'type': 'string', 'enum': ['transparent', 'opaque', 'auto']},
+        'moderation': {'type': 'string', 'enum': ['low', 'auto']},
+        'output_compression': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+        'output_format': {'type': 'string', 'enum': ['png', 'jpeg', 'web']},
+    },
+}
+
 # Supported image generation models with their metadata.
 SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     'dall-e-3': ModelInfo(
@@ -56,6 +75,7 @@ SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-image-1': ModelInfo(
         label='OpenAI - GPT Image 1',
+        config_schema=_GPT_IMAGE_1_CONFIG_SCHEMA,
         supports=Supports(
             media=False,
             output=['media'],
@@ -91,11 +111,18 @@ def _to_image_generate_params(
     config = extract_config_dict(request)
 
     # Start with required params.
+    effective_model = config.pop('version', None) or model_name
     params: dict[str, Any] = {
-        'model': config.pop('version', None) or model_name,
+        'model': effective_model,
         'prompt': prompt,
-        'response_format': config.pop('response_format', 'b64_json'),
     }
+
+    # GPT Image 1 rejects the response_format parameter; its API always
+    # returns base64 image data. DALL-E models retain the existing default.
+    if 'gpt-image' not in effective_model.lower():
+        params['response_format'] = config.pop('response_format', 'b64_json')
+    else:
+        config.pop('response_format', None)
 
     # Strip standard GenAI config keys that don't apply to image generation.
     for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):

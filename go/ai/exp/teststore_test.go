@@ -68,6 +68,12 @@ func (s *testInMemStore[State]) GetSnapshot(_ context.Context, snapshotID string
 	return testCopySnapshot(snap)
 }
 
+// testInMemStore deliberately implements no [SnapshotMetadataReader], so the
+// package's metadata-only reads exercise the fallback (a full read with the
+// state dropped); metadataCountingStore layers the capability on for the
+// tests that pin the fast path.
+var _ SessionStore[testState] = (*testInMemStore[testState])(nil)
+
 func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("testInMemStore: session ID is empty")
@@ -103,12 +109,17 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	}
 
 	var existing *SessionSnapshot[State]
+	var prevStatus SnapshotStatus
 	if stored, ok := s.snapshots[id]; ok {
 		copied, err := testCopySnapshot(stored)
 		if err != nil {
 			return nil, err
 		}
 		existing = copied
+		// Captured before fn runs: a mutator that edits existing in place
+		// and returns it would otherwise hide the status change from the
+		// notification below.
+		prevStatus = existing.Status
 	}
 
 	next, err := fn(existing)
@@ -134,7 +145,7 @@ func (s *testInMemStore[State]) SaveSnapshot(
 		return nil, err
 	}
 	s.snapshots[id] = copied
-	if existing == nil || existing.Status != next.Status {
+	if existing == nil || prevStatus != next.Status {
 		s.notifyLocked(id, next.Status)
 	}
 	return next, nil

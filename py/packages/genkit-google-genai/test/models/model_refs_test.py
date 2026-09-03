@@ -28,6 +28,7 @@ from genkit_google_genai import (
     KnownGeminiTts,
     KnownGemma,
     KnownImagen,
+    KnownVeo,
     VertexAI,
 )
 from genkit_google_genai.models.gemini import (
@@ -48,6 +49,7 @@ from genkit_google_genai.models.imagen import (
     ImagenVersion,
     is_imagen_model_name,
 )
+from genkit_google_genai.models.veo import VeoConfig, VeoVersion, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -71,6 +73,8 @@ class TestHappyPaths:
         """The existing version enums remain valid constructor input."""
         assert GoogleAI.gemini_model(GoogleAIGeminiVersion.GEMINI_2_5_FLASH).name == 'googleai/gemini-2.5-flash'
         assert GoogleAI.imagen_model(ImagenVersion.IMAGEN3).name == 'googleai/imagen-3.0-generate-002'
+        assert GoogleAI.veo_model(VeoVersion.VEO_3_1_FAST_PREVIEW).name == 'googleai/veo-3.1-fast-generate-preview'
+        assert VertexAI.veo_model(VeoVersion.VEO_3_1).name == 'vertexai/veo-3.1-generate-001'
 
     def test_family_constructors_type_their_config(self) -> None:
         """Each family constructor carries its own config schema."""
@@ -78,12 +82,15 @@ class TestHappyPaths:
         image = VertexAI.gemini_image_model('gemini-2.5-flash-image')
         gemma = GoogleAI.gemma_model('gemma-3-12b-it')
         imagen = VertexAI.imagen_model('imagen-3.0-generate-002')
+        veo = GoogleAI.veo_model('veo-3.1-fast-generate-preview')
 
         assert tts.config_schema is GeminiTtsConfigSchema
         assert image.config_schema is GeminiImageConfigSchema
         assert gemma.config_schema is GemmaConfigSchema
         assert imagen.config_schema is ImagenConfigSchema
         assert imagen.name == 'vertexai/imagen-3.0-generate-002'
+        assert veo.config_schema is VeoConfig
+        assert veo.name == 'googleai/veo-3.1-fast-generate-preview'
 
     def test_config_instance_rides_along(self) -> None:
         """A default config passed at construction survives into the ref."""
@@ -154,7 +161,7 @@ class TestClosedRejectSet:
     @pytest.mark.parametrize(
         'bad_id',
         [
-            'veo-3.0-generate-001',  # background model, no ref constructor
+            'veo-3.0-generate-001',  # wrong family: has its own constructor
             'lyria-002',  # no constructor in this plugin
             'googleai/lyria-002',  # prefix must not defeat the gate
             'deep-research-pro-preview',  # Interactions API family
@@ -182,7 +189,7 @@ class TestClosedRejectSet:
             VertexAI.imagen_model('gemini-2.5-flash')
         with pytest.raises(GenkitError, match=r'embedding'):
             GoogleAI.gemini_model('gemini-embedding-001')
-        with pytest.raises(GenkitError, match=r'background model and has no ref constructor'):
+        with pytest.raises(GenkitError, match=r'veo_model'):
             GoogleAI.gemini_model('veo-3.0-generate-001')
         with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
             GoogleAI.gemini_model('lyria-002')
@@ -207,6 +214,10 @@ class TestClosedRejectSet:
             GoogleAI.gemma_model('gemini-2.5-flash')
         with pytest.raises(GenkitError):
             VertexAI.gemini_image_model('imagen-3.0-generate-002')
+        with pytest.raises(GenkitError):
+            GoogleAI.veo_model('gemini-2.5-flash')
+        with pytest.raises(GenkitError):
+            GoogleAI.veo_model('totally-new-model')
 
 
 class TestEmbeddingConstructor:
@@ -259,3 +270,5 @@ class TestKnownIdLiterals:
         assert set(get_args(KnownGemma)) == _family_catalog(is_gemma_model)
         assert set(get_args(KnownImagen)) == {str(member.value) for member in ImagenVersion}
         assert all(is_imagen_model_name(value) for value in get_args(KnownImagen))
+        assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
+        assert all(is_veo_model(value) for value in get_args(KnownVeo))

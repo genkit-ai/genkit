@@ -34,10 +34,12 @@ type AgentAbortRequest struct {
 type AgentAbortResponse struct {
 	// SnapshotID identifies the snapshot the abort attempt targeted.
 	SnapshotID string `json:"snapshotId"`
-	// Status is the snapshot's status after the abort attempt. For a
-	// pending snapshot this is [SnapshotStatusAborted]. For an
-	// already-terminal snapshot this is the existing terminal status (the
-	// abort is a no-op).
+	// Status is the snapshot's status after the abort attempt. For a pending
+	// snapshot this is [SnapshotStatusAborting]: the flip that stops the work
+	// landed, and the finalize that stamps the state and settles the row as
+	// [SnapshotStatusAborted] follows. For an already-settled snapshot this is
+	// the existing status (the abort is a no-op), and for a row already aborting
+	// it is [SnapshotStatusAborting] again.
 	Status SnapshotStatus `json:"status,omitempty"`
 }
 
@@ -281,6 +283,14 @@ type Artifact struct {
 // (whatever its status). When both are set, the fetched snapshot must belong
 // to that session, or the request is rejected.
 type GetSnapshotRequest struct {
+	// MetadataOnly returns the snapshot's metadata only: status, finish reason,
+	// parent, session, timestamps, and error, with no state payload. The read is
+	// shaped exactly as a full read (status defaulting and heartbeat expiry need
+	// only the metadata), and a store that implements [SnapshotMetadataReader]
+	// answers without loading the state at all; any other store is read in full
+	// and the state dropped. For callers that dispatch on where a task stands,
+	// this skips serializing a potentially large conversation history.
+	MetadataOnly bool `json:"metadataOnly,omitempty"`
 	// SessionID identifies the session whose latest snapshot to fetch.
 	// Optional when SnapshotID is given. The latest snapshot is the session's
 	// most recently updated row regardless of status (pending, failed, or
@@ -403,14 +413,16 @@ type SessionState[State any] struct {
 // snapshot with [SnapshotStatusPending] (and empty state) and returns its
 // ID immediately. Background processing then rewrites that snapshot with the
 // state through the last committed turn and [SnapshotStatusCompleted] /
-// [SnapshotStatusFailed] when the agent finishes, or [SnapshotStatusAborted]
-// if the client called abort in the meantime. A detached run's rows are
-// therefore shaped like a synchronous one's: the same statuses mean the same
-// things whichever way the invocation ran.
+// [SnapshotStatusFailed] when the agent finishes. An abort in the meantime
+// flips the row to [SnapshotStatusAborting] to stop the work, and the same
+// finalize then lands it as [SnapshotStatusAborted] with the state. A
+// detached run's settled rows are therefore shaped like a synchronous one's:
+// the same statuses mean the same things whichever way the invocation ran.
 //
 // [SnapshotStatusExpired] is never persisted: it is computed on read for a
-// pending snapshot whose background worker is presumed dead (its heartbeat
-// went stale), surfacing the orphan rather than leaving it pending forever.
+// pending or aborting snapshot whose background worker is presumed dead (its
+// heartbeat went stale), surfacing the orphan rather than leaving it in
+// flight forever.
 type SnapshotStatus string
 
 const (
@@ -418,6 +430,17 @@ const (
 	// processing the queued inputs. The snapshot will be rewritten with a
 	// terminal status once the background work finishes.
 	SnapshotStatusPending SnapshotStatus = "pending"
+	// SnapshotStatusAborting indicates the abort companion action stopped a
+	// detached invocation and its worker is winding down toward the finalize
+	// that stamps the state onto the row. The flip is what cancels the work; the
+	// finalize that follows writes [SnapshotStatusAborted] with the state through
+	// the last committed turn. It is not terminal, so a wait keeps waiting, and it
+	// is not resumable: the row carries no state yet, and resuming from the
+	// parent snapshot would fork away from the work the finalize is about to
+	// commit. The worker keeps refreshing [SessionSnapshot.HeartbeatAt] while it
+	// drains, so a stale beat means it died between the two writes and a read
+	// surfaces the row as [SnapshotStatusExpired].
+	SnapshotStatusAborting SnapshotStatus = "aborting"
 	// SnapshotStatusCompleted indicates the snapshot captures a settled state.
 	SnapshotStatusCompleted SnapshotStatus = "completed"
 	// SnapshotStatusAborted indicates the caller stopped the invocation rather
@@ -430,7 +453,9 @@ const (
 	// last turn that finished, so resume is permitted the same way
 	// [SnapshotStatusFailed] permits it. A tool that ran inside the turn that did
 	// not finish has its response discarded with that turn, so re-sending the
-	// conversation runs it again.
+	// conversation runs it again. A detached run reaches this status through
+	// [SnapshotStatusAborting]: the abort flips the row to stop the work, and the
+	// finalize that follows writes this status together with the state.
 	SnapshotStatusAborted SnapshotStatus = "aborted"
 	// SnapshotStatusFailed indicates a turn ended with an error. The snapshot's
 	// Error field describes the failure, and its state is what the turn
@@ -439,10 +464,11 @@ const (
 	// attempt is the client's call, taken from the error's status. A turn the
 	// caller stopped writes [SnapshotStatusAborted] instead.
 	SnapshotStatusFailed SnapshotStatus = "failed"
-	// SnapshotStatusExpired indicates a pending snapshot whose detached background
-	// worker is presumed dead: its [SessionSnapshot.HeartbeatAt] went stale. It is
-	// computed on read (never persisted), so the raw store row stays
-	// [SnapshotStatusPending] while a read surfaces it as expired.
+	// SnapshotStatusExpired indicates a pending or aborting snapshot whose detached
+	// background worker is presumed dead: its [SessionSnapshot.HeartbeatAt] went
+	// stale. It is computed on read (never persisted), so the raw store row stays
+	// [SnapshotStatusPending] or [SnapshotStatusAborting] while a read surfaces it
+	// as expired.
 	SnapshotStatusExpired SnapshotStatus = "expired"
 )
 

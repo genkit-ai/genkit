@@ -118,7 +118,8 @@ from genkit_google_genai.models.imagen import (
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.veo import (
-    VeoConfigSchema,
+    KnownVeo,
+    VeoConfig,
     VeoModel,
     is_veo_model,
     veo_model_info,
@@ -366,7 +367,7 @@ def _create_veo_background_action(
     clean_name = name.removeprefix(prefix)
     full_name = f'{prefix}{clean_name}'
 
-    async def _start(request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
+    async def _start(request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
         veo = VeoModel(clean_name, client_getter())
         return await veo.start(request, ctx)
 
@@ -378,7 +379,7 @@ def _create_veo_background_action(
         full_name,
         _start,
         _check,
-        config_schema=VeoConfigSchema,
+        config_schema=VeoConfig,
         info=veo_model_info(clean_name),
         metadata={'type': 'background-model'},
     )
@@ -475,6 +476,19 @@ class GoogleFamilyRefs:
         )
 
     @classmethod
+    def veo_model(cls, name: KnownVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+        """Typed ref for a Veo video model (``veo-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='veo',
+            method='veo_model',
+            config_schema=VeoConfig,
+            config=config,
+        )
+
+    @classmethod
     def embedding(
         cls, name: str, *, config: dict[str, object] | None = None, version: str | None = None
     ) -> EmbedderRef:
@@ -497,12 +511,12 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
     return ActionMetadata(
         action_type=ActionKind.BACKGROUND_MODEL,
         name=name,
-        input_json_schema=to_json_schema(ModelRequest[VeoConfigSchema]),
+        input_json_schema=to_json_schema(ModelRequest[VeoConfig]),
         output_json_schema=to_json_schema(Operation),
         metadata={
             'model': {
                 **veo_model_info(local).model_dump(by_alias=True),
-                'customOptions': to_json_schema(VeoConfigSchema),
+                'customOptions': to_json_schema(VeoConfig),
             },
             'type': 'background-model',
         },

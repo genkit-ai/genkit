@@ -14,15 +14,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/schematest"
 )
 
 var ctx = context.Background()
@@ -53,7 +56,7 @@ func TestMiddlewareInjectsInstructions(t *testing.T) {
 	r := newTestRegistry(t)
 	m, captured := echoModel(t, r, "test/echo", "ok")
 
-	cfg := &Config{}
+	cfg := &Surfaces{}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +87,7 @@ func TestMiddlewareInstructionsNone(t *testing.T) {
 	r := newTestRegistry(t)
 	m, captured := echoModel(t, r, "test/echo-none", "ok")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +109,7 @@ func TestMiddlewareRewritesFinalMessage(t *testing.T) {
 		"\n```"
 	m, _ := echoModel(t, r, "test/rewrite", reply)
 
-	cfg := &Config{SurfaceID: "fixed-surface", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed-surface", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("card please"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +170,7 @@ func TestMiddlewareRewritesFinalMessageSplitAcrossParts(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{SurfaceID: "fixed-surface", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed-surface", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("card please"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +254,7 @@ func TestMiddlewareTransformsStream(t *testing.T) {
 		return nil
 	}
 
-	cfg := &Config{SurfaceID: "fixed", Validate: ValidateStrict}
+	cfg := &Surfaces{SurfaceID: "fixed", Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
 		ai.WithPrompt("card please"),
@@ -305,7 +308,7 @@ func TestMiddlewareSanitizesInboundA2UI(t *testing.T) {
 	})
 	userMsg := ai.NewMessage(ai.RoleUser, nil, ai.NewTextPart("submit"), actionPart)
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +349,7 @@ func TestMiddlewarePreservesTextPartMetadata(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	cfg := &Surfaces{Instructions: InstructionsNone, Validate: ValidateStrict}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hi"), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +385,7 @@ func TestMiddlewareSkipsParseOnAbnormalFinish(t *testing.T) {
 	})
 	m.Register(r)
 
-	cfg := &Config{Instructions: InstructionsNone, Validate: ValidateStrict}
+	cfg := &Surfaces{Instructions: InstructionsNone, Validate: ValidateStrict}
 	// Generate itself surfaces a blocked finish as an error, but the middleware
 	// must not replace it with an a2ui parse error, and the response state must
 	// survive. Call the model through the middleware directly to observe that.
@@ -424,7 +427,7 @@ func TestMiddlewareReplaysPriorSurfaceAsBlock(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, ai.NewTextPart("Here you go:"), surfacePart)
 	userMsg := ai.NewUserTextMessage("thanks")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +479,7 @@ func TestMiddlewareDropsEmptiedMessage(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, emptyPart)
 	userMsg := ai.NewUserTextMessage("hi")
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +529,7 @@ func TestMiddlewareNewRenderNeverReusesHistoryID(t *testing.T) {
 	modelMsg := ai.NewMessage(ai.RoleModel, nil, priorSurface)
 	userMsg := ai.NewMessage(ai.RoleUser, nil, actionPart)
 
-	cfg := &Config{SurfaceID: "sfc-new"}
+	cfg := &Surfaces{SurfaceID: "sfc-new"}
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(modelMsg, userMsg), ai.WithUse(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +595,7 @@ func TestMiddlewareGroupsSurfacesSplitsAroundAction(t *testing.T) {
 	})
 	userMsg := ai.NewMessage(ai.RoleUser, nil, part)
 
-	cfg := &Config{Instructions: InstructionsNone}
+	cfg := &Surfaces{Instructions: InstructionsNone}
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(userMsg), ai.WithUse(cfg)); err != nil {
 		t.Fatal(err)
 	}
@@ -621,20 +624,90 @@ func TestMiddlewareGroupsSurfacesSplitsAroundAction(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsInvalidValidateMode(t *testing.T) {
-	if _, err := (&Config{Validate: "strick"}).New(ctx); err == nil {
+func TestSurfacesRejectsInvalidValidateMode(t *testing.T) {
+	if _, err := (&Surfaces{Validate: "strick"}).New(ctx); err == nil {
 		t.Fatal("expected an error for an invalid Validate mode")
 	}
 }
 
-func TestConfigRejectsUnsupportedVersion(t *testing.T) {
-	if _, err := (&Config{Version: "0.9"}).New(ctx); err == nil {
+func TestSurfacesRejectsUnsupportedVersion(t *testing.T) {
+	if _, err := (&Surfaces{Version: "0.9"}).New(ctx); err == nil {
 		t.Fatal("expected an error for an unsupported Version")
 	}
 }
 
-func TestConfigRejectsInvalidInstructions(t *testing.T) {
-	if _, err := (&Config{Instructions: "prompt"}).New(ctx); err == nil {
+func TestSurfacesRejectsInvalidInstructions(t *testing.T) {
+	if _, err := (&Surfaces{Instructions: "prompt"}).New(ctx); err == nil {
 		t.Fatal("expected an error for invalid Instructions")
+	}
+}
+
+// The plugin exists only to register the middleware so it can be resolved by
+// name: from the Dev UI, from another runtime, or from a prompt file's `use:`
+// list. Its descriptor must carry the name the middleware answers to, a
+// description, a fully documented schema, and exactly the serializable
+// options (Catalog is code-only).
+func TestPluginDescribesMiddleware(t *testing.T) {
+	descs, err := (&A2UI{}).Middlewares(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(descs) != 1 {
+		t.Fatalf("got %d middleware descriptors, want 1", len(descs))
+	}
+	d := descs[0]
+	if d.Name != provider || (&A2UI{}).Name() != provider {
+		t.Errorf("descriptor name = %q, plugin name = %q; both must be %q", d.Name, (&A2UI{}).Name(), provider)
+	}
+	if d.Description == "" {
+		t.Error("middleware has no description")
+	}
+	schematest.AssertDescribed(t, d.Name, d.ConfigSchema)
+
+	props, _ := d.ConfigSchema["properties"].(map[string]any)
+	got := slices.Sorted(maps.Keys(props))
+	want := []string{"catalogId", "instructions", "surfaceId", "validate", "version"}
+	if !slices.Equal(got, want) {
+		t.Errorf("config schema properties = %v, want %v", got, want)
+	}
+}
+
+// TestDescriptionsUseTheDedicatedTag guards against the inline
+// `jsonschema:"description=..."` form, which the schema library truncates at
+// the first comma; see [schematest.AssertNoInlineDescriptions].
+func TestDescriptionsUseTheDedicatedTag(t *testing.T) {
+	schematest.AssertNoInlineDescriptions(t, ".")
+}
+
+// Every JSON-dispatched call (Dev UI, another runtime, a prompt file) builds
+// its own config off the registered prototype, so an option one call sets must
+// not leak into the next.
+func TestJSONDispatchDoesNotLeakConfigBetweenCalls(t *testing.T) {
+	r := newTestRegistry(t)
+	m, captured := echoModel(t, r, "test/echo", "ok")
+	descs, err := (&A2UI{}).Middlewares(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descs[0].Register(r)
+
+	injectedSystem := func(config map[string]any) bool {
+		t.Helper()
+		_, err := ai.GenerateWithRequest(t.Context(), r, &ai.GenerateActionOptions{
+			Model:    m.Name(),
+			Messages: []*ai.Message{ai.NewUserTextMessage("hi")},
+			Use:      []*ai.MiddlewareRef{{Name: provider, Config: config}},
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(*captured, func(msg *ai.Message) bool { return msg.Role == ai.RoleSystem })
+	}
+
+	if injectedSystem(map[string]any{"instructions": InstructionsNone}) {
+		t.Error("instructions=none still injected a system message")
+	}
+	if !injectedSystem(map[string]any{}) {
+		t.Error("default dispatch injected no system message: instructions=none leaked from the previous call")
 	}
 }

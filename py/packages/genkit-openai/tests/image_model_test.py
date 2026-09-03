@@ -84,6 +84,72 @@ class TestToImageGenerateParams:
         assert got['prompt'] == 'a cat'
         assert got['response_format'] == 'b64_json'
 
+    def test_gpt_image_1_omits_response_format(self) -> None:
+        """Verify GPT Image 1 requests omit the unsupported response format."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'response_format': 'url'},
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert 'response_format' not in got
+
+    @pytest.mark.parametrize('model_name', ['GPT-IMAGE-1', 'gpt-image-1-mini', 'gpt-image-1.5'])
+    def test_gpt_image_variants_omit_response_format(self, model_name: str) -> None:
+        """Verify GPT Image variants use the API's base64-only response shape."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'response_format': 'url'},
+        )
+
+        got = _to_image_generate_params(model_name, request)
+
+        assert 'response_format' not in got
+
+    def test_gpt_image_version_override_omits_response_format(self) -> None:
+        """Verify the version override is also classified as a GPT Image model."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={'version': 'gpt-image-1-mini'},
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert got['model'] == 'gpt-image-1-mini'
+        assert 'response_format' not in got
+
+    def test_gpt_image_config_passthrough(self) -> None:
+        """Verify GPT Image-specific options are forwarded unchanged."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+            ],
+            config={
+                'background': 'transparent',
+                'moderation': 'low',
+                'output_compression': 80,
+                'output_format': 'png',
+                'size': '1024x1024',
+                'quality': 'high',
+            },
+        )
+
+        got = _to_image_generate_params('gpt-image-1', request)
+
+        assert got['background'] == 'transparent'
+        assert got['moderation'] == 'low'
+        assert got['output_compression'] == 80
+        assert got['output_format'] == 'png'
+        assert got['size'] == '1024x1024'
+        assert got['quality'] == 'high'
+
     def test_config_passthrough(self) -> None:
         """Verify image-specific config options pass through."""
         request = ModelRequest(
@@ -195,6 +261,20 @@ class TestSupportedImageModels:
         for name, info in SUPPORTED_IMAGE_MODELS.items():
             assert info.supports is not None, f'{name} has no supports metadata'
             assert 'media' in (info.supports.output or []), f"{name} should support 'media' output"
+
+    def test_gpt_image_1_exposes_config_schema(self) -> None:
+        """Verify GPT Image 1 advertises its model-specific config constraints."""
+        schema = SUPPORTED_IMAGE_MODELS['gpt-image-1'].config_schema
+
+        assert schema is not None
+        properties = schema['properties']
+        assert properties['size']['enum'] == ['1024x1024', '1536x1024', '1024x1536', 'auto']
+        assert properties['quality']['enum'] == ['low', 'medium', 'high']
+        assert properties['background']['enum'] == ['transparent', 'opaque', 'auto']
+        assert properties['moderation']['enum'] == ['low', 'auto']
+        assert properties['output_compression'] == {'type': 'integer', 'minimum': 1, 'maximum': 100}
+        assert properties['output_format']['enum'] == ['png', 'jpeg', 'web']
+        assert 'response_format' not in properties
 
 
 class TestOpenAIImageModel:

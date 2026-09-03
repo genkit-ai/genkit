@@ -1057,6 +1057,9 @@ async def _generate_action_turn(
             response.finish_reason = FinishReason.ABORTED
             response.finish_message = f'Exceeded maximum tool call iterations ({max_iters})'
             log_responded()
+            # This model call opened a tool round we will not run. Only
+            # completed rounds can be reused as conversation history.
+            response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
 
         raise_if_aborted(ctx.abort_signal)
@@ -1076,6 +1079,7 @@ async def _generate_action_turn(
             response.finish_reason = FinishReason.FAILED
             response.finish_message = f'Tool {missing_tool} not found'
             log_responded()
+            response.message = None
             return _persist_threaded_conversation(response, turn_options.messages)
 
         revised_model_msg, tool_msg = await resolve_tool_requests(

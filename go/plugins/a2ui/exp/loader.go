@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package a2ui
+package exp
 
 import (
 	"fmt"
@@ -27,7 +27,7 @@ import (
 
 // LoadCatalog registers an A2UI catalog in the Genkit registry under the key
 // `/a2ui-catalog/<id>` (using the catalog's own ID), so the [ai.Middleware] can
-// resolve it by id via [Config.CatalogID], and tooling such as the Dev UI can
+// resolve it by id via [Surfaces.CatalogID], and tooling such as the Dev UI can
 // enumerate catalogs (GET /api/values?type=a2ui-catalog). This mirrors the JS
 // and Dart plugins, keeping the catalog representation identical across
 // runtimes.
@@ -41,9 +41,9 @@ import (
 //
 // Example:
 //
-//	a2ui.LoadCatalog(g, myCatalog)
+//	a2uix.LoadCatalog(g, myCatalog)
 //	// ... then reference it by id:
-//	ai.WithUse(&a2ui.Config{CatalogID: myCatalog.ID})
+//	ai.WithUse(&a2uix.Surfaces{CatalogID: myCatalog.ID})
 func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 	if catalog == nil {
 		return fmt.Errorf("a2ui: LoadCatalog: catalog is nil")
@@ -127,7 +127,7 @@ func resolveCatalog(g *genkit.Genkit, catalog *Catalog, catalogID string) (*Cata
 			if c, ok := v.(*Catalog); ok {
 				return c, nil
 			}
-			return nil, fmt.Errorf("a2ui: registry value %q is not an *a2ui.Catalog", catalogRegistryKey(id))
+			return nil, fmt.Errorf("a2ui: registry value %q is not an A2UI catalog", catalogRegistryKey(id))
 		}
 	}
 	// Fall back to the bundled basic catalog for the default id (and also when
@@ -136,6 +136,6 @@ func resolveCatalog(g *genkit.Genkit, catalog *Catalog, catalogID string) (*Cata
 		return BasicCatalog(), nil
 	}
 	return nil, fmt.Errorf(
-		"a2ui: no catalog registered under id %q; register one with a2ui.LoadCatalog(g, catalog) or use the default %q catalog",
+		"a2ui: no catalog registered under id %q; register one with LoadCatalog(g, catalog) or use the default %q catalog",
 		id, DefaultCatalogID)
 }

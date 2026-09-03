@@ -16,7 +16,7 @@
 
 // This sample serves an A2UI-enabled agent over HTTP, compatible with the
 // browser frontend in js/testapps/a2ui/web. The whole A2UI integration is the
-// a2ui middleware in the agent's inline prompt (`ai.WithUse(&a2ui.Config{})`):
+// a2ui middleware in the agent's inline prompt (`ai.WithUse(&a2uix.Surfaces{})`):
 // it injects the catalog's capabilities into the system prompt and rewrites the
 // model's a2ui fenced blocks into a2ui data parts that the client renderer
 // consumes.
@@ -58,7 +58,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
-	"github.com/firebase/genkit/go/plugins/a2ui"
+	a2uix "github.com/firebase/genkit/go/plugins/a2ui/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -84,7 +84,7 @@ func main() {
 	// optional (it surfaces the middleware in the Dev UI); the middleware works
 	// via ai.WithUse regardless.
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}, &a2ui.Plugin{}),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}, &a2uix.A2UI{}),
 		genkit.WithExperimental(),
 	)
 
@@ -92,7 +92,7 @@ func main() {
 	// Dev UI (GET /api/values?type=a2ui-catalog) alongside any custom catalogs.
 	// The middleware falls back to the basic catalog even without this, so it is
 	// optional; it is here to demonstrate registry-backed catalogs.
-	if err := a2ui.RegisterBasicCatalog(g); err != nil {
+	if err := a2uix.RegisterBasicCatalog(g); err != nil {
 		log.Fatalf("registering basic catalog: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func main() {
 		},
 	)
 
-	// The A2UI-enabled agent. The whole integration is a2ui.Config in WithUse.
+	// The A2UI-enabled agent. The whole integration is a2uix.Surfaces in WithUse.
 	// An in-memory session store makes state server-managed, so the browser
 	// only needs to pass a session id (remoteAgent handles that for it).
 	uiAgent := genkitx.DefineAgent(g, "uiAgent",
@@ -130,7 +130,7 @@ condition, humidity). Feel free to add a Button (e.g. "Refresh") when useful.`),
 			// Retry transient model failures (UNAVAILABLE, RESOURCE_EXHAUSTED,
 			// etc.) with exponential backoff before giving up.
 			ai.WithUse(&middleware.Retry{MaxRetries: 5}),
-			ai.WithUse(&a2ui.Config{}), // defaults to the bundled basic catalog
+			ai.WithUse(&a2uix.Surfaces{}), // defaults to the bundled basic catalog
 		},
 		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 	)

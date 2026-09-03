@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // testState is the custom-state type used by store unit tests.
@@ -272,6 +273,138 @@ func abortViaSave(t *testing.T, store exp.SessionStore[testState], id string) ex
 		return ""
 	}
 	return saved.Status
+}
+
+// runMetadataStoreTests exercises the optional metadata-only reads
+// ([exp.SnapshotMetadataReader]) against any store: they resolve the same row
+// as their full counterparts, carry every field but the state, and share the
+// full reads' miss and empty-session-ID contract.
+func runMetadataStoreTests(t *testing.T, newStore func(t *testing.T) exp.SessionStore[testState]) {
+	ctx := context.Background()
+	tick := func() { time.Sleep(2 * time.Millisecond) }
+
+	// Both bundled stores implement the optional capability; a store that
+	// lost it would silently fall back to full reads, so the suite asserts
+	// the capability rather than reading through the runtime's fallback.
+	metadataReader := func(t *testing.T, store exp.SessionStore[testState]) exp.SnapshotMetadataReader[testState] {
+		t.Helper()
+		mr, ok := store.(exp.SnapshotMetadataReader[testState])
+		if !ok {
+			t.Fatalf("%T does not implement exp.SnapshotMetadataReader", store)
+		}
+		return mr
+	}
+
+	saveRow := func(t *testing.T, store exp.SessionStore[testState], id, sessionID, parentID string, st exp.SnapshotStatus) *exp.SessionSnapshot[testState] {
+		t.Helper()
+		now := time.Now()
+		beat := now.Add(-time.Second)
+		saved, err := store.SaveSnapshot(ctx, id,
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{
+					SessionID:    sessionID,
+					ParentID:     parentID,
+					Status:       st,
+					FinishReason: exp.AgentFinishReasonFailed,
+					Error:        &status.Error{Status: status.Internal, Message: "boom"},
+					State:        &exp.SessionState[testState]{Custom: testState{Counter: 7}},
+					CreatedAt:    now,
+					UpdatedAt:    now,
+					HeartbeatAt:  &beat,
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot(%q): %v", id, err)
+		}
+		return saved
+	}
+
+	// assertMetadataOf checks meta against the full read of the same row:
+	// State dropped, everything else equal.
+	assertMetadataOf := func(t *testing.T, meta, full *exp.SessionSnapshot[testState]) {
+		t.Helper()
+		if meta == nil {
+			t.Fatal("metadata read returned nil for an existing row")
+		}
+		if meta.State != nil {
+			t.Errorf("metadata read carried state: %+v", meta.State)
+		}
+		if meta.SnapshotID != full.SnapshotID || meta.SessionID != full.SessionID || meta.ParentID != full.ParentID ||
+			meta.Status != full.Status || meta.FinishReason != full.FinishReason ||
+			!meta.CreatedAt.Equal(full.CreatedAt) || !meta.UpdatedAt.Equal(full.UpdatedAt) {
+			t.Errorf("metadata read differs from the full read:\n meta=%+v\n full=%+v", meta, full)
+		}
+		if meta.HeartbeatAt == nil || full.HeartbeatAt == nil || !meta.HeartbeatAt.Equal(*full.HeartbeatAt) {
+			t.Errorf("HeartbeatAt: meta=%v full=%v", meta.HeartbeatAt, full.HeartbeatAt)
+		}
+		if meta.Error == nil || full.Error == nil || meta.Error.Message != full.Error.Message || meta.Error.Status != full.Error.Status {
+			t.Errorf("Error: meta=%+v full=%+v", meta.Error, full.Error)
+		}
+	}
+
+	t.Run("GetSnapshotMetadataMatchesFullReadWithoutState", func(t *testing.T) {
+		store := newStore(t)
+		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusFailed)
+		full, err := store.GetSnapshot(ctx, "a")
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		meta, err := metadataReader(t, store).GetSnapshotMetadata(ctx, "a")
+		if err != nil {
+			t.Fatalf("GetSnapshotMetadata: %v", err)
+		}
+		assertMetadataOf(t, meta, full)
+	})
+
+	t.Run("GetSnapshotMetadataUnknownIsNil", func(t *testing.T) {
+		store := newStore(t)
+		meta, err := metadataReader(t, store).GetSnapshotMetadata(ctx, "nope")
+		if err != nil {
+			t.Fatalf("GetSnapshotMetadata: %v", err)
+		}
+		if meta != nil {
+			t.Errorf("expected nil for a missing snapshot, got %+v", meta)
+		}
+	})
+
+	t.Run("GetLatestSnapshotMetadataResolvesTheSameRow", func(t *testing.T) {
+		store := newStore(t)
+		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusCompleted)
+		tick()
+		saveRow(t, store, "b", "sess-1", "a", exp.SnapshotStatusPending)
+		tick()
+		saveRow(t, store, "other", "sess-2", "", exp.SnapshotStatusCompleted)
+		full, err := store.GetLatestSnapshot(ctx, "sess-1")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshot: %v", err)
+		}
+		meta, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, "sess-1")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotMetadata: %v", err)
+		}
+		if full == nil || full.SnapshotID != "b" {
+			t.Fatalf("GetLatestSnapshot resolved %+v, want row b", full)
+		}
+		assertMetadataOf(t, meta, full)
+	})
+
+	t.Run("GetLatestSnapshotMetadataUnknownSessionIsNil", func(t *testing.T) {
+		store := newStore(t)
+		meta, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, "sess-none")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshotMetadata: %v", err)
+		}
+		if meta != nil {
+			t.Errorf("expected nil for an unknown session, got %+v", meta)
+		}
+	})
+
+	t.Run("GetLatestSnapshotMetadataEmptySessionID", func(t *testing.T) {
+		store := newStore(t)
+		if _, err := metadataReader(t, store).GetLatestSnapshotMetadata(ctx, ""); err == nil {
+			t.Error("expected an error for an empty session ID")
+		}
+	})
 }
 
 // runHeartbeatStoreTests exercises a heartbeat refresh - an ordinary

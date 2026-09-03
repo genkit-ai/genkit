@@ -95,7 +95,7 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
 from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
-from genkit_google_genai.models.veo import VeoConfig, VeoVersion
+from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
 
 
 def package_name() -> str:
@@ -123,6 +123,7 @@ __all__ = [
     'KnownGeminiTts',
     'KnownGemma',
     'KnownImagen',
+    'KnownVeo',
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',
