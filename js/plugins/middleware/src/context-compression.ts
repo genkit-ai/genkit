@@ -78,9 +78,7 @@ export const DeduplicateToolResponsesOptionsSchema = z.object({
   keepRecent: z
     .number()
     .optional()
-    .describe(
-      'Number of recent duplicates to keep untouched. Default: 1.'
-    ),
+    .describe('Number of recent duplicates to keep untouched. Default: 1.'),
 
   /**
    * Replacement text for deduplicated tool responses.
@@ -223,6 +221,24 @@ export const ContextCompressionOptionsSchema = z
       .string()
       .optional()
       .describe('Custom notice text for when messages are dropped.'),
+
+    /**
+     * Store compressed messages on `message.metadata.compressedHistory` of the
+     * last compressed message, keeping original uncompressed messages in
+     * `request.messages` and `response.messages`.
+     *
+     * The middleware automatically resolves `compressedHistory` on subsequent turns.
+     * Use `resolveCompressedHistory(messages)` to resolve the active messages yourself.
+     *
+     * Set to `false` to overwrite `request.messages` directly (destructive).
+     * @default true
+     */
+    preserveOriginalMessages: z
+      .boolean()
+      .optional()
+      .describe(
+        'Preserve original messages and store compressed history in metadata. Default: true.'
+      ),
   })
   .passthrough();
 
@@ -257,6 +273,25 @@ const DEFAULT_TRUNCATION_NOTICE =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolves active messages by scanning bottom-up for `message.metadata.compressedHistory`.
+ * When found, replaces messages from index 0 up to that message with the compressedHistory.
+ */
+export function resolveCompressedHistory(
+  messages: MessageData[]
+): MessageData[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const meta = messages[i]?.metadata;
+    if (meta && Array.isArray(meta.compressedHistory)) {
+      return [
+        ...(meta.compressedHistory as MessageData[]),
+        ...messages.slice(i + 1),
+      ];
+    }
+  }
+  return messages;
+}
 
 /**
  * Stringify tool output, avoiding re-stringifying if already a string.
@@ -392,8 +427,10 @@ export const contextCompression: GenerateMiddleware<
   },
   ({ config, ai }) => {
     const maxInputTokens = config?.maxInputTokens ?? Infinity;
-    const basePreserveRecent = config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
+    const basePreserveRecent =
+      config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
     const preserveSystem = config?.preserveSystem !== false;
+    const preserveOriginalMessages = config?.preserveOriginalMessages !== false;
     const maxToolResponseChars =
       config?.maxToolResponseChars ?? DEFAULT_MAX_TOOL_RESPONSE_CHARS;
 
@@ -657,7 +694,8 @@ export const contextCompression: GenerateMiddleware<
       summarized: boolean;
       tailCount: number;
     }> {
-      if (!summaryModelRef) return { messages, summarized: false, tailCount: 0 };
+      if (!summaryModelRef)
+        return { messages, summarized: false, tailCount: 0 };
 
       const summaryPreserveRecent =
         effectiveSummaryPreserveRecent ?? baseSummaryPreserveRecent;
@@ -685,7 +723,7 @@ export const contextCompression: GenerateMiddleware<
         );
 
         const response = await ai.generate({
-          model: (summaryModelRef as any),
+          model: summaryModelRef as any,
           config: summaryModelRef?.config,
           prompt,
         });
@@ -713,7 +751,13 @@ export const contextCompression: GenerateMiddleware<
 
     return {
       model: async (req, ctx, next) => {
-        const result = await next(req, ctx);
+        const resolvedMessages = resolveCompressedHistory(req.messages || []);
+        const modifiedReq =
+          resolvedMessages !== req.messages
+            ? { ...req, messages: resolvedMessages }
+            : req;
+
+        const result = await next(modifiedReq, ctx);
         const store = compressionStorage.getStore();
         if (store && result.usage?.inputTokens !== undefined) {
           store.lastInputTokens = result.usage.inputTokens;
@@ -733,8 +777,9 @@ export const contextCompression: GenerateMiddleware<
           }
 
           const rawMessages = envelope.request.messages || [];
+          const activeMessages = resolveCompressedHistory(rawMessages);
           const estimatedTokens = Math.ceil(
-            estimateMessageChars(rawMessages) / 3.5
+            estimateMessageChars(activeMessages) / 3.5
           );
           const effectiveTokens = Math.max(
             store?.lastInputTokens ?? 0,
@@ -743,7 +788,7 @@ export const contextCompression: GenerateMiddleware<
 
           const shouldCompress =
             effectiveTokens > maxInputTokens ||
-            (maxMessages !== undefined && rawMessages.length > maxMessages);
+            (maxMessages !== undefined && activeMessages.length > maxMessages);
 
           if (!shouldCompress) {
             const response = await next(envelope, ctx);
@@ -759,8 +804,8 @@ export const contextCompression: GenerateMiddleware<
             return response;
           }
 
-          const charsBefore = estimateMessageChars(rawMessages);
-          const originalCount = rawMessages.length;
+          const charsBefore = estimateMessageChars(activeMessages);
+          const originalCount = activeMessages.length;
 
           const overshootRatio =
             maxInputTokens !== Infinity && maxInputTokens > 0
@@ -780,15 +825,21 @@ export const contextCompression: GenerateMiddleware<
             toolResponsesDeduplicated,
             toolResponsesTruncated,
             truncationNoticeInserted,
+            messagesTruncated,
+            truncTailCount,
             summarized,
+            summaryTailCount,
             summarizationSkipped,
-          } = await ai.run('contextCompression', rawMessages, async () => {
-            let messages = [...rawMessages];
+          } = await ai.run('contextCompression', activeMessages, async () => {
+            let messages = [...activeMessages];
             let capped = 0;
             let deduplicated = 0;
             let truncated = 0;
             let noticeInserted = false;
+            let msgTruncated = false;
+            let mTailCount = 0;
             let isSummarized = false;
+            let sTailCount = 0;
             let skippedSummary = false;
 
             // 1. Safety cap on oversized tool responses
@@ -842,6 +893,10 @@ export const contextCompression: GenerateMiddleware<
               );
               messages = msgResult.messages;
               noticeInserted = msgResult.noticeInserted;
+              if (msgResult.dropped > 0) {
+                msgTruncated = true;
+                mTailCount = msgResult.tailCount;
+              }
             }
 
             // 6. Summarization
@@ -855,6 +910,9 @@ export const contextCompression: GenerateMiddleware<
                 );
                 messages = sumResult.messages;
                 isSummarized = sumResult.summarized;
+                if (isSummarized) {
+                  sTailCount = sumResult.tailCount;
+                }
               }
             }
 
@@ -864,7 +922,10 @@ export const contextCompression: GenerateMiddleware<
               toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
               truncationNoticeInserted: noticeInserted,
+              messagesTruncated: msgTruncated,
+              truncTailCount: mTailCount,
               summarized: isSummarized,
+              summaryTailCount: sTailCount,
               summarizationSkipped: skippedSummary,
             };
           });
@@ -897,11 +958,59 @@ export const contextCompression: GenerateMiddleware<
             }
           }
 
+          let outgoingMessages: MessageData[];
+          if (wasCompressed && preserveOriginalMessages) {
+            let tailCount = 0;
+            if (summarized) {
+              tailCount = summaryTailCount;
+            } else if (messagesTruncated) {
+              tailCount = truncTailCount;
+            } else {
+              tailCount = 0;
+            }
+
+            const cutIndex =
+              tailCount > 0
+                ? Math.max(0, rawMessages.length - tailCount - 1)
+                : rawMessages.length - 1;
+
+            const compressedPrefix =
+              tailCount > 0
+                ? compressedMessages.slice(
+                    0,
+                    compressedMessages.length - tailCount
+                  )
+                : compressedMessages;
+
+            outgoingMessages = rawMessages.map((m, idx) => {
+              if (idx === cutIndex) {
+                return {
+                  ...m,
+                  metadata: {
+                    ...m.metadata,
+                    compressedHistory: structuredClone(compressedPrefix),
+                  },
+                };
+              }
+              if (m.metadata && 'compressedHistory' in m.metadata) {
+                const { compressedHistory, ...restMeta } = m.metadata;
+                return {
+                  ...m,
+                  metadata:
+                    Object.keys(restMeta).length > 0 ? restMeta : undefined,
+                };
+              }
+              return m;
+            });
+          } else {
+            outgoingMessages = wasCompressed ? compressedMessages : rawMessages;
+          }
+
           const modifiedEnvelope = {
             ...envelope,
             request: {
               ...envelope.request,
-              messages: wasCompressed ? compressedMessages : rawMessages,
+              messages: outgoingMessages,
             },
           };
 

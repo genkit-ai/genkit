@@ -17,7 +17,10 @@
 import { genkit, z, type GenerateRequest } from 'genkit';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { contextCompression } from '../src/context-compression.js';
+import {
+  contextCompression,
+  resolveCompressedHistory,
+} from '../src/context-compression.js';
 
 describe('contextCompression middleware', () => {
   it('skips compression when token count is below maxInputTokens', async () => {
@@ -628,7 +631,12 @@ describe('contextCompression middleware', () => {
           message: {
             role: 'model',
             content: [
-              { toolRequest: { name: 'search', input: { query: 'first-query' } } },
+              {
+                toolRequest: {
+                  name: 'search',
+                  input: { query: 'first-query' },
+                },
+              },
             ],
           },
           usage: { inputTokens: 200 },
@@ -639,7 +647,12 @@ describe('contextCompression middleware', () => {
           message: {
             role: 'model',
             content: [
-              { toolRequest: { name: 'search', input: { query: 'second-query' } } },
+              {
+                toolRequest: {
+                  name: 'search',
+                  input: { query: 'second-query' },
+                },
+              },
             ],
           },
           usage: { inputTokens: 500 },
@@ -667,8 +680,18 @@ describe('contextCompression middleware', () => {
     const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
     assert.strictEqual(toolMessages.length, 2);
     // Neither should be deduplicated because arguments differ
-    assert.strictEqual(String(toolMessages[0].content[0].toolResponse?.output).includes('Deduplicated'), false);
-    assert.strictEqual(String(toolMessages[1].content[0].toolResponse?.output).includes('Deduplicated'), false);
+    assert.strictEqual(
+      String(toolMessages[0].content[0].toolResponse?.output).includes(
+        'Deduplicated'
+      ),
+      false
+    );
+    assert.strictEqual(
+      String(toolMessages[1].content[0].toolResponse?.output).includes(
+        'Deduplicated'
+      ),
+      false
+    );
   });
 
   it('summarizes older messages using summary model', async () => {
@@ -676,15 +699,12 @@ describe('contextCompression middleware', () => {
     let turn = 0;
     const capturedRequests: GenerateRequest[] = [];
 
-    const summaryModel = ai.defineModel(
-      { name: 'summaryModel' },
-      async () => ({
-        message: {
-          role: 'model',
-          content: [{ text: 'Summary of past events: steps were executed.' }],
-        },
-      })
-    );
+    const summaryModel = ai.defineModel({ name: 'summaryModel' }, async () => ({
+      message: {
+        role: 'model',
+        content: [{ text: 'Summary of past events: steps were executed.' }],
+      },
+    }));
 
     const dummyTool = ai.defineTool(
       {
@@ -878,5 +898,265 @@ describe('contextCompression middleware', () => {
 
     // Truncation should have clamped to 4 messages rather than 6 due to severe overshoot
     assert.strictEqual(capturedRequest?.messages.length, 4);
+  });
+
+  it('attaches compressedHistory to message metadata and keeps original history in request.messages when preserveOriginalMessages: true (default)', async () => {
+    const ai = genkit({});
+    const longText = 'TOOL_OUTPUT_'.repeat(50);
+    let modelReceivedMessages: any[] = [];
+
+    const pm = ai.defineModel(
+      { name: 'compressedHistoryModel' },
+      async (req) => {
+        modelReceivedMessages = req.messages;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run heavy tool' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'heavyTool', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'heavyTool', output: longText } }],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          toolResponses: { maxChars: 10, preserveRecent: 0 },
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.text, 'done');
+    assert.ok(response.custom?.contextCompression);
+    assert.strictEqual(response.custom.contextCompression.triggered, true);
+
+    // 1. Check model received messages: The tool message received by the model WAS compressed/truncated
+    assert.strictEqual(modelReceivedMessages.length, 3);
+    const modelToolPart = modelReceivedMessages[2].content[0].toolResponse;
+    assert.ok(modelToolPart.output.includes('[TRUNCATED:'));
+
+    // 2. Check response.request.messages: Contains original full uncompressed tool text with metadata.compressedHistory
+    const reqMessages = response.request.messages;
+    assert.strictEqual(reqMessages.length, 3);
+    assert.strictEqual(reqMessages[2].content[0].toolResponse.output, longText);
+    assert.ok(reqMessages[2].metadata?.compressedHistory);
+    assert.strictEqual(
+      (reqMessages[2].metadata.compressedHistory as any[])[2].content[0]
+        .toolResponse.output.length < longText.length,
+      true
+    );
+
+    // 3. Check response.messages: Contains all 3 original messages + the 4th model response
+    assert.strictEqual(response.messages.length, 4);
+    assert.strictEqual(
+      response.messages[2].content[0].toolResponse.output,
+      longText
+    );
+  });
+
+  it('attaches compressedHistory on cut message during summarization and resolves cleanly in model hook', async () => {
+    const ai = genkit({});
+    const longPrompt = 'original user research prompt '.repeat(20);
+    let modelReceivedMessages: any[] = [];
+
+    const summaryModel = ai.defineModel(
+      { name: 'mockSummaryModel' },
+      async () => ({
+        message: {
+          role: 'model',
+          content: [{ text: 'MOCK_SUMMARY_TEXT' }],
+        },
+      })
+    );
+
+    const pm = ai.defineModel(
+      { name: 'summarizeResolutionModel' },
+      async (req) => {
+        modelReceivedMessages = req.messages;
+        return {
+          message: { role: 'model', content: [{ text: 'done all' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: longPrompt }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'tool1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'tool1', output: 'TOOL_1_RESULT' } },
+          ],
+        },
+        { role: 'user', content: [{ text: 'followup question' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.text, 'done all');
+    assert.ok(response.custom?.contextCompression);
+    assert.strictEqual(response.custom.contextCompression.summarized, true);
+
+    // Model should receive: Summary Message + last preserved message ('followup question')
+    assert.strictEqual(modelReceivedMessages.length, 2);
+    assert.ok(
+      modelReceivedMessages[0].content[0].text.includes('MOCK_SUMMARY_TEXT')
+    );
+    assert.strictEqual(
+      modelReceivedMessages[1].content[0].text,
+      'followup question'
+    );
+
+    // request.messages retains all 4 original messages with metadata.compressedHistory on cut message (index 2)
+    const reqMsgs = response.request.messages;
+    assert.strictEqual(reqMsgs.length, 4);
+    assert.strictEqual(reqMsgs[0].content[0].text, longPrompt);
+    assert.ok(reqMsgs[2].metadata?.compressedHistory);
+    assert.strictEqual(
+      (reqMsgs[2].metadata.compressedHistory as any[]).length,
+      1
+    );
+  });
+
+  it('overwrites request.messages with compressed messages when preserveOriginalMessages: false', async () => {
+    const ai = genkit({});
+    let modelReceivedMessages: any[] = [];
+
+    const pm = ai.defineModel(
+      { name: 'disabledPreserveModel' },
+      async (req) => {
+        modelReceivedMessages = req.messages;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'A'.repeat(500) }] },
+        { role: 'model', content: [{ text: 'response 1' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          preserveOriginalMessages: false,
+          maxMessages: 1,
+          preserveRecent: 0,
+          insertTruncationNotice: false,
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.text, 'done');
+    assert.ok(response.custom?.contextCompression);
+    assert.strictEqual(response.custom.contextCompression.triggered, true);
+
+    // Model received the compressed history (1 message)
+    assert.strictEqual(modelReceivedMessages.length, 1);
+
+    // When preserveOriginalMessages is false and insertTruncationNotice is false, 1 message remains
+    assert.strictEqual(response.request.messages.length, 1);
+    assert.strictEqual(
+      response.request.messages[0].content[0].text,
+      'response 1'
+    );
+  });
+
+  it('prevents stale compressedHistory from shadowing newer compressions in multi-turn history', async () => {
+    const ai = genkit({});
+    let modelReceivedMessages: any[] = [];
+
+    let summaryCount = 0;
+    const summaryModel = ai.defineModel(
+      { name: 'staleShadowSummaryModel' },
+      async () => {
+        summaryCount++;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: `SUMMARY_${summaryCount}` }],
+          },
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'staleShadowModel' }, async (req) => {
+      modelReceivedMessages = req.messages;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 500 },
+      };
+    });
+
+    // Simulated Turn 1: 4 messages get summarized down to 2 active messages
+    const r1 = await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'M1 '.repeat(50) }] },
+        { role: 'model', content: [{ text: 'R1 '.repeat(50) }] },
+        { role: 'user', content: [{ text: 'M2 '.repeat(50) }] },
+        { role: 'model', content: [{ text: 'R2 '.repeat(50) }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          summarize: { model: summaryModel, preserveRecent: 1 },
+        }),
+      ],
+    });
+
+    // Turn 2: append new user message onto full uncompressed history returned by r1
+    const fullHistoryTurn2 = [
+      ...r1.messages,
+      { role: 'user' as const, content: [{ text: 'M3 '.repeat(50) }] },
+    ];
+
+    const r2 = await ai.generate({
+      model: pm,
+      messages: fullHistoryTurn2,
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          summarize: { model: summaryModel, preserveRecent: 1 },
+        }),
+      ],
+    });
+
+    // Model on turn 2 should receive SUMMARY_2 and only the most recent message
+    assert.strictEqual(modelReceivedMessages.length, 2);
+    assert.ok(modelReceivedMessages[0].content[0].text.includes('SUMMARY_2'));
+
+    // resolveCompressedHistory should resolve to the latest summary, not the stale SUMMARY_1
+    const resolved = resolveCompressedHistory(r2.messages);
+    assert.strictEqual(resolved.length, 3);
+    assert.ok(resolved[0].content[0].text.includes('SUMMARY_2'));
   });
 });
