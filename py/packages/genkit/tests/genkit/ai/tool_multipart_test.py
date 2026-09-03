@@ -52,22 +52,22 @@ WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,
 
 
 def test_response_text_part_is_live() -> None:
-    env = response({'ok': True}, parts=TextPart(text='lab camera'))
+    env = response({'ok': True}, parts=[TextPart(text='lab camera')])
     assert parts_to_wire(env.content) == [{'text': 'lab camera'}]
 
 
 def test_response_data_and_reasoning_parts_are_live() -> None:
-    data = response({'ok': True}, parts=DataPart(data={'rows': [1]}))
+    data = response({'ok': True}, parts=[DataPart(data={'rows': [1]})])
     assert parts_to_wire(data.content) == [{'data': {'rows': [1]}}]
-    thought = response({'ok': True}, parts=ReasoningPart(reasoning='checking the label'))
+    thought = response({'ok': True}, parts=[ReasoningPart(reasoning='checking the label')])
     assert parts_to_wire(thought.content) == [{'reasoning': 'checking the label'}]
-    res = response({'ok': True}, parts=ResourcePart(resource=Resource(uri='file://shot.png')))
+    res = response({'ok': True}, parts=[ResourcePart(resource=Resource(uri='file://shot.png'))])
     assert parts_to_wire(res.content) == [{'resource': {'uri': 'file://shot.png'}}]
 
 
 def test_response_rejects_hollow_parts() -> None:
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=Part(root=DataPart()))
+        response({'ok': True}, parts=[Part(root=DataPart())])
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert 'no live payload' in ei.value.original_message
 
@@ -87,10 +87,17 @@ def test_response_without_parts_is_output_only() -> None:
 
 
 def test_response_wraps_a_bare_media_part() -> None:
-    env = response({'ok': True}, parts=_png().root)
+    env = response({'ok': True}, parts=[_png().root])
     assert env.content is not None
     assert len(env.content) == 1
     assert parts_to_wire(env.content) == [WIRE_PNG]
+
+
+def test_response_rejects_bare_part() -> None:
+    with pytest.raises(GenkitError) as ei:
+        response({'ok': True}, parts=_png())  # type: ignore[arg-type]
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert 'parts' in ei.value.original_message
 
 
 def test_response_rejects_non_part_parts() -> None:
@@ -119,7 +126,7 @@ class Camera:
 
 def test_unserializable_part_data_is_invalid_argument() -> None:
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=DataPart(data={'cam': Camera()}))
+        response({'ok': True}, parts=[DataPart(data={'cam': Camera()})])
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert 'response()' in ei.value.original_message
     assert 'content' in ei.value.original_message

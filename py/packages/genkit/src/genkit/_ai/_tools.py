@@ -49,18 +49,6 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 
-PartLike = (
-    Part
-    | TextPart
-    | MediaPart
-    | ToolRequestPart
-    | ToolResponsePart
-    | DataPart
-    | CustomPart
-    | ReasoningPart
-    | ResourcePart
-)
-
 PART_VARIANTS = (
     TextPart,
     MediaPart,
@@ -76,14 +64,14 @@ PART_VARIANTS = (
 def response(
     output: OutputT | None = None,
     *,
-    parts: Sequence[PartLike] | PartLike | None = None,
+    parts: Sequence[Part] | None = None,
     metadata: Metadata | None = None,
 ) -> MultipartToolResponse[OutputT]:
     """Build a tool result the model can see as structured output plus media.
 
     Return this from a tool when the reply is more than a JSON value — a caption
     and a screenshot, for example. A plain ``return value`` still works; that is
-    treated as ``output`` only. ``parts`` may be one part or a list.
+    treated as ``output`` only. ``parts`` may be a sequence of parts.
     """
     if metadata is not None and not isinstance(metadata, dict):
         raise GenkitError(
@@ -101,7 +89,7 @@ def coerce_part(value: object) -> Part | None:
     return None
 
 
-def normalize_response_parts(parts: object) -> list[Part] | None:
+def normalize_response_parts(parts: Sequence[Part] | None) -> list[Part] | None:
     if parts is None:
         return None
     if isinstance(parts, (list, tuple, Sequence)) and not isinstance(parts, (str, bytes, dict, Part, *PART_VARIANTS)):
@@ -115,12 +103,9 @@ def normalize_response_parts(parts: object) -> list[Part] | None:
                 )
             out.append(require_live_part(part))
         return out
-    part = coerce_part(parts)
-    if part is not None:
-        return [require_live_part(part)]
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message=f'response() parts must be a Part or a list of Parts, got {type(parts).__name__}.',
+        message=f'response() parts must be a sequence of Parts, got {type(parts).__name__}.',
     )
 
 

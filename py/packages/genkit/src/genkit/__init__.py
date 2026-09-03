@@ -47,7 +47,6 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import (
     Interrupt,
     MultipartToolResponse,
-    PartLike,
     Tool,
     ToolRunContext,
     respond_to_interrupt,
@@ -143,7 +142,6 @@ __all__ = [
     'Message',
     'MultipartToolResponse',
     'Part',
-    'PartLike',
     'Role',
     'Stage',
     'Supports',
