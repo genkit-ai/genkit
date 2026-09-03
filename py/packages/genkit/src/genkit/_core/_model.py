@@ -64,6 +64,7 @@ from genkit._core._typing import (
     ToolChoice,
     ToolDefinition,
     ToolRequestPart,
+    ToolResponsePart,
 )
 
 # Runtime schema for common generate knobs. ModelConfigDict is the
@@ -767,6 +768,11 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
                             parts.append(str(text_val))
         return ''.join(parts) + self.text
 
+    @property
+    def tool_responses(self) -> list[ToolResponsePart]:
+        """Tool response parts carried by this chunk."""
+        return [part.root for part in self.content if isinstance(part.root, ToolResponsePart)]
+
     @cached_property
     def output(self) -> OutputT | None:
         """Parsed output from accumulated text.
@@ -779,6 +785,8 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         prefixes, and constraints are not enforced. Guard each field you
         use. ``(await sr.response).output`` is the only fully validated value.
         """
+        if self.role is not None and self.role != Role.MODEL:
+            return None
         parsed = (
             self.chunk_parser(self)
             if self.chunk_parser

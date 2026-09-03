@@ -153,6 +153,7 @@ class AgentChunk(Generic[StateT]):
     reasoning: str | None = None
     accumulated_text: str = ''  # this turn's text so far, including this chunk
     tool_requests: list[ToolRequestPart] = field(default_factory=list)
+    tool_responses: list[ToolResponsePart] = field(default_factory=list)
     data: Any | None = None  # structured output part, if the chunk carries one
     media: Media | None = None
     artifact: Artifact | None = None
@@ -748,8 +749,8 @@ class StreamedMessageAccumulator:
 
     The chunk stream is the one channel that carries a turn's intermediate
     tool-request/tool-response steps; nothing else does. We stitch them back the
-    same way the store records them: consecutive model deltas (same role and
-    message index) merge into one message; a ``tool`` chunk arrives whole.
+    same way the store records them: transient tool progress is skipped,
+    consecutive model deltas merge, and a final ``tool`` chunk arrives whole.
     """
 
     def __init__(self) -> None:
@@ -763,13 +764,22 @@ class StreamedMessageAccumulator:
         mc = chunk.model_chunk
         if mc is None:
             return
+        durable_parts = [
+            part
+            for raw_part in mc.content or []
+            if not (
+                isinstance((part := as_part(raw_part)).root, ToolResponsePart)
+                and (part.root.metadata or {}).get('partial') is True
+            )
+        ]
+        if not durable_parts:
+            return
         role = mc.role if mc.role is not None else Role.MODEL
         if self.role is not None and (role != self.role or mc.index != self.index):
             self.flush()
         self.role = role
         self.index = mc.index
-        for part in mc.content or []:
-            self.parts.append(as_part(part))
+        self.parts.extend(durable_parts)
 
     def flush(self) -> None:
         if self.role is None:
@@ -939,6 +949,7 @@ class TurnDriver(Generic[StateT]):
             reasoning=reasoning_of(content) or None,
             accumulated_text=self.accumulated_text,
             tool_requests=tool_requests_of(content),
+            tool_responses=tool_responses_of(content),
             data=first_data_of(content),
             media=first_media_of(content),
             artifact=chunk.artifact,
@@ -1548,3 +1559,8 @@ def first_data_of(content: list[Part] | None) -> Any:  # noqa: ANN401
 def tool_requests_of(content: list[Part] | None) -> list[ToolRequestPart]:
     """All tool-request parts."""
     return [r for r in part_roots(content) if isinstance(r, ToolRequestPart)]
+
+
+def tool_responses_of(content: list[Part] | None) -> list[ToolResponsePart]:
+    """All tool-response parts."""
+    return [r for r in part_roots(content) if isinstance(r, ToolResponsePart)]

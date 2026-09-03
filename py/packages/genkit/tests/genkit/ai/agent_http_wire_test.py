@@ -24,18 +24,25 @@ from unittest import mock
 import pytest
 
 from genkit._ai._agents._transports._http import HttpAgentTransport
-from genkit._core._typing import AgentInit, AgentInput, MessageData, Part, TextPart
+from genkit._core._typing import AgentInit, AgentInput, MessageData, Part, TextPart, ToolResponsePart
 
 URL = 'http://example.test/weatherAgent'
 RESULT_LINE = 'data: {"result": {"finishReason": "stop", "message": {"role": "model", "content": [{"text": "ok"}]}}}'
+PROGRESS_LINE = (
+    'data: {"message": {"modelChunk": {"role": "tool", "index": 1, "content": ['
+    '{"toolResponse": {"name": "deploy", "ref": "call-1", "output": {"percent": 50}}, '
+    '"metadata": {"partial": true}}]}}}'
+)
 
 
 class FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, *, lines: list[str] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.lines = lines or [RESULT_LINE]
 
     def stream(self, method: str, url: str, *, json: dict[str, Any], headers: dict[str, str]) -> Any:
         self.calls.append({'url': url, 'json': json, 'headers': headers})
+        lines = self.lines
 
         class Resp:
             status_code = 200
@@ -44,7 +51,8 @@ class FakeClient:
                 return b''
 
             async def aiter_lines(self):
-                yield RESULT_LINE
+                for line in lines:
+                    yield line
 
             async def __aenter__(self):
                 return self
@@ -93,6 +101,32 @@ async def test_run_turn_posts_data_init_envelope_with_accept_header() -> None:
     assert call['headers'] == {'Accept': 'text/event-stream', 'Content-Type': 'application/json'}
     assert set(call['json']) == {'data', 'init'}
     assert call['json']['init'] == {'snapshotId': 'snap-1'}
+
+
+@pytest.mark.asyncio
+async def test_run_turn_parses_partial_tool_response_from_sse() -> None:
+    """The remote transport preserves tool identity, progress output, and partial metadata."""
+    client = FakeClient(lines=[PROGRESS_LINE, RESULT_LINE])
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    with mock.patch(
+        'genkit._ai._agents._transports._http.get_cached_client',
+        return_value=client,
+    ):
+        stream, output = await transport.run_turn(
+            agent_input=AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text='deploy'))])),
+            init=AgentInit(snapshot_id='snap-1'),
+        )
+        chunks = [chunk async for chunk in stream]
+        await output
+
+    model_chunk = chunks[0].model_chunk
+    assert model_chunk is not None
+    [part] = model_chunk.content
+    assert isinstance(part.root, ToolResponsePart)
+    assert part.root.tool_response.name == 'deploy'
+    assert part.root.tool_response.ref == 'call-1'
+    assert part.root.tool_response.output == {'percent': 50}
+    assert part.root.metadata == {'partial': True}
 
 
 @pytest.mark.asyncio

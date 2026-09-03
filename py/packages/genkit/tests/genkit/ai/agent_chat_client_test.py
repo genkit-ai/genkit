@@ -34,6 +34,7 @@ from genkit._ai._agents._types import StateManagement
 from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
+from genkit._ai._tools import ToolRunContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel
 from genkit._core._typing import (
@@ -65,6 +66,11 @@ from genkit.agent import InMemorySessionStore
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application
 # ---------------------------------------------------------------------------
+
+
+def is_partial(response: ToolResponsePart) -> bool:
+    """Return whether a tool response is transient progress."""
+    return (response.metadata or {}).get('partial') is True
 
 
 def test_apply_json_patch_root_replace() -> None:
@@ -479,6 +485,110 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_stream_exposes_tool_progress_without_adding_it_to_messages() -> None:
+    """High-level chunks expose progress while the running conversation keeps only the final response."""
+    transport = MockAgentTransport(state_management='client')
+    chat = AgentChat(transport)
+    request = Part(root=ToolRequestPart(tool_request=ToolRequest(name='deploy', ref='c1', input={})))
+    progress = ToolResponsePart(
+        tool_response=ToolResponse(name='deploy', ref='c1', output={'percent': 50}),
+        metadata={'partial': True},
+    )
+    final = ToolResponsePart(tool_response=ToolResponse(name='deploy', ref='c1', output='ready'))
+    transport.final_output = AgentOutput(
+        message=MessageData(role=Role.MODEL, content=[Part(root=TextPart(text='Deployed.'))]),
+        state=SessionState(session_id='sess-progress'),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn = chat.send_stream('Deploy it')
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, index=0, content=[request])))
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.TOOL, index=1, content=[Part(root=progress)]))
+    )
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.TOOL, index=1, content=[Part(root=final)]))
+    )
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL,
+                index=2,
+                content=[Part(root=TextPart(text='Deployed.'))],
+            )
+        )
+    )
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP)))
+
+    chunks = [chunk async for chunk in turn.stream]
+    await turn.response
+
+    progress_chunks = [chunk for chunk in chunks if any(is_partial(part) for part in chunk.tool_responses)]
+    assert len(progress_chunks) == 1
+    assert progress_chunks[0].tool_responses == [progress]
+    assert progress_chunks[0].accumulated_text == ''
+    assert [message.role for message in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    stored_tool_parts = [
+        part.root for message in chat.messages for part in message.content if isinstance(part.root, ToolResponsePart)
+    ]
+    assert stored_tool_parts == [final]
+    init = chat._wire_init()
+    assert init.state is not None
+    assert init.state.messages == chat.messages
+
+
+@pytest.mark.asyncio
+async def test_agent_interrupt_after_progress_creates_no_tool_message() -> None:
+    """Progress before an interrupt stays live-only and cannot create a phantom resumable tool message."""
+    transport = MockAgentTransport(state_management='client')
+    chat = AgentChat(transport)
+    interrupted_request = ToolRequestPart(
+        tool_request=ToolRequest(name='deploy', ref='c1', input={}),
+        metadata={'interrupt': {'reason': 'approval'}},
+    )
+    transport.final_output = AgentOutput(
+        message=MessageData(role=Role.MODEL, content=[Part(root=interrupted_request)]),
+        state=SessionState(session_id='sess-interrupt'),
+        finish_reason=AgentFinishReason.INTERRUPTED,
+    )
+    turn = chat.send_stream('Deploy it')
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL,
+                index=0,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='deploy', ref='c1', input={})))],
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.TOOL,
+                index=1,
+                content=[
+                    Part(
+                        root=ToolResponsePart(
+                            tool_response=ToolResponse(name='deploy', ref='c1', output='waiting'),
+                            metadata={'partial': True},
+                        )
+                    )
+                ],
+            )
+        )
+    )
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.INTERRUPTED)))
+
+    await turn.response
+
+    assert [message.role for message in chat.messages] == [Role.USER, Role.MODEL]
+    assert isinstance(chat.messages[-1].content[0].root, ToolRequestPart)
+    assert chat.messages[-1].content[0].root.metadata == {'interrupt': {'reason': 'approval'}}
+    init = chat._wire_init()
+    assert init.state is not None
+    assert init.state.messages == chat.messages
+
+
+@pytest.mark.asyncio
 async def test_client_managed_stitches_tool_messages_from_chunks_not_output_state() -> None:
     """Client-managed turns build the running view the same way server-managed ones
     do — from the chunk stream — even though the output round-trips the whole blob.
@@ -609,6 +719,59 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     assert snapshot is not None
     assert snapshot.state is not None
     assert [m.role for m in (snapshot.state.messages or [])] == [m.role for m in chat.messages]
+
+
+@pytest.mark.asyncio
+async def test_server_managed_agent_streams_tool_progress_without_persisting_it() -> None:
+    """A real agent exposes tool progress while its running view and snapshot retain only the result."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    store = InMemorySessionStore()
+
+    @ai.tool()
+    async def weather(city: str, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        ctx.send_partial({'status': 'fetching'})
+        return '12C'
+
+    ai.define_prompt(name='weatherProgressAgent', model='programmableModel', tools=[weather])
+    agent = ai.define_prompt_agent(name='weatherProgressAgent', store=store)
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+            )
+        ),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C.'))])),
+    ]
+    pm.chunks = [
+        [
+            ModelResponseChunkModel(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+            )
+        ],
+        [ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C.'))])],
+    ]
+
+    chat = agent.chat()
+    turn = chat.send_stream('Weather in Tokyo?')
+    chunks = [chunk async for chunk in turn.stream]
+    await turn.response
+
+    progress = [part for chunk in chunks for part in chunk.tool_responses if is_partial(part)]
+    assert len(progress) == 1
+    assert progress[0].tool_response.output == {'status': 'fetching'}
+    assert [message.role for message in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    stored_parts = [
+        part.root for message in chat.messages for part in message.content if isinstance(part.root, ToolResponsePart)
+    ]
+    assert len(stored_parts) == 1
+    assert stored_parts[0].tool_response.output == '12C'
+    snapshot = await chat.get_snapshot()
+    assert snapshot is not None
+    assert snapshot.state is not None
+    assert snapshot.state.messages == chat.messages
 
 
 @pytest.mark.asyncio
