@@ -30,7 +30,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal"
-	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -130,7 +130,7 @@ var sdkSchemaOverrides = internal.SchemaOverrides{
 // know, so it is mapped here; the result is then curated by
 // [sdkSchemaOverrides].
 var sdkConfigSchema = sync.OnceValue(func() map[string]any {
-	schema := pluginjsonschema.ReflectConfigSchema(openai.ChatCompletionNewParams{}, map[string]*jsonschema.Schema{
+	schema := schemautil.ReflectConfigSchema(openai.ChatCompletionNewParams{}, map[string]*jsonschema.Schema{
 		"ChatCompletionNewParamsStopUnion": {AnyOf: []*jsonschema.Schema{
 			{Type: "string"},
 			{Type: "array", Items: &jsonschema.Schema{Type: "string"}},
