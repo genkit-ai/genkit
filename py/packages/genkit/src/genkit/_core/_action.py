@@ -99,6 +99,24 @@ def _sanitize_value(val: object, seen: set[int] | None = None) -> object:
             return repr(val)
 
 
+def context_for_telemetry(context: dict[str, Any]) -> dict[str, Any]:
+    """Copy of action context for the Dev UI Context panel.
+
+    ``auth`` and ``secrets`` are what the caller put on the request for
+    identity and keys. The live action still sees the real values; the
+    panel should not.
+    """
+    # Sanitize on the caller's dict so a self-pointer becomes '[Circular]'
+    # instead of one extra unwrap on the panel.
+    cleaned = _sanitize_value(context)
+    traced = dict(cleaned) if isinstance(cleaned, dict) else {}
+    if 'auth' in traced:
+        traced['auth'] = '<redacted>'
+    if 'secrets' in traced:
+        traced['secrets'] = '<redacted>'
+    return traced
+
+
 # =============================================================================
 # Action types
 # =============================================================================
@@ -551,7 +569,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         init = self._validate_init(init)
 
         token = None
-        if context:
+        if context is not None:
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
@@ -756,14 +774,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # Surface action context (auth, headers, etc.) on the span so the Dev UI
         # trace inspector can render the "Context" panel for a flow run.
         if ctx.context:
+            traced_context = context_for_telemetry(ctx.context)
             try:
-                extra_metadata['context'] = json.dumps(ctx.context)
+                extra_metadata['context'] = json.dumps(traced_context)
             except Exception:
                 try:
-                    cleaned_context = _sanitize_value(ctx.context)
+                    cleaned_context = _sanitize_value(traced_context)
                     extra_metadata['context'] = json.dumps(cleaned_context)
                 except Exception:
-                    extra_metadata['context'] = str(ctx.context)
+                    extra_metadata['context'] = str(traced_context)
         span_meta = SpanMetadata(
             name=self._name,
             type='action',

@@ -1819,7 +1819,7 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation) -> Operation:
+    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     action = ai.define_background_model(
@@ -1851,7 +1851,7 @@ async def test_generate_operation_with_model_info_long_running(
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='op123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(name='lr_model', start=start, check=check)

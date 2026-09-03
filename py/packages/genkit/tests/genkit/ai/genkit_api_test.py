@@ -108,7 +108,7 @@ async def test_check_operation_round_trips_persisted_dump() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-rt', start=start, check=check)
@@ -163,10 +163,10 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
-    async def cancel(op: Operation) -> Operation:
+    async def cancel(op: Operation, _ctx: ActionRunContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-cancel-rt', start=start, check=check, cancel=cancel)
@@ -199,7 +199,7 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -218,7 +218,7 @@ async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -237,7 +237,7 @@ async def test_background_action_check_rejects_non_operation() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -265,7 +265,7 @@ async def test_background_action_cancel_rejects_non_operation() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai = Genkit()
