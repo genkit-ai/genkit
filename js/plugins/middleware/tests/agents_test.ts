@@ -1514,6 +1514,34 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(task.response, undefined);
   });
 
+  it('reports a settled task on a deadline that beats the follow', async () => {
+    const ai = genkit({});
+    const researcher = defineGatedResearcher(
+      ai,
+      'researcher',
+      Promise.resolve()
+    );
+    const task = await researcher.chat().detach('dig');
+    await task.wait();
+
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
+    // Whichever wins, the deadline or the follow's first read, the row is
+    // settled and the report must say so: a timeout returns the current
+    // statuses, not the follow's last look at them.
+    const out = await waitTool({
+      taskIds: [`researcher:${task.snapshotId}`],
+      timeoutSeconds: 0.000001,
+    });
+    assert.strictEqual(out.tasks[0].status, 'completed');
+    assert.strictEqual(out.tasks[0].response, 'research complete');
+    assert.strictEqual(out.timedOut, undefined);
+  });
+
   it('times out a wait, reporting running tasks as pending and keeping unresolvable errors', async () => {
     const ai = genkit({});
     const gate = makeGate();
