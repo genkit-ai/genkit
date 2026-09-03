@@ -48,7 +48,6 @@ from genkit import (
 from genkit.model import Error, Operation
 from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit_google_genai.models._sdk_config import (
-    attach_leftovers,
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
