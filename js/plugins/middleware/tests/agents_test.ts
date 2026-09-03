@@ -1542,6 +1542,42 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(out.timedOut, undefined);
   });
 
+  it('does not advertise task handles on a synchronous instance', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'researcher',
+      model: ai.defineModel(
+        { name: 'researcher-sync-schema-' + Math.random() },
+        async () => textResponse('unused')
+      ),
+      system: 'unused',
+    });
+    let delegateDef: any;
+    const orchestrator = ai.defineModel(
+      { name: 'orch-sync-schema-' + Math.random() },
+      async (req) => {
+        delegateDef = req.tools?.find(
+          (t) => t.name === 'delegate_to_researcher'
+        );
+        return textResponse('done');
+      }
+    );
+    await ai.generate({
+      model: orchestrator,
+      prompt: 'go',
+      use: [agents({ agents: ['researcher'] })],
+    });
+    assert.ok(delegateDef, 'the delegation tool must reach the model');
+    // The schemas are what the model reads: nothing in them may point at
+    // background tasks or the tools that collect them, which this instance
+    // does not have.
+    const inputSchema = JSON.stringify(delegateDef.inputSchema);
+    const outputSchema = JSON.stringify(delegateDef.outputSchema);
+    assert.ok(!inputSchema.includes('background'));
+    assert.ok(!outputSchema.includes('taskId'));
+    assert.ok(!outputSchema.includes('background'));
+  });
+
   it('times out a wait, reporting running tasks as pending and keeping unresolvable errors', async () => {
     const ai = genkit({});
     const gate = makeGate();

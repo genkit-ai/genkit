@@ -544,13 +544,19 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             : 'Names of artifacts produced by the sub-agent. Use read_artifact to access content.'
         );
 
-      const delegationResultSchema = z.object({
+      // The result schema is what the model reads, so a synchronous-only
+      // instance must not advertise task handles or background-task tools it
+      // does not have.
+      const syncDelegationResultSchema = z.object({
+        response: z.string().describe("The sub-agent's text response."),
+        artifacts: artifactsField,
+      });
+      const asyncDelegationResultSchema = syncDelegationResultSchema.extend({
         response: z
           .string()
           .describe(
             "The sub-agent's text response. For a background delegation it describes the launch instead; the sub-agent's response arrives later via the background-task tools."
           ),
-        artifacts: artifactsField,
         taskId: z
           .string()
           .optional()
@@ -562,7 +568,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           .optional()
           .describe('"pending" when a background delegation was started.'),
       });
-      type DelegationResult = z.infer<typeof delegationResultSchema>;
+      const delegationResultSchema = async
+        ? asyncDelegationResultSchema
+        : syncDelegationResultSchema;
+      type DelegationResult = z.infer<typeof asyncDelegationResultSchema>;
 
       const delegateInputSchema = z.object({
         task: z
