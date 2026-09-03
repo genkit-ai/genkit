@@ -25,9 +25,11 @@ validates into the real type.
 
 from __future__ import annotations
 
+import contextlib
+import sys
 from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from types import UnionType
-from typing import Annotated, Any, TypeGuard, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, ForwardRef, TypeGuard, Union, cast, get_args, get_origin, get_type_hints
 
 from pydantic import AliasChoices, BaseModel, RootModel
 from pydantic.fields import FieldInfo
@@ -60,15 +62,57 @@ def union_members(*, annotation: Any) -> tuple[Any, ...]:  # noqa: ANN401
     return (annotation,)
 
 
+def extract_model_namespace(schema_type: type[BaseModel]) -> dict[str, Any]:
+    ns: dict[str, Any] = {}
+    mod = sys.modules.get(schema_type.__module__)
+    if mod is not None:
+        ns.update(getattr(mod, '__dict__', {}))
+    schema = getattr(schema_type, '__pydantic_core_schema__', None)
+    if schema is not None:
+
+        def walk(node: object) -> None:
+            if isinstance(node, dict):
+                node_dict: dict[str, Any] = cast(dict[str, Any], node)
+                if node_dict.get('type') == 'model' and 'cls' in node_dict:
+                    cls = node_dict['cls']
+                    if isinstance(cls, type):
+                        ns[cls.__name__] = cls
+                for v in node_dict.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(schema)
+    return ns
+
+
+def resolve_annotation(annotation: Any, ns: dict[str, Any]) -> Any:  # noqa: ANN401
+    if isinstance(annotation, str):
+        return ns.get(annotation, annotation)
+    if isinstance(annotation, ForwardRef):
+        name = annotation.__forward_arg__
+        return ns.get(name, annotation)
+    origin = get_origin(annotation)
+    if origin is not None:
+        args = tuple(resolve_annotation(a, ns) for a in get_args(annotation))
+        try:
+            return origin[args]
+        except Exception:
+            return annotation
+    return annotation
+
+
 def field_annotation(*, schema_type: type[BaseModel], name: str, info: FieldInfo) -> Any:  # noqa: ANN401
     annotation = info.annotation
     if annotation is None:
         return object
-    try:
-        hints = get_type_hints(schema_type, include_extras=True)
-    except Exception:
-        return annotation
-    return hints.get(name, annotation)
+    ns = extract_model_namespace(schema_type)
+    with contextlib.suppress(Exception):
+        hints = get_type_hints(schema_type, globalns=ns, localns=ns, include_extras=True)
+        if name in hints:
+            return resolve_annotation(hints[name], ns)
+    return resolve_annotation(annotation, ns)
 
 
 def field_keys(*, name: str, info: FieldInfo) -> tuple[str, ...]:

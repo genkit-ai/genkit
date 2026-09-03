@@ -23,8 +23,16 @@ from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
 from genkit import Genkit  # noqa: E402
 from genkit._ai._testing import define_programmable_model  # noqa: E402
+from genkit._ai._tools import ToolRunContext  # noqa: E402
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel  # noqa: E402
-from genkit._core._typing import FinishReason, Part, Role, TextPart  # noqa: E402
+from genkit._core._typing import (  # noqa: E402
+    FinishReason,
+    Part,
+    Role,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+)
 
 
 def build_agent(name: str) -> Any:
@@ -41,6 +49,36 @@ def build_agent(name: str) -> Any:
         )
     )
     pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))])]]
+    return agent
+
+
+def build_progress_agent(name: str) -> Any:
+    """A server-backed agent whose tool emits progress before completing."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='deploy')
+    async def deploy(_: dict, ctx: ToolRunContext) -> str:
+        ctx.send_partial({'percent': 50})
+        return 'ready'
+
+    ai.define_prompt(name=name, model='programmableModel', tools=[deploy])
+    agent = ai.define_prompt_agent(name=name, store=InMemorySessionStore())
+    request_part = Part(root=ToolRequestPart(tool_request=ToolRequest(name='deploy', ref='call-1', input={})))
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[request_part]),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Deployed.'))]),
+        ),
+    ]
+    pm.chunks = [
+        [ModelResponseChunkModel(role=Role.MODEL, content=[request_part])],
+        [ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Deployed.'))])],
+    ]
     return agent
 
 
@@ -74,6 +112,42 @@ def test_turn_streams_sse_and_final_result() -> None:
     assert 'result' in records[-1]
     # The reply text lands in the settled AgentOutput.
     assert 'Hi there!' in json.dumps(records[-1]['result'])
+
+
+def test_turn_streams_partial_tool_response_without_persisting_it() -> None:
+    """SSE preserves attributed progress while the settled agent result remains authoritative."""
+    client_obj = client(build_progress_agent('progressAgent'))
+
+    response = client_obj.post('/api/chat?stream=true', json={'message': 'Deploy it'})
+
+    assert response.status_code == 200
+    records = sse_events(response.text)
+    model_chunks = [
+        record['message']['modelChunk'] for record in records if record.get('message', {}).get('modelChunk')
+    ]
+    tool_responses = [part for chunk in model_chunks for part in chunk.get('content', []) if 'toolResponse' in part]
+    partials = [part for part in tool_responses if part.get('metadata', {}).get('partial') is True]
+    finals = [part for part in tool_responses if part.get('metadata', {}).get('partial') is not True]
+    assert partials == [
+        {
+            'toolResponse': {
+                'ref': 'call-1',
+                'name': 'deploy',
+                'output': {'percent': 50},
+            },
+            'metadata': {'partial': True},
+        }
+    ]
+    assert finals == [
+        {
+            'toolResponse': {
+                'ref': 'call-1',
+                'name': 'deploy',
+                'output': 'ready',
+            }
+        }
+    ]
+    assert 'partial' not in json.dumps(records[-1]['result'])
 
 
 def test_base_path_defaults_to_agent_name() -> None:

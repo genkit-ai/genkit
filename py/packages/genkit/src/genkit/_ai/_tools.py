@@ -87,6 +87,7 @@ class Tool:
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
 # Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).
 _tool_original_input: ContextVar[Any | None] = ContextVar('tool_original_input', default=None)  # noqa: ANN401
+_tool_partial_sender: ContextVar[Callable[[object], None] | None] = ContextVar('tool_partial_sender', default=None)
 
 
 class ToolRunContext(ActionRunContext):
@@ -112,6 +113,17 @@ class ToolRunContext(ActionRunContext):
         )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
+        self._partial_sender = _tool_partial_sender.get()
+
+    @property
+    def is_streaming(self) -> bool:
+        """True when raw chunks or partial tool responses can be streamed."""
+        return self._partial_sender is not None or super().is_streaming
+
+    def send_partial(self, output: object) -> None:
+        """Stream transient progress for this tool's active model request."""
+        if self._partial_sender is not None:
+            self._partial_sender(output)
 
     def is_resumed(self) -> bool:
         """Return True if this execution is resuming after an interrupt."""
@@ -247,6 +259,7 @@ async def run_tool_request(
     tool: Action,
     tool_request_part: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
+    on_partial: Callable[[object], None] | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
@@ -257,6 +270,13 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
+    active = True
+
+    def send_partial(output: object) -> None:
+        if active and on_partial is not None:
+            on_partial(output)
+
+    token_partial = _tool_partial_sender.set(send_partial if on_partial is not None else None)
     run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
@@ -269,6 +289,8 @@ async def run_tool_request(
             )
         ).response
     finally:
+        active = False
+        _tool_partial_sender.reset(token_partial)
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
 
@@ -301,6 +323,7 @@ async def run_tool_after_restart(
     tool: Action,
     restart_trp: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
+    on_partial: Callable[[object], None] | None = None,
 ) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
@@ -308,7 +331,12 @@ async def run_tool_after_restart(
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     try:
-        tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+        tool_response = await run_tool_request(
+            tool=tool,
+            tool_request_part=restart_trp,
+            ctx=ctx,
+            on_partial=on_partial,
+        )
     except (GenkitError, Interrupt) as e:
         intr = (
             e.cause
