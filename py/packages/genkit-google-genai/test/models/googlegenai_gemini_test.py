@@ -593,6 +593,7 @@ def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
         'gemini-3.5-flash',
         'gemini-3.6-flash',
         'gemini-3.7-flash',
+        'gemini-3.8-flash',
     ],
 )
 def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: str) -> None:
