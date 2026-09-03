@@ -120,7 +120,6 @@ def embedder(
     name: str,
     fn: EmbedderFn,
     *,
-    config_schema: type[BaseModel] | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     options: EmbedderOptions | None = None,
     description: str | None = None,
@@ -128,8 +127,6 @@ def embedder(
     """Build an embedder action without registering it.
 
     Plugin ``init`` / ``resolve`` return this. ``define_embedder`` registers it.
-    The config class stays on the action so ``embed(embedder='name', options=)``
-    can isinstance-check a Pydantic instance against a string embedder name.
     """
     embedder_info: dict[str, object] = {}
 
@@ -148,14 +145,11 @@ def embedder(
             embedder_info['dimensions'] = options.dimensions
         if options.supports:
             embedder_info['supports'] = options.supports.model_dump(exclude_none=True, by_alias=True)
-        if options.config_schema and config_schema is None:
-            embedder_info['customOptions'] = to_json_schema(options.config_schema)
+        if options.config_schema:
+            embedder_info['customOptions'] = options.config_schema
 
     if 'label' not in embedder_info or not embedder_info['label']:
         embedder_info['label'] = name
-
-    if config_schema:
-        embedder_info['customOptions'] = to_json_schema(config_schema)
 
     embedder_meta: dict[str, object] = metadata.copy() if metadata else {}
     embedder_meta['embedder'] = embedder_info
@@ -166,7 +160,6 @@ def embedder(
         fn=fn,
         metadata=embedder_meta,
         description=get_func_description(fn, description),
-        config_schema=config_schema,
     )
 
 
@@ -177,13 +170,11 @@ def define_embedder(
     options: EmbedderOptions | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
-    config_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Action:
     """Register a custom embedder action."""
     action = embedder(
         name,
         fn,
-        config_schema=config_schema if config_schema is not None else (options.config_schema if options else None),
         metadata=metadata,
         options=options,
         description=description,

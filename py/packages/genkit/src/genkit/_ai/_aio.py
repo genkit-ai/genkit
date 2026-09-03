@@ -68,8 +68,6 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     define_model,
-    normalize_config,
-    python_config_schema,
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
@@ -477,10 +475,9 @@ class Genkit:
         options: EmbedderOptions | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Action:
         """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, options, metadata, description, config_schema)
+        return define_embedder(self.registry, name, fn, options, metadata, description)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
@@ -1553,7 +1550,7 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: str | Document | None = None,
         metadata: dict[str, object] | None = None,
-        options: BaseModel | Mapping[str, object] | None = None,
+        options: dict[str, object] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for a single document or string.
 
@@ -1571,22 +1568,16 @@ class Genkit:
 
         # Extract config and version from EmbedderRef (not done for embed_many per JS behavior)
         if isinstance(embedder, EmbedderRef):
-            embedder_config = normalize_config(config=embedder.config)
+            embedder_config = embedder.config or {}
             if embedder.version:
                 embedder_config['version'] = embedder.version  # Handle version from ref
+
+        # Merge options passed to embed() with config from EmbedderRef
+        final_options = {**(embedder_config or {}), **(options or {})}
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
-
-        assert_correct_config_class(
-            config=options,
-            schema=python_config_schema(getattr(embed_action, '_config_schema', None)),
-            model=embedder_name,
-        )
-
-        # Merge options passed to embed() with config from EmbedderRef
-        final_options = {**embedder_config, **normalize_config(config=options)}
 
         if content is None:
             raise ValueError('Content must be specified for embedding.')
@@ -1609,7 +1600,7 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: list[str] | list[Document] | None = None,
         metadata: dict[str, object] | None = None,
-        options: BaseModel | Mapping[str, object] | None = None,
+        options: dict[str, object] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for multiple documents in a single batch call."""
         if content is None:
@@ -1627,21 +1618,7 @@ class Genkit:
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        assert_correct_config_class(
-            config=options,
-            schema=python_config_schema(getattr(embed_action, '_config_schema', None)),
-            model=embedder_name,
-        )
-
-        wire_options = normalize_config(config=options) if options is not None else None
-        response = (
-            await embed_action.run(
-                EmbedRequest(
-                    input=documents,  # type: ignore[arg-type]
-                    options=wire_options,
-                )
-            )
-        ).response
+        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
         return response.embeddings
 
     async def evaluate(

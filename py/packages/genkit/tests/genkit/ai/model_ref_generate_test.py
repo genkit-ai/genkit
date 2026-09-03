@@ -1021,7 +1021,7 @@ async def test_generate_rejects_wrong_config_class_on_string_model() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_stream_rejects_wrong_config_class() -> None:
-    """The class check is on .response; iterating the stream alone will not fail."""
+    """await stream.response raises the same class check as generate."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     ref = model_ref('flash', config_schema=CustomConfig)
@@ -1029,6 +1029,19 @@ async def test_generate_stream_rejects_wrong_config_class() -> None:
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await stream.response
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_wrong_class_raises_on_async_for() -> None:
+    """async for chunk in generate_stream(...) raises the same class check."""
+    ai = Genkit()
+    define_echo_model(ai, name='flash', config_schema=CustomConfig)
+    ref = model_ref('flash', config_schema=CustomConfig)
+    stream = ai.generate_stream(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        async for _chunk in stream:
+            pass
 
 
 @pytest.mark.asyncio

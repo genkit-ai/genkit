@@ -392,11 +392,11 @@ class Ollama(Plugin):
         return create_embedder(
             name,
             _run,
-            config_schema=ollama_api.Options,
             options=EmbedderOptions(
                 label=f'Ollama Embedding - {clean_name}',
                 dimensions=embedder_ref.dimensions,
                 supports=EmbedderSupports(input=['text']),
+                config_schema=to_json_schema(ollama_api.Options),
             ),
         )
 
