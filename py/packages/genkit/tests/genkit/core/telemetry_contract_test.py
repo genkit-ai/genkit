@@ -259,7 +259,7 @@ async def test_enable_hangs_cloud_exporter_on_their_provider() -> None:
 def test_exporter_refuses_a_provider_it_cannot_attach_to() -> None:
     """Wrong provider type: named TypeError, not a silent empty Cloud Trace."""
     yours = OtelInstrumentation()
-    setattr(yours, '_tracer_provider', NoOpTracerProvider())
+    yours._tracer_provider = NoOpTracerProvider()  # pyright: ignore[reportAttributeAccessIssue]
     configure_instrumentation(yours)
     with pytest.raises(TypeError, match='not a TracerProvider'):
         add_custom_exporter(InMemorySpanExporter(), 'cloud-trace')
