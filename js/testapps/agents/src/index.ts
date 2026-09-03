@@ -122,7 +122,9 @@ app.use((_req, res, next) => {
 });
 
 // Register an agent at `/api/<name>`, optionally wiring up its companion
-// `/getSnapshot` and `/abort` sub-actions.
+// `/getSnapshot`, `/waitForSnapshot`, and `/abort` sub-actions. The wait
+// route lets a `remoteAgent` client follow a background task in one request
+// (`task.wait()`) instead of polling `/getSnapshot`.
 function exposeAgent(
   name: string,
   agent: Agent,
@@ -133,6 +135,10 @@ function exposeAgent(
     app.post(
       `/api/${name}/getSnapshot`,
       expressHandler(agent.getSnapshotDataAction)
+    );
+    app.post(
+      `/api/${name}/waitForSnapshot`,
+      expressHandler(agent.waitForSnapshotAction)
     );
   }
   if (opts.abort) {
