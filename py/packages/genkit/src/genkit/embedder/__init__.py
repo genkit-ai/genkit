@@ -31,7 +31,6 @@ Example:
 
 from genkit._ai._embedding import (
     EmbedderInfo,
-    EmbedderOptions,
     EmbedderRef,
     EmbedderSupports,
     create_embedder_ref as embedder_ref,
@@ -58,5 +57,4 @@ __all__ = [
     # Options and capabilities
     'EmbedderSupports',
     'EmbedderInfo',
-    'EmbedderOptions',
 ]

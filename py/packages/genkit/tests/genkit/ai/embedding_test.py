@@ -26,7 +26,6 @@ from pydantic import BaseModel
 from genkit import Document, Genkit
 from genkit._ai._embedding import (
     EmbedderInfo,
-    EmbedderOptions,
     EmbedderSupports,
     create_embedder_ref,
     embedder,
@@ -35,11 +34,6 @@ from genkit._ai._embedding import (
 from genkit._core._action import Action, ActionResponse
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, Embedding, EmbedRequest, EmbedResponse
-
-
-def test_embedder_options_is_embedder_info() -> None:
-    """The catalog card is EmbedderInfo; EmbedderOptions is the same type."""
-    assert EmbedderOptions is EmbedderInfo
 
 
 def test_embedder_action_metadata() -> None:

@@ -50,9 +50,6 @@ class EmbedderInfo(BaseModel):
     dimensions: int | None = None
 
 
-EmbedderOptions = EmbedderInfo
-
-
 class EmbedderRef(BaseModel):
     """Reference to an embedder with configuration."""
 
