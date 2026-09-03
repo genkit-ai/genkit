@@ -63,16 +63,8 @@ export const ContextCompressionOptionsSchema = z
      */
     maxInputTokens: z
       .number()
-      .describe('Compress when token count exceeds this threshold.'),
-
-    /**
-     * Number of most recent messages to never compress or drop.
-     * @default 4
-     */
-    preserveRecent: z
-      .number()
       .optional()
-      .describe('Number of recent messages to always keep intact. Default: 4.'),
+      .describe('Compress when token count exceeds this threshold.'),
 
     /**
      * Always keep system/instructions messages.
@@ -156,7 +148,12 @@ const DEFAULT_TRUNCATION_NOTICE =
  * Stringify tool output, avoiding re-stringifying if already a string.
  */
 function stringifyOutput(output: unknown): string {
-  return typeof output === 'string' ? output : JSON.stringify(output ?? '');
+  if (typeof output === 'string') return output;
+  try {
+    return JSON.stringify(output ?? '');
+  } catch {
+    return String(output);
+  }
 }
 
 /**
@@ -334,7 +331,13 @@ export const contextCompression: GenerateMiddleware<
         0,
         maxMessages - systemMessages.length - (insertTruncationNotice ? 1 : 0)
       );
-      const kept = nonSystemMessages.slice(-keepCount);
+      let kept = nonSystemMessages.slice(-keepCount);
+
+      // Prevent orphaned tool messages by removing any leading tool messages
+      while (kept.length > 0 && kept[0].role === 'tool') {
+        kept.shift();
+      }
+
       const dropped = nonSystemMessages.length - kept.length;
 
       let noticeInserted = false;

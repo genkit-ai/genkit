@@ -426,7 +426,6 @@ describe('contextCompression middleware', () => {
     const sharedCC = contextCompression({
       maxInputTokens: 100,
       maxMessages: 2,
-      preserveRecent: 0,
       insertTruncationNotice: false,
     });
 
@@ -453,5 +452,87 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(resp1.custom.contextCompression.messagesOriginal, 3);
     assert.strictEqual(resp1.custom.contextCompression.messagesAfter, 2);
     assert.strictEqual(resp2.custom?.contextCompression, undefined);
+  });
+
+  it('prevents orphaned tool messages during message truncation', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'orphanedModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'hello' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'tool', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'tool', output: 'result' } }],
+        },
+        { role: 'model', content: [{ text: 'result is ok' }] },
+        { role: 'user', content: [{ text: 'next' }] },
+      ],
+      use: [
+        contextCompression({
+          maxMessages: 3,
+          insertTruncationNotice: false,
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    assert.strictEqual(msgs.length, 2);
+    assert.strictEqual(msgs[0].role, 'model');
+    assert.strictEqual(msgs[0].content[0].text, 'result is ok');
+    assert.strictEqual(msgs[1].role, 'user');
+    assert.strictEqual(msgs[1].content[0].text, 'next');
+  });
+
+  it('discards leading tool messages during message truncation to prevent dangling tool responses', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'danglingModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'msg 1' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'myTool', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'myTool', output: 'result' } }],
+        },
+        { role: 'user', content: [{ text: 'msg 2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxMessages: 2,
+          insertTruncationNotice: false,
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    assert.strictEqual(msgs.length, 1);
+    assert.strictEqual(msgs[0].content[0].text, 'msg 2');
   });
 });
