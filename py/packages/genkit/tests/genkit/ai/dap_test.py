@@ -91,8 +91,8 @@ async def test_gets_specific_action(registry: Registry, tool1: Action, tool2: Ac
 
 
 @pytest.mark.asyncio
-async def test_tool_bucket_is_the_selector(registry: Registry, tool1: Action) -> None:
-    """Authors write ``{tool: [...]}``. That is what ``provider:tool/name`` reads."""
+async def test_dap_authors_write_tool_not_tool_v2(registry: Registry, tool1: Action) -> None:
+    """Authors write {tool: [...]}. That is what mcp:tool/echo reads."""
 
     async def dap_fn() -> DapValue:
         return {'tool': [tool1]}
@@ -106,8 +106,8 @@ async def test_tool_bucket_is_the_selector(registry: Registry, tool1: Action) ->
 
 
 @pytest.mark.asyncio
-async def test_tool_v2_bucket_is_not_the_selector(registry: Registry, tool1: Action) -> None:
-    """``{tool.v2: [...]}`` is not a promised slot. ``provider:tool/name`` misses it."""
+async def test_dap_tool_v2_bucket_is_not_found_by_mcp_tool_echo(registry: Registry, tool1: Action) -> None:
+    """{tool.v2: [...]} is missed by mcp:tool/echo."""
 
     async def dap_fn() -> DapValue:
         return {ActionKind.TOOL: [tool1]}

@@ -58,8 +58,8 @@ async def test_resolve_action_by_key_invalid_format() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_action_dap_tool_returns_action_without_catalog() -> None:
-    """``mcp:tool/echo`` peeks the DAP Action. It does not write ``/tool.v2/echo``."""
+async def test_lookup_mcp_tool_echo_does_not_register_tool_v2_echo() -> None:
+    """resolve_action(TOOL, 'mcp:tool/echo') returns the Action. It does not write /tool.v2/echo."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
