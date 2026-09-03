@@ -20,7 +20,7 @@ Enables sub-agent delegation. For each configured agent the middleware injects a
 
 - Injects **one delegation tool per agent**, named `<toolPrefix>_<agentName>` (default prefix: `delegate_to`).
 - Agent descriptions are auto-discovered from the registry (or can be overridden per-agent) and surfaced in the system prompt.
-- Sub-agent interrupts and failures are returned as tool responses (not thrown), allowing the orchestrator to self-correct. (Interactive, stateful back-and-forth with an interrupted sub-agent is a future feature.)
+- Sub-agent interrupts and failures are returned as tool responses (not thrown), allowing the orchestrator to self-correct. (Interactive, stateful back-and-forth with an interrupted sub-agent is a future feature.) A turn that ends without an answer (`length`, `blocked`, `aborted`) is reported as an error naming the reason and the agent's last message, and a success with no final text says so and names its artifact count.
 - Sub-agent artifacts are merged into the parent session and/or returned inline, controlled by `artifactStrategy`.
 - With `async: true`, delegations can run in the background and be collected later (see below).
 
