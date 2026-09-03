@@ -29,6 +29,7 @@ interface CompressionExecutionState {
 }
 
 const compressionStorage = new AsyncLocalStorage<CompressionExecutionState>();
+const TRUNCATION_MARKER = '[TRUNCATED:';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -55,75 +56,73 @@ export const ToolResponsesOptionsSchema = z.object({
     .describe("Don't truncate the last N tool responses. Default: 2."),
 });
 
-export const ContextCompressionOptionsSchema = z
-  .object({
-    /**
-     * Compression triggers when the previous turn's `inputTokens` exceeds
-     * this threshold. On turn 0, token count is estimated from messages.
-     */
-    maxInputTokens: z
-      .number()
-      .optional()
-      .describe('Compress when token count exceeds this threshold.'),
+export const ContextCompressionOptionsSchema = z.object({
+  /**
+   * Compression triggers when the previous turn's `inputTokens` exceeds
+   * this threshold. On turn 0, token count is estimated from messages.
+   */
+  maxInputTokens: z
+    .number()
+    .optional()
+    .describe('Compress when token count exceeds this threshold.'),
 
-    /**
-     * Always keep system/instructions messages.
-     * @default true
-     */
-    preserveSystem: z
-      .boolean()
-      .optional()
-      .describe('Always keep system messages. Default: true.'),
+  /**
+   * Always keep system/instructions messages.
+   * @default true
+   */
+  preserveSystem: z
+    .boolean()
+    .optional()
+    .describe('Always keep system messages. Default: true.'),
 
-    /**
-     * Hard cap on individual tool response size in characters.
-     * Applied regardless of other toolResponses config as a safety net.
-     * Set to `Infinity` to disable.
-     * @default 400000
-     */
-    maxToolResponseChars: z
-      .number()
-      .optional()
-      .describe(
-        'Hard cap on any single tool response size. Default: 400000 chars.'
-      ),
-
-    /**
-     * Truncate tool response content that exceeds a character limit.
-     * This is a cheap strategy that requires no LLM call.
-     */
-    toolResponses: ToolResponsesOptionsSchema.optional().describe(
-      'Truncate verbose tool response content.'
+  /**
+   * Hard cap on individual tool response size in characters.
+   * Applied regardless of other toolResponses config as a safety net.
+   * Set to `Infinity` to disable.
+   * @default 400000
+   */
+  maxToolResponseChars: z
+    .number()
+    .optional()
+    .describe(
+      'Hard cap on any single tool response size. Default: 400000 chars.'
     ),
 
-    /**
-     * Hard cap on message count. Messages beyond this (oldest first) are
-     * dropped, preserving system messages and recent messages.
-     */
-    maxMessages: z
-      .number()
-      .optional()
-      .describe('Hard cap on message count. Drop oldest beyond this.'),
+  /**
+   * Truncate tool response content that exceeds a character limit.
+   * This is a cheap strategy that requires no LLM call.
+   */
+  toolResponses: ToolResponsesOptionsSchema.optional().describe(
+    'Truncate verbose tool response content.'
+  ),
 
-    /**
-     * Insert a notice message when messages are dropped during message
-     * truncation, so the model knows context was removed.
-     * @default true
-     */
-    insertTruncationNotice: z
-      .boolean()
-      .optional()
-      .describe('Insert a notice when messages are dropped. Default: true.'),
+  /**
+   * Hard cap on message count. Messages beyond this (oldest first) are
+   * dropped, preserving system messages and recent messages.
+   */
+  maxMessages: z
+    .number()
+    .optional()
+    .describe('Hard cap on message count. Drop oldest beyond this.'),
 
-    /**
-     * Custom truncation notice text. Used when messages are dropped.
-     */
-    truncationNotice: z
-      .string()
-      .optional()
-      .describe('Custom notice text for when messages are dropped.'),
-  })
-  .passthrough();
+  /**
+   * Insert a notice message when messages are dropped during message
+   * truncation, so the model knows context was removed.
+   * @default true
+   */
+  insertTruncationNotice: z
+    .boolean()
+    .optional()
+    .describe('Insert a notice when messages are dropped. Default: true.'),
+
+  /**
+   * Custom truncation notice text. Used when messages are dropped.
+   */
+  truncationNotice: z
+    .string()
+    .optional()
+    .describe('Custom notice text for when messages are dropped.'),
+});
 
 export type ContextCompressionOptions = z.infer<
   typeof ContextCompressionOptionsSchema
@@ -140,6 +139,13 @@ const DEFAULT_TRUNCATION_NOTICE =
   'context limits. The most recent messages are preserved. Pay close attention to the ' +
   'latest messages and any conversation summary above.';
 
+/**
+ * Multimodal LLMs (e.g. Gemini) tokenize images at a fixed rate (~258 tokens)
+ * regardless of base64 payload size. 1000 chars / 3.5 ≈ 285 tokens prevents
+ * multi-megabyte inline data URIs from causing phantom token spikes on turn 0.
+ */
+const DATA_URI_APPROX_CHARS = 1000;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -154,6 +160,10 @@ function stringifyOutput(output: unknown): string {
   } catch {
     return String(output);
   }
+}
+
+function isAlreadyTruncated(output: unknown): boolean {
+  return typeof output === 'string' && output.includes(TRUNCATION_MARKER);
 }
 
 /**
@@ -181,18 +191,26 @@ function partitionMessages(
  * Estimate the total character count across all message content.
  */
 function estimateMessageChars(messages: MessageData[]): number {
-  return messages.reduce(
-    (sum, m) =>
+  return messages.reduce((sum, m) => {
+    return (
       sum +
       m.content.reduce((pSum, p) => {
         if (p.text) return pSum + p.text.length;
-        if (p.media?.url) return pSum + p.media.url.length;
-        if (p.toolRequest) return pSum + JSON.stringify(p.toolRequest).length;
-        if (p.toolResponse) return pSum + JSON.stringify(p.toolResponse).length;
+        if (p.media?.url) {
+          // Use a fixed character approximation for inline base64 data URIs
+          // to reflect fixed image token billing rather than raw string length.
+          const urlLen = p.media.url.startsWith('data:')
+            ? DATA_URI_APPROX_CHARS
+            : p.media.url.length;
+          return pSum + urlLen;
+        }
+        if (p.toolRequest) return pSum + stringifyOutput(p.toolRequest).length;
+        if (p.toolResponse)
+          return pSum + stringifyOutput(p.toolResponse).length;
         return pSum;
-      }, 0),
-    0
-  );
+      }, 0)
+    );
+  }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,90 +244,84 @@ export const contextCompression: GenerateMiddleware<
     const truncationNoticeText =
       config?.truncationNotice ?? DEFAULT_TRUNCATION_NOTICE;
 
-    function applyToolResponseSafetyCap(messages: MessageData[]): {
+    function applyToolLimits(messages: MessageData[]): {
       messages: MessageData[];
       capped: number;
+      truncated: number;
     } {
-      if (maxToolResponseChars === Infinity) return { messages, capped: 0 };
+      const toolParts: { msgIdx: number; partIdx: number }[] = [];
+      messages.forEach((msg, mIdx) => {
+        if (msg.role === 'tool') {
+          msg.content.forEach((p, pIdx) => {
+            if (p.toolResponse) toolParts.push({ msgIdx: mIdx, partIdx: pIdx });
+          });
+        }
+      });
 
-      let cappedCount = 0;
-      const result = messages.map((msg) => {
+      const numPreserved = Math.min(toolPreserveRecent, toolParts.length);
+      const truncatableParts = new Set(
+        toolParts
+          .slice(0, toolParts.length - numPreserved)
+          .map((tp) => `${tp.msgIdx}:${tp.partIdx}`)
+      );
+
+      let capped = 0;
+      let truncated = 0;
+
+      const result = messages.map((msg, mIdx) => {
         if (msg.role !== 'tool') return msg;
 
         let changed = false;
-        const newContent = msg.content.map((part): Part => {
-          if (part.toolResponse) {
-            const outputStr = stringifyOutput(part.toolResponse.output);
-            if (outputStr.length > maxToolResponseChars) {
-              cappedCount++;
-              changed = true;
-              return {
-                toolResponse: {
-                  ...part.toolResponse,
-                  output:
-                    outputStr.slice(0, maxToolResponseChars) +
-                    `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-                    `but only first ${maxToolResponseChars} are shown.]`,
-                },
-              };
-            }
+        const newContent = msg.content.map((part, pIdx): Part => {
+          if (
+            !part.toolResponse ||
+            isAlreadyTruncated(part.toolResponse.output)
+          ) {
+            return part;
           }
-          return part;
-        });
-        return changed ? { ...msg, content: newContent } : msg;
-      });
 
-      return { messages: result, capped: cappedCount };
-    }
+          const isTruncatable = truncatableParts.has(`${mIdx}:${pIdx}`);
+          const limit =
+            isTruncatable && toolMaxChars
+              ? Math.min(maxToolResponseChars, toolMaxChars)
+              : maxToolResponseChars;
 
-    function applyToolResponseTruncation(messages: MessageData[]): {
-      messages: MessageData[];
-      truncated: number;
-    } {
-      if (!toolMaxChars) return { messages, truncated: 0 };
+          if (limit === Infinity) return part;
 
-      const toolIndices: number[] = [];
-      for (let i = 0; i < messages.length; i++) {
-        if (messages[i].role === 'tool') {
-          toolIndices.push(i);
-        }
-      }
+          const outputStr = stringifyOutput(part.toolResponse.output);
+          if (outputStr.length <= limit) return part;
 
-      const numToPreserve = Math.min(toolPreserveRecent, toolIndices.length);
-      const truncatableIndices = new Set(
-        toolIndices.slice(0, toolIndices.length - numToPreserve)
-      );
-
-      let truncatedCount = 0;
-      const result = messages.map((msg, idx) => {
-        if (!truncatableIndices.has(idx)) return msg;
-
-        let changed = false;
-        const newContent = msg.content.map((part): Part => {
-          if (part.toolResponse) {
-            const outputStr = stringifyOutput(part.toolResponse.output);
-            if (outputStr.length > toolMaxChars) {
-              truncatedCount++;
-              changed = true;
-              return {
-                toolResponse: {
-                  ...part.toolResponse,
-                  output:
-                    outputStr.slice(0, toolMaxChars) +
-                    `\n\n---\n\n[TRUNCATED: Tool response was ${outputStr.length} characters long, ` +
-                    `only the first ${toolMaxChars} characters are shown above. ` +
-                    `Call this tool again if you need the full output.]`,
-                },
-              };
-            }
+          changed = true;
+          if (isTruncatable && toolMaxChars && limit === toolMaxChars) {
+            truncated++;
+            return {
+              toolResponse: {
+                ...part.toolResponse,
+                output:
+                  outputStr.slice(0, limit) +
+                  `\n\n---\n\n[TRUNCATED: Tool response was ${outputStr.length} characters long, ` +
+                  `only the first ${limit} characters are shown above. ` +
+                  `Call this tool again if you need the full output.]`,
+              },
+            };
+          } else {
+            capped++;
+            return {
+              toolResponse: {
+                ...part.toolResponse,
+                output:
+                  outputStr.slice(0, limit) +
+                  `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
+                  `but only first ${limit} are shown.]`,
+              },
+            };
           }
-          return part;
         });
 
         return changed ? { ...msg, content: newContent } : msg;
       });
 
-      return { messages: result, truncated: truncatedCount };
+      return { messages: result, capped, truncated };
     }
 
     function applyMessageTruncation(messages: MessageData[]): {
@@ -327,14 +339,19 @@ export const contextCompression: GenerateMiddleware<
         preserveSystem
       );
 
+      const noticeConsumesSlot =
+        insertTruncationNotice && systemMessages.length === 0;
       const keepCount = Math.max(
         0,
-        maxMessages - systemMessages.length - (insertTruncationNotice ? 1 : 0)
+        maxMessages - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
       );
-      let kept = nonSystemMessages.slice(-keepCount);
+      let kept = keepCount === 0 ? [] : nonSystemMessages.slice(-keepCount);
 
-      // Prevent orphaned tool messages by removing any leading tool messages
-      while (kept.length > 0 && kept[0].role === 'tool') {
+      // Prevent orphaned tool messages and dangling model turns
+      while (
+        kept.length > 0 &&
+        (kept[0].role === 'tool' || kept[0].role === 'model')
+      ) {
         kept.shift();
       }
 
@@ -342,17 +359,38 @@ export const contextCompression: GenerateMiddleware<
 
       let noticeInserted = false;
       if (dropped > 0 && insertTruncationNotice) {
-        const notice: MessageData = {
-          role: 'model',
-          content: [{ text: truncationNoticeText }],
-        };
         noticeInserted = true;
-        return {
-          messages: [...systemMessages, notice, ...kept],
-          dropped,
-          noticeInserted,
-          tailCount: kept.length,
-        };
+        if (systemMessages.length > 0) {
+          const alreadyHasNotice = systemMessages[0].content.some((p) =>
+            p.text?.includes(truncationNoticeText)
+          );
+          const updatedSystem: MessageData = alreadyHasNotice
+            ? systemMessages[0]
+            : {
+                ...systemMessages[0],
+                content: [
+                  ...systemMessages[0].content,
+                  { text: `\n\n${truncationNoticeText}` },
+                ],
+              };
+          return {
+            messages: [updatedSystem, ...systemMessages.slice(1), ...kept],
+            dropped,
+            noticeInserted,
+            tailCount: kept.length,
+          };
+        } else {
+          const notice: MessageData = {
+            role: 'system',
+            content: [{ text: truncationNoticeText }],
+          };
+          return {
+            messages: [notice, ...kept],
+            dropped,
+            noticeInserted,
+            tailCount: kept.length,
+          };
+        }
       }
 
       return {
@@ -374,7 +412,7 @@ export const contextCompression: GenerateMiddleware<
       },
 
       generate: async (envelope, ctx, next) => {
-        const currentTurn = (envelope as any).currentTurn ?? 0;
+        const currentTurn = envelope.currentTurn ?? 0;
         const isTopLevel = currentTurn === 0;
 
         const executeTurn = async () => {
@@ -399,14 +437,14 @@ export const contextCompression: GenerateMiddleware<
 
           if (!shouldCompress) {
             const response = await next(envelope, ctx);
-            if (
-              response.custom &&
-              typeof response.custom === 'object' &&
-              'contextCompression' in response.custom
-            ) {
-              const { contextCompression, ...restCustom } =
-                response.custom as Record<string, unknown>;
-              return { ...response, custom: restCustom };
+            if (isTopLevel && store?.latestCompressionMeta) {
+              return {
+                ...response,
+                custom: {
+                  ...((response.custom as Record<string, unknown>) ?? {}),
+                  contextCompression: store.latestCompressionMeta,
+                },
+              };
             }
             return response;
           }
@@ -424,21 +462,13 @@ export const contextCompression: GenerateMiddleware<
             let truncated = 0;
             let noticeInserted = false;
 
-            // 1. Safety cap on oversized tool responses
-            if (maxToolResponseChars !== Infinity) {
-              const capResult = applyToolResponseSafetyCap(messages);
-              messages = capResult.messages;
-              capped = capResult.capped;
-            }
+            // 1. Tool response limits (Safety cap & Truncation in a single pass)
+            const toolResult = applyToolLimits(messages);
+            messages = toolResult.messages;
+            capped = toolResult.capped;
+            truncated = toolResult.truncated;
 
-            // 2. Tool response truncation
-            if (toolMaxChars) {
-              const truncResult = applyToolResponseTruncation(messages);
-              messages = truncResult.messages;
-              truncated = truncResult.truncated;
-            }
-
-            // 3. Message truncation
+            // 2. Message truncation
             if (maxMessages && messages.length > maxMessages) {
               const msgResult = applyMessageTruncation(messages);
               messages = msgResult.messages;
@@ -486,24 +516,18 @@ export const contextCompression: GenerateMiddleware<
 
           const response = await next(modifiedEnvelope, ctx);
 
-          if (turnCompressionMeta) {
-            return {
-              ...response,
-              custom: {
-                ...((response.custom as Record<string, unknown>) ?? {}),
-                contextCompression: turnCompressionMeta,
-              },
-            };
-          }
-
-          if (
-            response.custom &&
-            typeof response.custom === 'object' &&
-            'contextCompression' in response.custom
-          ) {
-            const { contextCompression, ...restCustom } =
-              response.custom as Record<string, unknown>;
-            return { ...response, custom: restCustom };
+          if (isTopLevel) {
+            const finalMeta =
+              turnCompressionMeta ?? store?.latestCompressionMeta;
+            if (finalMeta) {
+              return {
+                ...response,
+                custom: {
+                  ...((response.custom as Record<string, unknown>) ?? {}),
+                  contextCompression: finalMeta,
+                },
+              };
+            }
           }
 
           return response;

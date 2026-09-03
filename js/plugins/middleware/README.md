@@ -275,3 +275,18 @@ const response = await ai.generate({
 });
 ```
 
+#### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
+| `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
+| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. |
+| `toolResponses` | `object` | — | Truncation settings for older tool responses. |
+| `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
+| `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool responses to keep untruncated. |
+| `maxMessages` | `number` | — | Hard cap on message count. Drops oldest non-system messages. |
+| `insertTruncationNotice` | `boolean` | `true` | Inserts an advisory notice when messages are dropped. |
+| `truncationNotice` | `string` | standard text | Custom notice text to use when messages are dropped. |
+
+
