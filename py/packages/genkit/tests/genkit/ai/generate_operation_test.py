@@ -166,7 +166,7 @@ async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='test-operation-123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(name='lro-model', start=start, check=check)
@@ -186,7 +186,7 @@ async def test_generate_operation_with_default_model() -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='default-op-456', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai_with_default = Genkit(model='default-lro-model')
@@ -208,7 +208,7 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
         captured_request = request
         return Operation(id='opt-test-789', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(name='options-test-model', start=start, check=check)

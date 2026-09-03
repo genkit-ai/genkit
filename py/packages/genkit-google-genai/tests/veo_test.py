@@ -21,9 +21,10 @@ start path) and Pydantic GenerateVideosResponse objects (from the check
 path where the SDK returns a model instance).
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from genkit_google_genai.constants import multi_regional_base_url
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoModel,
@@ -283,5 +284,439 @@ async def test_check_classifies_503_as_unavailable() -> None:
     model = VeoModel('veo-3.0-generate-001', client)
 
     with pytest.raises(GenkitError) as raised:
-        await model.check(Operation(id='operations/abc'))
+        await model.check(Operation(id='operations/abc'), ActionRunContext())
     assert raised.value.status == 'UNAVAILABLE'
+
+
+def _pending_sdk_op(*, name: str = 'operations/1') -> MagicMock:
+    op = MagicMock()
+    op.name = name
+    op.done = False
+    op.error = None
+    op.response = None
+    return op
+
+
+def _http_option_base_url(kwargs: dict[str, object]) -> str | None:
+    opts = kwargs.get('http_options')
+    if opts is None:
+        return None
+    base_url = getattr(opts, 'base_url', None)
+    if isinstance(base_url, str):
+        return base_url
+    if isinstance(opts, dict):
+        url = opts.get('base_url') or opts.get('baseUrl')
+        return url if isinstance(url, str) else None
+    return None
+
+
+class TestVeoContextClient:
+    """Veo peels context.secrets / context.config onto a request-scoped client.
+
+    The ticket stays a ticket: start/check must not write the key onto the
+    Operation. Empty context keeps the plugin client.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_context_uses_plugin_client(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        plugin.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+
+        with patch('genkit_google_genai.models.veo.genai.Client') as ctor:
+            started = await veo.start(_text_request(), ActionRunContext())
+            await veo.check(started, ActionRunContext())
+
+        ctor.assert_not_called()
+        plugin.aio.models.generate_videos.assert_awaited_once()
+        plugin.aio.operations.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_secrets_api_key_builds_request_client(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op(name='operations/tenant'))
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            op = await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+
+        ctor.assert_called_once()
+        assert ctor.call_args.kwargs['api_key'] == 'sk-tenant'
+        plugin.aio.models.generate_videos.assert_not_called()
+        override.aio.models.generate_videos.assert_awaited_once()
+        dumped = op.model_dump()
+        assert 'sk-tenant' not in str(dumped)
+        assert 'api_key' not in dumped
+        assert 'apiKey' not in dumped
+
+    @pytest.mark.asyncio
+    async def test_start_config_routes_client_and_stays_out_of_model_parameters(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+        request = _text_request(
+            config=VeoConfigSchema.model_validate({
+                'aspectRatio': '16:9',
+                'baseUrl': 'https://request.example',
+                'apiVersion': 'v1',
+                'fooBar': 1,
+            }),
+        )
+        ctx = ActionRunContext(context={'config': {'base_url': 'https://context.example'}})
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(request, ctx)
+
+        kwargs = ctor.call_args.kwargs
+        assert _http_option_base_url(kwargs) == 'https://request.example'
+        assert kwargs['http_options'].api_version == 'v1'
+        start_call = override.aio.models.generate_videos.await_args
+        assert start_call is not None
+        cfg = start_call.kwargs['config']
+        assert cfg.aspect_ratio == '16:9'
+        assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
+        plugin.aio.models.generate_videos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_config_routes_vertex_location(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={'vertexai': True, 'project': 'p', 'location': 'us-central1'},
+        )
+        request = _text_request(config=VeoConfigSchema(location='eu'))
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(request, ActionRunContext())
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['location'] == 'eu'
+        assert _http_option_base_url(kwargs) == multi_regional_base_url('eu')
+
+    @pytest.mark.asyncio
+    async def test_check_without_tenant_context_returns_to_plugin_client(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override):
+            ticket = await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+        await veo.check(ticket, ActionRunContext())
+
+        override.aio.models.generate_videos.assert_awaited_once()
+        plugin.aio.operations.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_secrets_apikey_alias(self) -> None:
+        plugin = MagicMock()
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'apiKey': 'sk-camel'}}),
+            )
+
+        assert ctor.call_args.kwargs['api_key'] == 'sk-camel'
+        plugin.aio.models.generate_videos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_check_uses_secrets_and_does_not_write_key_on_op(self) -> None:
+        plugin = MagicMock()
+        plugin.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        override = MagicMock()
+        override.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+        ticket = Operation(id='operations/1', done=False)
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            updated = await veo.check(
+                ticket,
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+
+        assert ctor.call_args.kwargs['api_key'] == 'sk-tenant'
+        plugin.aio.operations.get.assert_not_called()
+        override.aio.operations.get.assert_awaited_once()
+        assert 'sk-tenant' not in str(updated.model_dump())
+
+    @pytest.mark.asyncio
+    async def test_secrets_and_base_url_together(self) -> None:
+        """One call with both pockets. The request-scoped client gets both."""
+        plugin = MagicMock()
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        override.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin)
+        ctx = ActionRunContext(
+            context={
+                'secrets': {'api_key': 'sk-tenant'},
+                'config': {'base_url': 'https://x.example'},
+            }
+        )
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            started = await veo.start(_text_request(), ctx)
+            await veo.check(started, ctx)
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['api_key'] == 'sk-tenant'
+        assert _http_option_base_url(kwargs) == 'https://x.example'
+        plugin.aio.models.generate_videos.assert_not_called()
+        plugin.aio.operations.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_vertex_secrets_drop_project_and_location(self) -> None:
+        """A tenant key is express mode. project/location beside it crash the SDK."""
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={
+                'vertexai': True,
+                'project': 'my-project',
+                'location': 'us-central1',
+                'credentials': object(),
+            },
+        )
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['api_key'] == 'sk-tenant'
+        assert 'project' not in kwargs
+        assert 'location' not in kwargs
+        assert kwargs['credentials'] is None
+
+    @pytest.mark.asyncio
+    async def test_googleai_location_is_ignored(self) -> None:
+        """Location is a Vertex knob. A Gemini API plugin keeps the plugin client."""
+        plugin = MagicMock()
+        plugin.vertexai = False
+        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+
+        with patch('genkit_google_genai.models.veo.genai.Client') as ctor:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'config': {'location': 'us-central1'}}),
+            )
+
+        ctor.assert_not_called()
+        plugin.aio.models.generate_videos.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_vertex_location_rewrites_base_url(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={
+                'vertexai': True,
+                'project': 'p',
+                'location': 'us',
+                'http_options': genai_types.HttpOptions(base_url='https://us-aiplatform.googleapis.com'),
+            },
+        )
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.check(
+                Operation(id='operations/1', done=False),
+                ActionRunContext(context={'config': {'location': 'eu'}}),
+            )
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['location'] == 'eu'
+        assert _http_option_base_url(kwargs) == multi_regional_base_url('eu')
+
+    @pytest.mark.asyncio
+    async def test_vertex_regional_location_clears_rep_url(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={
+                'vertexai': True,
+                'project': 'p',
+                'location': 'us',
+                'http_options': genai_types.HttpOptions(base_url=multi_regional_base_url('us')),
+            },
+        )
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.check(
+                Operation(id='operations/1', done=False),
+                ActionRunContext(context={'config': {'location': 'us-central1'}}),
+            )
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['location'] == 'us-central1'
+        assert _http_option_base_url(kwargs) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('bag', ({'api_key': 'sk-wrong'}, {'apiKey': 'sk-wrong'}))
+    async def test_config_api_key_is_invalid_argument(self, bag: dict[str, str]) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'config': bag}),
+            )
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert 'secrets' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_secrets_must_be_a_dict(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': 'sk-tenant'}),
+            )
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_secret_api_key_must_be_a_string(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 123}}),
+            )
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert 'must be a string' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_api_version_overlay(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = False
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel('veo-3.0-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'config': {'api_version': 'v1'}}),
+            )
+
+        opts = ctor.call_args.kwargs.get('http_options')
+        assert opts is not None
+        assert opts.api_version == 'v1'
+
+    @pytest.mark.asyncio
+    async def test_empty_secrets_pocket_is_invalid_argument(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+        for pocket in ({}, {'api_key': None}, {'api_key': ''}):
+            with pytest.raises(GenkitError) as raised:
+                await veo.start(
+                    _text_request(),
+                    ActionRunContext(context={'secrets': pocket}),
+                )
+            assert raised.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_top_level_api_key_is_invalid_argument(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+        for bag in ({'api_key': 'sk-wrong'}, {'apiKey': 'sk-wrong'}):
+            with pytest.raises(GenkitError) as raised:
+                await veo.start(_text_request(), ActionRunContext(context=bag))
+            assert raised.value.status == 'INVALID_ARGUMENT'
+            assert 'secrets' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_request_config_api_key_is_invalid_argument(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+        cfg = VeoConfigSchema.model_validate({'api_key': 'sk-gemini-habit'})
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(_text_request(config=cfg), ActionRunContext())
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert 'secrets' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_client_ctor_failure_is_invalid_argument(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = False
+        veo = VeoModel('veo-3.0-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+
+        with (
+            patch(
+                'genkit_google_genai.models.veo.genai.Client',
+                side_effect=ValueError('Project/location and API key are mutually exclusive'),
+            ),
+            pytest.raises(GenkitError) as raised,
+        ):
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert 'google-genai client' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_vertex_tenant_key_clears_plugin_base_url(self) -> None:
+        plugin = MagicMock()
+        plugin.vertexai = True
+        override = MagicMock()
+        override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin,
+            client_kwargs={
+                'vertexai': True,
+                'project': 'p',
+                'location': 'us',
+                'http_options': genai_types.HttpOptions(base_url=multi_regional_base_url('us')),
+            },
+        )
+
+        with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
+            await veo.start(
+                _text_request(),
+                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+            )
+
+        kwargs = ctor.call_args.kwargs
+        assert kwargs['api_key'] == 'sk-tenant'
+        assert _http_option_base_url(kwargs) is None

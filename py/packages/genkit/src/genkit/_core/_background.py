@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Generic, TypeVar
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
@@ -56,8 +56,32 @@ def stamp_operation_action(*, operation: Operation, name: str) -> None:
 
 
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-CheckModelOpFn = Callable[[Operation], Awaitable[Operation]]
-CancelModelOpFn = Callable[[Operation], Awaitable[Operation]]
+CheckModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
+CancelModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
+
+
+def operation_context(
+    *,
+    context: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Fold check/cancel ``config=`` into the context bag the plugin reads.
+
+    ``config`` here is client knobs (``base_url``, ``location``), not video
+    settings. A per-request key lives in ``context['secrets']``. Top-level
+    ``config=`` wins when both are set so the caller's explicit override is
+    what the plugin sees.
+
+    Supplying only ``config=`` keeps the current action context. An explicit
+    ``context={}`` still clears it. Both omitted returns ``None`` so
+    ``Action.run`` inherits directly.
+    """
+    if context is None and config is None:
+        return None
+    folded = dict(context if context is not None else (get_current_context() or {}))
+    if config is not None:
+        folded['config'] = dict(config)
+    return folded
 
 
 class BackgroundAction(Generic[OutputT]):
@@ -112,25 +136,35 @@ class BackgroundAction(Generic[OutputT]):
     async def start(
         self,
         input: ModelRequest | None = None,
-        options: dict[str, Any] | None = None,
+        *,
+        context: dict[str, Any] | None = None,
     ) -> Operation:
         """Start a background operation.
 
         Args:
             input: The input request.
-            options: Optional run options.
+            context: Optional run context. Per-request keys go in
+                ``context['secrets']``.
 
         Returns:
             An Operation with an ID to track the job.
         """
-        result = await self.start_action.run(input)
+        # Same pocket as check/cancel — a tenant key on start has to
+        # reach the plugin, not die on this wrapper.
+        result = await self.start_action.run(input, context=context)
         return _ensure_operation(response=result.response, name=self.start_action.name)
 
-    async def check(self, operation: Operation) -> Operation:
+    async def check(
+        self,
+        operation: Operation,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> Operation:
         """Check the status of a background operation.
 
         Args:
             operation: The operation to check.
+            context: Optional run context (secrets, folded client config).
 
         Returns:
             Updated Operation with current status.
@@ -140,14 +174,20 @@ class BackgroundAction(Generic[OutputT]):
                 ``Operation`` (e.g. a dump or a ``ModelResponse``).
         """
         operation = require_operation(value=operation)
-        result = await self.check_action.run(operation)
+        result = await self.check_action.run(operation, context=context)
         return _ensure_operation(response=result.response, name=self.check_action.name)
 
-    async def cancel(self, operation: Operation) -> Operation:
+    async def cancel(
+        self,
+        operation: Operation,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> Operation:
         """Cancel a background operation.
 
         Args:
             operation: The operation to cancel.
+            context: Optional run context (secrets, folded client config).
 
         Returns:
             Updated Operation reflecting cancellation attempt.
@@ -165,7 +205,7 @@ class BackgroundAction(Generic[OutputT]):
                 status='UNIMPLEMENTED',
                 message=f'Background action {operation.action} does not support cancellation.',
             )
-        result = await self.cancel_action.run(operation)
+        result = await self.cancel_action.run(operation, context=context)
         return _ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
@@ -268,9 +308,8 @@ def define_background_model(
         op.action = action_key
         return op
 
-    # Wrap the check function (no ctx parameter)
     async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
-        updated = await check(op)
+        updated = await check(op, ctx)
         # Preserve action key
         updated.action = action_key
         return updated
@@ -300,7 +339,7 @@ def define_background_model(
         cancel_fn = cancel
 
         async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
-            cancelled = await cancel_fn(op)
+            cancelled = await cancel_fn(op, ctx)
             cancelled.action = action_key
             return cancelled
 
@@ -417,12 +456,19 @@ async def resolve_operation_action(
 async def check_operation(
     registry: Registry,
     operation: Operation,
+    *,
+    context: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> Operation:
     """Check the status of a background operation.
 
     Args:
         registry: The registry to look up actions from.
         operation: The poll handle.
+        context: Optional run context. Per-request keys go in
+            ``context['secrets']``.
+        config: Optional client knobs (``base_url``, ``location``). Folded
+            into ``context['config']`` for the plugin.
 
     Returns:
         Updated Operation with current status.
@@ -432,18 +478,28 @@ async def check_operation(
             not found.
     """
     background_action = await resolve_operation_action(registry, operation)
-    return await background_action.check(operation)
+    return await background_action.check(
+        operation,
+        context=operation_context(context=context, config=config),
+    )
 
 
 async def cancel_operation(
     registry: Registry,
     operation: Operation,
+    *,
+    context: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> Operation:
     """Cancel a background operation.
 
     Args:
         registry: The registry to look up actions from.
         operation: The poll handle.
+        context: Optional run context. Per-request keys go in
+            ``context['secrets']``.
+        config: Optional client knobs (``base_url``, ``location``). Folded
+            into ``context['config']`` for the plugin.
 
     Returns:
         Updated Operation reflecting the cancel attempt.
@@ -454,4 +510,7 @@ async def cancel_operation(
             ``BackgroundAction.cancel``).
     """
     background_action = await resolve_operation_action(registry, operation)
-    return await background_action.cancel(operation)
+    return await background_action.cancel(
+        operation,
+        context=operation_context(context=context, config=config),
+    )

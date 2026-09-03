@@ -17,12 +17,13 @@
 """generate() / generate_operation() against a define_background_model fake."""
 
 from collections.abc import Awaitable, Callable
+from types import MappingProxyType
 from typing import Any, cast
 
 import pytest
 
 from genkit import ActionKind, Document, Genkit, Message
-from genkit._core._action import ActionRunContext
+from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse
@@ -49,7 +50,7 @@ def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id=op_id, done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(
@@ -100,7 +101,7 @@ async def test_generate_returns_the_job_without_polling(ai: Genkit) -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='bg-op-123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         nonlocal checks
         checks += 1
         return Operation(id=op.id, done=True)
@@ -213,7 +214,7 @@ async def test_generate_keeps_fallback_answer_when_start_raises(ai: Genkit) -> N
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         raise GenkitError(status='UNAVAILABLE', message='veo capacity exhausted')
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-model', start=start, check=check)
@@ -251,7 +252,7 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
         started += 1
         return Operation(id='bg-op-123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-model', start=start, check=check)
@@ -456,7 +457,7 @@ async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> N
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         return Operation(id='bg-op-123', done=False)
 
-    async def check(op: Operation) -> Operation:
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(
@@ -475,3 +476,252 @@ async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> N
     assert updated.id == 'bg-op-123'
     assert updated.done is True
     assert updated.action == '/background-model/bg-model'
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_passes_context_to_start(ai: Genkit) -> None:
+    """generate_operation(context=) already reaches start. Keep that hop."""
+    seen: dict[str, Any] = {}
+
+    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        seen['start'] = dict(ctx.context)
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+
+    await ai.generate_operation(
+        model='bg-model',
+        prompt='a cat',
+        context={'secrets': {'api_key': 'sk-start'}},
+    )
+
+    assert seen['start']['secrets']['api_key'] == 'sk-start'
+
+
+@pytest.mark.asyncio
+async def test_background_action_start_passes_context(ai: Genkit) -> None:
+    """Holding the wrapper and calling start() still delivers the tenant key."""
+    seen: dict[str, Any] = {}
+
+    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        seen['start'] = dict(ctx.context)
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    bg = ai.define_background_model(name='bg-model', start=start, check=check)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat'))])],
+    )
+
+    await bg.start(request, context={'secrets': {'api_key': 'tenant'}})
+
+    assert seen['start']['secrets']['api_key'] == 'tenant'
+
+
+@pytest.mark.asyncio
+async def test_check_and_cancel_pass_folded_context(ai: Genkit) -> None:
+    """check/cancel hand the plugin secrets and fold config= into context['config']."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['check'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['cancel'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check, cancel=cancel)
+    op = await ai.generate_operation(model='bg-model', prompt='a cat')
+    context = {'secrets': {'api_key': 'sk-live'}, 'config': {'base_url': 'https://old'}}
+    config = MappingProxyType({'base_url': 'https://x'})
+
+    await ai.check_operation(
+        op,
+        context=context,
+        config=config,
+    )
+    await ai.cancel_operation(
+        op,
+        context={'secrets': {'api_key': 'sk-live'}},
+        config=config,
+    )
+
+    assert seen['check']['secrets']['api_key'] == 'sk-live'
+    assert seen['check']['config']['base_url'] == 'https://x'
+    assert seen['cancel']['secrets']['api_key'] == 'sk-live'
+    assert seen['cancel']['config']['base_url'] == 'https://x'
+    assert context == {'secrets': {'api_key': 'sk-live'}, 'config': {'base_url': 'https://old'}}
+    assert config == {'base_url': 'https://x'}
+
+
+@pytest.mark.asyncio
+async def test_bare_check_operation_still_works(ai: Genkit) -> None:
+    """The plugin-key loop does not require context= or config=."""
+    seen: dict[str, object] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['check'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+    op = await ai.generate_operation(model='bg-model', prompt='a cat')
+
+    updated = await ai.check_operation(op)
+
+    assert updated.done is True
+    assert seen['check'] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method_name', ['check_operation', 'cancel_operation'])
+@pytest.mark.parametrize('config', [{'base_url': 'https://x'}, {}], ids=['configured', 'empty'])
+async def test_operation_config_keeps_ambient_context(
+    ai: Genkit,
+    method_name: str,
+    config: dict[str, str],
+) -> None:
+    """Connection knobs don't discard the tenant context of the current call."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check, cancel=cancel)
+    token = _action_context.set({'secrets': {'api_key': 'sk-ambient'}, 'locale': 'en-US'})
+    try:
+        op = await ai.generate_operation(model='bg-model', prompt='a cat')
+        await getattr(ai, method_name)(op, config=MappingProxyType(config))
+    finally:
+        _action_context.reset(token)
+
+    assert seen['operation'] == {
+        'secrets': {'api_key': 'sk-ambient'},
+        'locale': 'en-US',
+        'config': config,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method_name', ['check_operation', 'cancel_operation'])
+async def test_empty_context_replaces_ambient(ai: Genkit, method_name: str) -> None:
+    """An explicit empty context means plugin-key / no tenant, not a no-op."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check, cancel=cancel)
+    token = _action_context.set({'secrets': {'api_key': 'sk-ambient'}})
+    try:
+        op = await ai.generate_operation(model='bg-model', prompt='a cat')
+        await getattr(ai, method_name)(op, context={})
+    finally:
+        _action_context.reset(token)
+
+    assert seen['operation'] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method_name', ['check_operation', 'cancel_operation'])
+async def test_empty_context_with_config_replaces_ambient(ai: Genkit, method_name: str) -> None:
+    """Connection knobs don't undo an explicit request to clear context."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check, cancel=cancel)
+    token = _action_context.set({'secrets': {'api_key': 'sk-ambient'}})
+    try:
+        op = await ai.generate_operation(model='bg-model', prompt='a cat')
+        await getattr(ai, method_name)(op, context={}, config={'base_url': 'https://x'})
+    finally:
+        _action_context.reset(token)
+
+    assert seen['operation'] == {'config': {'base_url': 'https://x'}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method_name', ['check_operation', 'cancel_operation'])
+async def test_bare_operation_inherits_ambient_context(ai: Genkit, method_name: str) -> None:
+    """A poll inside the current request sees its tenant without extra plumbing."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        seen['operation'] = dict(ctx.context)
+        return Operation(id=op.id, done=True)
+
+    ai.define_background_model(name='bg-model', start=start, check=check, cancel=cancel)
+    token = _action_context.set({'secrets': {'api_key': 'sk-ambient'}})
+    try:
+        op = await ai.generate_operation(model='bg-model', prompt='a cat')
+        await getattr(ai, method_name)(op)
+    finally:
+        _action_context.reset(token)
+
+    assert seen['operation'] == {'secrets': {'api_key': 'sk-ambient'}}
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_empty_context_replaces_ambient(ai: Genkit) -> None:
+    """generate_operation(..., context={}) is plugin-key this time, not ambient."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        seen['start'] = dict(ctx.context)
+        return Operation(id='bg-op-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg-model', start=start, check=check)
+    token = _action_context.set({'secrets': {'api_key': 'sk-ambient'}})
+    try:
+        await ai.generate_operation(model='bg-model', prompt='a cat', context={})
+    finally:
+        _action_context.reset(token)
+
+    assert seen['start'] == {}

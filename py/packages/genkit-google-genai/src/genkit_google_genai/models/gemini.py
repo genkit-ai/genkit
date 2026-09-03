@@ -27,6 +27,7 @@ from genkit_google_genai.models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
+from genkit_google_genai.models._secrets import context_api_key, reject_request_config_api_key
 from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
 from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
@@ -252,9 +253,6 @@ class GeminiConfigSchema(ModelConfig):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
 
-    api_key: str | None = Field(  # pyright: ignore[reportGeneralTypeIssues]
-        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
-    )
     base_url: str | None = Field(
         None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
     )
@@ -1153,8 +1151,8 @@ class GeminiModel:
             version: Gemini version
             client: Google AI client
             client_kwargs: The plugin-level kwargs the client was constructed
-                from. Required for per-request config overrides (api_key,
-                api_version, base_url, location).
+                from. Required for a per-request tenant key or client knobs
+                (api_version, base_url, location).
             base_url_pinned: Whether the plugin caller explicitly pinned a
                 base URL (as opposed to one derived from the location).
         """
@@ -1369,7 +1367,7 @@ class GeminiModel:
         # Resolve the client before building messages so context-cache
         # operations run against the same (possibly overridden) region as the
         # generate call.
-        client = await self._resolve_request_client(request)
+        client = await self._resolve_request_client(request, context=ctx.context)
 
         request_contents, cached_content = await self._build_messages(
             request=request, model_name=model_name, client=client
@@ -1397,27 +1395,30 @@ class GeminiModel:
 
         return response
 
-    async def _resolve_request_client(self, request: ModelRequest) -> genai.Client:
+    async def _resolve_request_client(
+        self, request: ModelRequest, context: dict[str, Any] | None = None
+    ) -> genai.Client:
         """Resolve the client to use for a request.
 
-        If the request config overrides api_key, base_url, api_version, or
-        location, a temporary client is created with those settings; otherwise
-        the plugin-configured client is returned.
+        A tenant key lives in ``context.secrets``. ``request.config`` is
+        client knobs (``base_url``, ``api_version``, ``location``), not
+        the key. Any of those rebuilds a request-scoped client; otherwise
+        the plugin client is reused.
         """
+        reject_request_config_api_key(request.config)
         api_version = None
-        api_key_override = None
         base_url_override = None
         location_override = None
+        bag = context if isinstance(context, dict) else {}
+        secret_key = context_api_key(bag)
 
         if request.config:
             if isinstance(request.config, dict):
                 api_version = request.config.get('api_version')
-                api_key_override = request.config.get('api_key')
                 base_url_override = request.config.get('base_url')
                 location_override = request.config.get('location')
             else:
                 api_version = getattr(request.config, 'api_version', None)
-                api_key_override = getattr(request.config, 'api_key', None)
                 base_url_override = getattr(request.config, 'base_url', None)
                 location_override = getattr(request.config, 'location', None)
 
@@ -1425,7 +1426,7 @@ class GeminiModel:
             # Location is a Vertex AI concept; ignore it for the Gemini API backend.
             location_override = None
 
-        if not (api_version or api_key_override or base_url_override or location_override):
+        if not (api_version or secret_key or base_url_override or location_override):
             return self._client
 
         if self._client_kwargs is None:
@@ -1454,10 +1455,16 @@ class GeminiModel:
                     opts.base_url = None
         if base_url_override:
             opts.base_url = base_url_override
-        if api_key_override and not self._client.vertexai:
-            kwargs['api_key'] = api_key_override
-            # The SDK rejects credentials and api_key together.
+        if secret_key:
+            # Express / tenant keys are not a regional Vertex host. Drop
+            # project, location, and the plugin base_url unless this call
+            # set one.
+            kwargs['api_key'] = secret_key
             kwargs['credentials'] = None
+            kwargs.pop('project', None)
+            kwargs.pop('location', None)
+            if not base_url_override:
+                opts.base_url = None
         kwargs['http_options'] = opts
 
         # The plugin's kwargs may carry project=None when the project comes

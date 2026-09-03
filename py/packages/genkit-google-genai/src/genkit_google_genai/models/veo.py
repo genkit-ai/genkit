@@ -20,6 +20,7 @@ Veo is Google's video generation model that creates videos from text prompts.
 """
 
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 if sys.version_info < (3, 11):
@@ -40,12 +41,14 @@ from genkit import (
 )
 from genkit.model import Error, Operation
 from genkit.plugin_api import ActionRunContext, wrap_http_error
+from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
 )
+from genkit_google_genai.models._secrets import context_api_key, misplaced_key_error
 
 
 class VeoVersion(StrEnum):
@@ -94,6 +97,11 @@ class VeoConfigSchema(BaseModel):
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
+    base_url: str | None = Field(default=None, alias='baseUrl', description='Override the API endpoint for this call.')
+    api_version: str | None = Field(
+        default=None, alias='apiVersion', description='Override the API version for this call.'
+    )
+    location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
 
 
 # Alias for backwards compatibility with __init__.py exports
@@ -108,6 +116,8 @@ DEFAULT_VEO_SUPPORT = Supports(
     output=['media'],
     long_running=True,
 )
+
+_CLIENT_OPTION_KEYS = frozenset({'base_url', 'baseUrl', 'api_version', 'apiVersion', 'location'})
 
 
 def veo_model_info(version: str) -> ModelInfo:
@@ -211,15 +221,90 @@ class VeoModel:
     poll it. There is no blocking generate path.
     """
 
-    def __init__(self, version: str, client: genai.Client) -> None:
+    def __init__(
+        self,
+        version: str,
+        client: genai.Client,
+        client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """Initialize Veo model.
 
         Args:
             version: The Veo model version.
             client: The Google GenAI client.
+            client_kwargs: The plugin-level kwargs the client was constructed
+                from. Used when a call overrides the key or endpoint.
         """
         self._version = version
         self._client = client
+        self._client_kwargs = client_kwargs
+
+    def _client_for_context(
+        self,
+        ctx: ActionRunContext,
+        *,
+        config: Mapping[str, Any] | None = None,
+    ) -> genai.Client:
+        """Plugin client, or a request-scoped one when secrets/config are set.
+
+        The ticket is just an id. A per-request key or endpoint has to be
+        handed in again on start and on every poll.
+        """
+        context = ctx.context
+        api_key = context_api_key(context)
+        context_config = context.get('config')
+        context_config = context_config if isinstance(context_config, dict) else {}
+        request_config = config or {}
+        base_url = (
+            request_config.get('base_url')
+            or request_config.get('baseUrl')
+            or context_config.get('base_url')
+            or context_config.get('baseUrl')
+        )
+        api_version = (
+            request_config.get('api_version')
+            or request_config.get('apiVersion')
+            or context_config.get('api_version')
+            or context_config.get('apiVersion')
+        )
+        location = request_config.get('location') or context_config.get('location')
+        is_vertex = bool(getattr(self._client, 'vertexai', False) or (self._client_kwargs or {}).get('vertexai'))
+        if location and not is_vertex:
+            # Location is a Vertex concept; ignore it on the Gemini API backend.
+            location = None
+        if api_key is None and not base_url and not api_version and not location:
+            return self._client
+
+        kwargs = dict(self._client_kwargs or {})
+        plugin_opts = kwargs.get('http_options')
+        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        if api_key is not None:
+            kwargs['api_key'] = api_key
+            # The SDK rejects api_key with credentials, project, or location.
+            kwargs['credentials'] = None
+            kwargs.pop('project', None)
+            kwargs.pop('location', None)
+            location = None
+            # Express keys are not a regional Vertex host. Keep only an
+            # explicit config.base_url from this call.
+            if not base_url:
+                opts.base_url = None
+        if location:
+            kwargs['location'] = location
+            if not base_url:
+                opts.base_url = multi_regional_base_url(location) if is_multi_regional_location(location) else None
+        if base_url:
+            opts.base_url = base_url
+        if api_version:
+            opts.api_version = api_version
+        kwargs['http_options'] = opts
+        try:
+            return genai.Client(**kwargs)
+        except Exception as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Failed to create google-genai client: {e}',
+            ) from e
 
     async def start(self, request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
         """Start a video generation operation (background model pattern for GoogleAI).
@@ -238,8 +323,16 @@ class VeoModel:
         if not prompt:
             raise GenkitError(status='INVALID_ARGUMENT', message='Veo requires a text prompt')
 
+        dumped = dump_family_config(
+            config=request.config,
+            expected_type=VeoConfigSchema,
+            action_name=self._version,
+        )
+        if dumped and (dumped.get('api_key') is not None or dumped.get('apiKey') is not None):
+            raise misplaced_key_error()
+
         try:
-            response = await self._client.aio.models.generate_videos(
+            response = await self._client_for_context(ctx, config=dumped).aio.models.generate_videos(
                 model=self._version,
                 prompt=prompt,
                 config=self._get_config(request),
@@ -253,11 +346,13 @@ class VeoModel:
             'done': getattr(response, 'done', False),
         })
 
-    async def check(self, operation: Operation) -> Operation:
+    async def check(self, operation: Operation, ctx: ActionRunContext) -> Operation:
         """Check the status of a video generation operation.
 
         Args:
             operation: The operation to check.
+            ctx: Run context. Pass secrets again when start used a
+                per-request key.
 
         Returns:
             Updated Operation with current status.
@@ -267,7 +362,7 @@ class VeoModel:
         # Create a GenerateVideosOperation object from the operation ID
         op_request = genai_types.GenerateVideosOperation.model_validate({'name': operation.id})
         try:
-            response = await self._client.aio.operations.get(operation=op_request)
+            response = await self._client_for_context(ctx).aio.operations.get(operation=op_request)
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
 
@@ -291,6 +386,12 @@ class VeoModel:
             expected_type=VeoConfigSchema,
             action_name=self._version,
         )
+        if not dumped:
+            return None
+        if dumped.get('api_key') is not None or dumped.get('apiKey') is not None:
+            raise misplaced_key_error()
+        for key in _CLIENT_OPTION_KEYS:
+            dumped.pop(key, None)
         if not dumped:
             return None
 

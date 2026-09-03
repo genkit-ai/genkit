@@ -626,8 +626,23 @@ class TestResolveRequestClient:
         assert await model._resolve_request_client(_text_request({'location': 'eu'})) is client
 
     @pytest.mark.asyncio
-    async def test_api_key_override_for_googleai_backend(self) -> None:
-        """A per-request api_key override replaces the plugin key and drops credentials."""
+    async def test_config_api_key_is_invalid_argument(self) -> None:
+        """A tenant key on generate config belongs in context.secrets."""
+        client = MagicMock()
+        client.vertexai = False
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs={'vertexai': False, 'api_key': 'plugin-key', 'credentials': MagicMock()},
+        )
+        for bag in ({'api_key': 'override-key'}, {'apiKey': 'override-key'}):
+            with pytest.raises(GenkitError, match='context.secrets') as exc:
+                await model._resolve_request_client(_text_request(bag))
+            assert exc.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_secrets_api_key_builds_request_client(self) -> None:
+        """context.secrets.api_key is the per-tenant slot on generate too."""
         client = MagicMock()
         client.vertexai = False
         model = GeminiModel(
@@ -636,10 +651,105 @@ class TestResolveRequestClient:
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key', 'credentials': MagicMock()},
         )
         with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            await model._resolve_request_client(_text_request({'api_key': 'override-key'}))
+            await model._resolve_request_client(
+                _text_request(),
+                context={'secrets': {'api_key': 'sk-tenant'}},
+            )
         kwargs = mock_ctor.call_args.kwargs
-        assert kwargs['api_key'] == 'override-key'
+        assert kwargs['api_key'] == 'sk-tenant'
         assert kwargs['credentials'] is None
+
+    @pytest.mark.asyncio
+    async def test_secrets_apikey_alias(self) -> None:
+        client = MagicMock()
+        client.vertexai = False
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
+        )
+        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+            await model._resolve_request_client(
+                _text_request(),
+                context={'secrets': {'apiKey': 'sk-camel'}},
+            )
+        assert mock_ctor.call_args.kwargs['api_key'] == 'sk-camel'
+
+    @pytest.mark.asyncio
+    async def test_config_api_key_rejected_even_with_secrets(self) -> None:
+        """Both pockets set still fails — config is not a key slot."""
+        client = MagicMock()
+        client.vertexai = False
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
+        )
+        with pytest.raises(GenkitError, match='context.secrets') as exc:
+            await model._resolve_request_client(
+                _text_request({'api_key': 'sk-config'}),
+                context={'secrets': {'api_key': 'sk-tenant'}},
+            )
+        assert exc.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_empty_secrets_is_invalid_argument(self) -> None:
+        client = MagicMock()
+        client.vertexai = False
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
+        )
+        with pytest.raises(GenkitError, match='context.secrets') as exc:
+            await model._resolve_request_client(_text_request(), context={'secrets': {}})
+        assert exc.value.status == 'INVALID_ARGUMENT'
+
+    @pytest.mark.asyncio
+    async def test_vertex_secrets_drops_project_and_location(self) -> None:
+        """A tenant key is not a regional Vertex host."""
+        model = _vertex_model()
+        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+            await model._resolve_request_client(
+                _text_request(),
+                context={'secrets': {'api_key': 'AQ.express'}},
+            )
+        kwargs = mock_ctor.call_args.kwargs
+        assert kwargs['api_key'] == 'AQ.express'
+        assert kwargs['credentials'] is None
+        assert 'project' not in kwargs
+        assert 'location' not in kwargs
+        opts = kwargs['http_options']
+        assert opts.base_url is None
+
+    @pytest.mark.asyncio
+    async def test_generate_passes_context_secrets(self) -> None:
+        """generate() peels ctx.context.secrets, not only request.config."""
+        client = MagicMock()
+        client.vertexai = False
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
+        )
+        response = genai_types.GenerateContentResponse(
+            candidates=[
+                genai_types.Candidate(
+                    content=genai_types.Content(parts=[genai_types.Part(text='ok')], role='model'),
+                    finish_reason=genai_types.FinishReason.STOP,
+                )
+            ]
+        )
+        temp_client = MagicMock()
+        temp_client.aio.models.generate_content = AsyncMock(return_value=response)
+        ctx = MagicMock()
+        ctx.is_streaming = False
+        ctx.context = {'secrets': {'api_key': 'sk-tenant'}}
+        with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client) as mock_ctor:
+            await model.generate(_text_request(), ctx)
+        assert mock_ctor.call_args.kwargs['api_key'] == 'sk-tenant'
+        temp_client.aio.models.generate_content.assert_awaited_once()
+        client.aio.models.generate_content.assert_not_called()
 
 
 class TestPluginModelWiring:
