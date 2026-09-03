@@ -48,7 +48,7 @@ from genkit_google_genai.models.gemini import (
     GemmaConfigSchema,
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema
-from genkit_google_genai.models.veo import VeoConfigSchema, VeoModel
+from genkit_google_genai.models.veo import VeoConfig, VeoModel
 
 from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
@@ -314,7 +314,7 @@ async def test_vertexai_gemma_action_accepts_temperature_3(mock_list_models: Mag
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Veo start is ModelRequest[VeoConfigSchema] so Action keeps aspectRatio / durationSeconds."""
+    """Veo start is ModelRequest[VeoConfig] so Action keeps aspectRatio / durationSeconds."""
     mock_list_models.return_value = GenaiModels()
 
     for plugin, name in (
@@ -323,7 +323,7 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
     ):
         action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, name)
         assert action is not None
-        assert _request_config_type(action) is VeoConfigSchema
+        assert _request_config_type(action) is VeoConfig
 
         with patch('genkit_google_genai.google.VeoModel.start', new_callable=AsyncMock) as mock_start:
             await action.run({
@@ -333,7 +333,7 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
             called = mock_start.await_args
             assert called is not None
             request = called.args[0]
-            assert isinstance(request.config, VeoConfigSchema)
+            assert isinstance(request.config, VeoConfig)
             assert request.config.aspect_ratio == '16:9'
             assert request.config.duration_seconds == 5
 

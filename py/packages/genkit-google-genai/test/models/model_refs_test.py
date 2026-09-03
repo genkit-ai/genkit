@@ -49,7 +49,7 @@ from genkit_google_genai.models.imagen import (
     ImagenVersion,
     is_imagen_model_name,
 )
-from genkit_google_genai.models.veo import VeoConfigSchema, VeoVersion, is_veo_model
+from genkit_google_genai.models.veo import VeoConfig, VeoVersion, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -89,7 +89,7 @@ class TestHappyPaths:
         assert gemma.config_schema is GemmaConfigSchema
         assert imagen.config_schema is ImagenConfigSchema
         assert imagen.name == 'vertexai/imagen-3.0-generate-002'
-        assert veo.config_schema is VeoConfigSchema
+        assert veo.config_schema is VeoConfig
         assert veo.name == 'googleai/veo-3.1-fast-generate-preview'
 
     def test_config_instance_rides_along(self) -> None:

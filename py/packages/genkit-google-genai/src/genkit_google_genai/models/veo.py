@@ -35,7 +35,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
     FinishReason,
-    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -99,7 +98,7 @@ def is_veo_model(name: str) -> bool:
     return name.split('/')[-1].lower().startswith('veo-')
 
 
-class VeoConfigSchema(BaseModel):
+class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
@@ -116,10 +115,6 @@ class VeoConfigSchema(BaseModel):
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
-
-
-# Alias for backwards compatibility with __init__.py exports
-VeoConfig = VeoConfigSchema
 
 
 DEFAULT_VEO_SUPPORT = Supports(
@@ -139,7 +134,7 @@ def veo_model_info(version: str) -> ModelInfo:
         version: The Veo model version.
 
     Returns:
-        ModelInfo describing the model's capabilities.
+        ModelInfo for the Veo model.
     """
     return ModelInfo(
         label=f'Google AI - {version}',
@@ -148,13 +143,13 @@ def veo_model_info(version: str) -> ModelInfo:
 
 
 def _extract_text(request: ModelRequest) -> str:
-    """Extract text prompt from a ModelRequest.
+    """Extract text prompt from request messages.
 
     Args:
-        request: The generation request.
+        request: The model request containing messages.
 
     Returns:
-        The text prompt string.
+        The combined text prompt.
     """
     prompt_parts = [
         str(part.root.text)
@@ -163,6 +158,16 @@ def _extract_text(request: ModelRequest) -> str:
         if hasattr(part.root, 'text') and part.root.text
     ]
     return ' '.join(prompt_parts)
+
+
+def _sniff_video_mime(uri: str | None) -> str:
+    if uri:
+        lower = uri.lower()
+        if lower.endswith('.webm'):
+            return 'video/webm'
+        if lower.endswith('.mov'):
+            return 'video/quicktime'
+    return 'video/mp4'
 
 
 def _media_part(*, video: genai_types.Video | None) -> Part | None:
@@ -174,7 +179,7 @@ def _media_part(*, video: genai_types.Video | None) -> Part | None:
     """
     if video is None:
         return None
-    mime = video.mime_type or 'video/mp4'
+    mime = video.mime_type or _sniff_video_mime(video.uri)
     if video.uri:
         url = video.uri
     elif video.video_bytes:
@@ -185,8 +190,11 @@ def _media_part(*, video: genai_types.Video | None) -> Part | None:
     return Part(MediaPart(media=Media(url=url, content_type=mime)))
 
 
-def _operation_error_message(*, error: dict[str, Any]) -> str:
-    message = error.get('message')
+def _operation_error_message(*, error: Any) -> str:  # noqa: ANN401
+    if isinstance(error, dict):
+        message = error.get('message')
+    else:
+        message = getattr(error, 'message', None) or str(error)
     return str(message) if message else 'Unknown error'
 
 
@@ -212,10 +220,17 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
         if part is not None:
             content.append(part)
 
+    raw_payload: dict[str, Any] | None = None
+    if hasattr(response, 'model_dump'):
+        raw_payload = response.model_dump(by_alias=True, exclude_none=True)
+    elif isinstance(response, dict):
+        raw_payload = response
+
     if content:
         op.output = ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=content),
+            raw=raw_payload,
         )
         return op
 
@@ -224,48 +239,45 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     if api_op.done and response.rai_media_filtered_count:
         reasons = [str(reason) for reason in (response.rai_media_filtered_reasons or []) if reason]
         op.error = Error(message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.')
+        return op
+
+    if api_op.done and not content and not op.error:
+        op.error = Error(message='Operation completed but returned no playable media.')
     return op
 
 
 class VeoModel:
-    """Veo video generation model.
+    """Veo video generation model runner."""
 
-    Veo runs as a background operation: callers start a generation and
-    poll it. There is no blocking generate path.
-    """
-
-    def __init__(self, version: str, client: genai.Client) -> None:
-        """Initialize Veo model.
+    def __init__(self, name: str, client: genai.Client) -> None:
+        """Initialize Veo model runner.
 
         Args:
-            version: The Veo model version.
-            client: The Google GenAI client.
+            name: The full model name.
+            client: The GenAI client.
         """
-        self._version = version
+        self._name = name
         self._client = client
+        self._model_id = name.split('/')[-1]
 
-    async def start(self, request: ModelRequest[VeoConfigSchema], ctx: ActionRunContext) -> Operation:
-        """Start a video generation operation (background model pattern for GoogleAI).
+    async def start(self, request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+        """Start a video generation operation.
 
         Args:
-            request: The generation request.
+            request: The model request containing prompt and config.
             ctx: The action run context.
 
         Returns:
-            An Operation with the job ID.
+            Operation representing the started video generation job.
         """
-        if request.tools:
-            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
-
         prompt = _extract_text(request)
-        if not prompt:
-            raise GenkitError(status='INVALID_ARGUMENT', message='Veo requires a text prompt')
+        config = self._get_config(request)
 
         try:
-            response = await self._client.aio.models.generate_videos(
-                model=self._version,
+            response: genai_types.GenerateVideosOperation = await self._client.aio.models.generate_videos(
+                model=self._model_id,
                 prompt=prompt,
-                config=self._get_config(request),
+                config=config,
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
@@ -295,8 +307,8 @@ class VeoModel:
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfig | None:
         dumped = dump_family_config(
             config=request.config,
-            expected_type=VeoConfigSchema,
-            action_name=self._version,
+            expected_type=VeoConfig,
+            action_name=self._name,
         )
         if not dumped:
             return None
@@ -305,8 +317,11 @@ class VeoModel:
         try:
             cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
         except ValidationError as e:
-            raise sdk_config_error(action_name=self._version, error=e) from e
-        return attach_leftovers(cfg, leftovers, nest='parameters')
+            raise sdk_config_error(action_name=self._name, error=e) from e
+
+        if leftovers:
+            cfg.http_options = genai_types.HttpOptions(extra_body={'parameters': leftovers})
+        return cfg
 
     @property
     def metadata(self) -> dict:
