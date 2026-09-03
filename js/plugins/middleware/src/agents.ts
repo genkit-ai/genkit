@@ -300,25 +300,6 @@ function isAbortError(e: unknown): boolean {
 }
 
 /**
- * Forwards the first abort among `sources` to `target`, with its reason.
- */
-function linkSignals(
-  target: AbortController,
-  ...sources: Array<AbortSignal | undefined>
-): void {
-  for (const source of sources) {
-    if (!source) continue;
-    if (source.aborted) {
-      target.abort(source.reason);
-      return;
-    }
-    source.addEventListener('abort', () => target.abort(source.reason), {
-      once: true,
-    });
-  }
-}
-
-/**
  * Returns up to `n` of the most recent user/model messages, each reduced to
  * its non-empty text parts. Tool and tool-request parts are dropped: a model
  * message mid-tool-loop can carry a `toolRequest` part with no matching
@@ -1247,12 +1228,16 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        * Follows one task to its end and returns its report. A fetch error
        * that reaches this level is a dead end worth reporting, with one
        * exception: `signal` ending the wait (its timeout, or a won race). The
-       * task is still running by definition then, so a follow cut short that
-       * way is reported as pending rather than as a read that did not finish.
-       * That is decided from the failure itself, not from the signal alone: a
-       * handle that never resolved is not the signal's doing and keeps its
-       * error however the wait ended, or the model would be told to keep
-       * re-checking an ID that can never settle.
+       * follow was cut short rather than finished then, so the task is
+       * reported as it stands from one more plain read: the runtime's wait
+       * checks the signal before its first read, and a deadline that beats
+       * the dispatch would otherwise report an already-settled task as
+       * pending. A read that fails there leaves the task pending, since it
+       * was still running the last time anyone saw it. That is decided from
+       * the failure itself, not from the signal alone: a handle that never
+       * resolved is not the signal's doing and keeps its error however the
+       * wait ended, or the model would be told to keep re-checking an ID that
+       * can never settle.
        */
       async function awaitTask(
         taskId: string,
@@ -1263,10 +1248,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           awaitSnapshot,
           signal
         );
-        if (error !== undefined && signal.aborted && isAbortError(error)) {
-          return { ...report, status: 'pending', error: undefined };
+        if (error === undefined || !signal.aborted || !isAbortError(error)) {
+          return report;
         }
-        return report;
+        const current = await reportTask(taskId, readSnapshotOnce);
+        if (current.error === undefined) return current.report;
+        return { ...report, status: 'pending', error: undefined };
       }
 
       /**
@@ -1304,26 +1291,43 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           return reportTasks(taskIds, readSnapshotOnce);
         }
         const timeoutMs = timeoutSeconds * 1000;
-        const deadline =
-          timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS
-            ? AbortSignal.timeout(timeoutMs)
-            : undefined;
 
         // One signal ends every follow: the deadline, the caller hanging up,
         // or (with waitFor "first") the first settlement, after which the
-        // remaining follows report their tasks as they stand.
+        // remaining follows report their tasks as they stand. The controller
+        // is aborted once the collection is over however it ended, so no
+        // follow outlives the call that started it, and the deadline timer is
+        // cleared rather than left to fire into a finished wait.
         const controller = new AbortController();
-        linkSignals(controller, deadline, toolSignal);
+        const signal = toolSignal
+          ? AbortSignal.any([controller.signal, toolSignal])
+          : controller.signal;
+        const deadline =
+          timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS
+            ? setTimeout(
+                () =>
+                  controller.abort(
+                    new DOMException('wait timed out', 'TimeoutError')
+                  ),
+                timeoutMs
+              )
+            : undefined;
 
-        const reports = await collectReports(taskIds, async (taskId) => {
-          const report = await awaitTask(taskId, controller.signal);
-          if (first && isSettled(report.status)) {
-            controller.abort(
-              new DOMException('first task settled', 'AbortError')
-            );
-          }
-          return report;
-        });
+        let reports: BackgroundTaskReport[];
+        try {
+          reports = await collectReports(taskIds, async (taskId) => {
+            const report = await awaitTask(taskId, signal);
+            if (first && isSettled(report.status)) {
+              controller.abort(
+                new DOMException('first task settled', 'AbortError')
+              );
+            }
+            return report;
+          });
+        } finally {
+          clearTimeout(deadline);
+          controller.abort(new DOMException('wait ended', 'AbortError'));
+        }
 
         // The calling tool ending is cancellation, not a timeout; let it fail
         // the tool call rather than dressing it up as a settled result.
