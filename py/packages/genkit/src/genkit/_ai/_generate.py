@@ -810,39 +810,14 @@ async def _generate_action_turn(
     run_ctx = mw_pipeline.ctx
     raise_if_aborted(run_ctx.abort_signal)
 
-    model, tools, format_def = await resolve_parameters(registry, raw_request)
     boxed_start = BoxedStart()
-    had_resume = raw_request.resume is not None
-
-    raw_request, formatter = apply_format(raw_request, format_def)
-
-    if raw_request.resources:
-        raw_request = await apply_resources(registry, raw_request, run_ctx.abort_signal)
-
-    assert_valid_tool_names(tools)
-
-    (
-        revised_request,
-        interrupted_response,
-        resumed_tool_message,
-    ) = await _resolve_resume_options(
-        registry=registry,
-        raw_request=raw_request,
-        mw_pipeline=mw_pipeline,
-    )
-
-    # NOTE: in the future we should make it possible to interrupt a restart, but
-    # at the moment it's too complicated because it's not clear how to return a
-    # response that amends history but doesn't generate a new message, so we throw
-    if interrupted_response:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message='One or more tools triggered an interrupt during a restarted execution.',
-            details={'message': interrupted_response.message},
-        )
-    raw_request = revised_request
-
-    chunks = ChunkAccumulator(message_index, formatter)
+    # The caller's output_schema is what this turn asked for. A wrap_generate
+    # that hung its own request on the response is still judged against that,
+    # not whatever leftover output config it copied. apply_format fills in
+    # format/content_type on this same object.
+    formatted_output = raw_request.output
+    formatter: Formatter[Any, Any] | None = None
+    resolved_name = ''
 
     async def dispatch_generate(
         params: GenerateHookParams,
@@ -903,29 +878,17 @@ async def _generate_action_turn(
             runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
         return await runner(params, ctx)
 
-    # if resolving the 'resume' option above generated a tool message, stream it.
-    if resumed_tool_message:
-        chunks.stream_chunk(
-            chunk=ModelResponseChunk(
-                role=resumed_tool_message.role,
-                content=resumed_tool_message.content,
-            ),
-            role=Role.TOOL,
-            ctx=run_ctx,
-        )
-
     async def run_one_iteration(
         params: GenerateHookParams,
         ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
-        chunks.message_index = params.message_index
-        # ``params.options`` picks up whatever wrap_generate middleware changed
-        # for this turn — including the model name. Re-resolve the action
-        # (and tools) so a reroute is not a silent no-op.
+        nonlocal formatter, resolved_name, formatted_output
+        # wrap_generate already ran. The name on options is the action.
         turn_options = params.options
-        turn_model = await resolve_model_action(registry, turn_options.model)
-        if turn_model.kind == ActionKind.BACKGROUND_MODEL and had_resume:
+        turn_model, turn_tools, format_def = await resolve_parameters(registry, turn_options)
+        resolved_name = turn_model.name
+        if turn_model.kind == ActionKind.BACKGROUND_MODEL and turn_options.resume is not None:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message=(
@@ -933,8 +896,43 @@ async def _generate_action_turn(
                     'a background start cannot satisfy an interrupted tool turn'
                 ),
             )
-        turn_tools = await resolve_tools_from_options(registry, turn_options.tools)
+        turn_options, formatter = apply_format(turn_options, format_def)
+        formatted_output = turn_options.output
+        if turn_options.resources:
+            turn_options = await apply_resources(registry, turn_options, run_ctx.abort_signal)
         assert_valid_tool_names(turn_tools)
+
+        (
+            revised_request,
+            interrupted_response,
+            resumed_tool_message,
+        ) = await _resolve_resume_options(
+            registry=registry,
+            raw_request=turn_options,
+            mw_pipeline=mw_pipeline,
+        )
+        # NOTE: in the future we should make it possible to interrupt a restart, but
+        # at the moment it's too complicated because it's not clear how to return a
+        # response that amends history but doesn't generate a new message, so we throw
+        if interrupted_response:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='One or more tools triggered an interrupt during a restarted execution.',
+                details={'message': interrupted_response.message},
+            )
+        turn_options = revised_request
+
+        chunks = ChunkAccumulator(params.message_index, formatter)
+        if resumed_tool_message:
+            chunks.stream_chunk(
+                chunk=ModelResponseChunk(
+                    role=resumed_tool_message.role,
+                    content=resumed_tool_message.content,
+                ),
+                role=Role.TOOL,
+                ctx=run_ctx,
+            )
+
         request = await action_to_generate_request(turn_options, turn_tools, turn_model)
         if request.docs:
             request = _augment_with_context(request)
@@ -1133,18 +1131,15 @@ async def _generate_action_turn(
     generate_params = GenerateHookParams(
         options=raw_request,
         iteration=current_turn,
-        message_index=chunks.message_index,
+        message_index=message_index,
     )
     response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
     assert_hook_kept_operation(
         boxed=boxed_start.response,
         after_hooks=response,
-        name=boxed_start.name or model.name,
+        name=boxed_start.name or resolved_name,
     )
-    # The caller's output_schema is what this turn asked for. A wrap_generate
-    # that hung its own request on the response is still judged against that,
-    # not whatever leftover output config it copied.
-    out = raw_request.output
+    out = formatted_output
     output = OutputConfig(
         format=out.format if out else None,
         # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
@@ -1160,7 +1155,8 @@ async def _generate_action_turn(
     else:
         response.request = response.request.model_copy(update={'output': output})
     if formatter and response._message_parser is None:
-        response._message_parser = lambda msg: formatter.parse_message(msg)
+        parse = formatter.parse_message
+        response._message_parser = lambda msg: parse(msg)
     if out and out.schema_type:
         response._schema_type = out.schema_type
     response.assert_valid()
@@ -1397,8 +1393,8 @@ async def resolve_parameters(
     """Resolve model, tools, and format from registry for a generation request."""
     model_action = await resolve_model_action(registry, request.model)
 
-    # Resolve tools up front to fail fast on invalid caller-supplied tool names or
-    # duplicate short names before running side effects or middleware.
+    # Resolve tools after wrap_generate so a hook that added names is what we
+    # look up, and fail on a bad name before the model or a resume restart.
     tools = await resolve_tools_from_options(registry, request.tools)
 
     format_def: FormatDef | None = None
