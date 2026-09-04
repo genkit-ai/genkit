@@ -161,6 +161,24 @@ async def test__generate(sample_request: ModelRequest) -> None:
 
 
 @pytest.mark.asyncio
+async def test__generate_no_choices(sample_request: ModelRequest) -> None:
+    """A completion carrying no choices fails with a status the caller can handle."""
+    mock_response = MagicMock()
+    mock_response.choices = []
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model._generate(sample_request)
+
+    assert exc_info.value.status == 'INTERNAL'
+    assert 'No choices in completion.' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test__generate_stream(sample_request: ModelRequest) -> None:
     """Test generate_stream method ensures it processes streamed responses correctly."""
     mock_client = MagicMock()
@@ -247,6 +265,34 @@ def _usage_chunk() -> ChatCompletionChunk:
         'model': 'gpt-4',
         'choices': [],
         'usage': _USAGE_PAYLOAD,
+    })
+
+
+def _tool_call_chunk(call_id: str, name: str, args_segment: str) -> ChatCompletionChunk:
+    """A chunk whose single choice carries a tool call delta."""
+    return ChatCompletionChunk.model_validate({
+        'id': '1',
+        'object': 'chat.completion.chunk',
+        'created': 1,
+        'model': 'gpt-4',
+        'choices': [
+            {
+                'index': 0,
+                'delta': {
+                    'role': 'assistant',
+                    'tool_calls': [
+                        {
+                            'index': 0,
+                            'id': call_id,
+                            'type': 'function',
+                            'function': {'name': name, 'arguments': args_segment},
+                        }
+                    ],
+                },
+                'finish_reason': None,
+            }
+        ],
+        'usage': None,
     })
 
 
@@ -396,6 +442,54 @@ async def test__generate_stream_reports_usage(sample_request: ModelRequest) -> N
 
     assert collected_chunks == ['Hello']
     _assert_usage_payload_reported(response.usage)
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_no_choices(sample_request: ModelRequest) -> None:
+    """A stream carrying only the usage chunk fails rather than returning an empty response."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([_usage_chunk()])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model._generate_stream(sample_request, lambda _: None)
+
+    assert exc_info.value.status == 'INTERNAL'
+    assert 'No choices in completion.' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_tool_calls_only(sample_request: ModelRequest) -> None:
+    """A stream carrying only tool calls accumulates no text but still succeeds."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _tool_call_chunk('tool123', 'tool_fn', '{"a": '),
+        _tool_call_chunk('tool123', 'tool_fn', '1}'),
+        _usage_chunk(),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate_stream(sample_request, lambda _: None)
+
+    assert response.message is not None
+    assert response.text == ''
+    tool_requests = [p.root.tool_request for p in response.message.content if p.root.tool_request]
+    assert len(tool_requests) == 1
+    assert tool_requests[0].name == 'tool_fn'
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_empty_deltas(sample_request: ModelRequest) -> None:
+    """A stream that carries choices but no content succeeds with an empty message."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([_text_chunk(''), _text_chunk('')])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate_stream(sample_request, lambda _: None)
+
+    assert response.message is not None
+    assert response.text == ''
 
 
 @pytest.mark.parametrize(
