@@ -18,6 +18,7 @@
 
 import base64
 import json
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -30,10 +31,12 @@ from genkit_openai.models.utils import (
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    extract_response_metadata,
     parse_data_uri_content_type,
     reraise_openai_error,
 )
 from openai import APIStatusError
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import (
@@ -787,3 +790,69 @@ def test_reraise_openai_error_marks_malformed_tool_json_internal() -> None:
         assert raised.value.status == 'INTERNAL'
         return
     raise AssertionError('expected JSONDecodeError')
+
+
+class TestExtractResponseMetadata:
+    """Tests for extract_response_metadata."""
+
+    def test_ids_and_fingerprint(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """The fingerprint, model and id are collected under camelCase keys."""
+        completion = make_completion(system_fingerprint='fp_44709d6fcb')
+        assert extract_response_metadata(completion) == {
+            'systemFingerprint': 'fp_44709d6fcb',
+            'model': 'gpt-4o-2024-08-06',
+            'id': 'chatcmpl-abc',
+        }
+
+    def test_ids_without_fingerprint(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """Providers that omit the fingerprint still report their model and id."""
+        assert extract_response_metadata(make_completion()) == {
+            'model': 'gpt-4o-2024-08-06',
+            'id': 'chatcmpl-abc',
+        }
+
+    def test_citations(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """Citations pass through in the shape the provider returned them."""
+        citations = ['https://a.example', 'https://b.example']
+        metadata = extract_response_metadata(make_completion(citations=citations))
+        assert metadata['citations'] == citations
+
+    def test_null_citations_are_absent(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """A citations field that arrived as null is treated as absent."""
+        assert 'citations' not in extract_response_metadata(make_completion(citations=None))
+
+    def test_choice_error_object(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """The error object a failing choice carries is kept whole."""
+        failure = {
+            'message': 'Provider returned error',
+            'code': 429,
+            'metadata': {'provider_name': 'xai'},
+        }
+        metadata = extract_response_metadata(make_completion(choice={'finish_reason': 'error', 'error': failure}))
+        assert metadata['error'] == failure
+
+    def test_non_object_choice_error_is_dropped(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """An error field that is not an object is not metadata."""
+        metadata = extract_response_metadata(make_completion(choice={'error': 'boom'}))
+        assert 'error' not in metadata
+
+    def test_empty_choices(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """A response with no choices still reports its top-level metadata."""
+        metadata = extract_response_metadata(make_completion(choices=[], citations=['u']))
+        assert metadata == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc', 'citations': ['u']}
+
+    def test_chunk(self, make_chunk: Callable[..., ChatCompletionChunk]) -> None:
+        """A streamed chunk reports the same metadata a completion does."""
+        chunk = make_chunk(
+            content='hi',
+            system_fingerprint='fp_stream',
+            citations=['https://x.example'],
+            choice={'finish_reason': 'error', 'error': {'message': 'boom'}},
+        )
+        assert extract_response_metadata(chunk) == {
+            'systemFingerprint': 'fp_stream',
+            'model': 'grok-4',
+            'id': 'chatcmpl-stream',
+            'citations': ['https://x.example'],
+            'error': {'message': 'boom'},
+        }

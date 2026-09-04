@@ -17,7 +17,7 @@
 
 """Tests for OpenAI compatible model implementation."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -1115,3 +1115,125 @@ class TestCleanJsonResponse:
         result = model._clean_json_response(response, request)
         # Should return the exact same object (no copy).
         assert result is response
+
+
+async def _stream(chunks: list[ChatCompletionChunk]) -> AsyncIterator[ChatCompletionChunk]:
+    """Yield chunks the way an AsyncStream does."""
+    for chunk in chunks:
+        yield chunk
+
+
+def _client(response: object) -> MagicMock:
+    """A client whose chat completion call answers with response."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+class TestResponseMetadata:
+    """Tests for the response metadata both chat paths report."""
+
+    @pytest.mark.asyncio
+    async def test_generate_reports_ids_and_fingerprint(
+        self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+    ) -> None:
+        """The fingerprint, model and id reach both custom and raw."""
+        model = OpenAIModel(model='gpt-4o', client=_client(make_completion(system_fingerprint='fp_44709d6fcb')))
+        response = await model._generate(sample_request)
+
+        expected = {
+            'systemFingerprint': 'fp_44709d6fcb',
+            'model': 'gpt-4o-2024-08-06',
+            'id': 'chatcmpl-abc',
+        }
+        assert response.custom == expected
+        assert response.raw == expected
+
+    @pytest.mark.asyncio
+    async def test_generate_reports_citations_without_a_fingerprint(
+        self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+    ) -> None:
+        """Citations survive on providers that never send a fingerprint."""
+        citations = ['https://a.example', 'https://b.example']
+        model = OpenAIModel(model='grok-4', client=_client(make_completion(citations=citations)))
+        response = await model._generate(sample_request)
+
+        assert response.raw is not None
+        assert response.raw['citations'] == citations
+        assert response.raw['id'] == 'chatcmpl-abc'
+        assert 'systemFingerprint' not in response.raw
+
+    @pytest.mark.asyncio
+    async def test_generate_reports_the_choice_error_object(
+        self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+    ) -> None:
+        """A gateway's error object rides on the metadata whole."""
+        failure = {'message': 'Provider returned error', 'code': 429, 'metadata': {'provider_name': 'xai'}}
+        completion = make_completion(choice={'finish_reason': 'error', 'error': failure})
+        model = OpenAIModel(model='gpt-4o', client=_client(completion))
+        response = await model._generate(sample_request)
+
+        assert response.raw is not None
+        assert response.raw['error'] == failure
+
+    @pytest.mark.asyncio
+    async def test_generate_omits_absent_fields(
+        self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+    ) -> None:
+        """A response without the optional fields grows no null-valued keys."""
+        model = OpenAIModel(model='gpt-4o', client=_client(make_completion()))
+        response = await model._generate(sample_request)
+
+        assert response.raw == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc'}
+
+    @pytest.mark.asyncio
+    async def test_generate_stream_reports_chunk_metadata(
+        self, sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+    ) -> None:
+        """Metadata spread across chunks is collected onto the final response."""
+        chunks = [
+            make_chunk(content='Hello', system_fingerprint='fp_stream'),
+            make_chunk(content=', world!'),
+            make_chunk(
+                citations=['https://x.example'],
+                choice={'finish_reason': 'error', 'error': {'message': 'upstream gave up'}},
+            ),
+        ]
+        model = OpenAIModel(model='grok-4', client=_client(_stream(chunks)))
+
+        collected = []
+
+        def callback(chunk: ModelResponseChunk) -> None:
+            collected.append(chunk.content[0].root.text)
+
+        response = await model._generate_stream(sample_request, callback)
+
+        assert collected == ['Hello', ', world!']
+        assert response.custom == {
+            'systemFingerprint': 'fp_stream',
+            'model': 'grok-4',
+            'id': 'chatcmpl-stream',
+            'citations': ['https://x.example'],
+            'error': {'message': 'upstream gave up'},
+        }
+        assert response.raw == response.custom
+
+    @pytest.mark.asyncio
+    async def test_cleaned_json_response_keeps_metadata(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """Stripping markdown fences does not drop the metadata."""
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate'))])],
+            output=OutputConfig(format='json'),
+        )
+        completion = make_completion(
+            content='```json\n{"name": "John", "level": 5}\n```',
+            system_fingerprint='fp_deepseek',
+        )
+        model = OpenAIModel(model='deepseek-chat', client=_client(completion))
+        response = await model._generate(request)
+
+        assert response.message is not None
+        assert response.message.content[0].root.text == '{"name": "John", "level": 5}'
+        assert response.raw is not None
+        assert response.raw['systemFingerprint'] == 'fp_deepseek'
+        assert response.custom == response.raw
