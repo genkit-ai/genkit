@@ -86,6 +86,26 @@ func main() {
 		},
 	)
 
+	genkit.DefineFlow(g, "image-generation", func(ctx context.Context, prompt string) ([]string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(oai.ImageModelRef("dall-e-3", &oai.ImageGenerationConfig{
+				Quality: openai.ImageGenerateParamsQualityHD,
+				Size:    openai.ImageGenerateParamsSize1024x1024,
+			})),
+			ai.WithPrompt(prompt),
+		)
+		if err != nil {
+			return nil, err
+		}
+		images := make([]string, 0, len(resp.Message.Content))
+		for _, part := range resp.Message.Content {
+			if part.IsMedia() {
+				images = append(images, part.Text)
+			}
+		}
+		return images, nil
+	})
+
 	// Serve every flow over HTTP.
 	mux := http.NewServeMux()
 	for _, a := range genkit.ListFlows(g) {
