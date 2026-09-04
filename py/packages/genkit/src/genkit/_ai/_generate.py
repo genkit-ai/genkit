@@ -72,6 +72,7 @@ from genkit._core._schema import check_output_schema
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
+    GenerateActionOutputConfig,
     MiddlewareRef,
     MultipartToolResponse,
     Operation,
@@ -772,11 +773,17 @@ def require_model_response(*, raw: object, name: str) -> ModelResponse:
 
 
 @dataclass
-class BoxedStart:
-    """The ModelResponse start() produced, before wrap_model / wrap_generate."""
+class Turn:
+    """Stamps wrap_generate cannot return — that hook must return ModelResponse.
 
-    response: ModelResponse | None = None
+    Resolve and apply_format run inside the turn. Ticket / schema / parse
+    checks run after the hook returns, so they read this bag.
+    """
+
+    boxed: ModelResponse | None = None
     name: str = ''
+    formatter: Formatter[Any, Any] | None = None
+    output: GenerateActionOutputConfig | None = None
 
 
 def assert_hook_kept_operation(*, boxed: ModelResponse | None, after_hooks: ModelResponse, name: str) -> None:
@@ -810,14 +817,7 @@ async def _generate_action_turn(
     run_ctx = mw_pipeline.ctx
     raise_if_aborted(run_ctx.abort_signal)
 
-    boxed_start = BoxedStart()
-    # The caller's output_schema is what this turn asked for. A wrap_generate
-    # that hung its own request on the response is still judged against that,
-    # not whatever leftover output config it copied. apply_format fills in
-    # format/content_type on this same object.
-    formatted_output = raw_request.output
-    formatter: Formatter[Any, Any] | None = None
-    resolved_name = ''
+    turn = Turn(output=raw_request.output)
 
     async def dispatch_generate(
         params: GenerateHookParams,
@@ -883,11 +883,10 @@ async def _generate_action_turn(
         ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
-        nonlocal formatter, resolved_name, formatted_output
         # wrap_generate already ran. The name on options is the action.
         turn_options = params.options
         turn_model, turn_tools, format_def = await resolve_parameters(registry, turn_options)
-        resolved_name = turn_model.name
+        turn.name = turn_model.name
         if turn_model.kind == ActionKind.BACKGROUND_MODEL and turn_options.resume is not None:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
@@ -896,8 +895,8 @@ async def _generate_action_turn(
                     'a background start cannot satisfy an interrupted tool turn'
                 ),
             )
-        turn_options, formatter = apply_format(turn_options, format_def)
-        formatted_output = turn_options.output
+        turn_options, turn.formatter = apply_format(turn_options, format_def)
+        turn.output = turn_options.output
         if turn_options.resources:
             turn_options = await apply_resources(registry, turn_options, run_ctx.abort_signal)
         assert_valid_tool_names(turn_tools)
@@ -922,7 +921,7 @@ async def _generate_action_turn(
             )
         turn_options = revised_request
 
-        chunks = ChunkAccumulator(params.message_index, formatter)
+        chunks = ChunkAccumulator(params.message_index, turn.formatter)
         if resumed_tool_message:
             chunks.stream_chunk(
                 chunk=ModelResponseChunk(
@@ -953,14 +952,14 @@ async def _generate_action_turn(
             )
             raw = result.response
             if turn_model.kind == ActionKind.BACKGROUND_MODEL:
-                boxed_start.response = box_background_start(
+                turn.boxed = box_background_start(
                     raw=raw,
                     request=params.request,
                     name=turn_model.name,
                     latency_ms=result.latency_ms,
                 )
-                boxed_start.name = turn_model.name
-                return boxed_start.response
+                turn.name = turn_model.name
+                return turn.boxed
             return require_model_response(raw=raw, name=turn_model.name)
 
         with chunks.intercept_model_stream(ctx, role=Role.MODEL):
@@ -970,15 +969,15 @@ async def _generate_action_turn(
                 next_fn,
             )
         assert_hook_kept_operation(
-            boxed=boxed_start.response,
+            boxed=turn.boxed,
             after_hooks=model_response,
-            name=boxed_start.name or turn_model.name,
+            name=turn.name or turn_model.name,
         )
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
-            if formatter is None:
+            if turn.formatter is None:
                 return None
-            return formatter.parse_message(msg)
+            return turn.formatter.parse_message(msg)
 
         # Extract schema_type for runtime Pydantic validation
         schema_type = turn_options.output.schema_type if turn_options.output else None
@@ -987,7 +986,7 @@ async def _generate_action_turn(
         # any output format context (message_parser, schema_type) as private attrs.
         response = model_response
         response.request = request
-        if formatter:
+        if turn.formatter:
             response._message_parser = message_parser
         if schema_type:
             response._schema_type = schema_type
@@ -1016,7 +1015,7 @@ async def _generate_action_turn(
             model=turn_options.model,
             finish_reason=response.finish_reason,
             finish_message=response.finish_message,
-            formatter=formatter,
+            formatter=turn.formatter,
             message=generated_msg,
         )
 
@@ -1135,11 +1134,11 @@ async def _generate_action_turn(
     )
     response = await dispatch_generate(generate_params, run_ctx, run_one_iteration)
     assert_hook_kept_operation(
-        boxed=boxed_start.response,
+        boxed=turn.boxed,
         after_hooks=response,
-        name=boxed_start.name or resolved_name,
+        name=turn.name,
     )
-    out = formatted_output
+    out = turn.output
     output = OutputConfig(
         format=out.format if out else None,
         # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
@@ -1154,8 +1153,8 @@ async def _generate_action_turn(
         )
     else:
         response.request = response.request.model_copy(update={'output': output})
-    if formatter and response._message_parser is None:
-        parse = formatter.parse_message
+    if turn.formatter and response._message_parser is None:
+        parse = turn.formatter.parse_message
         response._message_parser = lambda msg: parse(msg)
     if out and out.schema_type:
         response._schema_type = out.schema_type
