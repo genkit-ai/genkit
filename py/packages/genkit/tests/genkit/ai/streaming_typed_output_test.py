@@ -284,6 +284,70 @@ class TestNestedAndConstrainedOutput:
         assert isinstance(out.posts[0].author, Author)
         assert out.posts[0].author.name is None
 
+    def test_half_arrived_nested_post_is_post_with_prefix_title(self) -> None:
+        """A nested object cut mid-string is a Post; the prefix is title, missing fields are None."""
+        out = _chunk(
+            '{"posts": [{"title": "Hel',
+            schema_type=Author,
+        ).output
+        assert isinstance(out, Author)
+        assert out.name is None
+        assert isinstance(out.posts[0], Post)
+        assert out.posts[0].title == 'Hel'
+        assert out.posts[0].author is None
+
+    def test_half_arrived_nested_author_fills_name_prefix(self) -> None:
+        """A nested object cut mid-string is an Author; the prefix is name, missing fields are None."""
+        out = _chunk(
+            '{"posts": [{"author": {"name": "Jo',
+            schema_type=Author,
+        ).output
+        assert isinstance(out, Author)
+        assert out.name is None
+        assert isinstance(out.posts[0], Post)
+        assert out.posts[0].title is None
+        assert isinstance(out.posts[0].author, Author)
+        assert out.posts[0].author.name == 'Jo'
+        assert out.posts[0].author.posts is None
+
+    def test_half_arrived_empty_nested_post_has_holes(self) -> None:
+        """A nested object that has only opened is a Post with every field None."""
+        out = _chunk(
+            '{"posts": [{',
+            schema_type=Author,
+        ).output
+        assert isinstance(out, Author)
+        assert out.name is None
+        assert isinstance(out.posts[0], Post)
+        assert out.posts[0].title is None
+        assert out.posts[0].author is None
+
+    def test_half_arrived_nested_key_without_value_is_none(self) -> None:
+        """A nested key whose value has not arrived is None; keys that arrived stay."""
+        out = _chunk(
+            '{"posts": [{"title": "Hel", "author":',
+            schema_type=Author,
+        ).output
+        assert isinstance(out, Author)
+        assert out.name is None
+        assert isinstance(out.posts[0], Post)
+        assert out.posts[0].title == 'Hel'
+        assert out.posts[0].author is None
+
+    def test_half_arrived_deep_child_name_is_prefix(self) -> None:
+        """A deeply nested object cut mid-string is a NodeTree; the prefix is name, missing fields are None."""
+        out = _chunk(
+            '{"children": [{"children": [{"name": "lea',
+            schema_type=NodeTree,
+        ).output
+        assert isinstance(out, NodeTree)
+        assert out.name is None
+        assert isinstance(out.children[0], NodeTree)
+        assert out.children[0].name is None
+        assert isinstance(out.children[0].children[0], NodeTree)
+        assert out.children[0].children[0].name == 'lea'
+        assert out.children[0].children[0].children is None
+
     def test_dict_quoted_post_yields_post_instances(self) -> None:
         """dict[str, 'QuotedItem'] values are QuotedItem, with holes as None."""
         out = _chunk(
@@ -439,3 +503,74 @@ async def test_generate_stream_camel_case_alias_fills_fields() -> None:
     assert isinstance(response.output, UserProfile)
     assert response.output.first_name == 'Ada'
     assert response.output.last_name == 'Lovelace'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_dict_schema_chunks_stay_dicts() -> None:
+    """A dict output_schema leaves chunk.output as extracted JSON, not a class."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake"}'))]),
+        ]
+    ]
+    pm.responses = [
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate Cake"}'))])),
+    ]
+
+    stream_result = ai.generate_stream(prompt='hi', output_schema=schema)
+    outputs: list[Any] = []
+    async for chunk in stream_result.stream:
+        outputs.append(chunk.output)
+
+    assert outputs[0] == {'title': 'Chocolate C'}
+    assert isinstance(outputs[0], dict)
+    assert outputs[1] == {'title': 'Chocolate Cake'}
+    response = await stream_result.response
+    assert response.output == {'title': 'Chocolate Cake'}
+    assert isinstance(response.output, dict)
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_stream_yields_typed_chunks() -> None:
+    """define_prompt(...).stream() yields the same Recipe holes as generate_stream."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake", "steps": ["mi'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='x", "bake"]}'))]),
+        ]
+    ]
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))]),
+        )
+    ]
+
+    recipe_prompt = ai.define_prompt(prompt='hi', output_schema=Recipe)
+    stream_result = recipe_prompt.stream()
+
+    outputs: list[Any] = []
+    async for chunk in stream_result.stream:
+        outputs.append(chunk.output)
+
+    assert isinstance(outputs[0], Recipe)
+    assert outputs[0].title == 'Chocolate C'
+    assert outputs[0].steps is None
+    assert isinstance(outputs[1], Recipe)
+    assert outputs[1].title == 'Chocolate Cake'
+    assert outputs[1].steps == ['mi']
+    assert isinstance(outputs[2], Recipe)
+    assert outputs[2].steps == ['mix', 'bake']
+
+    response = await stream_result.response
+    assert isinstance(response.output, Recipe)
+    assert response.output.title == 'Chocolate Cake'
+    assert response.output.steps == ['mix', 'bake']
