@@ -24,7 +24,6 @@ from genkit._core._model import OutputConfig
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
-    DocumentPart,
     Media,
     MediaPart,
     Part,
@@ -368,21 +367,6 @@ def test_text_from_content_with_parts() -> None:
     """Test text_from_content with list of Part objects."""
     content = [Part(root=TextPart(text='hello')), Part(root=TextPart(text=' world'))]
     assert text_from_content(content) == 'hello world'
-
-
-def test_text_from_content_with_document_parts() -> None:
-    """Test text_from_content with list of DocumentPart objects."""
-    content = [DocumentPart(root=TextPart(text='doc1')), DocumentPart(root=TextPart(text=' doc2'))]
-    assert text_from_content(content) == 'doc1 doc2'
-
-
-def test_text_from_content_with_mixed_parts() -> None:
-    """Test text_from_content with mixed Part and DocumentPart objects."""
-    content = [
-        Part(root=TextPart(text='part')),
-        DocumentPart(root=TextPart(text=' text')),
-    ]
-    assert text_from_content(content) == 'part text'
 
 
 def test_text_from_content_with_empty_list() -> None:

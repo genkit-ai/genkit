@@ -73,8 +73,6 @@
 
 ::: genkit.Document
 
-::: genkit.DocumentPart
-
 ::: genkit.EmbedderRef
 
 ::: genkit.EmbedderInfo

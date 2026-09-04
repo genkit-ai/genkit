@@ -44,6 +44,9 @@ TRANSFORMATIONS = {
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
     # RuntimeError would shadow Python's builtin exception.
     'RuntimeError': {'output_name': 'GenkitRuntimeError'},
+    # Documents take the same Part as messages. The schema names a
+    # text|media subset; we do not emit a second type for that.
+    'DocumentPart': {'output_name': 'Part'},
 }
 
 
@@ -62,7 +65,7 @@ def _output_name(name: str) -> str:
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
 PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
-ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
+ROOT_MODEL_UNIONS = frozenset({'Part', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -390,8 +393,8 @@ def generate(schema_path: Path, _out: Path) -> str:
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)
-    # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
-    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
+    # Part needs RootModel so Part(root=TextPart(...)) works; others get type aliases
+    ROOT_MODEL_UNIONS = frozenset({'Part'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
@@ -404,10 +407,106 @@ def generate(schema_path: Path, _out: Path) -> str:
                 continue
             class_name = _output_name(name)
             union_str = ' | '.join(_output_name(r) for r in refs)
-            if name in ROOT_MODEL_UNIONS:
+            if name == 'DocumentPart':
+                emitted.add(name)
+                break
+            elif name == 'Part':
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
-                    f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
+                    f'    """Root model for {name} union (Part(root=X))."""',
+                    '',
+                    '    @classmethod',
+                    '    def from_text(cls, text: str, metadata: Metadata | None = None) -> Part:',
+                    '        """Create a text Part."""',
+                    '        return cls(root=TextPart(text=text, metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_media(cls, url: str, content_type: str | None = None, metadata: Metadata | None = None) -> Part:',
+                    '        """Create a media Part."""',
+                    '        return cls(root=MediaPart(media=Media(url=url, content_type=content_type), metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_tool_request(',
+                    '        cls,',
+                    '        name: str,',
+                    '        input: Any = None,  # noqa: ANN401',
+                    '        ref: str | None = None,',
+                    '        metadata: Metadata | None = None,',
+                    '    ) -> Part:',
+                    '        """Create a tool request Part."""',
+                    '        return cls(root=ToolRequestPart(tool_request=ToolRequest(name=name, input=input, ref=ref), metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_tool_response(',
+                    '        cls,',
+                    '        name: str,',
+                    '        output: Any = None,  # noqa: ANN401',
+                    '        ref: str | None = None,',
+                    '        metadata: Metadata | None = None,',
+                    '    ) -> Part:',
+                    '        """Create a tool response Part."""',
+                    '        return cls(root=ToolResponsePart(tool_response=ToolResponse(name=name, output=output, ref=ref), metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_data(cls, data: Any, metadata: Metadata | None = None) -> Part:  # noqa: ANN401',
+                    '        """Create a data Part."""',
+                    '        return cls(root=DataPart(data=data, metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_reasoning(cls, reasoning: str, metadata: Metadata | None = None) -> Part:',
+                    '        """Create a reasoning Part."""',
+                    '        return cls(root=ReasoningPart(reasoning=reasoning, metadata=metadata))',
+                    '',
+                    '    @classmethod',
+                    '    def from_custom(cls, custom: Custom, metadata: Metadata | None = None) -> Part:',
+                    '        """Create a custom Part."""',
+                    '        return cls(root=CustomPart(custom=custom, metadata=metadata))',
+                    '',
+                    '    @property',
+                    '    def text(self) -> str | None:',
+                    '        """The text content if this is a text part, otherwise None."""',
+                    "        return getattr(self.root, 'text', None)",
+                    '',
+                    '    @property',
+                    '    def media(self) -> Media | None:',
+                    '        """The media content if this is a media part, otherwise None."""',
+                    "        return getattr(self.root, 'media', None)",
+                    '',
+                    '    @property',
+                    '    def tool_request(self) -> ToolRequest | None:',
+                    '        """The tool request if this is a tool request part, otherwise None."""',
+                    "        return getattr(self.root, 'tool_request', None)",
+                    '',
+                    '    @property',
+                    '    def tool_response(self) -> ToolResponse | None:',
+                    '        """The tool response if this is a tool response part, otherwise None."""',
+                    "        return getattr(self.root, 'tool_response', None)",
+                    '',
+                    '    @property',
+                    '    def data(self) -> Any | None:  # noqa: ANN401',
+                    '        """The data payload if this is a data part, otherwise None."""',
+                    "        return getattr(self.root, 'data', None)",
+                    '',
+                    '    @property',
+                    '    def reasoning(self) -> str | None:',
+                    '        """The reasoning string if this is a reasoning part, otherwise None."""',
+                    "        return getattr(self.root, 'reasoning', None)",
+                    '',
+                    '    @property',
+                    '    def custom(self) -> Custom | None:',
+                    '        """The custom payload if this is a custom part, otherwise None."""',
+                    "        return getattr(self.root, 'custom', None)",
+                    '',
+                    '    @property',
+                    '    def metadata(self) -> Metadata | None:',
+                    '        """Metadata associated with the part."""',
+                    "        return getattr(self.root, 'metadata', None)",
+                    '',
+                ])
+            elif name in ROOT_MODEL_UNIONS:
+                out.extend([
+                    f'class {class_name}(RootModel[{union_str}]):',
+                    f'    """Root model for {name} union (Part(root=X))."""',
                     '',
                 ])
             else:

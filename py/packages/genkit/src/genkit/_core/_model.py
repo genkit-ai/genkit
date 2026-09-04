@@ -40,7 +40,6 @@ from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     Candidate,
     DocumentData,
-    DocumentPart,
     FinishReason,
     GenerateActionOptionsData,
     GenerateActionOutputConfig,
@@ -282,7 +281,7 @@ class Document(DocumentData):
 
     def __init__(
         self,
-        content: list[DocumentPart],
+        content: list[Part],
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Initialize with content parts and optional metadata."""
@@ -293,7 +292,7 @@ class Document(DocumentData):
     @staticmethod
     def from_text(text: str, metadata: dict[str, Any] | None = None) -> Document:
         """Create a document from a text string."""
-        return Document(content=[DocumentPart(root=TextPart(text=text))], metadata=metadata)
+        return Document(content=[Part.from_text(text)], metadata=metadata)
 
     @staticmethod
     def from_media(
@@ -302,10 +301,7 @@ class Document(DocumentData):
         metadata: dict[str, Any] | None = None,
     ) -> Document:
         """Create a document from a media URL."""
-        return Document(
-            content=[DocumentPart(root=MediaPart(media=Media(url=url, content_type=content_type)))],
-            metadata=metadata,
-        )
+        return Document(content=[Part.from_media(url, content_type)], metadata=metadata)
 
     @staticmethod
     def from_data(
@@ -776,7 +772,7 @@ def text_from_message(msg: Message) -> str:
     return text_from_content(msg.content)
 
 
-def text_from_content(content: Sequence[Part | DocumentPart]) -> str:
+def text_from_content(content: Sequence[Part]) -> str:
     """Concatenate text parts.
 
     Thoughts ride on ``ReasoningPart``, so they stay out of ``.text`` —

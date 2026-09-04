@@ -55,7 +55,6 @@ from google import genai
 
 from genkit import (
     CustomPart,
-    DocumentPart,
     Media,
     MediaPart,
     Metadata,
@@ -108,7 +107,7 @@ class PartConverter:
     })
 
     @classmethod
-    async def to_gemini(cls, part: Part | DocumentPart) -> genai.types.Part | list[genai.types.Part]:
+    async def to_gemini(cls, part: Part) -> genai.types.Part | list[genai.types.Part]:
         """Maps a Genkit Part to a Gemini Part.
 
         This method inspects the root type of the Genkit Part and converts it
@@ -256,7 +255,7 @@ class PartConverter:
         return genai.types.Part()
 
     @classmethod
-    def _to_gemini_custom(cls, part: Part | DocumentPart) -> genai.types.Part:
+    def _to_gemini_custom(cls, part: Part) -> genai.types.Part:
         """Converts a Genkit CustomPart into a Gemini Part.
 
         This internal helper method handles the conversion of custom part types,

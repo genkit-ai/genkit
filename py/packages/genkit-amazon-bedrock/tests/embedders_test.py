@@ -35,7 +35,7 @@ from genkit_amazon_bedrock.embedders import (
 )
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 
-from genkit import DocumentPart, Media, MediaPart, TextPart
+from genkit import Media, MediaPart, Part, TextPart
 from genkit._core._typing import DocumentData
 from genkit.embedder import EmbedRequest
 from genkit.plugin_api import GenkitError
@@ -99,18 +99,18 @@ class ForbiddenTransport:
 
 
 def text_doc(*texts: str) -> DocumentData:
-    return DocumentData(content=[DocumentPart(root=TextPart(text=text)) for text in texts])
+    return DocumentData(content=[Part(root=TextPart(text=text)) for text in texts])
 
 
 def media_doc(url: str, content_type: str | None = None) -> DocumentData:
-    return DocumentData(content=[DocumentPart(root=MediaPart(media=Media(url=url, content_type=content_type)))])
+    return DocumentData(content=[Part(root=MediaPart(media=Media(url=url, content_type=content_type)))])
 
 
 def mixed_doc(text: str, url: str, content_type: str | None = None) -> DocumentData:
     return DocumentData(
         content=[
-            DocumentPart(root=TextPart(text=text)),
-            DocumentPart(root=MediaPart(media=Media(url=url, content_type=content_type))),
+            Part(root=TextPart(text=text)),
+            Part(root=MediaPart(media=Media(url=url, content_type=content_type))),
         ]
     )
 
@@ -567,9 +567,9 @@ def test_image_from_document_rejects_remote_urls(url: str) -> None:
 def test_image_from_document_returns_the_first_image() -> None:
     document = DocumentData(
         content=[
-            DocumentPart(root=MediaPart(media=Media(url=f'data:application/pdf;base64,{PNG_B64}'))),
-            DocumentPart(root=MediaPart(media=Media(url='data:image/png;base64,FIRST'))),
-            DocumentPart(root=MediaPart(media=Media(url='data:image/png;base64,SECOND'))),
+            Part(root=MediaPart(media=Media(url=f'data:application/pdf;base64,{PNG_B64}'))),
+            Part(root=MediaPart(media=Media(url='data:image/png;base64,FIRST'))),
+            Part(root=MediaPart(media=Media(url='data:image/png;base64,SECOND'))),
         ]
     )
     assert image_from_document(document) == ('image/png', 'FIRST')

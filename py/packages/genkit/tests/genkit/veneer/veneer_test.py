@@ -35,7 +35,6 @@ from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
-    DocumentPart,
     EvalFnResponse,
     EvalRequest,
     EvalResponse,
@@ -1382,7 +1381,7 @@ async def test_generate_simulates_doc_grounding(
 
     response = await ai.generate(
         messages=[clean_msg],
-        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+        docs=[Document(content=[Part(root=TextPart(text='doc content 1'))])],
     )
 
     # the model receives the grounded prompt; the returned request reports the
@@ -1396,7 +1395,7 @@ async def test_generate_simulates_doc_grounding(
 
     stream_result = ai.generate_stream(
         messages=[clean_msg],
-        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+        docs=[Document(content=[Part(root=TextPart(text='doc content 1'))])],
     )
 
     resp = await stream_result.response

@@ -42,7 +42,6 @@ from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, 
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit import (
-    DocumentPart,
     FinishReason,
     Media,
     MediaPart,
@@ -173,11 +172,11 @@ async def embed(model_id: str, documents: list[DocumentData]) -> list[list[float
 
 
 def text_doc(text: str) -> DocumentData:
-    return DocumentData(content=[DocumentPart(root=TextPart(text=text))])
+    return DocumentData(content=[Part(root=TextPart(text=text))])
 
 
 def image_doc(data_url: str = PNG_1X1_DATA_URL) -> DocumentData:
-    return DocumentData(content=[DocumentPart(root=MediaPart(media=Media(url=data_url)))])
+    return DocumentData(content=[Part(root=MediaPart(media=Media(url=data_url)))])
 
 
 def text_request(text: str, **kwargs) -> ModelRequest:
@@ -540,8 +539,8 @@ async def test_embed_titan_multimodal_image() -> None:
 async def test_embed_titan_multimodal_text_and_image() -> None:
     document = DocumentData(
         content=[
-            DocumentPart(root=TextPart(text='a white square')),
-            DocumentPart(root=MediaPart(media=Media(url=PNG_1X1_DATA_URL))),
+            Part(root=TextPart(text='a white square')),
+            Part(root=MediaPart(media=Media(url=PNG_1X1_DATA_URL))),
         ]
     )
     vectors = await embed(TITAN_EMBED_IMAGE, [document])

@@ -27,7 +27,6 @@ from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
 from genkit._core._typing import (
-    DocumentPart,
     FinishReason,
     Part,
     Resume,
@@ -139,7 +138,7 @@ async def test_simulates_doc_grounding(
                     content=[Part(TextPart(text='hi'))],
                 ),
             ],
-            docs=[Document(content=[DocumentPart(TextPart(text='doc content 1'))])],
+            docs=[Document(content=[Part(TextPart(text='doc content 1'))])],
         ),
     )
 
@@ -193,8 +192,8 @@ def test_augment_with_context_adds_docs_as_context() -> None:
             Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
         ],
         docs=[
-            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
-            Document(content=[DocumentPart(root=TextPart(text='doc content 2'))]),
+            Document(content=[Part(root=TextPart(text='doc content 1'))]),
+            Document(content=[Part(root=TextPart(text='doc content 2'))]),
         ],
     )
 
@@ -219,8 +218,8 @@ def test_augment_with_context_adds_docs_as_context() -> None:
             )
         ],
         docs=[
-            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
-            Document(content=[DocumentPart(root=TextPart(text='doc content 2'))]),
+            Document(content=[Part(root=TextPart(text='doc content 1'))]),
+            Document(content=[Part(root=TextPart(text='doc content 2'))]),
         ],
     )
 
@@ -230,7 +229,7 @@ def test_augment_with_context_does_not_mutate_input() -> None:
     original_user_msg = Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])
     req = ModelRequest(
         messages=[original_user_msg],
-        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+        docs=[Document(content=[Part(root=TextPart(text='doc content 1'))])],
     )
     original_content_len = len(original_user_msg.content)
 
@@ -265,7 +264,7 @@ def test_augment_with_context_skips_when_context_already_rendered() -> None:
             ),
         ],
         docs=[
-            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+            Document(content=[Part(root=TextPart(text='doc content 1'))]),
         ],
     )
 
@@ -297,7 +296,7 @@ def test_augment_with_context_with_purpose_part() -> None:
             ),
         ],
         docs=[
-            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+            Document(content=[Part(root=TextPart(text='doc content 1'))]),
         ],
     )
 
@@ -321,7 +320,7 @@ def test_augment_with_context_with_purpose_part() -> None:
             )
         ],
         docs=[
-            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+            Document(content=[Part(root=TextPart(text='doc content 1'))]),
         ],
     )
 
