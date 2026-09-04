@@ -541,37 +541,28 @@ class OpenAIModel:
                 failure_message = failure
 
             delta = choice.delta
+            parts: list[Part] = []
 
             # A refusal streams in fragments and is reported as the finish message, not content.
             if delta.refusal:
                 refusal_fragments.append(delta.refusal)
 
-            # Text content chunk
-            if delta.content:
-                message = MessageConverter.to_genkit(MessageAdapter(delta))
-                accumulated_content.extend(message.content)
-                callback(
-                    ModelResponseChunk(
-                        role=Role.MODEL,
-                        content=message.content,
-                    )
-                )
-
-            # Reasoning content chunk (DeepSeek R1 / reasoner models).
-            # Note: Pydantic models raise AttributeError for unknown fields,
-            # so getattr() with a default doesn't work. Use try-except.
-            elif reasoning_text := MessageAdapter(delta).reasoning_content:
+            # Reasoning content (DeepSeek R1 / reasoner models). Pydantic
+            # models raise AttributeError for unknown fields, so the lookup
+            # goes through MessageAdapter.
+            if reasoning_text := MessageAdapter(delta).reasoning_content:
                 reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
                 accumulated_content.append(reasoning_part)
-                callback(
-                    ModelResponseChunk(
-                        role=Role.MODEL,
-                        content=[reasoning_part],
-                    )
-                )
+                parts.append(reasoning_part)
 
-            # Tool call chunk (partial function call)
-            elif delta.tool_calls:
+            # Text content
+            if delta.content:
+                text_part = MessageConverter.text_part_to_genkit(delta.content)
+                accumulated_content.append(text_part)
+                parts.append(text_part)
+
+            # Tool calls (partial function calls)
+            if delta.tool_calls:
                 for tool_call in delta.tool_calls:
                     # Accumulate fragmented tool call arguments
                     if tool_call.index not in tool_calls:
@@ -580,14 +571,15 @@ class OpenAIModel:
                         existing = tool_calls[tool_call.index]
                         if hasattr(existing, 'function') and existing.function and tool_call.function:
                             existing.function.arguments += tool_call.function.arguments
-                content = [
-                    MessageConverter.tool_call_to_genkit(
-                        tool_calls[tool_call.index],
-                        args_segment=tool_call.function.arguments if tool_call.function else None,
+                    parts.append(
+                        MessageConverter.tool_call_to_genkit(
+                            tool_calls[tool_call.index],
+                            args_segment=tool_call.function.arguments if tool_call.function else None,
+                        )
                     )
-                    for tool_call in delta.tool_calls
-                ]
-                callback(ModelResponseChunk(role=Role.MODEL, content=content))
+
+            if parts:
+                callback(ModelResponseChunk(role=Role.MODEL, content=parts))
 
         if not saw_choice:
             raise GenkitError(status='INTERNAL', message='No choices in completion.')

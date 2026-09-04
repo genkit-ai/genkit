@@ -532,9 +532,8 @@ class MessageConverter:
     def to_genkit(cls, message: ChatCompletionMessageAdapter) -> Message:
         """Converts an OpenAI-style message into a Genkit `Message` object.
 
-        Handles tool calls, reasoning content (from DeepSeek R1 / reasoner),
-        and regular text content. Matches the JS canonical implementation
-        in fromOpenAIChoice().
+        Emits a reasoning part, a text part, and one tool request part per
+        tool call, in that order, for whichever of them the message carries.
 
         A message carrying only a refusal converts to an empty one: the
         refusal is the reason the model declined, not an answer, and is
@@ -552,16 +551,15 @@ class MessageConverter:
         """
         content: list[Part] = []
 
-        if message.tool_calls:
-            content = [cls.tool_call_to_genkit(tool_call, args_parser=json.loads) for tool_call in message.tool_calls]
-        else:
-            # Reasoning content comes before regular content (matching JS order).
-            reasoning = message.reasoning_content
-            if reasoning:
-                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+        reasoning = message.reasoning_content
+        if reasoning:
+            content.append(Part(root=ReasoningPart(reasoning=reasoning)))
 
-            if message.content:
-                content.append(cls.text_part_to_genkit(message.content))
+        if message.content:
+            content.append(cls.text_part_to_genkit(message.content))
+
+        for tool_call in message.tool_calls or []:
+            content.append(cls.tool_call_to_genkit(tool_call, args_parser=json.loads))
 
         if not content and not message.refusal:
             raise ValueError('Unable to determine content part')
