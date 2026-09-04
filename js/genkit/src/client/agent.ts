@@ -19,6 +19,7 @@ import {
   type AgentAPI,
   type AgentTransport,
   type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from '@genkit-ai/ai/agent-core';
 
 import type {
@@ -41,6 +42,7 @@ export {
   type AgentResponse,
   type AgentTurn,
   type DetachedTask,
+  type WaitForSnapshotOptions,
 } from '@genkit-ai/ai/agent-core';
 
 // Re-export the JSON Patch helper so apps can apply a chunk's `customPatch` to
@@ -55,6 +57,12 @@ export interface RemoteAgentOptions {
   url: string;
   /** Optional. Defaults to `${url}/getSnapshot`. */
   getSnapshotUrl?: string;
+  /**
+   * Optional. Defaults to `${url}/waitForSnapshot`. The agent's
+   * `waitForSnapshotAction` must be mounted there for `waitForSnapshot` and
+   * `DetachedTask.wait` to follow a background task in one request.
+   */
+  waitForSnapshotUrl?: string;
   /** Optional. Defaults to `${url}/abort`. */
   abortUrl?: string;
   /** Optional. Static headers, or a function called per request. */
@@ -88,6 +96,8 @@ export function remoteAgent<State = unknown>(
 ): AgentAPI<State> {
   const { url } = options;
   const getSnapshotUrl = options.getSnapshotUrl ?? `${url}/getSnapshot`;
+  const waitForSnapshotUrl =
+    options.waitForSnapshotUrl ?? `${url}/waitForSnapshot`;
   const abortUrl = options.abortUrl ?? `${url}/abort`;
 
   const resolveHeaders = async (): Promise<
@@ -139,6 +149,19 @@ export function remoteAgent<State = unknown>(
         url: getSnapshotUrl,
         input: lookup,
         headers,
+      });
+    },
+
+    // One request for the whole wait: the server blocks next to its store and
+    // answers once the snapshot settles, so a client neither picks a cadence
+    // nor pays a round trip per tick. Aborting the signal drops the request.
+    async waitForSnapshot(snapshotId: string, opts?: WaitForSnapshotOptions) {
+      const headers = await resolveHeaders();
+      return runFlow<SessionSnapshot<State> | undefined>({
+        url: waitForSnapshotUrl,
+        input: { snapshotId },
+        headers,
+        abortSignal: opts?.abortSignal,
       });
     },
 
