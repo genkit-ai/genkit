@@ -34,6 +34,38 @@ class Recipe(BaseModel):
     steps: list[str]
 
 
+class Author(BaseModel):
+    name: str
+    posts: list['Post'] = []
+
+
+class Post(BaseModel):
+    title: str
+    author: Author | None = None
+
+
+Author.model_rebuild()
+
+
+class QuotedItem(BaseModel):
+    name: str
+    qty: int
+
+
+class QuotedInventory(BaseModel):
+    by_id: dict[str, 'QuotedItem']
+    featured: tuple['QuotedItem', ...]
+
+
+class NodeTree(BaseModel):
+    name: str
+    children: list['NodeTree'] = []
+
+
+class UnknownQuotedList(BaseModel):
+    items: list['NoSuchModel'] = []  # noqa: F821  # ty: ignore[unresolved-reference]
+
+
 @overload
 def _chunk(text: str, schema_type: type[OutputT]) -> ModelResponseChunk[OutputT]: ...
 @overload
@@ -241,15 +273,7 @@ class TestNestedAndConstrainedOutput:
         assert out.child.child.name == 'leaf'
 
     def test_mutually_recursive_models(self) -> None:
-        class Author(BaseModel):
-            name: str
-            posts: list['Post'] = []
-
-        class Post(BaseModel):
-            title: str
-            author: Author | None = None
-
-        Author.model_rebuild()
+        """A quoted sibling in list['Post'] is a Post, with holes as None."""
         out = _chunk(
             '{"name": "a", "posts": [{"author": {"posts": []}}]}',
             schema_type=Author,
@@ -259,6 +283,50 @@ class TestNestedAndConstrainedOutput:
         assert out.posts[0].title is None
         assert isinstance(out.posts[0].author, Author)
         assert out.posts[0].author.name is None
+
+    def test_dict_quoted_post_yields_post_instances(self) -> None:
+        """dict[str, 'QuotedItem'] values are QuotedItem, with holes as None."""
+        out = _chunk(
+            '{"by_id": {"a": {"name": "axe"}}, "featured": []}',
+            schema_type=QuotedInventory,
+        ).output
+        assert isinstance(out, QuotedInventory)
+        assert isinstance(out.by_id['a'], QuotedItem)
+        assert out.by_id['a'].name == 'axe'
+        assert out.by_id['a'].qty is None
+
+    def test_tuple_quoted_post_yields_post_instances(self) -> None:
+        """tuple['QuotedItem', ...] values are QuotedItem, with holes as None."""
+        out = _chunk(
+            '{"by_id": {}, "featured": [{"qty": 2}]}',
+            schema_type=QuotedInventory,
+        ).output
+        assert isinstance(out, QuotedInventory)
+        assert isinstance(out.featured[0], QuotedItem)
+        assert out.featured[0].qty == 2
+        assert out.featured[0].name is None
+
+    def test_list_quoted_self_yields_node_instances(self) -> None:
+        """list['NodeTree'] children are NodeTree, with holes as None."""
+        out = _chunk(
+            '{"name": "root", "children": [{"children": [{"name": "leaf"}]}]}',
+            schema_type=NodeTree,
+        ).output
+        assert isinstance(out, NodeTree)
+        assert out.name == 'root'
+        assert isinstance(out.children[0], NodeTree)
+        assert out.children[0].name is None
+        assert isinstance(out.children[0].children[0], NodeTree)
+        assert out.children[0].children[0].name == 'leaf'
+
+    def test_list_quoted_unknown_name_stays_dicts(self) -> None:
+        """A quoted name that is not a model stays extracted JSON; the loop does not crash."""
+        out = _chunk(
+            '{"items": [{"name": "x"}]}',
+            schema_type=UnknownQuotedList,
+        ).output
+        assert isinstance(out, UnknownQuotedList)
+        assert out.items[0] == {'name': 'x'}
 
 
 class TestActionRunContextGenerics:

@@ -25,9 +25,10 @@ validates into the real type.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from types import UnionType
-from typing import Annotated, Any, TypeGuard, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, ForwardRef, TypeGuard, Union, get_args, get_origin, get_type_hints
 
 from pydantic import AliasChoices, BaseModel, RootModel
 from pydantic.fields import FieldInfo
@@ -49,6 +50,26 @@ def unwrap_annotated(*, annotation: Any) -> Any:  # noqa: ANN401
     while get_origin(annotation) is Annotated:
         args = get_args(annotation)
         annotation = args[0] if args else annotation
+    return annotation
+
+
+def lookup_name(*, name: str, schema_type: type[BaseModel]) -> type[BaseModel] | None:
+    # list['Post'] stores the name they wrote, not the class. The class
+    # lives next to the schema on its module, or is the schema itself.
+    if name == schema_type.__name__ and is_model(schema_type):
+        return schema_type
+    module = sys.modules.get(schema_type.__module__)
+    obj = getattr(module, name, None) if module is not None else None
+    return obj if is_model(obj) else None
+
+
+def resolve(*, annotation: Any, schema_type: type[BaseModel]) -> Any:  # noqa: ANN401
+    annotation = unwrap_annotated(annotation=annotation)
+    if isinstance(annotation, ForwardRef):
+        annotation = annotation.__forward_arg__
+    if isinstance(annotation, str):
+        found = lookup_name(name=annotation, schema_type=schema_type)
+        return found if found is not None else annotation
     return annotation
 
 
@@ -112,10 +133,10 @@ def pick_model(*, annotation: Any, data: dict[str, Any]) -> type[BaseModel] | No
     return max(candidates, key=lambda model: overlap(schema_type=model, data=data))
 
 
-def coerce(*, annotation: Any, raw: Any) -> Any:  # noqa: ANN401
+def coerce(*, annotation: Any, raw: Any, schema_type: type[BaseModel]) -> Any:  # noqa: ANN401
     if raw is None:
         return None
-    annotation = unwrap_annotated(annotation=annotation)
+    annotation = resolve(annotation=annotation, schema_type=schema_type)
     if isinstance(raw, dict):
         model = pick_model(annotation=annotation, data=raw)
         if model is not None:
@@ -124,17 +145,23 @@ def coerce(*, annotation: Any, raw: Any) -> Any:  # noqa: ANN401
         if origin in MAPPING_ORIGINS:
             args = get_args(annotation)
             if len(args) == 2:
-                return {key: coerce(annotation=args[1], raw=value) for key, value in raw.items()}
+                return {
+                    key: coerce(annotation=args[1], raw=value, schema_type=schema_type) for key, value in raw.items()
+                }
         return raw
     if isinstance(raw, list):
         origin = get_origin(annotation)
         if origin in SEQUENCE_ORIGINS:
             inners = tuple(arg for arg in get_args(annotation) if arg is not Ellipsis)
             if len(inners) == 1:
-                return [coerce(annotation=inners[0], raw=item) for item in raw]
+                return [coerce(annotation=inners[0], raw=item, schema_type=schema_type) for item in raw]
             if inners:
                 return [
-                    coerce(annotation=inners[index] if index < len(inners) else inners[-1], raw=item)
+                    coerce(
+                        annotation=inners[index] if index < len(inners) else inners[-1],
+                        raw=item,
+                        schema_type=schema_type,
+                    )
                     for index, item in enumerate(raw)
                 ]
         return raw
@@ -158,5 +185,6 @@ def construct_partial(*, schema_type: type[BaseModel], data: dict[str, Any]) -> 
         values[name] = coerce(
             annotation=field_annotation(schema_type=schema_type, name=name, info=info),
             raw=raw,
+            schema_type=schema_type,
         )
     return schema_type.model_construct(**values)
