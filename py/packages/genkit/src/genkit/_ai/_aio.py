@@ -304,8 +304,16 @@ class Genkit:
             metadata=metadata,
         )
 
-    def tool(self, name: str | None = None, description: str | None = None) -> Callable[[Callable[..., Any]], Tool]:
+    def tool(
+        self,
+        name: str | None = None,
+        description: str | None = None,
+        *,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Callable[[Callable[..., Any]], Tool]:
         """Decorator to register a function as a tool.
+
+        The return annotation is what the model binds as ``outputSchema``.
 
         Example:
             @ai.tool()
@@ -316,7 +324,13 @@ class Genkit:
         """
 
         def wrapper(func: Callable[..., Any]) -> Tool:
-            return define_tool(self.registry, func, name, description)
+            return define_tool(
+                self.registry,
+                func,
+                name,
+                description,
+                input_schema=input_schema,
+            )
 
         return wrapper
 

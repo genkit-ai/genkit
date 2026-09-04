@@ -91,6 +91,37 @@ async def test_gets_specific_action(registry: Registry, tool1: Action, tool2: Ac
 
 
 @pytest.mark.asyncio
+async def test_dap_authors_write_tool_not_tool_v2(registry: Registry, tool1: Action) -> None:
+    """Authors write {tool: [...]}. That is what mcp:tool/echo reads."""
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+
+    assert await dap.get_action('tool', 'tool1') is tool1
+    listed = await dap.list_action_metadata_by_key('my-dap')
+    assert list(listed) == ['/dynamic-action-provider/my-dap:tool/tool1']
+    assert listed['/dynamic-action-provider/my-dap:tool/tool1'].action_type == 'tool'
+
+
+@pytest.mark.asyncio
+async def test_dap_tool_v2_bucket_is_not_found_by_mcp_tool_echo(registry: Registry, tool1: Action) -> None:
+    """{tool.v2: [...]} is missed by mcp:tool/echo."""
+
+    async def dap_fn() -> DapValue:
+        return {ActionKind.TOOL: [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+
+    assert await dap.get_action('tool', 'tool1') is None
+    assert await dap.list_action_metadata('tool', '*') == []
+    listed = await dap.list_action_metadata_by_key('my-dap')
+    assert list(listed) == ['/dynamic-action-provider/my-dap:tool.v2/tool1']
+    assert '/dynamic-action-provider/my-dap:tool/tool1' not in listed
+
+
+@pytest.mark.asyncio
 async def test_lists_action_metadata(registry: Registry, tool1: Action, tool2: Action) -> None:
     call_count = 0
 

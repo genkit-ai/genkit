@@ -53,6 +53,7 @@ from genkit._core._typing import (
     MiddlewareRef,
     ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
+    MultipartToolResponse as MultipartToolResponseData,
     Operation,
     OutputConfig as OutputConfigData,
     Part,
@@ -769,6 +770,17 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         if self.chunk_parser:
             return cast(OutputT, self.chunk_parser(self))
         return cast(OutputT, extract_json(self.accumulated_text))
+
+
+class MultipartToolResponse(MultipartToolResponseData, Generic[OutputT]):
+    """What ``Action.run()`` returns: ``output`` plus optional media.
+
+    People annotate ``MultipartToolResponse[ShotOut]`` so the model binds
+    ``ShotOut``. ``run()`` is still this envelope. The wire fields live on
+    the generated type; this only types ``output``.
+    """
+
+    output: OutputT | None = None
 
 
 def text_from_message(msg: Message) -> str:

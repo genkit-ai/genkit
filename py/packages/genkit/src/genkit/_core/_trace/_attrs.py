@@ -62,7 +62,6 @@ class Subtype(StrEnum):
 
     MODEL = 'model'
     PROMPT = 'prompt'
-    TOOL = 'tool'
     FLOW = 'flow'
 
 

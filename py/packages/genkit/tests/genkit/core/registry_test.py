@@ -58,8 +58,8 @@ async def test_resolve_action_by_key_invalid_format() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_action_via_dynamic_action_provider() -> None:
-    """Registry resolves DAP tools only for DAP-qualified names (host:kind/name)."""
+async def test_lookup_mcp_tool_echo_does_not_register_tool_v2_echo() -> None:
+    """resolve_action(TOOL, 'mcp:tool/echo') returns the Action. It does not write /tool.v2/echo."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -79,11 +79,39 @@ async def test_resolve_action_via_dynamic_action_provider() -> None:
 
     got = await registry.resolve_action(ActionKind.TOOL, 'my-dap:tool/inner-tool')
     assert got is inner
+    assert 'inner-tool' not in registry._entries.get(ActionKind.TOOL, {})
+
+
+@pytest.mark.asyncio
+async def test_child_resolve_action_dap_tool_returns_action_without_catalog() -> None:
+    """A generate child can peek the parent's DAP Action. Bind still happens in expand."""
+    parent = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    inner = Action(
+        name='inner-tool',
+        kind=ActionKind.TOOL,
+        fn=tool_fn,
+        metadata={'name': 'inner-tool'},
+    )
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [inner]}
+
+    define_dynamic_action_provider(parent, 'my-dap', dap_fn)
+    child = parent.new_child()
+
+    got = await child.resolve_action(ActionKind.TOOL, 'my-dap:tool/inner-tool')
+    assert got is inner
+    assert 'inner-tool' not in child._entries.get(ActionKind.TOOL, {})
+    assert 'inner-tool' not in parent._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio
 async def test_resolve_action_by_key_dap_qualified() -> None:
-    """DAP-qualified keys resolve nested actions."""
+    """Qualified DAP key returns the child Action. It does not bind or catalog it."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -103,6 +131,12 @@ async def test_resolve_action_by_key_dap_qualified() -> None:
 
     got = await registry.resolve_action_by_key('/dynamic-action-provider/my-dap:tool/inner-tool')
     assert got is inner
+    assert 'inner-tool' not in registry._entries.get(ActionKind.TOOL, {})
+
+    catalog = await registry.list_actions()
+    assert '/dynamic-action-provider/my-dap' in catalog
+    assert '/dynamic-action-provider/my-dap:tool/inner-tool' not in catalog
+    assert '/tool.v2/inner-tool' not in catalog
 
 
 @pytest.mark.asyncio
@@ -334,14 +368,14 @@ async def test_child_resolvable_local_tool_shadows_parent_plugin_metadata() -> N
     )
 
     catalog = await child.list_actions()
-    entry = catalog['/tool/parentplugin/shared-name']
+    entry = catalog['/tool.v2/parentplugin/shared-name']
     assert entry.description == 'from child registry'
     assert entry.description != 'from parent plugin'
 
 
 @pytest.mark.asyncio
 async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> None:
-    """DAP-exposed nested actions must shadow parent plugin metadata for the same (kind, name)."""
+    """DAP children are not catalog rows; plugin-advertised ``/tool.v2/`` stays until generate binds."""
 
     class ParentPlugin(Plugin):
         name = 'parentplugin'
@@ -382,13 +416,13 @@ async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> Non
 
     catalog = await child.list_actions()
     qualified = create_action_key(ActionKind.DYNAMIC_ACTION_PROVIDER, 'mcp:tool/parentplugin/mcp-tool')
-    assert catalog[qualified].description == 'from mcp'
-    assert catalog['/tool/parentplugin/mcp-tool'].description == 'stale parent schema'
+    assert qualified not in catalog
+    assert catalog['/tool.v2/parentplugin/mcp-tool'].description == 'stale parent schema'
 
 
 @pytest.mark.asyncio
 async def test_list_actions_registered_canonical_coexists_with_qualified_dap_rows() -> None:
-    """Registered ``/tool/...`` row coexists with DAP ``/dynamic-action-provider/...`` rows when shortnames collide."""
+    """Registered ``/tool.v2/...`` row is the catalog key; DAP children are not listed."""
     tool_name = 'suite/same-canonical'
 
     async def registered_fn(_: str) -> str:
@@ -427,9 +461,7 @@ async def test_list_actions_registered_canonical_coexists_with_qualified_dap_row
     assert canonical in catalog
     assert catalog[canonical].description == 'from registry registration'
 
-    assert qualified in catalog
-    assert catalog[qualified].key == qualified
-
+    assert qualified not in catalog
     assert provider_key in catalog
 
 

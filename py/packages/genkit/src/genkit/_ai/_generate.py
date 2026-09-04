@@ -40,12 +40,27 @@ from genkit._ai._model import (
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._tools import Interrupt, Tool, restart_interrupt_error, run_tool_after_restart, run_tool_request
+from genkit._ai._tools import (
+    ORIGINAL_OUTPUT_SCHEMA_KEY,
+    Interrupt,
+    Tool,
+    as_multipart_tool_response,
+    dump_tool_metadata,
+    dump_tool_output,
+    normalize_pending_content,
+    parts_to_wire,
+    restart_interrupt_error,
+    run_tool_after_restart,
+    run_tool_request,
+)
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
     ActionRunContext,
+    create_action_key,
+    parse_action_key,
+    parse_dap_qualified_name,
 )
 from genkit._core._background import _ensure_operation, missing_operation_error, stamp_operation_action
 from genkit._core._error import GenkitError
@@ -64,6 +79,7 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
+    MultipartToolResponse,
     OutputConfig,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
@@ -73,7 +89,6 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
-    MultipartToolResponse,
     Operation,
     Part,
     Role,
@@ -368,26 +383,23 @@ async def dispatch_tool(
 
 
 async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> list[str]:
-    """Expand DAP wildcard tool names into individual registry keys.
+    """Bind ``provider:tool/…`` selectors to ``/tool.v2/<name>`` catalog keys.
 
-    A wildcard has the form ``<provider>:tool/*`` (or ``<provider>:tool/<prefix>*``).
-    Each match becomes a full DAP key
-    ``/dynamic-action-provider/<provider>:<actionType>/<toolName>`` so later resolution
-    stays bound to that provider (no ambiguous bare-name lookup across DAPs).
-
-    Non-wildcard names are passed through unchanged.
+    People write ``mcp:tool/echo`` or ``mcp:tool/*``. We resolve the ``tool``
+    bucket, register each Action on ``registry`` (the generate child), and
+    return the same key a local tool uses.
     """
     expanded: list[str] = []
     for name in tool_names:
-        if not name.endswith('*') or ':' not in name:
+        qualified = parse_dap_qualified_name(name)
+        if qualified is None or qualified.inner_kind != 'tool':
             expanded.append(name)
             continue
 
-        colon = name.index(':')
-        provider_name = name[:colon]
-        rest = name[colon + 1 :]  # e.g. "tool/*" or "tool/prefix*"
-
-        provider_action = await registry.resolve_action(ActionKind.DYNAMIC_ACTION_PROVIDER, provider_name)
+        provider_action = await registry.resolve_action(
+            ActionKind.DYNAMIC_ACTION_PROVIDER,
+            qualified.provider,
+        )
         if provider_action is None:
             expanded.append(name)
             continue
@@ -397,17 +409,19 @@ async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> li
             expanded.append(name)
             continue
 
-        if '/' not in rest:
+        metas = await dap.list_action_metadata('tool', qualified.inner_name)
+        if not metas:
             expanded.append(name)
             continue
-
-        action_type, action_pattern = rest.split('/', 1)
-        metas = await dap.list_action_metadata(action_type, action_pattern)
         for meta in metas:
             tool_name = meta.get('name')
-            if tool_name:
-                tn = str(tool_name)
-                expanded.append(f'/dynamic-action-provider/{provider_name}:{action_type}/{tn}')
+            if not tool_name:
+                continue
+            action = await dap.get_action('tool', str(tool_name))
+            if action is None:
+                continue
+            registry.register_action_from_instance(action)
+            expanded.append(create_action_key(ActionKind.TOOL, action.name))
 
     return expanded
 
@@ -1462,13 +1476,18 @@ async def action_to_generate_request(
 
 def to_tool_definition(tool: Action) -> ToolDefinition:
     """Convert an Action to a ToolDefinition for model requests."""
-    tdef = ToolDefinition(
+    metadata = tool.metadata or {}
+    if ORIGINAL_OUTPUT_SCHEMA_KEY in metadata:
+        original = metadata[ORIGINAL_OUTPUT_SCHEMA_KEY]
+        output_schema = original if isinstance(original, dict) else None
+    else:
+        output_schema = tool.output_schema
+    return ToolDefinition(
         name=tool.name,
         description=tool.description or '',
         input_schema=tool.input_schema,
-        output_schema=tool.output_schema,
+        output_schema=output_schema,
     )
-    return tdef
 
 
 async def resolve_tool_requests(
@@ -1485,7 +1504,8 @@ async def resolve_tool_requests(
         for tool_name in request.tools:
             tool_action = await resolve_tool(registry, tool_name)
             tool_dict[tool_name] = tool_action
-            # Model tool calls use ToolDefinition.name (short); wildcard expansion uses full DAP keys.
+            # Model tool calls use ToolDefinition.name (short). Selectors
+            # are already bound to /tool.v2/<name> on this registry.
             short = tool_action.name
             if short not in tool_dict:
                 tool_dict[short] = tool_action
@@ -1541,9 +1561,12 @@ async def resolve_tool_requests(
 
         try:
             if mw_list and mw_pipeline is not None:
-                multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
+                multipart = as_multipart_tool_response(
+                    await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn),
+                    tool_name=trp.tool_request.name,
+                )
             else:
-                multipart = await next_fn(params, ctx)
+                multipart = as_multipart_tool_response(await next_fn(params, ctx), tool_name=trp.tool_request.name)
             return (multipart, None)
         except Exception as e:
             # Interrupts (raised by the tool body or by middleware) become a
@@ -1568,7 +1591,7 @@ async def resolve_tool_requests(
                     name=tool_req_root.tool_request.name,
                     ref=tool_req_root.tool_request.ref,
                     output=multipart_resp.output,
-                    content=[p.model_dump() for p in multipart_resp.content] if multipart_resp.content else None,
+                    content=parts_to_wire(multipart_resp.content, tool_name=tool_req_root.tool_request.name),
                 ),
                 metadata=multipart_resp.metadata,
             )
@@ -1586,10 +1609,18 @@ async def resolve_tool_requests(
 
 
 def _to_pending_response(request: ToolRequestPart, response: ToolResponsePart) -> Part:
-    """Mark a tool request as pending with its response stored in metadata."""
+    """Stash a completed sibling tool so resume can rebuild the same tool message.
+
+    When another tool in the same turn interrupts, this tool already finished.
+    The next model turn still needs that output — and any media — without
+    running the tool again.
+    """
     metadata = dict(request.metadata) if request.metadata else {}
     metadata['pendingOutput'] = response.tool_response.output
-    # Part is a RootModel, so we pass content via 'root' parameter
+    if response.tool_response.content:
+        metadata['pendingContent'] = response.tool_response.content
+    if response.metadata:
+        metadata['pendingMetadata'] = response.metadata
     return Part(
         root=ToolRequestPart(
             tool_request=request.tool_request,
@@ -1647,9 +1678,7 @@ async def _resolve_tool_request(
     finally:
         watcher_task.cancel()
 
-    return MultipartToolResponse(
-        output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
-    )
+    return as_multipart_tool_response(tool_response, tool_name=tool_request_part.tool_request.name)
 
 
 def _interrupt_request_part(trp: ToolRequestPart, intr: Interrupt) -> ToolRequestPart:
@@ -1663,22 +1692,26 @@ def _interrupt_request_part(trp: ToolRequestPart, intr: Interrupt) -> ToolReques
 
 
 async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
-    """Resolve a tool from a registry name or a Tool instance.
+    """Resolve a tool already on the registry.
 
-    Accepts full action keys (``/dynamic-action-provider/...``), DAP-qualified
-    names (``provider:tool/name``), or plain registered tool names.
-
-    Used when building ModelRequest (for example from to_generate_request).
+    Catalog keys (``/tool.v2/name``) and bare registered names. DAP
+    selectors (``mcp:tool/echo``) are bound in expand, not here.
     """
     if isinstance(tool_ref, Tool):
         return tool_ref.action()
 
+    name = tool_ref
     if tool_ref.startswith('/'):
-        tool = await registry.resolve_action_by_key(tool_ref)
-        if tool is not None:
-            return tool
+        try:
+            kind, name = parse_action_key(tool_ref)
+        except ValueError as e:
+            raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_ref}') from e
+        if kind != ActionKind.TOOL:
+            raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_ref}')
+    elif parse_dap_qualified_name(tool_ref) is not None:
+        raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_ref}')
 
-    tool = await registry.resolve_action(kind=ActionKind.TOOL, name=tool_ref)
+    tool = await registry.resolve_action(kind=ActionKind.TOOL, name=name)
     if tool is None:
         raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_ref}')
     return tool
@@ -1770,22 +1803,39 @@ async def _resolve_resumed_tool_request(
     tool_req_root = tool_request_part.root
 
     if tool_req_root.metadata and 'pendingOutput' in tool_req_root.metadata:
-        # resolveResumedToolRequest: strip pendingOutput from the model TRP; reconstruct
-        # output on the tool message with metadata { ...rest, source: 'pending' }.
+        # Strip the stash from the model TRP and rebuild the tool message so
+        # resume looks like the tool already ran (output, media, metadata).
         trp_metadata = dict(tool_req_root.metadata)
         pending_output = trp_metadata.pop('pendingOutput')
+        pending_content = trp_metadata.pop('pendingContent', None)
+        pending_part_metadata = trp_metadata.pop('pendingMetadata', None)
+        tool_name = tool_req_root.tool_request.name
+        pending_content = normalize_pending_content(pending_content, tool_name=tool_name)
+        if pending_part_metadata is not None and not isinstance(pending_part_metadata, dict):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'Tool {tool_name!r} pendingMetadata must be a dict, got {type(pending_part_metadata).__name__}.'
+                ),
+            )
         revised_trp = ToolRequestPart(
             tool_request=tool_req_root.tool_request,
             metadata=trp_metadata if trp_metadata else None,
         )
-        response_metadata = {**trp_metadata, 'source': 'pending'}
+        saved_meta = (
+            dump_tool_metadata(pending_part_metadata, tool_name=tool_name)
+            if isinstance(pending_part_metadata, dict)
+            else None
+        ) or {}
+        response_metadata = {**trp_metadata, **saved_meta, 'source': 'pending'}
         return (
             revised_trp,
             ToolResponsePart(
                 tool_response=ToolResponse(
-                    name=tool_req_root.tool_request.name,
+                    name=tool_name,
                     ref=tool_req_root.tool_request.ref,
-                    output=pending_output.model_dump() if isinstance(pending_output, BaseModel) else pending_output,
+                    output=dump_tool_output(pending_output, tool_name=tool_name),
+                    content=pending_content,
                 ),
                 metadata=response_metadata,
             ),
@@ -1875,15 +1925,20 @@ async def _run_restart_through_middleware(
         tool=tool,
     )
 
-    async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=c)
+    async def next_fn(p: ToolHookParams, ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
+        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
+        raw_content = executed.tool_response.content or []
         return MultipartToolResponse(
             output=executed.tool_response.output,
-            content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],
+            content=[Part.model_validate(item) for item in raw_content] or None,
+            metadata=executed.metadata,
         )
 
     try:
-        multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
+        multipart = as_multipart_tool_response(
+            await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn),
+            tool_name=restart_trp.tool_request.name,
+        )
     except Exception as e:
         intr = _interrupt_from_tool_exc(e)
         if intr is not None:
@@ -1907,7 +1962,7 @@ async def _run_restart_through_middleware(
             name=restart_trp.tool_request.name,
             ref=restart_trp.tool_request.ref,
             output=multipart.output,
-            content=[p.model_dump() for p in multipart.content] if multipart.content else None,
+            content=parts_to_wire(multipart.content, tool_name=restart_trp.tool_request.name),
         ),
         metadata=multipart.metadata,
     )
