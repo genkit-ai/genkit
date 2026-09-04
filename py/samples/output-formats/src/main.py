@@ -63,6 +63,17 @@ async def main() -> None:
     )
     print(country.output)
 
+    # Streaming JSON: chunk.output is a Country with holes as fields arrive.
+    sr = ai.generate_stream(
+        prompt='Give quick facts about Japan.',
+        output_schema=Country,
+    )
+    async for chunk in sr:
+        if chunk.output and chunk.output.name:
+            print(f'streaming name: {chunk.output.name}')
+    final_country = (await sr.response).output
+    print(final_country)
+
     # Array / jsonl take an items schema; TypeAdapter is how you get one
     # from list[T]. validate_python turns the raw list into Book models.
     books = await ai.generate(

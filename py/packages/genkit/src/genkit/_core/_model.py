@@ -29,13 +29,14 @@ from functools import cached_property
 from importlib import import_module
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, RootModel, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._error import GenkitError
 from genkit._core._extract_json import extract_json
+from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     Candidate,
@@ -698,6 +699,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
     # Field(exclude=True) means these fields are not included in serialization
     previous_chunks: list[ModelResponseChunk[Any]] = Field(default_factory=list, exclude=True)
     chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = Field(None, exclude=True)
+    schema_type: type[BaseModel] | None = Field(None, exclude=True)
 
     def __init__(
         self,
@@ -705,6 +707,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         previous_chunks: list[ModelResponseChunk[Any]] | None = None,
         index: int | float | None = None,
         chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = None,
+        schema_type: type[BaseModel] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Initialize from a chunk or keyword arguments."""
@@ -722,6 +725,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
             super().__init__(**kwargs)
         self.previous_chunks = previous_chunks or []
         self.chunk_parser = chunk_parser
+        self.schema_type = schema_type
 
     def __eq__(self, other: object) -> bool:
         """Check equality."""
@@ -763,12 +767,29 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
                             parts.append(str(text_val))
         return ''.join(parts) + self.text
 
-    @property
-    def output(self) -> OutputT:
-        """Parsed JSON output from accumulated text."""
-        if self.chunk_parser:
-            return cast(OutputT, self.chunk_parser(self))
-        return cast(OutputT, extract_json(self.accumulated_text))
+    @cached_property
+    def output(self) -> OutputT | None:
+        """Parsed output from accumulated text.
+
+        With no ``output_schema`` class, this is the extracted JSON value
+        (a dict, list, scalar, or ``None`` if an object has not started).
+
+        When ``output_schema`` is a Pydantic model, this is an instance of
+        that class with missing fields set to ``None``. Values may still be
+        prefixes, and constraints are not enforced. Guard each field you
+        use. ``(await sr.response).output`` is the only fully validated value.
+        """
+        parsed = (
+            self.chunk_parser(self)
+            if self.chunk_parser
+            else extract_json(self.accumulated_text, throw_on_bad_json=False)
+        )
+        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
+            return cast(
+                'OutputT | None',
+                construct_partial(schema_type=self.schema_type, data=parsed),
+            )
+        return cast('OutputT | None', parsed)
 
 
 def text_from_message(msg: Message) -> str:

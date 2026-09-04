@@ -675,9 +675,15 @@ class ChunkAccumulator:
     saved history numbered consistently.
     """
 
-    def __init__(self, message_index: int, formatter: Formatter[Any, Any] | None) -> None:
+    def __init__(
+        self,
+        message_index: int,
+        formatter: Formatter[Any, Any] | None,
+        schema_type: type[BaseModel] | None = None,
+    ) -> None:
         self.message_index = message_index
         self.formatter = formatter
+        self.schema_type = schema_type
         self.chunk_role: Role = Role.MODEL
         self.prev_chunks: list[ModelResponseChunk[Any]] = []
         self._chunk_parser: Callable[[ModelResponseChunk[Any]], Any | None] | None = (
@@ -699,6 +705,7 @@ class ChunkAccumulator:
             index=self.message_index,
             previous_chunks=prev_to_send,
             chunk_parser=self._chunk_parser,
+            schema_type=self.schema_type,
         )
 
     def stream_chunk(
@@ -849,7 +856,11 @@ async def _generate_action_turn(
         )
     raw_request = revised_request
 
-    chunks = ChunkAccumulator(message_index, formatter)
+    chunks = ChunkAccumulator(
+        message_index,
+        formatter,
+        schema_type=getattr(raw_request.output, 'schema_type', None) if raw_request.output else None,
+    )
 
     async def dispatch_generate(
         params: GenerateHookParams,
