@@ -139,7 +139,6 @@ class PromptGenerateOptions(TypedDict, total=False):
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
-    resources: list[str] | None
     tool_choice: ToolChoice | None
     output: OutputOptions | None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None
@@ -238,7 +237,6 @@ class PromptConfig(BaseModel):
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None
     resume_metadata: dict[str, Any] | None = None
-    resources: list[str] | None = None
 
 
 class ExecutablePrompt(Generic[InputT, OutputT]):
@@ -267,7 +265,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         tool_choice: ToolChoice | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        resources: list[str] | None = None,
         name: str | None = None,
         ns: str | None = None,
     ) -> None:
@@ -293,7 +290,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._tool_choice = tool_choice
         self._use = use
         self._docs = docs
-        self._resources = resources
         self._cache_prompt: PromptCache = PromptCache()
         self._name = name
         self._ns = ns
@@ -345,7 +341,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._tool_choice = resolved._tool_choice
         self._use = resolved._use
         self._docs = resolved._docs
-        self._resources = resolved._resources
         self._prompt_action = resolved._prompt_action
 
     async def __call__(
@@ -436,7 +431,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             input_schema=self._input_schema,
             metadata=merged_metadata,
             docs=self._docs,
-            resources=opts.get('resources') or self._resources,
             use=opts.get('use') or self._use,
             resume_respond=opts.get('resume_respond'),
             resume_restart=opts.get('resume_restart'),
