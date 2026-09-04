@@ -286,6 +286,18 @@ class DictMessageAdapter:
         """
         return self._data.get('reasoning_content', None)
 
+    @property
+    def refusal(self) -> str | None:
+        """The 'refusal' if present in the message.
+
+        A model that declines to answer sends the reason it declined here
+        rather than as content.
+
+        Returns:
+            The refusal string or None.
+        """
+        return self._data.get('refusal', None)
+
 
 class MessageAdapter:
     """Adapter for object-based chat message objects with OpenAI-compatible fields."""
@@ -343,6 +355,18 @@ class MessageAdapter:
             return self._data.reasoning_content  # type: ignore[union-attr]
         except AttributeError:
             return None
+
+    @property
+    def refusal(self) -> str | None:
+        """The 'refusal' attribute of the message if available.
+
+        A model that declines to answer sends the reason it declined here
+        rather than as content.
+
+        Returns:
+            The refusal string or None.
+        """
+        return getattr(self._data, 'refusal', None)
 
 
 ChatCompletionMessageAdapter = DictMessageAdapter | MessageAdapter
@@ -457,6 +481,10 @@ class MessageConverter:
         and regular text content. Matches the JS canonical implementation
         in fromOpenAIChoice().
 
+        A message carrying only a refusal converts to an empty one: the
+        refusal is the reason the model declined, not an answer, and is
+        reported as the response's finish message.
+
         Args:
             message: A ChatCompletionMessageAdapter instance.
 
@@ -464,8 +492,8 @@ class MessageConverter:
             A Genkit `Message` object.
 
         Raises:
-            ValueError: If neither content, tool_calls, nor reasoning_content
-                are present in the message.
+            ValueError: If none of content, tool_calls, reasoning_content or
+                a refusal are present in the message.
         """
         content: list[Part] = []
 
@@ -480,7 +508,7 @@ class MessageConverter:
             if message.content:
                 content.append(cls.text_part_to_genkit(message.content))
 
-        if not content:
+        if not content and not message.refusal:
             raise ValueError('Unable to determine content part')
 
         role = message.role or Role.MODEL

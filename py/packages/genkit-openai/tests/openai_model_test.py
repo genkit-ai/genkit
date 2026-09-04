@@ -27,10 +27,11 @@ from genkit_openai.models.model import _usage_from_completion
 from genkit_openai.models.utils import strip_markdown_fences
 from genkit_openai.typing import OpenAIConfig
 from openai.types import CompletionUsage
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import (
+    FinishReason,
     GenkitError,
     Message,
     ModelRequest,
@@ -142,6 +143,7 @@ async def test__generate(sample_request: ModelRequest) -> None:
     mock_message.role = 'model'
     mock_message.tool_calls = None
     mock_message.reasoning_content = None
+    mock_message.refusal = None
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=mock_message)]
@@ -203,6 +205,7 @@ async def test__generate_stream(sample_request: ModelRequest) -> None:
             delta_mock.role = None
             delta_mock.tool_calls = None
             delta_mock.reasoning_content = None
+            delta_mock.refusal = None
 
             choice_mock = MagicMock()
             choice_mock.delta = delta_mock
@@ -244,16 +247,66 @@ def _assert_usage_payload_reported(usage: Any) -> None:  # noqa: ANN401
     assert usage.custom == {'cost': 0.00042}
 
 
-def _text_chunk(text: str) -> ChatCompletionChunk:
-    """A content chunk with no usage, as the API sends mid-stream."""
-    return ChatCompletionChunk.model_validate({
-        'id': '1',
-        'object': 'chat.completion.chunk',
-        'created': 1,
-        'model': 'gpt-4',
-        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': text}, 'finish_reason': None}],
-        'usage': None,
-    })
+def _chunk(
+    *,
+    content: str | None = None,
+    refusal: str | None = None,
+    finish_reason: str | None = None,
+    error: object | None = None,
+) -> ChatCompletionChunk:
+    """A one-choice chunk with no usage, as the API sends mid-stream.
+
+    Built with ``construct``, which is how the SDK reads a response off the
+    wire: a finish reason outside OpenAI's own five and an error object beside
+    the choice both survive it, where validation would reject them.
+    """
+    choice: dict[str, Any] = {
+        'index': 0,
+        'delta': {'role': 'assistant', 'content': content, 'refusal': refusal},
+        'finish_reason': finish_reason,
+    }
+    if error is not None:
+        choice['error'] = error
+    return ChatCompletionChunk.construct(
+        id='1',
+        object='chat.completion.chunk',
+        created=1,
+        model='gpt-4',
+        choices=[choice],
+        usage=None,
+    )
+
+
+def _completion(
+    *,
+    content: str | None = 'Hello, user!',
+    refusal: str | None = None,
+    finish_reason: str | None = 'stop',
+    error: object | None = None,
+) -> ChatCompletion:
+    """A one-choice completion, built the same way as :func:`_chunk`."""
+    choice: dict[str, Any] = {
+        'index': 0,
+        'message': {'role': 'assistant', 'content': content, 'refusal': refusal},
+        'finish_reason': finish_reason,
+    }
+    if error is not None:
+        choice['error'] = error
+    return ChatCompletion.construct(
+        id='1',
+        object='chat.completion',
+        created=1,
+        model='gpt-4',
+        choices=[choice],
+        usage=None,
+    )
+
+
+def _mock_completion(completion: ChatCompletion) -> MagicMock:
+    """A client whose create() answers with one completion."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=completion)
+    return client
 
 
 def _usage_chunk() -> ChatCompletionChunk:
@@ -314,6 +367,7 @@ async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
     mock_message.role = 'model'
     mock_message.tool_calls = None
     mock_message.reasoning_content = None
+    mock_message.refusal = None
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=mock_message)]
@@ -338,6 +392,7 @@ async def test__generate_reports_extra_token_counts() -> None:
     mock_message.role = 'model'
     mock_message.tool_calls = None
     mock_message.reasoning_content = None
+    mock_message.refusal = None
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=mock_message)]
@@ -413,7 +468,7 @@ async def test__generate_stream_requests_usage(sample_request: ModelRequest) -> 
     sample_request.config = config
 
     mock_client = MagicMock()
-    mock_client.chat.completions.create = _mock_stream([_text_chunk('Hello')])
+    mock_client.chat.completions.create = _mock_stream([_chunk(content='Hello')])
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     await model._generate_stream(sample_request, lambda chunk: None)
@@ -430,7 +485,7 @@ async def test__generate_stream_requests_usage(sample_request: ModelRequest) -> 
 async def test__generate_stream_reports_usage(sample_request: ModelRequest) -> None:
     """The choice-less usage chunk is read, not indexed into."""
     mock_client = MagicMock()
-    mock_client.chat.completions.create = _mock_stream([_text_chunk('Hello'), _usage_chunk()])
+    mock_client.chat.completions.create = _mock_stream([_chunk(content='Hello'), _usage_chunk()])
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     collected_chunks = []
@@ -483,13 +538,229 @@ async def test__generate_stream_tool_calls_only(sample_request: ModelRequest) ->
 async def test__generate_stream_empty_deltas(sample_request: ModelRequest) -> None:
     """A stream that carries choices but no content succeeds with an empty message."""
     mock_client = MagicMock()
-    mock_client.chat.completions.create = _mock_stream([_text_chunk(''), _text_chunk('')])
+    mock_client.chat.completions.create = _mock_stream([_chunk(content=''), _chunk(content='')])
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     response = await model._generate_stream(sample_request, lambda _: None)
 
     assert response.message is not None
     assert response.text == ''
+
+
+_FINISH_REASONS: list[tuple[str | None, FinishReason]] = [
+    ('stop', FinishReason.STOP),
+    ('tool_calls', FinishReason.STOP),
+    ('end_turn', FinishReason.STOP),
+    ('length', FinishReason.LENGTH),
+    ('model_context_window_exceeded', FinishReason.LENGTH),
+    ('content_filter', FinishReason.BLOCKED),
+    ('sensitive', FinishReason.BLOCKED),
+    ('error', FinishReason.OTHER),
+    ('function_call', FinishReason.OTHER),
+    ('network_error', FinishReason.OTHER),
+    ('insufficient_system_resource', FinishReason.OTHER),
+    ('a_reason_no_provider_has_sent_yet', FinishReason.UNKNOWN),
+    (None, FinishReason.UNKNOWN),
+]
+
+
+@pytest.mark.parametrize(('reason', 'expected'), _FINISH_REASONS)
+@pytest.mark.asyncio
+async def test__generate_maps_finish_reason(
+    reason: str | None, expected: FinishReason, sample_request: ModelRequest
+) -> None:
+    """Every reason a compatible provider ends a generation with is reported."""
+    model = OpenAIModel(model='gpt-4', client=_mock_completion(_completion(finish_reason=reason)))
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == expected
+    assert response.finish_message is None
+
+
+@pytest.mark.parametrize(('reason', 'expected'), _FINISH_REASONS)
+@pytest.mark.asyncio
+async def test__generate_stream_maps_finish_reason(
+    reason: str | None, expected: FinishReason, sample_request: ModelRequest
+) -> None:
+    """The reason on a stream's last chunk reaches the response."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([_chunk(content='Hello'), _chunk(finish_reason=reason)])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert response.finish_reason == expected
+    assert response.finish_message is None
+
+
+@pytest.mark.asyncio
+async def test__generate_refusal_only_is_blocked(sample_request: ModelRequest) -> None:
+    """A message carrying only a refusal is a blocked response, not a failure."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(_completion(content=None, refusal='I cannot help with that.')),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'I cannot help with that.'
+    assert response.message is not None
+    assert response.message.content == []
+
+
+@pytest.mark.asyncio
+async def test__generate_refusal_wins_over_a_clean_stop(sample_request: ModelRequest) -> None:
+    """A refusal beside content blocks the response and keeps the content."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(_completion(content='Some of it.', refusal='Not the rest.')),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'Not the rest.'
+    assert response.message is not None
+    assert response.message.content[0].root.text == 'Some of it.'
+
+
+@pytest.mark.asyncio
+async def test__generate_refusal_wins_over_a_failure_message(sample_request: ModelRequest) -> None:
+    """A refusal beside a gateway's error object is the finish message."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(
+            _completion(
+                content=None,
+                refusal='I cannot help with that.',
+                finish_reason='error',
+                error={'message': 'upstream timed out', 'code': 504},
+            )
+        ),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'I cannot help with that.'
+
+
+@pytest.mark.asyncio
+async def test__generate_reports_the_failure_message_on_a_choice(sample_request: ModelRequest) -> None:
+    """The message of an error object on a failing choice is the finish message."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(
+            _completion(
+                content='Partial ',
+                finish_reason='error',
+                error={'message': 'upstream timed out', 'code': 504},
+            )
+        ),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.OTHER
+    assert response.finish_message == 'upstream timed out'
+
+
+@pytest.mark.asyncio
+async def test__generate_clean_stop_reports_no_failure_message(sample_request: ModelRequest) -> None:
+    """A choice that stopped cleanly reports no finish message."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(_completion(error={'message': 'not this generation'})),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
+
+
+@pytest.mark.asyncio
+async def test__generate_ignores_an_error_field_that_is_not_an_object(sample_request: ModelRequest) -> None:
+    """An error field that is not an object leaves the finish message unset."""
+    model = OpenAIModel(
+        model='gpt-4',
+        client=_mock_completion(_completion(finish_reason='error', error='upstream timed out')),
+    )
+
+    response = await model._generate(sample_request)
+
+    assert response.finish_reason == FinishReason.OTHER
+    assert response.finish_message is None
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_refusal_is_blocked(sample_request: ModelRequest) -> None:
+    """A streamed refusal blocks the response and is not sent as content."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _chunk(refusal='I cannot '),
+        _chunk(refusal='help with that.'),
+        _chunk(finish_reason='stop'),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected_chunks: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected_chunks.append)
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'I cannot help with that.'
+    assert collected_chunks == []
+    assert response.message is not None
+    assert response.message.content == []
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_reports_the_failure_message_on_a_choice(sample_request: ModelRequest) -> None:
+    """A stream whose upstream failed reports the message the gateway sent."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _chunk(content='Partial '),
+        _chunk(finish_reason='error', error={'message': 'upstream timed out', 'code': 504}),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert response.finish_reason == FinishReason.OTHER
+    assert response.finish_message == 'upstream timed out'
+    assert response.message is not None
+    assert response.message.content[0].root.text == 'Partial '
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_refusal_wins_over_a_failure_message(sample_request: ModelRequest) -> None:
+    """A streamed refusal beside a gateway's error object is the finish message."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _chunk(refusal='I cannot help with that.'),
+        _chunk(finish_reason='error', error={'message': 'upstream timed out', 'code': 504}),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    response = await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'I cannot help with that.'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_an_unreadable_message(sample_request: ModelRequest) -> None:
+    """A message with nothing to read at all is still INTERNAL, so retry runs."""
+    ctx_mock = MagicMock(spec=ActionRunContext)
+    type(ctx_mock).is_streaming = PropertyMock(return_value=False)
+    model = OpenAIModel(model='gpt-4', client=_mock_completion(_completion(content=None)))
+
+    with pytest.raises(GenkitError) as raised:
+        await model.generate(sample_request, ctx_mock)
+    assert raised.value.status == 'INTERNAL'
 
 
 @pytest.mark.parametrize(
