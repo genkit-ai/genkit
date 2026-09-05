@@ -46,11 +46,21 @@ def ai() -> Genkit:
     return Genkit()
 
 
-def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
+def register_bg_model(
+    ai: Genkit,
+    *,
+    op_id: str = 'bg-op-123',
+    starts: list[str] | None = None,
+    checks: list[str] | None = None,
+) -> None:
     async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        if starts is not None:
+            starts.append('start')
         return Operation(id=op_id, done=False)
 
     async def check(op: Operation) -> Operation:
+        if checks is not None:
+            checks.append('check')
         return op
 
     ai.define_background_model(
@@ -96,17 +106,8 @@ async def test_generate_returns_the_job_without_polling(ai: Genkit) -> None:
     ``generate_operation()`` only start; they must not call ``check``
     on the way out, or a long render would block the first call.
     """
-    checks = 0
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation) -> Operation:
-        nonlocal checks
-        checks += 1
-        return Operation(id=op.id, done=True)
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    checks: list[str] = []
+    register_bg_model(ai, checks=checks)
 
     response = await ai.generate(model='bg-model', prompt='a cat surfing')
     operation = await ai.generate_operation(model='bg-model', prompt='a cat surfing')
@@ -114,7 +115,7 @@ async def test_generate_returns_the_job_without_polling(ai: Genkit) -> None:
     assert response.operation is not None
     assert response.operation.done is False
     assert operation.done is False
-    assert checks == 0
+    assert checks == []
 
 
 class ReadsMessage(BaseMiddleware):
@@ -245,17 +246,8 @@ async def test_generate_persists_clean_history_without_injected_docs(ai: Genkit)
 @pytest.mark.asyncio
 async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
     """A video start cannot satisfy an interrupt resume. Don't bill start()."""
-    started = 0
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    starts: list[str] = []
+    register_bg_model(ai, starts=starts)
 
     with pytest.raises(GenkitError, match='Cannot resume background model') as exc_info:
         await ai.generate(
@@ -273,7 +265,7 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
         )
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert started == 0
+    assert starts == []
 
 
 @pytest.mark.asyncio
@@ -576,23 +568,15 @@ async def test_wrap_generate_reroute_to_background_starts_the_job(ai: Genkit) ->
 @pytest.mark.asyncio
 async def test_wrap_generate_reroute_from_background_runs_plain(ai: Genkit) -> None:
     """The reverse swap must call the chat model and never start()."""
-    started = 0
+    starts: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_plain(ai)
 
     response = await ai.generate(model='bg-model', prompt='a cat', use=[Reroute(to='plain')])
 
     assert_chat(response, text='from-plain')
-    assert started == 0
+    assert starts == []
 
 
 @pytest.mark.asyncio
@@ -651,18 +635,10 @@ async def test_wrap_generate_rescues_a_missing_model_name(ai: Genkit) -> None:
 @pytest.mark.asyncio
 async def test_resume_restart_on_video_without_swap_does_not_run_the_tool(ai: Genkit) -> None:
     """Still on Veo after the hook: reject before a resume restart runs the tool."""
-    started = 0
+    starts: list[str] = []
     runs: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_ping(ai, runs)
 
     with pytest.raises(GenkitError, match='Cannot resume background model') as raised:
@@ -674,24 +650,16 @@ async def test_resume_restart_on_video_without_swap_does_not_run_the_tool(ai: Ge
         )
 
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert started == 0
+    assert starts == []
     assert runs == []
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_resume_respond_on_video_swaps_to_flash_and_continues(ai: Genkit) -> None:
     """Swap off Veo before resolve. Resume stitches, then flash writes the next message."""
-    started = 0
+    starts: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_plain(ai)
 
     response = await ai.generate(
@@ -702,24 +670,16 @@ async def test_wrap_generate_resume_respond_on_video_swaps_to_flash_and_continue
     )
 
     assert_chat(response, text='from-plain', roles=[Role.USER, Role.MODEL, Role.TOOL, Role.MODEL])
-    assert started == 0
+    assert starts == []
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_resume_restart_on_video_swaps_to_flash_runs_the_tool(ai: Genkit) -> None:
     """Swap off Veo, then the restarted tool runs and flash continues."""
-    started = 0
+    starts: list[str] = []
     runs: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_plain(ai)
     register_ping(ai, runs)
 
@@ -732,24 +692,16 @@ async def test_wrap_generate_resume_restart_on_video_swaps_to_flash_runs_the_too
     )
 
     assert_chat(response, text='from-plain', roles=[Role.USER, Role.MODEL, Role.TOOL, Role.MODEL])
-    assert started == 0
+    assert starts == []
     assert runs == ['ping']
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_resume_respond_on_flash_swaps_to_video_raises(ai: Genkit) -> None:
     """A swap onto Veo during resume is still a video start. Don't bill start()."""
-    started = 0
+    starts: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_plain(ai)
 
     with pytest.raises(GenkitError, match='Cannot resume background model') as raised:
@@ -761,24 +713,16 @@ async def test_wrap_generate_resume_respond_on_flash_swaps_to_video_raises(ai: G
         )
 
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert started == 0
+    assert starts == []
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_resume_restart_on_flash_swaps_to_video_does_not_run_the_tool(ai: Genkit) -> None:
     """Swap onto Veo: reject before the restarted tool runs."""
-    started = 0
+    starts: list[str] = []
     runs: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        nonlocal started
-        started += 1
-        return Operation(id='bg-op-123', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg-model', start=start, check=check)
+    register_bg_model(ai, starts=starts)
     register_plain(ai)
     register_ping(ai, runs)
 
@@ -792,7 +736,7 @@ async def test_wrap_generate_resume_restart_on_flash_swaps_to_video_does_not_run
         )
 
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert started == 0
+    assert starts == []
     assert runs == []
 
 
