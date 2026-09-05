@@ -277,10 +277,11 @@ async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
     mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
+    sample_request.config = OpenAIConfig(stream_options={'include_usage': False})
     response = await model._generate(sample_request)
 
     _assert_usage_payload_reported(response.usage)
-    # include_usage is added on the streaming path only.
+    # Streaming-only options must never reach a non-streaming request.
     assert 'stream_options' not in mock_client.chat.completions.create.call_args.kwargs
 
 

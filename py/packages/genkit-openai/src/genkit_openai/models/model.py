@@ -395,6 +395,7 @@ class OpenAIModel:
             A ModelResponse object containing the generated message.
         """
         openai_config = await self._get_openai_request_config(request=request)
+        openai_config.pop('stream_options', None)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
         response = await self._openai_client.chat.completions.create(**openai_config)
         logger.debug(
