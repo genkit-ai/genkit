@@ -70,6 +70,8 @@ class TestHappyPaths:
         assert GoogleAI.gemini_model(GoogleAIGeminiVersion.GEMINI_2_5_FLASH).name == 'googleai/gemini-2.5-flash'
         assert GoogleAI.veo_model(VeoVersion.VEO_3_1_FAST_PREVIEW).name == 'googleai/veo-3.1-fast-generate-preview'
         assert VertexAI.veo_model(VeoVersion.VEO_3_1).name == 'vertexai/veo-3.1-generate-001'
+        assert GoogleAI.veo_model(VeoVersion.VEO_3_1_LITE_PREVIEW).name == 'googleai/veo-3.1-lite-generate-preview'
+        assert VertexAI.veo_model(VeoVersion.VEO_3_1_LITE).name == 'vertexai/veo-3.1-lite-generate-001'
 
     def test_family_constructors_type_their_config(self) -> None:
         """Each family constructor carries its own config schema."""
@@ -154,7 +156,7 @@ class TestClosedRejectSet:
     @pytest.mark.parametrize(
         'bad_id',
         [
-            'veo-3.0-generate-001',  # wrong family: has its own constructor
+            'veo-3.1-generate-preview',  # wrong family: has its own constructor
             'lyria-002',  # no constructor in this plugin
             'googleai/lyria-002',  # prefix must not defeat the gate
             'deep-research-pro-preview',  # Interactions API family
@@ -184,7 +186,7 @@ class TestClosedRejectSet:
         with pytest.raises(GenkitError, match=r'embedding'):
             GoogleAI.gemini_model('gemini-embedding-001')
         with pytest.raises(GenkitError, match=r'veo_model'):
-            GoogleAI.gemini_model('veo-3.0-generate-001')
+            GoogleAI.gemini_model('veo-3.1-generate-preview')
         with pytest.raises(GenkitError, match=r'lyria_model'):
             GoogleAI.gemini_model('lyria-002')
         with pytest.raises(GenkitError, match=r'deep_research_model'):
@@ -272,6 +274,17 @@ class TestKnownIdLiterals:
         assert set(get_args(KnownGemma)) == _family_catalog(is_gemma_model)
         assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
+
+    def test_veo_catalog_is_the_3_1_family(self) -> None:
+        """The Veo catalog is the 3.1 family only: preview ids on Google AI, 001 ids on Vertex AI."""
+        assert {str(member.value) for member in VeoVersion} == {
+            'veo-3.1-generate-preview',
+            'veo-3.1-fast-generate-preview',
+            'veo-3.1-lite-generate-preview',
+            'veo-3.1-generate-001',
+            'veo-3.1-fast-generate-001',
+            'veo-3.1-lite-generate-001',
+        }
 
 
 class TestNoImagenSurface:
