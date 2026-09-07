@@ -399,14 +399,18 @@ class OpenAIModel:
         openai_config.pop('stream_options', None)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
         response = await self._openai_client.chat.completions.create(**openai_config)
+        if not response.choices:
+            raise GenkitError(
+                status='INTERNAL',
+                message='No choices in completion.',
+                details={'usage': _usage_from_completion(response.usage).model_dump(exclude_none=True)},
+            )
+
         logger.debug(
             'OpenAI raw API response',
             model=self._model,
-            finish_reason=str(response.choices[0].finish_reason) if response.choices else None,
+            finish_reason=str(response.choices[0].finish_reason),
         )
-
-        if not response.choices:
-            raise GenkitError(status='INTERNAL', message='No choices in completion.')
 
         result = ModelResponse(
             request=request,
@@ -494,7 +498,11 @@ class OpenAIModel:
                 callback(ModelResponseChunk(role=Role.MODEL, content=content))
 
         if not saw_choice:
-            raise GenkitError(status='INTERNAL', message='No choices in completion.')
+            raise GenkitError(
+                status='INTERNAL',
+                message='No choices in completion.',
+                details={'usage': _usage_from_completion(usage).model_dump(exclude_none=True)},
+            )
 
         if tool_calls:
             message = MessageConverter.to_genkit(

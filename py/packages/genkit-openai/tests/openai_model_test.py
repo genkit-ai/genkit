@@ -175,6 +175,11 @@ async def test__generate_no_choices(sample_request: ModelRequest) -> None:
     """A completion carrying no choices fails with a status the caller can handle."""
     mock_response = MagicMock()
     mock_response.choices = []
+    mock_response.usage = CompletionUsage.model_validate({
+        'prompt_tokens': 10,
+        'completion_tokens': 0,
+        'total_tokens': 10,
+    })
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -186,6 +191,7 @@ async def test__generate_no_choices(sample_request: ModelRequest) -> None:
 
     assert exc_info.value.status == 'INTERNAL'
     assert 'No choices in completion.' in str(exc_info.value)
+    assert exc_info.value.details['usage'] == {'inputTokens': 10, 'outputTokens': 0, 'totalTokens': 10}
 
 
 @pytest.mark.asyncio
@@ -468,6 +474,7 @@ async def test__generate_stream_no_choices(sample_request: ModelRequest) -> None
 
     assert exc_info.value.status == 'INTERNAL'
     assert 'No choices in completion.' in str(exc_info.value)
+    assert exc_info.value.details['usage']['totalTokens'] == 17
 
 
 @pytest.mark.asyncio
@@ -551,6 +558,26 @@ async def test_generate_classifies_bad_config_type() -> None:
     with pytest.raises(GenkitError) as raised:
         await model.generate(request, ctx_mock)
     assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_no_choices_reaches_the_caller(sample_request: ModelRequest) -> None:
+    """generate()'s error handling lets the no-choices error through unchanged."""
+    ctx_mock = MagicMock(spec=ActionRunContext)
+    type(ctx_mock).is_streaming = PropertyMock(return_value=False)
+
+    mock_response = MagicMock()
+    mock_response.choices = []
+    mock_response.usage = None
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+
+    with pytest.raises(GenkitError) as raised:
+        await model.generate(sample_request, ctx_mock)
+    assert raised.value.status == 'INTERNAL'
 
 
 @pytest.mark.parametrize(
