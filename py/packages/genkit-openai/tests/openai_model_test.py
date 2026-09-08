@@ -42,6 +42,7 @@ from genkit import (
     ReasoningPart,
     Role,
     TextPart,
+    ToolRequest,
     ToolRequestPart,
 )
 from genkit._core._model import OutputConfig
@@ -1324,6 +1325,29 @@ class TestCleanJsonResponse:
         cleaned = model._clean_json_response(response, request)
         assert cleaned.message is not None
         assert cleaned.message.content[0].root.text == '{"name": "John", "level": 5}'
+
+    def test_keeps_tool_parts_beside_cleaned_text(self) -> None:
+        """Strips fences from the text part and carries a tool request part through unchanged."""
+        model = OpenAIModel(model='deepseek-chat', client=MagicMock())
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            output=OutputConfig(format='json'),
+        )
+        tool_part = Part(
+            root=ToolRequestPart(tool_request=ToolRequest(ref='call_1', name='get_weather', input={'city': 'NYC'}))
+        )
+        response = ModelResponse(
+            request=request,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=TextPart(text='```json\n{"city": "NYC"}\n```')), tool_part],
+            ),
+        )
+        cleaned = model._clean_json_response(response, request)
+        assert cleaned.message is not None
+        assert [type(part.root).__name__ for part in cleaned.message.content] == ['TextPart', 'ToolRequestPart']
+        assert cleaned.message.content[0].root.text == '{"city": "NYC"}'
+        assert cleaned.message.content[1] is tool_part
 
     def test_no_op_for_gpt_model(self) -> None:
         """Does not modify responses from non-DeepSeek models."""
