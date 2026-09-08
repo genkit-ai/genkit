@@ -1070,6 +1070,43 @@ async def test__generate_stream_keeps_text_riding_with_tool_call_arguments(
 
 
 @pytest.mark.asyncio
+async def test__generate_stream_tolerates_a_null_arguments_fragment(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """A fragment whose arguments are null adds nothing, and the rest still accumulate."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {
+                    'index': 0,
+                    'id': 'tool123',
+                    'type': 'function',
+                    'function': {'name': 'tool_fn', 'arguments': '{"a": '},
+                }
+            ],
+        ),
+        _delta_chunk(make_chunk, tool_calls=[{'index': 0, 'function': {'arguments': None}}]),
+        _delta_chunk(make_chunk, tool_calls=[{'index': 0, 'function': {'arguments': '1}'}}]),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    fragments = [root for chunk in collected for root in _roots(chunk) if isinstance(root, ToolRequestPart)]
+    assert [root.tool_request.input for root in fragments] == ['{"a": ', '', '1}']
+    assert all(root.tool_request.name == 'tool_fn' for root in fragments)
+
+    assert response.message is not None
+    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    assert len(requests) == 1
+    assert requests[0].input == {'a': 1}
+
+
+@pytest.mark.asyncio
 async def test__generate_stream_skips_a_delta_with_nothing_to_report(
     sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
 ) -> None:

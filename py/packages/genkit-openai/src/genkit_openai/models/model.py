@@ -563,18 +563,16 @@ class OpenAIModel:
             # Tool calls (partial function calls)
             if delta.tool_calls:
                 for tool_call in delta.tool_calls:
+                    fragment = (tool_call.function.arguments or '') if tool_call.function else ''
                     # Accumulate fragmented tool call arguments
                     if tool_call.index not in tool_calls:
                         tool_calls[tool_call.index] = tool_call
                     else:
                         existing = tool_calls[tool_call.index]
                         if hasattr(existing, 'function') and existing.function and tool_call.function:
-                            existing.function.arguments += tool_call.function.arguments
+                            existing.function.arguments = (existing.function.arguments or '') + fragment
                     parts.append(
-                        MessageConverter.tool_call_to_genkit(
-                            tool_calls[tool_call.index],
-                            args_segment=tool_call.function.arguments if tool_call.function else None,
-                        )
+                        MessageConverter.tool_call_to_genkit(tool_calls[tool_call.index], args_segment=fragment)
                     )
 
             if parts:
