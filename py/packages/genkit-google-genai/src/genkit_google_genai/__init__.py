@@ -95,7 +95,6 @@ from genkit_google_genai.models.gemini import (
     KnownGemma,
     VertexAIGeminiVersion,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
 from genkit_google_genai.models.interactions_registry import LyriaVersion
 from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
@@ -121,13 +120,10 @@ __all__ = [
     'DeepResearchConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
-    'ImagenConfigSchema',
-    'ImagenVersion',
     'KnownGemini',
     'KnownGeminiImage',
     'KnownGeminiTts',
     'KnownGemma',
-    'KnownImagen',
     'KnownVeo',
     'LyriaConfig',
     'LyriaVersion',
