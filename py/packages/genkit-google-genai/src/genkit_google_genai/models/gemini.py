@@ -960,9 +960,9 @@ def is_tts_model(name: str) -> bool:
 def is_image_model(name: str) -> bool:
     """Check if the model is a Gemini native image generation model.
 
-    Native image is a ``gemini-`` name that contains ``-image``. Imagen
-    (``imagen-…``) is a different family — a bare ``image`` substring
-    would catch both.
+    Native image is a ``gemini-`` name that contains ``-image``. The
+    ``gemini-`` prefix is required: a bare ``image`` substring would also
+    match ``imagen-`` ids, which have no generate path here.
 
     Args:
         name: The model name to check.

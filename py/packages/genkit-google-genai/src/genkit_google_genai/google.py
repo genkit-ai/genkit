@@ -22,7 +22,7 @@ Google's generative AI models. Both plugins use dynamic model discovery via the
 Google GenAI SDK to detect and register available models at runtime.
 
 Supported capabilities include text generation (Gemini/Gemma), text embeddings,
-image generation (Imagen), and video generation (Veo).
+image generation (Gemini native image), and video generation (Veo).
 
 Example:
     ```python
@@ -92,7 +92,11 @@ from genkit_google_genai.models._model_refs import (
     family_embedder_ref,
     family_model_ref,
 )
-from genkit_google_genai.models._routing import is_unroutable_model_id, strip_ref_prefixes
+from genkit_google_genai.models._routing import (
+    is_unroutable_model_id,
+    is_unsupported_image_model_name,
+    strip_ref_prefixes,
+)
 from genkit_google_genai.models.antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai.models.deep_research import (
     DeepResearchConfig,
@@ -121,15 +125,6 @@ from genkit_google_genai.models.gemini import (
     is_image_model,
     is_tts_model,
     is_tuned_gemini_name,
-)
-from genkit_google_genai.models.imagen import (
-    SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
-    ImagenConfigSchema,
-    ImagenModel,
-    KnownImagen,
-    is_imagen_model_name,
-    is_unsupported_image_model_name,
-    vertexai_image_model_info,
 )
 from genkit_google_genai.models.interactions_lyria import (
     LyriaConfig as InteractionsLyriaConfig,
@@ -163,20 +158,17 @@ class GenaiModels:
 
     Attributes:
         gemini: List of Gemini/Gemma model names (generateContent action).
-        imagen: List of Imagen model names (predict action, Vertex AI only).
         embedders: List of embedding model names (embedContent action).
         veo: List of Veo video generation model names (generateVideos action).
     """
 
     gemini: list[str]
-    imagen: list[str]
     embedders: list[str]
     veo: list[str]
 
     def __init__(self) -> None:
         """Initialize empty model lists."""
         self.gemini = []
-        self.imagen = []
         self.embedders = []
         self.veo = []
 
@@ -208,8 +200,6 @@ def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool)
             return
         elif is_unsupported_image_model_name(name):
             return
-        elif is_imagen_model_name(name):
-            models.imagen.append(name)
         elif is_veo_model(name):
             models.veo.append(name)
         elif 'gemini' in lower_name or 'gemma' in lower_name:
@@ -222,10 +212,6 @@ def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool)
     # Embedders
     if 'embedContent' in m.supported_actions:
         models.embedders.append(name)
-
-    # Imagen (imagen- prefix, not a bare "image" substring)
-    if 'predict' in m.supported_actions and is_imagen_model_name(name):
-        models.imagen.append(name)
 
     # Veo
     if 'generateVideos' in m.supported_actions or is_veo_model(name):
@@ -467,21 +453,6 @@ class GoogleFamilyRefs:
         )
 
     @classmethod
-    def imagen_model(
-        cls, name: KnownImagen | str, *, config: ImagenConfigSchema | None = None
-    ) -> ModelRef[ImagenConfigSchema]:
-        """Typed ref for an Imagen model (``imagen-…``)."""
-        return family_model_ref(
-            name,
-            namespace=cls.name,
-            plugin_class=cls.__name__,
-            family='imagen',
-            method='imagen_model',
-            config_schema=ImagenConfigSchema,
-            config=config,
-        )
-
-    @classmethod
     def veo_model(cls, name: KnownVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
         """Typed ref for a Veo video model (``veo-…``)."""
         return family_model_ref(
@@ -540,7 +511,6 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         | Type | Action Kind | Example |
         |---|---|---|
         | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
-        | Imagen | MODEL | ``googleai/imagen-3.0-generate-002`` |
         | Embedders | EMBEDDER | ``googleai/gemini-embedding-001`` |
         | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-preview`` |
 
@@ -706,11 +676,6 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             if action := self._resolve_model(googleai_name(name)):
                 actions.append(action)
 
-        # Imagen Models
-        for name in genai_models.imagen:
-            if action := self._resolve_model(googleai_name(name)):
-                actions.append(action)
-
         # Veo Models (background models)
         for name in genai_models.veo:
             actions.extend(_background_actions(self._resolve_veo_model(googleai_name(name))))
@@ -835,15 +800,6 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             return None
         # One annotated closure per family. Action validates request.config
         # from the fn annotation; a single _run cannot switch schemas at runtime.
-        if is_imagen_model_name(clean_name):
-            model_info = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_info  # pyright: ignore[reportArgumentType]
-
-            async def _run_imagen(request: ModelRequest[ImagenConfigSchema], ctx: ActionRunContext) -> ModelResponse:
-                return await ImagenModel(clean_name, self._runtime_client()).generate(request, ctx)
-
-            return _model_action(name, _run_imagen, model_info, ImagenConfigSchema)
-
         model_info = google_model_info(clean_name)
         SUPPORTED_MODELS[clean_name] = model_info
 
@@ -910,15 +866,6 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 )
             )
 
-        for name in genai_models.imagen:
-            actions_list.append(
-                model_action_metadata(
-                    name=googleai_name(name),
-                    info=vertexai_image_model_info(name).model_dump(by_alias=True),
-                    config_schema=ImagenConfigSchema,
-                )
-            )
-
         for name in genai_models.veo:
             actions_list.append(_veo_background_action_metadata(googleai_name(name)))
 
@@ -974,7 +921,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
     """Vertex AI plugin for Genkit with dynamic model discovery.
 
     This plugin provides access to Google Cloud Vertex AI models including
-    Gemini, Imagen, Veo, and embedders. Models are discovered dynamically,
+    Gemini, Veo, and embedders. Models are discovered dynamically,
     ensuring new models are available without SDK updates.
 
     Vertex AI vs Google AI:
@@ -983,13 +930,11 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         - Customer-managed encryption keys (CMEK)
         - Data residency controls
         - IAM-based access control
-        - Imagen image generation models
 
     Model Types:
         | Type | Action Kind | Example |
         |---|---|---|
         | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
-        | Imagen | MODEL | ``vertexai/imagen-3.0-generate-002`` |
         | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-3.1-generate-preview`` |
         | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
@@ -1116,10 +1061,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         actions: list[Action] = []
 
         for name in genai_models.gemini:
-            if action := self._resolve_model(vertexai_name(name)):
-                actions.append(action)
-
-        for name in genai_models.imagen:
             if action := self._resolve_model(vertexai_name(name)):
                 actions.append(action)
 
@@ -1280,15 +1221,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
             return _model_action(name, _run_tuned, model_info, GeminiConfigSchema)
 
-        if is_imagen_model_name(clean_name):
-            model_info = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_info  # pyright: ignore[reportArgumentType]
-
-            async def _run_imagen(request: ModelRequest[ImagenConfigSchema], ctx: ActionRunContext) -> ModelResponse:
-                return await ImagenModel(clean_name, self._runtime_client()).generate(request, ctx)
-
-            return _model_action(name, _run_imagen, model_info, ImagenConfigSchema)
-
         model_info = google_model_info(clean_name)
         SUPPORTED_MODELS[clean_name] = model_info
 
@@ -1352,15 +1284,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                     name=vertexai_name(name),
                     info=google_model_info(name).model_dump(by_alias=True),
                     config_schema=get_model_config_schema(name),
-                )
-            )
-
-        for name in genai_models.imagen:
-            actions_list.append(
-                model_action_metadata(
-                    name=vertexai_name(name),
-                    info=vertexai_image_model_info(name).model_dump(by_alias=True),
-                    config_schema=ImagenConfigSchema,
                 )
             )
 
