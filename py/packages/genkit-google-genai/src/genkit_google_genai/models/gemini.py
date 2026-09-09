@@ -248,6 +248,21 @@ class VoiceConfigSchema(BaseModel):
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
 
 
+class SpeakerVoiceConfigSchema(BaseModel):
+    """Speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker: str | None = None
+    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+
+
+class MultiSpeakerVoiceConfigSchema(BaseModel):
+    """Multi speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
+
+
 class GeminiConfigSchema(ModelConfig):
     """Gemini Config Schema."""
 
@@ -457,19 +472,65 @@ class GeminiConfigSchema(ModelConfig):
 class SpeechConfigSchema(BaseModel):
     """Speech config schema."""
 
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
+    language_code: str | None = Field(None, alias='languageCode')
 
-    http_options: Any | None = Field(None, exclude=True)
-    tools: Any | None = Field(None, exclude=True)
-    tool_config: Any | None = Field(None, exclude=True)
-    response_schema: Any | None = Field(None, exclude=True)
-    response_json_schema: Any | None = Field(None, exclude=True)
+
+_VOICE_CONFIG_JSON_SCHEMA: dict[str, Any] = {
+    'type': 'object',
+    'properties': {
+        'prebuiltVoiceConfig': {
+            'type': 'object',
+            'properties': {
+                'voiceName': {'type': 'string', 'description': 'Name of the preset voice to use.'},
+            },
+            'description': 'Configuration for the prebuilt speaker to use.',
+            'additionalProperties': True,
+        },
+    },
+    'additionalProperties': True,
+}
 
 
 class GeminiTtsConfigSchema(GeminiConfigSchema):
     """Gemini TTS Config Schema."""
 
-    speech_config: SpeechConfigSchema | None = Field(None, alias='speechConfig')
+    speech_config: Annotated[
+        SpeechConfigSchema | None,
+        WithJsonSchema({
+            'type': 'object',
+            'properties': {
+                'voiceConfig': {**_VOICE_CONFIG_JSON_SCHEMA, 'description': 'Configuration for the voice to use.'},
+                'multiSpeakerVoiceConfig': {
+                    'type': 'object',
+                    'properties': {
+                        'speakerVoiceConfigs': {
+                            'type': 'array',
+                            'items': {
+                                'type': 'object',
+                                'properties': {
+                                    'speaker': {'type': 'string', 'description': 'Name of the speaker to use.'},
+                                    'voiceConfig': _VOICE_CONFIG_JSON_SCHEMA,
+                                },
+                                'additionalProperties': True,
+                            },
+                            'description': 'Configuration for all the enabled speaker voices.',
+                        },
+                    },
+                    'description': 'Configuration for a multi speaker setup.',
+                    'additionalProperties': True,
+                },
+                'languageCode': {
+                    'type': 'string',
+                    'description': 'BCP-47 language code of the synthesized speech, e.g. en-US.',
+                },
+            },
+            'description': 'Speech generation config.',
+            'additionalProperties': True,
+        }),
+    ] = Field(None, alias='speechConfig')
 
 
 class GeminiImageConfigSchema(GeminiConfigSchema):
