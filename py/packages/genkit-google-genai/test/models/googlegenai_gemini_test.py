@@ -552,7 +552,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
         (
             'gemini-2.5-flash-preview-tts',
             ModelInfo(
-                label='Google AI - Gemini TTS',
+                label='Google AI - Gemini 2.5 Flash Preview TTS',
                 supports=Supports(
                     multiturn=False,
                     media=False,
@@ -624,6 +624,87 @@ def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: 
     assert model_info.supports.tool_choice is True
     assert model_info.supports.constrained == Constrained.ALL
     assert model_info.supports.output == ['text', 'json']
+
+
+@pytest.mark.parametrize(
+    ('model_name', 'expected_label'),
+    [
+        ('gemini-2.5-pro', 'Google AI - Gemini 2.5 Pro'),
+        ('gemini-2.5-flash', 'Google AI - Gemini 2.5 Flash'),
+        ('gemini-flash-lite-latest', 'Google AI - Gemini Flash Lite Latest'),
+    ],
+)
+def test_stable_gemini_text_models_register_real_capabilities(model_name: str, expected_label: str) -> None:
+    """Stable text ids resolve to their own ModelInfo, not the generic fallback.
+
+    The fallback (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset and labels the id verbatim,
+    so the label and ``output == ['text', 'json']`` together prove real metadata.
+    """
+    model_info = google_model_info(model_name)
+
+    assert model_info.label == expected_label
+    assert model_info.supports is not None
+    assert model_info.supports.tools is True
+    assert model_info.supports.tool_choice is True
+    assert model_info.supports.system_role is True
+    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.output == ['text', 'json']
+
+
+@pytest.mark.parametrize(
+    ('model_name', 'expected_label'),
+    [
+        ('gemini-2.5-flash-preview-tts', 'Google AI - Gemini 2.5 Flash Preview TTS'),
+        ('gemini-2.5-pro-preview-tts', 'Google AI - Gemini 2.5 Pro Preview TTS'),
+        ('gemini-3.1-flash-tts-preview', 'Google AI - Gemini 3.1 Flash TTS Preview'),
+    ],
+)
+def test_tts_models_register_per_name_capabilities(model_name: str, expected_label: str) -> None:
+    """Each TTS id carries its own label instead of sharing the generic TTS entry."""
+    model_info = google_model_info(model_name)
+
+    assert model_info.label == expected_label
+    assert model_info.supports is not None
+    assert model_info.supports.multiturn is False
+    assert model_info.supports.media is False
+    assert model_info.supports.tools is False
+    assert model_info.supports.tool_choice is False
+    assert model_info.supports.output == ['media']
+    assert get_model_config_schema(model_name) is GeminiTtsConfigSchema
+
+
+@pytest.mark.parametrize(
+    'model_name',
+    [
+        'gemini-2.5-flash-preview-tts',
+        'gemini-2.5-pro-preview-tts',
+        'gemini-3.1-flash-tts-preview',
+        'gemini-9.9-flash-preview-tts',
+    ],
+)
+def test_tts_models_do_not_advertise_system_role(model_name: str) -> None:
+    """TTS ignores system instructions, so no TTS entry advertises a system role."""
+    supports = google_model_info(model_name).supports
+
+    assert supports is not None
+    assert supports.system_role is False
+
+
+@pytest.mark.parametrize(
+    ('model_name', 'expected_label'),
+    [
+        ('gemma-4-26b-a4b-it', 'Google AI - Gemma 4 26B A4B IT'),
+        ('gemma-4-31b-it', 'Google AI - Gemma 4 31B IT'),
+    ],
+)
+def test_gemma_4_models_register_per_name_capabilities(model_name: str, expected_label: str) -> None:
+    """Each gemma-4 id carries its own label instead of sharing the generic Gemma entry."""
+    model_info = google_model_info(model_name)
+
+    assert model_info.label == expected_label
+    assert model_info.supports is not None
+    assert model_info.supports.output == ['text', 'json']
+    assert get_model_config_schema(model_name) is GemmaConfigSchema
 
 
 @pytest.fixture
@@ -1155,6 +1236,7 @@ async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
     ('version', 'expected_schema'),
     [
         ('gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
+        ('gemini-3.1-flash-tts-preview', GeminiTtsConfigSchema),
         ('gemini-2.0-flash-preview-image-generation', GeminiImageConfigSchema),
         ('gemini-3-pro-image', GeminiImageConfigSchema),
         ('gemini-3.1-flash-image', GeminiImageConfigSchema),
@@ -1163,6 +1245,7 @@ async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
         ('gemini-2.5-flash-image', GeminiImageConfigSchema),
         ('gemini-2.5-flash-image-preview', GeminiImageConfigSchema),
         ('gemma-2-27b-it', GemmaConfigSchema),
+        ('gemma-4-31b-it', GemmaConfigSchema),
         ('gemini-2.0-flash-001', GeminiConfigSchema),
     ],
 )
