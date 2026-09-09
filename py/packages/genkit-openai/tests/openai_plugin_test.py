@@ -316,15 +316,17 @@ async def test_embedder_carries_retry_after_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedder_classifies_bad_dimensions_option() -> None:
-    """A non-numeric dimensions option is INVALID_ARGUMENT, before any API call."""
+@pytest.mark.parametrize('dimensions', ['lots', [256]], ids=['non-numeric', 'wrong-type'])
+async def test_embedder_classifies_bad_dimensions_option(dimensions: Any) -> None:
+    """A dimensions option that is not an int is INVALID_ARGUMENT, before any API call."""
     client = MagicMock()
     client.embeddings.create = AsyncMock()
 
     with pytest.raises(GenkitError) as exc_info:
-        await _run_embedder(client, options={'dimensions': 'lots'})
+        await _run_embedder(client, options={'dimensions': dimensions})
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'dimensions' in str(exc_info.value)
     client.embeddings.create.assert_not_called()
 
 
@@ -333,12 +335,16 @@ async def test_embedder_classifies_bad_dimensions_option() -> None:
     'error',
     [
         APITimeoutError(request=_http_request()),
+        ValueError('No embedding data received'),
         RuntimeError('unexpected failure'),
     ],
-    ids=['timeout', 'runtime-error'],
+    ids=['timeout', 'sdk-value-error', 'runtime-error'],
 )
 async def test_embedder_propagates_unclassified_errors(error: Exception) -> None:
-    """An error without a failing HTTP status escapes the embedder unchanged."""
+    """An error without a failing HTTP status escapes the embedder unchanged.
+
+    A ValueError from the SDK is a provider-side failure, not caller input,
+    so it must not be reported as INVALID_ARGUMENT."""
     with pytest.raises(Exception) as exc_info:
         await _run_embedder(_embedder_client(error))
 

@@ -455,26 +455,33 @@ class OpenAI(Plugin):
 
         async def embed_fn(request: EmbedRequest) -> EmbedResponse:
             """Embedder function that calls OpenAI embeddings API."""
-            try:
-                # Extract text from document content
-                texts = []
-                for doc in request.input:
-                    doc_text = ''.join(  # type: ignore[arg-type]
-                        part.root.text for part in doc.content if hasattr(part.root, 'text') and part.root.text
-                    )
-                    texts.append(doc_text)
+            # Extract text from document content
+            texts = []
+            for doc in request.input:
+                doc_text = ''.join(  # type: ignore[arg-type]
+                    part.root.text for part in doc.content if hasattr(part.root, 'text') and part.root.text
+                )
+                texts.append(doc_text)
 
-                # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
-                dimensions: int | None = None
-                encoding_format: Literal['base64', 'float'] | None = None
-                if request.options:
-                    if dim_val := request.options.get('dimensions'):
+            # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
+            dimensions: int | None = None
+            encoding_format: Literal['base64', 'float'] | None = None
+            if request.options:
+                if dim_val := request.options.get('dimensions'):
+                    try:
                         dimensions = int(dim_val)
-                    enc_val = request.options.get('encodingFormat')
-                    if enc_val in ('float', 'base64'):
-                        encoding_format = cast(Literal['base64', 'float'], enc_val)
+                    except (TypeError, ValueError) as e:
+                        raise GenkitError(
+                            status='INVALID_ARGUMENT',
+                            message=f'dimensions must be an int, got {dim_val!r}',
+                            cause=e,
+                        ) from e
+                enc_val = request.options.get('encodingFormat')
+                if enc_val in ('float', 'base64'):
+                    encoding_format = cast(Literal['base64', 'float'], enc_val)
 
-                # Call with only non-None optional params to satisfy strict typings
+            # Call with only non-None optional params to satisfy strict typings
+            try:
                 if dimensions is not None and encoding_format is not None:
                     response = await self._runtime_client().embeddings.create(
                         model=clean_name,
@@ -499,12 +506,12 @@ class OpenAI(Plugin):
                         model=clean_name,
                         input=texts,
                     )
-
-                # Convert OpenAI response to Genkit format
-                embeddings = [Embedding(embedding=item.embedding) for item in response.data]
-                return EmbedResponse(embeddings=embeddings)
-            except (APIStatusError, ValueError) as e:
+            except APIStatusError as e:
                 reraise_openai_error(e)
+
+            # Convert OpenAI response to Genkit format
+            embeddings = [Embedding(embedding=item.embedding) for item in response.data]
+            return EmbedResponse(embeddings=embeddings)
 
         return embedder(
             name,
