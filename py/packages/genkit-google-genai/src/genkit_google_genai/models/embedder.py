@@ -16,9 +16,11 @@
 
 """Google-Genai embedder model."""
 
+import asyncio
 import json
 import sys
-from typing import Any, cast
+from collections.abc import Coroutine
+from typing import Any, Protocol, TypeVar, cast
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -126,6 +128,10 @@ class VertexEmbeddingConfigSchema(EmbeddingConfigSchema):
 GOOGLEAI_EMBED_BATCH_SIZE = 100
 VERTEXAI_EMBED_BATCH_SIZE = 250
 
+# Caps simultaneous embedding calls; large batches otherwise trip rate limits or
+# exhaust the client's connection pool.
+EMBED_CONCURRENCY_LIMIT = 10
+
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
@@ -200,6 +206,69 @@ def get_embedder_info(name: str, label: str, is_vertex: bool = False) -> Embedde
     )
 
 
+# One call's result: the embeddings decoded from a single API response.
+_T = TypeVar('_T')
+
+
+async def _run_bounded(calls: list[Coroutine[Any, Any, _T]]) -> list[_T]:
+    """Run the calls concurrently, cancelling the rest on the first failure.
+
+    The semaphore is built per call rather than once per module: it binds to the
+    running loop, and the Dev UI reflection server runs a second one.
+
+    Args:
+        calls: Coroutines to run, in the order their results are wanted.
+
+    Returns:
+        The results, in the order the calls were given.
+
+    Raises:
+        BaseException: The failure of the earliest failing call in that order,
+            so the reported error does not depend on completion order.
+    """
+    if not calls:
+        return []
+    semaphore = asyncio.Semaphore(EMBED_CONCURRENCY_LIMIT)
+
+    async def _bounded(call: Coroutine[Any, Any, _T]) -> _T:
+        try:
+            async with semaphore:
+                return await call
+        except asyncio.CancelledError:
+            # Cancelled while queued on the semaphore, so nothing awaited it.
+            call.close()
+            raise
+
+    tasks = [asyncio.create_task(_bounded(call)) for call in calls]
+    _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    for task in pending:
+        # Without this the rest of the batch still bills one call each.
+        task.cancel()
+    # Also retrieves the cancelled outcomes, so none resurfaces later as
+    # "Task exception was never retrieved".
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        # Call order, not completion order, so the reported failure is
+        # deterministic across the calls that were left to run.
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
+    return cast(list[_T], results)
+
+
+class _HttpResponse(Protocol):
+    """The google-genai HTTP response surface used to read a JSON body."""
+
+    body: str | bytes | None
+
+
+class _AsyncRequester(Protocol):
+    """The google-genai transport surface used to POST to ``:predict``."""
+
+    async def async_request(self, *, http_method: str, path: str, request_dict: dict[str, Any]) -> _HttpResponse:
+        """Send an authenticated request and return the HTTP response."""
+        ...
+
+
 class Embedder:
     """Embedder for Google-Genai."""
 
@@ -225,8 +294,8 @@ class Embedder:
         """Generate embeddings for a given request.
 
         Requests with more documents than the endpoint accepts per call are
-        split into sequential batches; the response carries one embedding per
-        document, in input order.
+        split into batches, sent with bounded concurrency; the response carries
+        one embedding per document, in input order.
 
         Args:
             request: Genkit embed request.
@@ -253,25 +322,49 @@ class Embedder:
         config = self._genkit_to_googleai_cfg(options)
         batch_size = self._embed_batch_size(model)
 
+        batches = [contents[start : start + batch_size] for start in range(0, len(contents), batch_size)]
+        results = await _run_bounded([self._embed_batch(model, batch, config) for batch in batches])
+
         embeddings: list[Embedding] = []
-        for start in range(0, len(contents), batch_size):
-            batch = contents[start : start + batch_size]
-            response = await self._client.aio.models.embed_content(
-                model=model,
-                contents=cast(genai_types.ContentListUnion, batch),
-                config=config,
-            )
-            returned = response.embeddings or []
-            if len(returned) != len(batch):
-                raise GenkitError(
-                    status='INTERNAL',
-                    message=(
-                        f'{model} returned {len(returned)} embeddings for {len(batch)} documents; '
-                        'embeddings cannot be aligned with the input.'
-                    ),
-                )
-            embeddings.extend(Embedding(embedding=em.values or []) for em in returned)
+        for batch_embeddings in results:
+            embeddings.extend(batch_embeddings)
         return EmbedResponse(embeddings=embeddings)
+
+    async def _embed_batch(
+        self,
+        model: str,
+        batch: list[genai.types.Content],
+        config: genai.types.EmbedContentConfig | None,
+    ) -> list[Embedding]:
+        """Embed one batch of contents in a single ``embed_content`` call.
+
+        Args:
+            model: API model id.
+            batch: Contents to send in this call.
+            config: Google-genai embed config, or None.
+
+        Returns:
+            One embedding per content in the batch, in batch order.
+
+        Raises:
+            GenkitError: INTERNAL when the endpoint returns a different number
+                of embeddings than documents were sent.
+        """
+        response = await self._client.aio.models.embed_content(
+            model=model,
+            contents=cast(genai_types.ContentListUnion, batch),
+            config=config,
+        )
+        returned = response.embeddings or []
+        if len(returned) != len(batch):
+            raise GenkitError(
+                status='INTERNAL',
+                message=(
+                    f'{model} returned {len(returned)} embeddings for {len(batch)} documents; '
+                    'embeddings cannot be aligned with the input.'
+                ),
+            )
+        return [Embedding(embedding=em.values or []) for em in returned]
 
     def _parse_options(self, options: object) -> EmbeddingConfigSchema:
         """Validate raw request options against this backend's option schema.
@@ -333,9 +426,9 @@ class Embedder:
         """Embed text/image/video via the Vertex multimodal ``:predict`` endpoint.
 
         ``multimodalembedding@001`` accepts one instance per ``:predict`` call,
-        so every document is sent as its own request and the resulting
-        embeddings are concatenated in document order. All documents are
-        validated before the first request is made.
+        so every document is sent as its own request, with bounded concurrency,
+        and the resulting embeddings are concatenated in document order. All
+        documents are validated before the first request is made.
 
         Args:
             request: Genkit embed request.
@@ -363,21 +456,47 @@ class Embedder:
                 'unavailable in the installed google-genai version; install google-genai>=1.63.0.'
             )
 
+        results = await _run_bounded([
+            self._predict_multimodal(api_client, model, instance, options) for instance in instances
+        ])
+
         embeddings: list[Embedding] = []
-        for instance in instances:
-            payload: dict[str, Any] = {'instances': [instance]}
-            if options.output_dimensionality is not None:
-                payload['parameters'] = {'dimension': options.output_dimensionality}
-            http_response = await api_client.async_request(
-                http_method='post',
-                path=f'publishers/google/models/{model}:predict',
-                request_dict=payload,
-            )
-            body = json.loads(http_response.body) if http_response.body else {}
-            predictions = body.get('predictions', []) if isinstance(body, dict) else []
-            for prediction in predictions:
-                embeddings.extend(self._prediction_to_embeddings(prediction))
+        for instance_embeddings in results:
+            embeddings.extend(instance_embeddings)
         return EmbedResponse(embeddings=embeddings)
+
+    async def _predict_multimodal(
+        self,
+        api_client: _AsyncRequester,
+        model: str,
+        instance: dict[str, Any],
+        options: EmbeddingConfigSchema,
+    ) -> list[Embedding]:
+        """Send one multimodal instance to ``:predict`` and decode its embeddings.
+
+        Args:
+            api_client: The google-genai client's low-level transport.
+            model: API model id.
+            instance: A single ``{text, image, video}`` instance.
+            options: Validated embedding options.
+
+        Returns:
+            The embeddings decoded from this instance's predictions.
+        """
+        payload: dict[str, Any] = {'instances': [instance]}
+        if options.output_dimensionality is not None:
+            payload['parameters'] = {'dimension': options.output_dimensionality}
+        http_response = await api_client.async_request(
+            http_method='post',
+            path=f'publishers/google/models/{model}:predict',
+            request_dict=payload,
+        )
+        body = json.loads(http_response.body) if http_response.body else {}
+        predictions = body.get('predictions', []) if isinstance(body, dict) else []
+        embeddings: list[Embedding] = []
+        for prediction in predictions:
+            embeddings.extend(self._prediction_to_embeddings(prediction))
+        return embeddings
 
     def _build_multimodal_instance(self, doc: Document) -> dict[str, Any]:
         """Build a Vertex multimodal embedding instance from a Genkit document.
