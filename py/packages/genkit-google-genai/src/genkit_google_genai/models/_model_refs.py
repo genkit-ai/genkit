@@ -64,9 +64,10 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
             else f"'{local}' has no ref constructor in this plugin."
         )
     elif actual == 'unsupported':
-        hint = f"'{local}' is not a supported model."
         if local.lower().startswith('imagen-'):
             hint = f"'{local}' is not a supported model; for image generation use {plugin_class}.gemini_image_model()."
+        else:
+            hint = f"'{local}' is not a supported model."
     elif actual in FAMILY_METHOD:
         hint = f"'{local}' is not a {family} model; use {plugin_class}.{FAMILY_METHOD[actual]}()."
     else:
