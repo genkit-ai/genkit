@@ -456,6 +456,7 @@ class GeminiConfigSchema(ModelConfig):
 class SpeechConfigSchema(BaseModel):
     """Speech config schema."""
 
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
 
     http_options: Any | None = Field(None, exclude=True)

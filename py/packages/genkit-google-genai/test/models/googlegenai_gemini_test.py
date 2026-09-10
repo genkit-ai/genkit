@@ -36,6 +36,7 @@ from genkit_google_genai.models.gemini import (
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
     GoogleAIGeminiVersion,
+    SpeechConfigSchema,
     VertexAIGeminiVersion,
     _to_finish_reason,
     get_model_config_schema,
@@ -1366,3 +1367,89 @@ def test_to_finish_reason_image_other_and_unexpected_tool() -> None:
     assert _to_finish_reason('NO_IMAGE') == FinishReason.OTHER
     assert _to_finish_reason('IMAGE_OTHER') == FinishReason.OTHER
     assert _to_finish_reason('UNEXPECTED_TOOL_CALL') == FinishReason.OTHER
+
+
+@pytest.fixture
+def tts_model_instance() -> GeminiModel:
+    """Common initialization of a TTS GeminiModel."""
+    return GeminiModel(
+        version='gemini-2.5-flash-preview-tts',
+        client=MagicMock(spec=genai.Client),
+    )
+
+
+def test_speech_config_schema_populates_by_field_name() -> None:
+    """The speech config validates from snake_case field names, not only aliases."""
+    config = SpeechConfigSchema.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
+
+    assert config.voice_config is not None
+    assert config.voice_config.prebuilt_voice_config is not None
+    assert config.voice_config.prebuilt_voice_config.voice_name == 'Kore'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_keeps_language_code(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A language code on the speech config reaches the SDK config."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {
+                'languageCode': 'en-US',
+                'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}},
+            }
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert isinstance(cfg.speech_config, genai_types.SpeechConfig)
+    assert cfg.speech_config.language_code == 'en-US'
+    assert cfg.speech_config.voice_config is not None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_keeps_multi_speaker_voice_config(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A multi-speaker voice config on the speech config reaches the SDK config."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {
+                'multiSpeakerVoiceConfig': {
+                    'speakerVoiceConfigs': [
+                        {'speaker': 'Alice', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+                    ]
+                }
+            }
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert isinstance(cfg.speech_config, genai_types.SpeechConfig)
+    assert cfg.speech_config.multi_speaker_voice_config is not None
+    speakers = cfg.speech_config.multi_speaker_voice_config.speaker_voice_configs
+    assert speakers is not None
+    assert [s.speaker for s in speakers] == ['Alice']
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__unknown_speech_config_key_is_rejected(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """An unknown speech config key is reported instead of silently dropped."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'languageCodes': 'en-US'}}),
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'speech_config' in str(exc_info.value)
