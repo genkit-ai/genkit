@@ -373,16 +373,7 @@ class OpenAIModel:
                 cleaned_parts.append(part)
 
         if changed:
-            return ModelResponse(
-                request=request,
-                message=Message(role=response.message.role, content=cleaned_parts),
-                finish_reason=response.finish_reason,
-                finish_message=response.finish_message,
-                latency_ms=response.latency_ms,
-                usage=response.usage,
-                custom=response.custom,
-                raw=response.raw,
-            )
+            return response.model_copy(update={'message': Message(role=response.message.role, content=cleaned_parts)})
         return response
 
     @staticmethod

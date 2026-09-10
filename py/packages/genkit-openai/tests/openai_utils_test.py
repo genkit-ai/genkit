@@ -855,3 +855,8 @@ class TestExtractResponseMetadata:
             'citations': ['https://x.example'],
             'error': {'message': 'boom'},
         }
+
+    def test_empty_strings_are_absent(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """An empty id, model or fingerprint is treated as absent."""
+        completion = make_completion(id='', model='', system_fingerprint='')
+        assert extract_response_metadata(completion) == {}

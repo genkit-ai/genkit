@@ -42,6 +42,7 @@ from genkit import (
     TextPart,
 )
 from genkit._core._model import OutputConfig
+from genkit._core._typing import GenerationUsage, Operation
 from genkit.plugin_api import ActionRunContext, ModelConfig
 
 
@@ -1204,6 +1205,29 @@ class TestCleanJsonResponse:
         result = model._clean_json_response(response, request)
         # Should return the exact same object (no copy).
         assert result is response
+
+    def test_cleaning_keeps_every_other_field(self) -> None:
+        """Only the message changes; the rest of the response comes through untouched."""
+        model = OpenAIModel(model='deepseek-chat', client=MagicMock())
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            output=OutputConfig(format='json'),
+        )
+        response = ModelResponse(
+            request=request,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='```json\n{"a": 1}\n```'))]),
+            finish_reason=FinishReason.LENGTH,
+            finish_message='cut off',
+            latency_ms=12.5,
+            usage=GenerationUsage(input_tokens=3, output_tokens=4),
+            custom={'id': 'chatcmpl-abc'},
+            raw={'id': 'chatcmpl-abc'},
+            operation=Operation(id='op-1', done=True),
+        )
+        cleaned = model._clean_json_response(response, request)
+        assert cleaned.message is not None
+        assert cleaned.message.content[0].root.text == '{"a": 1}'
+        assert cleaned.model_dump(exclude={'message'}) == response.model_dump(exclude={'message'})
 
 
 async def _stream(chunks: list[ChatCompletionChunk]) -> AsyncIterator[ChatCompletionChunk]:
