@@ -186,13 +186,12 @@ doing whenever a large static system prompt is sent repeatedly.
 
 ```python
 from genkit import Part
-from genkit._core._typing import TextPart
 from genkit_amazon_bedrock import cache_point_part
 
 CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
 
 # The cache point goes after the content it should cache.
-system = [Part(root=TextPart(text=LONG_STATIC_PROMPT)), cache_point_part()]
+system = [Part.from_text(LONG_STATIC_PROMPT), cache_point_part()]
 
 first = await ai.generate(model=CLAUDE, system=system, prompt='What are the delivery tiers?')
 second = await ai.generate(model=CLAUDE, system=system, prompt='Which tier needs a signature?')
@@ -379,7 +378,7 @@ response = await bedrock.rerank(
 )
 
 for document in response.documents:
-    print(document.metadata.score, document.content[0].root.text)
+    print(document.metadata.score, document.content[0].text)
 ```
 
 Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare

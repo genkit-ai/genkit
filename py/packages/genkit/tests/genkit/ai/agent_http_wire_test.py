@@ -25,7 +25,7 @@ import pytest
 
 from genkit import Part
 from genkit._ai._agents._transports._http import HttpAgentTransport
-from genkit._core._typing import AgentInit, AgentInput, MessageData, TextPart
+from genkit._core._model import AgentInit, AgentInput, Message
 
 URL = 'http://example.test/weatherAgent'
 RESULT_LINE = 'data: {"result": {"finishReason": "stop", "message": {"role": "model", "content": [{"text": "ok"}]}}}'
@@ -71,7 +71,7 @@ class FakeClient:
 
 async def _run_turn(transport: HttpAgentTransport) -> None:
     stream, output = await transport.run_turn(
-        agent_input=AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text='hi'))])),
+        agent_input=AgentInput(message=Message(role='user', content=[Part.from_text('hi')])),
         init=AgentInit(snapshot_id='snap-1'),
     )
     async for _ in stream:

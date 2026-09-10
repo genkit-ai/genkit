@@ -42,8 +42,8 @@ from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, 
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit import (
+    Document,
     FinishReason,
-    Media,
     Message,
     ModelRequest,
     ModelResponse,
@@ -51,7 +51,6 @@ from genkit import (
     Role,
     ToolDefinition,
 )
-from genkit._core._typing import DocumentData, MediaPart, TextPart
 from genkit.embedder import EmbedRequest
 from genkit.plugin_api import ActionRunContext, GenkitError
 
@@ -155,31 +154,32 @@ def assert_image_response(response: ModelResponse, mime: str = 'image/png') -> N
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
     prefix = f'data:{mime};base64,'
-    media_parts = [part.root for part in response.message.content if isinstance(part.root, MediaPart)]
+    media_parts = [part for part in response.message.content if part.media is not None]
     assert media_parts, 'expected at least one media part'
     for part in media_parts:
+        assert part.media is not None
         assert part.media.content_type == mime
         assert part.media.url.startswith(prefix)
         assert part.media.url.removeprefix(prefix)
 
 
-async def embed(model_id: str, documents: list[DocumentData]) -> list[list[float]]:
+async def embed(model_id: str, documents: list[Document]) -> list[list[float]]:
     embedder = BedrockEmbedder(model_id=model_id, transport=make_transport())
     response = await embedder.embed(EmbedRequest(input=documents))
     return [embedding.embedding for embedding in response.embeddings]
 
 
-def text_doc(text: str) -> DocumentData:
-    return DocumentData(content=[Part(root=TextPart(text=text))])
+def text_doc(text: str) -> Document:
+    return Document(content=[Part.from_text(text)])
 
 
-def image_doc(data_url: str = PNG_1X1_DATA_URL) -> DocumentData:
-    return DocumentData(content=[Part(root=MediaPart(media=Media(url=data_url)))])
+def image_doc(data_url: str = PNG_1X1_DATA_URL) -> Document:
+    return Document(content=[Part.from_media(data_url)])
 
 
 def text_request(text: str, **kwargs) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text(text)])],
         **kwargs,
     )
 
@@ -190,7 +190,7 @@ def media_request(data_url: str, text: str, **kwargs) -> ModelRequest:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=MediaPart(media=Media(url=data_url))), Part(root=TextPart(text=text))],
+                content=[Part.from_media(data_url), Part.from_text(text)],
             )
         ],
         **kwargs,
@@ -270,7 +270,7 @@ async def test_nova_sync() -> None:
     response = await make_model(NOVA).generate(text_request("Reply with the single word 'pong'."))
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
-    assert response.message.content[0].root.text
+    assert response.message.content[0].text
     assert response.usage is not None
     assert response.usage.input_tokens is not None and response.usage.input_tokens > 0
 
@@ -280,10 +280,10 @@ async def test_nova_stream() -> None:
     response = await make_model(NOVA).generate(text_request('Count from 1 to 5, one number per line.'), ctx)
 
     assert len(chunks) > 1, 'expected the response to arrive as multiple deltas'
-    streamed = ''.join(chunk.content[0].root.text or '' for chunk in chunks)
+    streamed = ''.join(chunk.content[0].text or '' for chunk in chunks)
     assert response.message is not None
     # Deltas, not snapshots: concatenating them must reproduce the final text.
-    assert streamed == response.message.content[0].root.text
+    assert streamed == response.message.content[0].text
     assert response.finish_reason == FinishReason.STOP
     assert response.usage is not None
     assert response.usage.output_tokens is not None and response.usage.output_tokens > 0
@@ -292,14 +292,14 @@ async def test_nova_stream() -> None:
 async def test_undocumented_tool_round_trip() -> None:
     weather = undocumented_weather_tool()
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='What is the weather in Lagos?'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('What is the weather in Lagos?')])],
         tools=[weather],
         config=BedrockConfig(tool_choice='get_weather'),
     )
     response = await make_model(NOVA).generate(request)
 
     assert response.message is not None
-    tool_requests = [part.root.tool_request for part in response.message.content if part.root.tool_request is not None]
+    tool_requests = [part.tool_request for part in response.message.content if part.tool_request is not None]
     assert tool_requests, 'expected the model to call the tool'
     assert tool_requests[0].name == 'get_weather'
     assert tool_requests[0].ref
@@ -330,7 +330,7 @@ async def test_undocumented_tool_round_trip() -> None:
 async def test_undocumented_tool_stream() -> None:
     weather = undocumented_weather_tool()
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='What is the weather in Lagos?'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('What is the weather in Lagos?')])],
         tools=[weather],
         config=BedrockConfig(tool_choice='get_weather'),
     )
@@ -339,16 +339,14 @@ async def test_undocumented_tool_stream() -> None:
 
     # Tool input arrives as JSON fragments, so it is held back and emitted
     # once, whole, when the content block closes.
-    tool_chunks = [
-        chunk.content[0].root.tool_request for chunk in chunks if chunk.content[0].root.tool_request is not None
-    ]
+    tool_chunks = [chunk.content[0].tool_request for chunk in chunks if chunk.content[0].tool_request is not None]
     assert len(tool_chunks) == 1
     assert tool_chunks[0].name == 'get_weather'
     assert tool_chunks[0].ref
     assert isinstance(tool_chunks[0].input, dict) and tool_chunks[0].input.get('city')
 
     assert response.message is not None
-    final = [part.root.tool_request for part in response.message.content if part.root.tool_request is not None]
+    final = [part.tool_request for part in response.message.content if part.tool_request is not None]
     assert len(final) == 1
     assert final[0].input == tool_chunks[0].input
 
@@ -359,7 +357,7 @@ async def test_claude_sync_without_config() -> None:
     response = await make_model(CLAUDE).generate(text_request("Reply with the single word 'pong'."))
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
-    text = response.message.content[0].root.text
+    text = response.message.content[0].text
     assert text is not None and 'pong' in text.lower()
 
 
@@ -375,9 +373,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
     response = await model.generate(request)
 
     assert response.message is not None
-    reasoning_parts = [
-        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
-    ]
+    reasoning_parts = [part for part in response.message.content if part.reasoning is not None]
     assert reasoning_parts, 'expected a reasoning part on a thinking-enabled sync call'
     assert reasoning_parts[0].metadata is not None
     assert reasoning_parts[0].metadata.get(REASONING_SIGNATURE_METADATA_KEY)
@@ -387,7 +383,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
         messages=[
             *request.messages,
             response.message,
-            Message(role=Role.USER, content=[Part(root=TextPart(text='Now add 100 to that.'))]),
+            Message(role=Role.USER, content=[Part.from_text('Now add 100 to that.')]),
         ],
         config=config,
     )
@@ -403,13 +399,11 @@ async def test_claude_thinking_stream() -> None:
     ctx, chunks = streaming_ctx()
     response = await make_model(CLAUDE).generate(text_request('What is 17 * 23? Think it through.', config=config), ctx)
 
-    assert any(getattr(chunk.content[0].root, 'reasoning', None) for chunk in chunks), (
+    assert any(getattr(chunk.content[0], 'reasoning', None) for chunk in chunks), (
         'expected reasoning deltas on a thinking-enabled stream'
     )
     assert response.message is not None
-    reasoning_parts = [
-        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
-    ]
+    reasoning_parts = [part for part in response.message.content if part.reasoning is not None]
     assert reasoning_parts
     assert reasoning_parts[0].metadata is not None
     # The signature arrives in its own delta, which streams nothing, so this
@@ -423,11 +417,9 @@ async def test_deepseek_reasoning_stream() -> None:
         text_request('What is 17 * 23? Think it through.', config=BedrockConfig(max_output_tokens=2048)), ctx
     )
 
-    assert any(getattr(chunk.content[0].root, 'reasoning', None) for chunk in chunks)
+    assert any(getattr(chunk.content[0], 'reasoning', None) for chunk in chunks)
     assert response.message is not None
-    reasoning_parts = [
-        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
-    ]
+    reasoning_parts = [part for part in response.message.content if part.reasoning is not None]
     assert reasoning_parts
     # Unsigned reasoning: this model sends no signature delta at all.
     metadata = reasoning_parts[0].metadata
@@ -441,9 +433,7 @@ async def test_deepseek_reasoning_sync_and_round_trip() -> None:
     response = await model.generate(request)
 
     assert response.message is not None
-    reasoning_parts = [
-        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
-    ]
+    reasoning_parts = [part for part in response.message.content if part.reasoning is not None]
     assert reasoning_parts, 'expected a reasoning part from a reasoning model'
     # Signatures are Anthropic-specific, so replay stays gated off here.
     metadata = reasoning_parts[0].metadata
@@ -453,7 +443,7 @@ async def test_deepseek_reasoning_sync_and_round_trip() -> None:
         messages=[
             *request.messages,
             response.message,
-            Message(role=Role.USER, content=[Part(root=TextPart(text='Now add 100 to that.'))]),
+            Message(role=Role.USER, content=[Part.from_text('Now add 100 to that.')]),
         ],
         config=config,
     )
@@ -489,13 +479,13 @@ async def test_claude_prompt_cache_read() -> None:
     model = make_model(CLAUDE)
     system = Message(
         role=Role.SYSTEM,
-        content=[Part(root=TextPart(text=cacheable_prefix())), cache_point_part()],
+        content=[Part.from_text(cacheable_prefix()), cache_point_part()],
     )
     config = BedrockConfig(max_output_tokens=512)
 
     def ask(question: str) -> ModelRequest:
         return ModelRequest(
-            messages=[system, Message(role=Role.USER, content=[Part(root=TextPart(text=question))])],
+            messages=[system, Message(role=Role.USER, content=[Part.from_text(question)])],
             config=config,
         )
 
@@ -535,10 +525,10 @@ async def test_embed_titan_multimodal_image() -> None:
 
 
 async def test_embed_titan_multimodal_text_and_image() -> None:
-    document = DocumentData(
+    document = Document(
         content=[
-            Part(root=TextPart(text='a white square')),
-            Part(root=MediaPart(media=Media(url=PNG_1X1_DATA_URL))),
+            Part.from_text('a white square'),
+            Part.from_media(PNG_1X1_DATA_URL),
         ]
     )
     vectors = await embed(TITAN_EMBED_IMAGE, [document])
@@ -580,7 +570,7 @@ async def test_rerank_cohere() -> None:
     )
 
     assert len(response.documents) == 2
-    top = [part.root for part in response.documents[0].content if isinstance(part.root, TextPart)]
+    top = [part for part in response.documents[0].content if part.text is not None]
     assert top and 'Paris' in (top[0].text or '')
     assert response.documents[0].metadata.score >= response.documents[1].metadata.score
 
@@ -606,7 +596,7 @@ async def test_rerank_amazon() -> None:
     )
 
     assert len(response.documents) == 2
-    top = [part.root for part in response.documents[0].content if isinstance(part.root, TextPart)]
+    top = [part for part in response.documents[0].content if part.text is not None]
     assert top and 'Paris' in (top[0].text or '')
     assert response.documents[0].metadata.score >= response.documents[1].metadata.score
 

@@ -23,7 +23,6 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit, ModelResponse, Part
-from genkit._core._typing import TextPart
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
@@ -49,10 +48,9 @@ class PiiRedact(BaseMiddleware[PiiRedactConfig]):
         for message in params.request.messages:
             new_parts = []
             for part in message.content:
-                root = part.root
-                if isinstance(root, TextPart):
-                    redacted = _EMAIL.sub('[REDACTED_EMAIL]', root.text)
-                    new_parts.append(Part(root=root.model_copy(update={'text': redacted})))
+                if part.text is not None:
+                    redacted = _EMAIL.sub('[REDACTED_EMAIL]', part.text)
+                    new_parts.append(Part.from_text(redacted, metadata=part.metadata))
                 else:
                     new_parts.append(part)
             new_messages.append(message.model_copy(update={'content': new_parts}))

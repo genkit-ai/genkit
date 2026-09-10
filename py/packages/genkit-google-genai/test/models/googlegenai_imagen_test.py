@@ -34,7 +34,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._typing import MediaPart, TextPart
 
 
 @pytest.mark.asyncio
@@ -50,7 +49,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text=request_text)),
+                    Part.from_text(request_text),
                 ],
             ),
         ],
@@ -78,13 +77,13 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
-    assert isinstance(content.root, MediaPart)
+    assert content.media is not None
 
-    assert content.root.media.content_type == response_mimetype
+    assert content.media.content_type == response_mimetype
 
     # Verify the data URL contains the correct base64-encoded content
     # Data URLs have format: data:<mimetype>;base64,<data>
-    data_url = content.root.media.url
+    data_url = content.media.url
     assert data_url.startswith(f'data:{response_mimetype};base64,')
     encoded_data = data_url.split(',', 1)[1]
     assert base64.b64decode(encoded_data) == response_byte_string
@@ -94,7 +93,7 @@ def test_imagen_unknown_extra_rides_on_extra_body() -> None:
     """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
     imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config=ImagenConfigSchema.model_validate({'fooBar': 1}),
     )
 
@@ -109,7 +108,7 @@ def test_imagen_rejects_raw_dicts() -> None:
     """A dict at the dump leaf means Action never produced the family instance."""
     imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config={'number_of_images': 1},  # type: ignore[arg-type]
     )
 
@@ -124,7 +123,7 @@ def test_imagen_invalid_sdk_field_is_invalid_argument() -> None:
     """SDK type errors become a named INVALID_ARGUMENT."""
     imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config=ImagenConfigSchema.model_validate({'number_of_images': 'nope'}),
     )
 

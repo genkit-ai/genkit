@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import pytest
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from genkit import ActionKind, Genkit, Message, MiddlewareRef, ModelResponse, Part
@@ -28,45 +28,41 @@ from genkit._ai._tools import (
 )
 from genkit._core._action import Action, create_action_key, parse_action_key
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, MultipartToolResponseData
+from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
-    DataPart,
     FinishReason,
-    Media,
-    MediaPart,
-    ReasoningPart,
-    Resource,
-    ResourcePart,
-    TextPart,
+    MultipartToolResponse as MultipartToolResponseData,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
 
 
 def _png() -> Part:
-    return Part(root=MediaPart(media=Media(content_type='image/png', url='data:image/png;base64,abc')))
+    return Part.from_media('data:image/png;base64,abc', content_type='image/png')
 
 
 WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,abc'}}
 
 
 def test_response_text_part_is_live() -> None:
-    env = response({'ok': True}, parts=[TextPart(text='lab camera')])
+    env = response({'ok': True}, parts=[Part.from_text('lab camera')])
     assert parts_to_wire(env.content) == [{'text': 'lab camera'}]
 
 
 def test_response_data_and_reasoning_parts_are_live() -> None:
-    data = response({'ok': True}, parts=[DataPart(data={'rows': [1]})])
+    data = response({'ok': True}, parts=[Part.from_data({'rows': [1]})])
     assert parts_to_wire(data.content) == [{'data': {'rows': [1]}}]
-    thought = response({'ok': True}, parts=[ReasoningPart(reasoning='checking the label')])
+    thought = response({'ok': True}, parts=[Part.from_reasoning('checking the label')])
     assert parts_to_wire(thought.content) == [{'reasoning': 'checking the label'}]
-    res = response({'ok': True}, parts=[ResourcePart(resource=Resource(uri='file://shot.png'))])
+    res = response({'ok': True}, parts=[Part.model_validate({'resource': {'uri': 'file://shot.png'}})])
     assert parts_to_wire(res.content) == [{'resource': {'uri': 'file://shot.png'}}]
 
 
 def test_response_rejects_hollow_parts() -> None:
-    with pytest.raises(ValidationError, match='exactly one'):
-        response({'ok': True}, parts=[Part(root=DataPart())])
+    with pytest.raises(GenkitError) as ei:
+        response({'ok': True}, parts=[Part.from_media('')])
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert 'no live payload' in ei.value.original_message
 
 
 def test_response_builds_the_envelope() -> None:
@@ -84,7 +80,7 @@ def test_response_without_parts_is_output_only() -> None:
 
 
 def test_response_wraps_a_bare_media_part() -> None:
-    env = response({'ok': True}, parts=[_png().root])
+    env = response({'ok': True}, parts=[_png()])
     assert env.content is not None
     assert len(env.content) == 1
     assert parts_to_wire(env.content) == [WIRE_PNG]
@@ -123,7 +119,7 @@ class Camera:
 
 def test_unserializable_part_data_is_invalid_argument() -> None:
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=[DataPart(data={'cam': Camera()})])
+        response({'ok': True}, parts=[Part.from_data({'cam': Camera()})])
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert 'response()' in ei.value.original_message
     assert 'content' in ei.value.original_message
@@ -398,6 +394,64 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
         ),
     )
     tool_msg = next(m for m in res.messages if m.role == 'tool')
-    denied = tool_msg.content[0].root.tool_response
+    denied = tool_msg.content[0].tool_response
     assert denied is not None
     assert denied.output == 'denied'
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
+    """wrap_tool sees the same Part the model put on the message."""
+    seen: list[Part] = []
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.middleware(name='capture_mw')
+    class CaptureMW(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            seen.append(params.tool_request_part)
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='weather')
+    async def weather(_: dict) -> str:  # noqa: ARG001
+        return 'Sunny'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'w1', 'name': 'weather', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+
+    res = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
+            tools=['weather'],
+            use=[MiddlewareRef(name='capture_mw')],
+        ),
+    )
+    assert len(seen) == 1
+    assert type(seen[0]) is Part
+    assert seen[0].tool_request is not None
+    assert seen[0].tool_request.name == 'weather'
+    assert seen[0].tool_request.ref == 'w1'
+    assert res.message is not None
+    assert res.messages[-1] == res.message
+    assert [m.role for m in res.messages] == ['user', 'model', 'tool', 'model']
+    assert res.text == 'ok'

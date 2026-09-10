@@ -11,7 +11,6 @@ from pydantic import BaseModel, TypeAdapter
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._array import ArrayFormat
 from genkit._core._error import GenkitError
-from genkit._core._typing import TextPart
 
 
 class TestArrayFormatStreaming:
@@ -23,17 +22,17 @@ class TestArrayFormatStreaming:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: [{"id": 1,
-        chunk1 = ModelResponseChunk(content=[Part(root=TextPart(text='[{"id": 1,'))])
+        chunk1 = ModelResponseChunk(content=[Part.from_text('[{"id": 1,')])
         result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: "name": "first"}
-        chunk2 = ModelResponseChunk(content=[Part(root=TextPart(text='"name": "first"}'))])
+        chunk2 = ModelResponseChunk(content=[Part.from_text('"name": "first"}')])
         result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'first'}]
 
         # Chunk 3: , {"id": 2, "name": "second"}]
-        chunk3 = ModelResponseChunk(content=[Part(root=TextPart(text=', {"id": 2, "name": "second"}]'))])
+        chunk3 = ModelResponseChunk(content=[Part.from_text(', {"id": 2, "name": "second"}]')])
         result3 = fmt.parse_chunk(ModelResponseChunk(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
         assert result3 == [{'id': 2, 'name': 'second'}]
 
@@ -42,7 +41,7 @@ class TestArrayFormatStreaming:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        chunk = ModelResponseChunk(content=[Part(root=TextPart(text='[{"id": 1, "name": "single"}]'))])
+        chunk = ModelResponseChunk(content=[Part.from_text('[{"id": 1, "name": "single"}]')])
         result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
         assert result == [{'id': 1, 'name': 'single'}]
 
@@ -52,14 +51,12 @@ class TestArrayFormatStreaming:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: preamble with code fence start
-        chunk1 = ModelResponseChunk(
-            content=[Part(root=TextPart(text='Here is the array you requested:\n\n```json\n['))]
-        )
+        chunk1 = ModelResponseChunk(content=[Part.from_text('Here is the array you requested:\n\n```json\n[')])
         result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: the actual data
-        chunk2 = ModelResponseChunk(content=[Part(root=TextPart(text='{"id": 1, "name": "item"}]\n```'))])
+        chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "item"}]\n```')])
         result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'item'}]
 
@@ -72,9 +69,7 @@ class TestArrayFormatMessage:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        result = fmt.parse_message(
-            Message(Message(role='model', content=[Part(root=TextPart(text='[{"id": 1, "name": "test"}]'))]))
-        )
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('[{"id": 1, "name": "test"}]')]))
         assert result == [{'id': 1, 'name': 'test'}]
 
     def test_parses_array_of_scalars(self) -> None:
@@ -82,7 +77,7 @@ class TestArrayFormatMessage:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'string'}})
 
-        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text='["a", "b"]'))])))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('["a", "b"]')]))
         assert result == ['a', 'b']
 
     def test_parses_empty_array(self) -> None:
@@ -90,7 +85,7 @@ class TestArrayFormatMessage:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text='[]'))])))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('[]')]))
         assert result == []
 
     def test_parses_array_with_preamble_and_code_fence(self) -> None:
@@ -99,11 +94,7 @@ class TestArrayFormatMessage:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         result = fmt.parse_message(
-            Message(
-                Message(
-                    role='model', content=[Part(root=TextPart(text='Here is the array:\n\n```json\n[{"id": 1}]\n```'))]
-                )
-            )
+            Message(role='model', content=[Part.from_text('Here is the array:\n\n```json\n[{"id": 1}]\n```')])
         )
         assert result == [{'id': 1}]
 

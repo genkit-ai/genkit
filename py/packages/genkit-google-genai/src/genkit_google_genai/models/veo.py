@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from genkit import (
     FinishReason,
     GenkitError,
-    Media,
     Message,
     ModelInfo,
     ModelRequest,
@@ -46,7 +45,6 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit._core._typing import MediaPart
 from genkit.model import Error, Operation
 from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
@@ -162,10 +160,10 @@ def _extract_text(request: ModelRequest) -> str:
         The combined text prompt.
     """
     prompt_parts = [
-        str(part.root.text)
+        str(part.text)
         for message in request.messages or []
         for part in message.content
-        if hasattr(part.root, 'text') and part.root.text
+        if part.text is not None and part.text
     ]
     return ' '.join(prompt_parts)
 
@@ -197,7 +195,7 @@ def _media_part(*, video: genai_types.Video | None) -> Part | None:
         url = f'data:{mime};base64,{b64}'
     else:
         return None
-    return Part(MediaPart(media=Media(url=url, content_type=mime)))
+    return Part.from_media(url, content_type=mime)
 
 
 def _operation_error_message(*, error: Any) -> str:  # noqa: ANN401

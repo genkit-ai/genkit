@@ -394,7 +394,7 @@ def generate(schema_path: Path, _out: Path) -> str:
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)
-    # PartData is the raw RootModel; the hand-written Part veneer subclasses it.
+    # PartData is the wire union. Callers construct Part, next to Message.
     ROOT_MODEL_UNIONS = frozenset({'Part'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):

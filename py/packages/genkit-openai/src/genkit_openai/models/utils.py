@@ -33,13 +33,6 @@ from genkit import (
     Role,
     ToolRequest,
 )
-from genkit._core._typing import (
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
-)
 from genkit.plugin_api import wrap_http_error
 
 
@@ -95,7 +88,7 @@ def _find_text(request: ModelRequest) -> str | None:
         return None
 
     return next(
-        (part.root.text for part in request.messages[0].content if isinstance(part.root, TextPart) and part.root.text),
+        (part.text for part in request.messages[0].content if part.text is not None and part.text),
         None,
     )
 
@@ -207,7 +200,7 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
 def _extract_media(request: ModelRequest) -> tuple[str, str]:
     """Extract media content from the first message.
 
-    Finds the first part with a MediaPart root and returns its URL and
+    Finds the first part with media and returns its URL and
     content type. If the content type is missing, attempts to parse it
     from a data URI.
 
@@ -224,7 +217,7 @@ def _extract_media(request: ModelRequest) -> tuple[str, str]:
         raise ValueError('No messages found in the request')
 
     part_with_media = next(
-        (p for p in request.messages[0].content if isinstance(p.root, MediaPart) and p.root.media),
+        (p for p in request.messages[0].content if p.media is not None and p.media),
         None,
     )
 
@@ -232,8 +225,8 @@ def _extract_media(request: ModelRequest) -> tuple[str, str]:
         raise ValueError('No media content found in the first message')
 
     # Re-assert to help type checkers narrow through the generator boundary.
-    assert isinstance(part_with_media.root, MediaPart)
-    media = part_with_media.root.media
+    assert part_with_media.media is not None
+    media = part_with_media.media
     content_type = media.content_type or ''
     url = media.url
     if not content_type and url.startswith('data:'):
@@ -370,10 +363,10 @@ class MessageConverter:
     def to_openai(cls, message: Message) -> list[dict]:
         """Converts an internal `Message` object to OpenAI-compatible chat messages.
 
-        Handles TextPart, MediaPart (images), ToolRequestPart, and
-        ToolResponsePart. When a message contains MediaPart content, the
-        ``content`` field uses the array-of-content-blocks format required
-        by the OpenAI Chat Completions API for multimodal requests.
+        Handles text, media (images), tool requests, and tool responses.
+        When a message contains media, the ``content`` field uses the
+        array-of-content-blocks format required by the OpenAI Chat
+        Completions API for multimodal requests.
 
         Matches the JS canonical implementation in ``toOpenAIMessages()``.
 
@@ -389,37 +382,34 @@ class MessageConverter:
         has_media = False
 
         for part in message.content:
-            root = part.root
-
-            # Skip ReasoningPart — reasoning_content must not be sent back
-            # in multi-turn context. DeepSeek's API rejects it, and the JS
-            # canonical implementation naturally excludes it by using msg.text
-            # (which only returns text parts) for assistant messages.
-            if isinstance(root, ReasoningPart):
+            # Reasoning must not be sent back in multi-turn context.
+            # DeepSeek's API rejects it, and assistant messages only
+            # replay text to the model.
+            if part.reasoning is not None:
                 continue
 
-            if isinstance(root, TextPart):
-                content_parts.append({'type': 'text', 'text': root.text})
+            if part.text is not None:
+                content_parts.append({'type': 'text', 'text': part.text})
 
-            elif isinstance(root, MediaPart):
+            elif part.media is not None:
                 has_media = True
                 content_parts.append({
                     'type': 'image_url',
-                    'image_url': {'url': root.media.url},
+                    'image_url': {'url': part.media.url},
                 })
 
-            elif isinstance(root, ToolRequestPart):
+            elif part.tool_request is not None:
                 tool_calls.append({
-                    'id': root.tool_request.ref,
+                    'id': part.tool_request.ref,
                     'type': 'function',
                     'function': {
-                        'name': root.tool_request.name,
-                        'arguments': json.dumps(root.tool_request.input),
+                        'name': part.tool_request.name,
+                        'arguments': json.dumps(part.tool_request.input),
                     },
                 })
 
-            elif isinstance(root, ToolResponsePart):
-                tool_call = root.tool_response
+            elif part.tool_response is not None:
+                tool_call = part.tool_response
                 tool_messages.append({
                     'role': cls._get_openai_role(message.role),
                     'tool_call_id': tool_call.ref,
@@ -477,7 +467,7 @@ class MessageConverter:
             # Reasoning content comes before regular content (matching JS order).
             reasoning = message.reasoning_content
             if reasoning:
-                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+                content.append(Part.from_reasoning(reasoning))
 
             if message.content:
                 content.append(cls.text_part_to_genkit(message.content))
@@ -498,7 +488,7 @@ class MessageConverter:
         Returns:
             A `Part` instance containing the text.
         """
-        return Part(root=TextPart(text=content))
+        return Part.from_text(content)
 
     @classmethod
     def tool_call_to_genkit(
@@ -534,11 +524,9 @@ class MessageConverter:
             args_input = args_parser(args_input)
 
         return Part(
-            root=ToolRequestPart(
-                tool_request=ToolRequest(
-                    ref=str(tool_id) if tool_id else None,
-                    name=str(func_name) if func_name else '',
-                    input=args_input,
-                )
+            tool_request=ToolRequest(
+                ref=str(tool_id) if tool_id else None,
+                name=str(func_name) if func_name else '',
+                input=args_input,
             )
         )

@@ -20,13 +20,12 @@ from genkit._ai._model import Message
 from genkit._core._model import Part
 from genkit._core._typing import (
     Role,
-    TextPart,
 )
 
 
 def _is_output_part(part: Part, require_pending: bool = False, require_non_pending: bool = False) -> bool:
     """Check if a part has purpose='output' metadata, optionally filtering by pending state."""
-    metadata_dict = part.root.metadata or {}
+    metadata_dict = part.metadata or {}
     if metadata_dict.get('purpose') != 'output':
         return False
     if require_pending:
@@ -45,7 +44,7 @@ def inject_instructions(messages: list[Message], instructions: str) -> list[Mess
     if any(any(_is_output_part(part, require_non_pending=True) for part in message.content) for message in messages):
         return messages
 
-    new_part = Part(TextPart(text=instructions, metadata={'purpose': 'output'}))
+    new_part = Part.from_text(instructions, metadata={'purpose': 'output'})
 
     # find first message with purpose=output and pending=True
     target_index = next(

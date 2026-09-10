@@ -16,6 +16,7 @@
 
 """Tool-specific types and utilities for the Genkit framework."""
 
+import base64
 import inspect
 import json
 from collections.abc import Callable, Sequence
@@ -30,34 +31,14 @@ from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
-from genkit._core._model import MultipartToolResponse, MultipartToolResponseData, OutputT, Part, as_part
+from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
-    CustomPart,
-    DataPart,
-    MediaPart,
     Metadata,
-    PartData,
-    ReasoningPart,
-    ResourcePart,
-    TextPart,
+    MultipartToolResponse as MultipartToolResponseData,
     ToolDefinition,
-    ToolRequest,
-    ToolRequestPart,
     ToolResponse,
-    ToolResponsePart,
-)
-
-PART_VARIANTS = (
-    TextPart,
-    MediaPart,
-    ToolRequestPart,
-    ToolResponsePart,
-    DataPart,
-    CustomPart,
-    ReasoningPart,
-    ResourcePart,
 )
 
 
@@ -84,17 +65,16 @@ def response(
 def coerce_part(value: object) -> Part | None:
     if isinstance(value, Part):
         return value
-    if isinstance(value, PartData):
-        return Part(root=value.root)
-    if isinstance(value, PART_VARIANTS):
-        return Part(root=value)
-    return None
+    try:
+        return as_part(value)
+    except (ValidationError, ValueError, TypeError):
+        return None
 
 
 def normalize_response_parts(parts: Sequence[Part] | None) -> list[Part] | None:
     if parts is None:
         return None
-    if isinstance(parts, (list, tuple, Sequence)) and not isinstance(parts, (str, bytes, dict, Part, *PART_VARIANTS)):
+    if isinstance(parts, (list, tuple, Sequence)) and not isinstance(parts, (str, bytes, dict, Part)):
         out: list[Part] = []
         for item in parts:
             part = coerce_part(item)
@@ -124,22 +104,16 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
         )
     out: list[dict[str, Any]] = []
     for i, item in enumerate(pending_content):
-        try:
-            part = coerce_part(item)
-            if part is None and isinstance(item, dict):
+        part = coerce_part(item)
+        if part is None and isinstance(item, dict):
+            try:
                 part = Part.model_validate(item)
-        except ValidationError as e:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'Tool {tool_name!r} pendingContent[{i}]: {e.errors()[0]["msg"]}',
-                cause=e,
-            ) from e
-        except Exception as e:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
-                cause=e,
-            ) from e
+            except Exception as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
+                    cause=e,
+                ) from e
         if part is None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
@@ -182,14 +156,12 @@ def _usable_locator(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def parts_to_wire(
-    parts: Sequence[Part | PartData] | None, *, tool_name: str | None = None
-) -> list[dict[str, Any]] | None:
+def parts_to_wire(parts: Sequence[Part] | None, *, tool_name: str | None = None) -> list[dict[str, Any]] | None:
     """Dump parts the way a model plugin expects them on the tool message.
 
-    A bare dump keeps every unused union sibling as null and uses snake_case
-    field names. The model request — and anything that later re-parses that
-    history — wants only the live fields, in camelCase.
+    A bare dump keeps unused fields as null and uses snake_case names. The
+    model request — and anything that later re-parses that history — wants
+    only the live fields, in camelCase.
     """
     if not parts:
         return None
@@ -203,9 +175,18 @@ def parts_to_wire(
     return out
 
 
-def dump_part(part: Part | PartData, *, tool_name: str | None = None, what: str = 'content') -> dict[str, Any]:
+def _wire_fallback(obj: object) -> object:
+    if isinstance(obj, bytes):
+        try:
+            return base64.b64encode(obj).decode('utf-8')
+        except Exception:
+            return '<bytes>'
+    raise TypeError(f'{type(obj).__name__} is not JSON-serializable')
+
+
+def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content') -> dict[str, Any]:
     try:
-        return part.model_dump(mode='json', by_alias=True, exclude_none=True)
+        return as_part(part).model_dump(mode='json', by_alias=True, exclude_none=True, fallback=_wire_fallback)
     except GenkitError:
         raise
     except Exception as e:
@@ -227,7 +208,7 @@ def live_payload_error(*, tool_name: str, where: str) -> GenkitError:
     )
 
 
-def require_live_part(part: Part | PartData, *, tool_name: str | None = None, where: str = 'content') -> Part:
+def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 'content') -> Part:
     p = as_part(part)
     dumped = dump_part(p, tool_name=tool_name, what=where)
     if wire_part_is_live(dumped):
@@ -275,11 +256,11 @@ def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = 
 
 def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> MultipartToolResponse[Any]:  # noqa: ANN401
     """Normalize a tool handler return into the envelope generate already speaks."""
-    if isinstance(value, MultipartToolResponseData):
+    if isinstance(value, (MultipartToolResponse, MultipartToolResponseData)):
         content = value.content
         parts: list[Part] | None = None
         if content:
-            parts = [require_live_part(part, tool_name=tool_name) for part in content]
+            parts = [require_live_part(as_part(part), tool_name=tool_name) for part in content]
         return MultipartToolResponse(
             output=dump_tool_output(value.output, tool_name=tool_name),
             content=parts,
@@ -418,19 +399,20 @@ class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not rename
 
 
 def _tool_response_part(
-    interrupt: ToolRequestPart,
+    interrupt: Part,
     output: Any,  # noqa: ANN401 - arbitrary tool/interrupt reply payload (JSON)
     metadata: dict[str, Any] | None = None,
-) -> ToolResponsePart:
-    """Build a ``ToolResponsePart`` for an interrupted tool request (interrupt reply channel)."""
+) -> Part:
+    """Build a tool-response Part for an interrupted tool request."""
+    part = as_part(interrupt)
+    tool_req = part.tool_request
+    if tool_req is None:
+        raise ValueError('respond_to_interrupt needs a tool request part')
     interrupt_metadata = metadata if metadata is not None else True
-    tool_req = interrupt.tool_request
-    return ToolResponsePart(
-        tool_response=ToolResponse(
-            ref=tool_req.ref,
-            name=tool_req.name,
-            output=output,
-        ),
+    return Part.from_tool_response(
+        name=tool_req.name,
+        output=output,
+        ref=tool_req.ref,
         metadata={'interruptResponse': interrupt_metadata},
     )
 
@@ -438,16 +420,16 @@ def _tool_response_part(
 def respond_to_interrupt(
     response: Any,  # noqa: ANN401 - user reply or tool output for resume_respond
     *,
-    interrupt: ToolRequestPart,
+    interrupt: Part,
     metadata: dict[str, Any] | None = None,
-) -> ToolResponsePart:
-    """Build a ``ToolResponsePart`` for a pending tool interrupt.
+) -> Part:
+    """Build a tool-response Part for a pending tool interrupt.
 
     Pass the return value to ``generate(..., resume_respond=interrupt_response)``.
 
     Args:
         response: Tool output / user reply for this interrupt.
-        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
+        interrupt: The interrupted tool request (e.g. from ``response.interrupts``).
         metadata: Optional metadata for the interrupt response channel.
     """
     return _tool_response_part(interrupt, response, metadata)
@@ -455,28 +437,31 @@ def respond_to_interrupt(
 
 def restart_tool(
     *,
-    interrupt: ToolRequestPart,
+    interrupt: Part,
     replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
     resumed_metadata: dict[str, Any] | None = None,
-) -> ToolRequestPart:
-    """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
+) -> Part:
+    """Build a restart tool-request Part for a pending tool interrupt.
 
     Pass the return value to ``generate(..., resume_restart=...)``.
 
     Args:
-        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
+        interrupt: The interrupted tool request (e.g. from ``response.interrupts``).
         replace_input: Optional new ``tool_request.input`` for this run (previous input is
             stored in ``metadata.replacedInput`` when this is set).
         resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
     Returns:
-        A ``ToolRequestPart`` for ``resume_restart`` / message history.
+        A Part for ``resume_restart`` / message history.
 
     Example:
         ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
     """
-    tool_req = interrupt.tool_request
-    new_meta: dict[str, Any] = dict(interrupt.metadata or {})
+    part = as_part(interrupt)
+    tool_req = part.tool_request
+    if tool_req is None:
+        raise ValueError('restart_tool needs a tool request part')
+    new_meta: dict[str, Any] = dict(part.metadata or {})
 
     new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
 
@@ -485,18 +470,16 @@ def restart_tool(
         new_meta['replacedInput'] = tool_req.input
         new_input = replace_input
 
-    return ToolRequestPart(
-        tool_request=ToolRequest(
-            name=tool_req.name,
-            ref=tool_req.ref,
-            input=new_input,
-        ),
+    return Part.from_tool_request(
+        name=tool_req.name,
+        input=new_input,
+        ref=tool_req.ref,
         metadata=new_meta,
     )
 
 
 def _resume_context_from_tool_request_part(
-    tool_request_part: ToolRequestPart,
+    tool_request_part: Part,
 ) -> tuple[dict[str, Any] | None, Any | None]:
     """Read resume/restart fields from a tool request part's metadata."""
     meta = tool_request_part.metadata or {}
@@ -515,7 +498,7 @@ def _resume_context_from_tool_request_part(
 async def run_tool_request(
     *,
     tool: Action,
-    tool_request_part: ToolRequestPart,
+    tool_request_part: Part,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
@@ -524,6 +507,9 @@ async def run_tool_request(
     into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
     metadata so ``ToolRunContext`` reflects ``resumed`` / ``replacedInput``.
     """
+    tool_req = tool_request_part.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_request needs a tool request part')
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
@@ -532,7 +518,7 @@ async def run_tool_request(
     try:
         return (
             await tool.run(
-                tool_request_part.tool_request.input,
+                tool_req.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
                 abort_signal=ctx.abort_signal if ctx else None,
@@ -569,14 +555,17 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
 async def run_tool_after_restart(
     *,
     tool: Action,
-    restart_trp: ToolRequestPart,
+    restart_trp: Part,
     ctx: GenerateMiddlewareContext | None = None,
-) -> ToolResponsePart:
+) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
+    tool_req = restart_trp.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_after_restart needs a tool request part')
     try:
         raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
     except (GenkitError, Interrupt) as e:
@@ -588,18 +577,18 @@ async def run_tool_after_restart(
         if intr is not None:
             logger.debug(
                 'restarted tool triggered an interrupt',
-                tool=restart_trp.tool_request.name,
+                tool=tool_req.name,
             )
             raise restart_interrupt_error(intr) from e
         raise
 
-    envelope = as_multipart_tool_response(raw, tool_name=restart_trp.tool_request.name)
-    return ToolResponsePart(
+    envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
+    return Part(
         tool_response=ToolResponse(
-            name=restart_trp.tool_request.name,
-            ref=restart_trp.tool_request.ref,
+            name=tool_req.name,
+            ref=tool_req.ref,
             output=envelope.output,
-            content=parts_to_wire(envelope.content, tool_name=restart_trp.tool_request.name),
+            content=parts_to_wire(envelope.content, tool_name=tool_req.name),
         ),
         metadata=envelope.metadata,
     )

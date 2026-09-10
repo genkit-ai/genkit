@@ -45,7 +45,8 @@ from helpers import (
 from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
-from genkit._core._typing import Candidate, FinishReason, Role
+from genkit._core._model import Candidate
+from genkit._core._typing import FinishReason, Role
 
 
 @pytest.mark.asyncio

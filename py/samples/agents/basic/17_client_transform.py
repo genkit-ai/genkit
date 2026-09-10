@@ -35,8 +35,7 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, FinishReason, Message, Part
-from genkit._core._typing import TextPart
+from genkit import ActionRunContext, FinishReason, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentFinishReason,
@@ -58,10 +57,10 @@ async def guarded_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         # Server-side state carries a secret the client should never see.
         await sess.update_custom(lambda c: {'answers': (c or {}).get('answers', 0) + 1, 'api_key': 'sk-super-secret'})
         # An internal artifact the client shouldn't receive either.
-        await sess.add_artifacts([Artifact(name='debug', parts=[Part(TextPart(text='internal trace'))])])
+        await sess.add_artifacts([Artifact(name='debug', parts=[Part.from_text('internal trace')])])
 
         history = await sess.get_messages()
-        messages = [Message(m) for m in history] if history else None
+        messages = history or None
         stream_resp = ai.generate_stream(
             model=GoogleAI.gemini_model('gemini-flash-latest'),
             system='Answer in one short sentence.',

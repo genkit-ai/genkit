@@ -38,7 +38,6 @@ from genkit import (
     ToolDefinition,
     ToolRequest,
 )
-from genkit._core._typing import ReasoningPart, TextPart, ToolRequestPart
 from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.config import BedrockConfig
 
@@ -110,8 +109,8 @@ def cache_point_part(cache_type: str = DEFAULT_CACHE_POINT_TYPE) -> Part:
     return Part.model_validate({'custom': {CACHE_POINT_CUSTOM_KEY: cache_type}})
 
 
-def _cache_point_type(root: Any) -> str | None:  # noqa: ANN401
-    custom = getattr(root, 'custom', None)
+def _cache_point_type(part: Part) -> str | None:
+    custom = part.custom
     if not isinstance(custom, dict):
         return None
     value = custom.get(CACHE_POINT_CUSTOM_KEY)
@@ -285,9 +284,11 @@ def _decode_media_payload(url: str) -> bytes:
         raise GenkitError(message=f'bedrock: decode base64 media: {e}', status='INVALID_ARGUMENT') from e
 
 
-def media_to_block(root: Any) -> dict[str, Any]:  # noqa: ANN401
+def media_to_block(part: Part) -> dict[str, Any]:
     """Converts a media part to an image or document content block."""
-    media = root.media
+    media = part.media
+    if media is None:
+        raise GenkitError(message='bedrock: media part has no media', status='INVALID_ARGUMENT')
     mime = _media_mime(media)
     payload = _decode_media_payload(media.url)
     # Document formats are checked first: text/plain and text/html are
@@ -324,20 +325,20 @@ def _tool_response_text(output: Any) -> str:  # noqa: ANN401
         raise GenkitError(message=f'bedrock: marshal tool response: {e}', status='INVALID_ARGUMENT') from e
 
 
-def _reasoning_part_to_blocks(root: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+def _reasoning_part_to_blocks(part: Part) -> list[dict[str, Any]]:
     """Converts a reasoning part back to Converse reasoningContent blocks.
 
     Only Bedrock-originated reasoning (carrying the signature and/or redacted
     metadata) is emitted; a generic reasoning part produces no blocks so it
     cannot corrupt the follow-up request.
     """
-    metadata = getattr(root, 'metadata', None)
+    metadata = part.metadata
     blocks: list[dict[str, Any]] = []
     redacted = _metadata_bytes(metadata, REDACTED_CONTENT_METADATA_KEY)
     if redacted:
         blocks.append({'reasoningContent': {'redactedContent': redacted}})
     signature = _metadata_str(metadata, REASONING_SIGNATURE_METADATA_KEY)
-    text = getattr(root, 'reasoning', None) or ''
+    text = part.reasoning or ''
     if text and signature:
         blocks.append({'reasoningContent': {'reasoningText': {'text': text, 'signature': signature}}})
     return blocks
@@ -353,16 +354,15 @@ def _tool_use_id(ref: str | None, label: str) -> str:
     return ref
 
 
-def _part_to_blocks(part: Part | Any) -> list[dict[str, Any]]:  # noqa: ANN401
+def _part_to_blocks(part: Part) -> list[dict[str, Any]]:
     """Converts one Genkit part to Converse content blocks.
 
     Unknown part kinds are silently dropped so a foreign part cannot fail a
     request; the response side fails loud instead.
     """
-    root = part.root if isinstance(part, Part) else part
-    if getattr(root, 'media', None) is not None:
-        return [media_to_block(root)]
-    tool_request = getattr(root, 'tool_request', None)
+    if part.media is not None:
+        return [media_to_block(part)]
+    tool_request = part.tool_request
     if tool_request is not None:
         return [
             {
@@ -373,7 +373,7 @@ def _part_to_blocks(part: Part | Any) -> list[dict[str, Any]]:  # noqa: ANN401
                 }
             }
         ]
-    tool_response = getattr(root, 'tool_response', None)
+    tool_response = part.tool_response
     if tool_response is not None:
         return [
             {
@@ -384,14 +384,14 @@ def _part_to_blocks(part: Part | Any) -> list[dict[str, Any]]:  # noqa: ANN401
                 }
             }
         ]
-    cache_type = _cache_point_type(root)
+    cache_type = _cache_point_type(part)
     if cache_type is not None:
         return [{'cachePoint': {'type': cache_type}}]
     # `is not None`: a redacted-only reasoning part has reasoning == ''.
-    if getattr(root, 'reasoning', None) is not None:
-        return _reasoning_part_to_blocks(root)
-    if getattr(root, 'text', None) is not None:
-        return [{'text': root.text}]
+    if part.reasoning is not None:
+        return _reasoning_part_to_blocks(part)
+    if part.text is not None:
+        return [{'text': part.text}]
     return []
 
 
@@ -399,13 +399,12 @@ def _system_blocks(message: Message | Any) -> list[dict[str, Any]]:  # noqa: ANN
     """System messages keep only text and cache points; the rest is dropped."""
     blocks: list[dict[str, Any]] = []
     for part in message.content or []:
-        root = part.root if isinstance(part, Part) else part
-        cache_type = _cache_point_type(root)
+        cache_type = _cache_point_type(part)
         if cache_type is not None:
             blocks.append({'cachePoint': {'type': cache_type}})
         # Truthiness, not `is not None`: Bedrock rejects empty system text.
-        elif getattr(root, 'text', None):
-            blocks.append({'text': root.text})
+        elif part.text:
+            blocks.append({'text': part.text})
     return blocks
 
 
@@ -650,7 +649,7 @@ def bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | N
         redacted: Redacted reasoning blob, stored base64-encoded.
 
     Returns:
-        A Part wrapping a ReasoningPart.
+        A reasoning part that can be replayed on the next turn.
     """
     metadata: dict[str, Any] = {}
     if signature:
@@ -660,7 +659,7 @@ def bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | N
     if redacted:
         # Base64 string, not raw bytes: part metadata must stay JSON-serializable.
         metadata[REDACTED_CONTENT_METADATA_KEY] = base64.b64encode(redacted).decode('ascii')
-    return Part(root=ReasoningPart(reasoning=text, metadata=metadata or None))
+    return Part.from_reasoning(text, metadata=metadata or None)
 
 
 def content_blocks_to_parts(
@@ -675,7 +674,7 @@ def content_blocks_to_parts(
     parts: list[Part] = []
     for block in blocks:
         if 'text' in block:
-            parts.append(Part(root=TextPart(text=block['text'])))
+            parts.append(Part.from_text(block['text']))
         elif 'toolUse' in block:
             tool_use = block['toolUse']
             tool_input = tool_use.get('input')
@@ -683,12 +682,10 @@ def content_blocks_to_parts(
                 tool_input = {}
             parts.append(
                 Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(
-                            ref=tool_use.get('toolUseId'),
-                            name=tool_use.get('name') or '',
-                            input=coerce_tool_input(tool_use.get('name') or '', tool_input, tools),
-                        )
+                    tool_request=ToolRequest(
+                        ref=tool_use.get('toolUseId'),
+                        name=tool_use.get('name') or '',
+                        input=coerce_tool_input(tool_use.get('name') or '', tool_input, tools),
                     )
                 )
             )
@@ -756,7 +753,7 @@ def to_model_response(response: dict[str, Any] | None, request: ModelRequest[Any
     if not parts:
         # Guardrail-blocked responses have no content; return a well-formed
         # empty message rather than erroring.
-        parts = [Part(root=TextPart(text=''))]
+        parts = [Part.from_text('')]
     return ModelResponse(
         message=Message(role=Role.MODEL, content=parts),
         finish_reason=map_finish_reason(response.get('stopReason')),

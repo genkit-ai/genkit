@@ -27,9 +27,7 @@ from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import ActionKind, Registry
 from genkit._core._typing import (
     Resource1,
-    ResourcePart,
     Role,
-    TextPart,
 )
 
 
@@ -40,7 +38,7 @@ async def test_generate_with_resources() -> None:
 
     # 1. Register a resource
     async def my_resource(input: ResourceInput, ctx: ActionRunContext) -> ResourceOutput:
-        return ResourceOutput(content=[Part(root=TextPart(text=f'Resource content for {input.uri}'))])
+        return ResourceOutput(content=[Part.from_text(f'Resource content for {input.uri}')])
 
     define_resource(registry, {'uri': 'test://foo'}, my_resource)
 
@@ -50,18 +48,18 @@ async def test_generate_with_resources() -> None:
         assert not input.docs
         # Access via root because Part is a RootModel
         # Verify the message content was hydrated (replaced resource part with text part)
-        assert input.messages[0].content[0].root.text == 'Resource content for test://foo'
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
+        assert input.messages[0].content[0].text == 'Resource content for test://foo'
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('Done')]))
 
     registry.register_action(ActionKind.MODEL, 'mock-model', mock_model)
 
     options = GenerateActionOptions(
         model='mock-model',
-        messages=[Message(role=Role.USER, content=[Part(root=ResourcePart(resource=Resource1(uri='test://foo')))])],
+        messages=[Message(role=Role.USER, content=[Part(resource=Resource1(uri='test://foo'))])],
         resources=['test://foo'],
     )
 
     response = await generate_action(registry, options)
     # Part also uses RootModel, access via root
     assert response.message is not None
-    assert response.message.content[0].root.text == 'Done'
+    assert response.message.content[0].text == 'Done'

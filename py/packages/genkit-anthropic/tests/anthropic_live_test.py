@@ -32,8 +32,7 @@ import pytest
 from anthropic import BadRequestError
 from genkit_anthropic import Anthropic
 
-from genkit import Genkit, GenkitError, Message
-from genkit._core._typing import ReasoningPart
+from genkit import Genkit, GenkitError, Message, Part
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -55,8 +54,8 @@ def ai() -> Genkit:
     return Genkit(plugins=[Anthropic()])
 
 
-def _reasoning_of(message: Message) -> list[ReasoningPart]:
-    return [part.root for part in message.content if isinstance(part.root, ReasoningPart)]
+def _reasoning_of(message: Message) -> list[Part]:
+    return [part for part in message.content if part.reasoning is not None]
 
 
 async def test_thinking_enabled_budget(ai: Genkit) -> None:
@@ -86,8 +85,8 @@ async def test_thinking_enabled_budget_streaming(ai: Genkit) -> None:
     streamed_text: list[str] = []
     async for chunk in stream_response.stream:
         for part in chunk.content:
-            if isinstance(part.root, ReasoningPart):
-                streamed_reasoning.append(part.root.reasoning)
+            if part.reasoning is not None:
+                streamed_reasoning.append(part.reasoning)
         if chunk.text:
             streamed_text.append(chunk.text)
     response = await stream_response.response

@@ -10,7 +10,6 @@ import pytest
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._enum import EnumFormat
 from genkit._core._error import GenkitError
-from genkit._core._typing import TextPart
 
 
 class TestEnumFormatMessage:
@@ -21,7 +20,7 @@ class TestEnumFormatMessage:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['VALUE1', 'VALUE2']})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text='VALUE1'))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('VALUE1')]))
         assert result == 'VALUE1'
 
     def test_trims_whitespace(self) -> None:
@@ -29,7 +28,7 @@ class TestEnumFormatMessage:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['VALUE1', 'VALUE2']})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text='  VALUE2\n'))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('  VALUE2\n')]))
         assert result == 'VALUE2'
 
     def test_removes_double_quotes(self) -> None:
@@ -37,7 +36,7 @@ class TestEnumFormatMessage:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['foo', 'bar']})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text='"foo"'))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('"foo"')]))
         assert result == 'foo'
 
     def test_removes_single_quotes(self) -> None:
@@ -45,7 +44,7 @@ class TestEnumFormatMessage:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['foo', 'bar']})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text="'bar'"))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text("'bar'")]))
         assert result == 'bar'
 
     def test_handles_unquoted_value(self) -> None:
@@ -53,7 +52,7 @@ class TestEnumFormatMessage:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['foo', 'bar']})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text='bar'))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('bar')]))
         assert result == 'bar'
 
 
@@ -65,8 +64,8 @@ class TestEnumFormatStreaming:
         enum_fmt = EnumFormat()
         fmt = enum_fmt.handle({'type': 'string', 'enum': ['foo', 'bar']})
 
-        chunk1 = ModelResponseChunk(content=[Part(TextPart(text='"f'))])
-        chunk2 = ModelResponseChunk(content=[Part(TextPart(text='oo"'))])
+        chunk1 = ModelResponseChunk(content=[Part.from_text('"f')])
+        chunk2 = ModelResponseChunk(content=[Part.from_text('oo"')])
 
         result = fmt.parse_chunk(
             ModelResponseChunk(

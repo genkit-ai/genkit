@@ -71,13 +71,12 @@ from genkit._ai._agents._session_stores._util import (
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._error import GenkitError
 from genkit._core._loop_cache import _loop_local_client
+from genkit._core._model import SessionSnapshot, SessionState
 from genkit._core._typing import (
     AgentFinishReason,
     GenkitRuntimeError,
     JsonPatchOp,
     JsonPatchOperation,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
 )
 

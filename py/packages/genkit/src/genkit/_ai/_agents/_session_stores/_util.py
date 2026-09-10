@@ -32,7 +32,8 @@ from datetime import datetime, timezone
 from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._core._error import GenkitError
-from genkit._core._typing import SessionSnapshot, SnapshotStatus
+from genkit._core._model import SessionSnapshot
+from genkit._core._typing import SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]

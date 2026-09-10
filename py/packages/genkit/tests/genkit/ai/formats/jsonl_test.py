@@ -11,7 +11,6 @@ from pydantic import BaseModel, TypeAdapter
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._jsonl import JsonlFormat
 from genkit._core._error import GenkitError
-from genkit._core._typing import TextPart
 
 
 class TestJsonlFormatStreaming:
@@ -23,17 +22,17 @@ class TestJsonlFormatStreaming:
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: first complete object
-        chunk1 = ModelResponseChunk(content=[Part(TextPart(text='{"id": 1, "name": "first"}\n'))])
+        chunk1 = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "first"}\n')])
         result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == [{'id': 1, 'name': 'first'}]
 
         # Chunk 2: second object complete, third starts
-        chunk2 = ModelResponseChunk(content=[Part(TextPart(text='{"id": 2, "name": "second"}\n{"id": 3'))])
+        chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 2, "name": "second"}\n{"id": 3')])
         result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 2, 'name': 'second'}]
 
         # Chunk 3: third object completes
-        chunk3 = ModelResponseChunk(content=[Part(TextPart(text=', "name": "third"}\n'))])
+        chunk3 = ModelResponseChunk(content=[Part.from_text(', "name": "third"}\n')])
         result3 = fmt.parse_chunk(ModelResponseChunk(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
         assert result3 == [{'id': 3, 'name': 'third'}]
 
@@ -42,7 +41,7 @@ class TestJsonlFormatStreaming:
         jsonl_fmt = JsonlFormat()
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        chunk = ModelResponseChunk(content=[Part(TextPart(text='{"id": 1, "name": "single"}\n'))])
+        chunk = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "single"}\n')])
         result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
         assert result == [{'id': 1, 'name': 'single'}]
 
@@ -52,12 +51,12 @@ class TestJsonlFormatStreaming:
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: preamble
-        chunk1 = ModelResponseChunk(content=[Part(TextPart(text='Here are the objects:\n\n```\n'))])
+        chunk1 = ModelResponseChunk(content=[Part.from_text('Here are the objects:\n\n```\n')])
         result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: actual data
-        chunk2 = ModelResponseChunk(content=[Part(TextPart(text='{"id": 1, "name": "item"}\n```'))])
+        chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "item"}\n```')])
         result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'item'}]
 
@@ -66,9 +65,7 @@ class TestJsonlFormatStreaming:
         jsonl_fmt = JsonlFormat()
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        chunk = ModelResponseChunk(
-            content=[Part(TextPart(text='First object:\n{"id": 1}\nSecond object:\n{"id": 2}\n'))]
-        )
+        chunk = ModelResponseChunk(content=[Part.from_text('First object:\n{"id": 1}\nSecond object:\n{"id": 2}\n')])
         result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
         assert result == [{'id': 1}, {'id': 2}]
 
@@ -82,7 +79,7 @@ class TestJsonlFormatMessage:
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         result = fmt.parse_message(
-            Message(role='model', content=[Part(TextPart(text='{"id": 1, "name": "test"}\n{"id": 2}\n'))])
+            Message(role='model', content=[Part.from_text('{"id": 1, "name": "test"}\n{"id": 2}\n')])
         )
         assert result == [{'id': 1, 'name': 'test'}, {'id': 2}]
 
@@ -91,7 +88,7 @@ class TestJsonlFormatMessage:
         jsonl_fmt = JsonlFormat()
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text=''))]))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('')]))
         assert result is None
 
     def test_parses_jsonl_with_preamble_and_code_fence(self) -> None:
@@ -102,7 +99,7 @@ class TestJsonlFormatMessage:
         result = fmt.parse_message(
             Message(
                 role='model',
-                content=[Part(TextPart(text='Here are the objects:\n\n```\n{"id": 1}\n{"id": 2}\n```'))],
+                content=[Part.from_text('Here are the objects:\n\n```\n{"id": 1}\n{"id": 2}\n```')],
             )
         )
         assert result == [{'id': 1}, {'id': 2}]

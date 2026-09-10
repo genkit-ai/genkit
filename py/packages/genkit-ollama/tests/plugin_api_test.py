@@ -34,13 +34,11 @@ from genkit import (
     ActionKind,
     Document,
     EmbedRequest,
-    Media,
     Message,
     ModelRequest,
     Part,
     Role,
 )
-from genkit._core._typing import MediaPart, TextPart
 from genkit.plugin_api import to_json_schema
 
 
@@ -354,7 +352,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
     sdk_client._client.aclose = AsyncMock()
 
     action = plugin._create_model_action(ollama_name('m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
         await action._fn(request, None)
@@ -474,7 +472,7 @@ async def test_model_action_wraps_connection_error() -> None:
     plugin.client = lambda: client_mock
 
     action = plugin._create_model_action(ollama_name('m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
         await action._fn(request, None)
@@ -490,7 +488,7 @@ async def test_model_action_wraps_transport_timeout() -> None:
     plugin.client = lambda: client_mock
 
     action = plugin._create_model_action(ollama_name('m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
         await action._fn(request, None)
@@ -521,9 +519,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
         messages=[
             Message(
                 role=Role.USER,
-                content=[
-                    Part(root=MediaPart(media=Media(url='http://imgs.example/cat.jpg', content_type='image/jpeg')))
-                ],
+                content=[Part.from_media('http://imgs.example/cat.jpg', content_type='image/jpeg')],
             )
         ]
     )

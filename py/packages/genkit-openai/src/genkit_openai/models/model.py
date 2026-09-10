@@ -36,7 +36,6 @@ from genkit import (
     Role,
     ToolDefinition,
 )
-from genkit._core._typing import ReasoningPart, TextPart
 from genkit.plugin_api import ActionRunContext, ModelConfig
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai.models.utils import (
@@ -295,10 +294,10 @@ class OpenAIModel:
         cleaned_parts: list[Part] = []
         changed = False
         for part in response.message.content:
-            if isinstance(part.root, TextPart) and part.root.text:
-                cleaned_text = strip_markdown_fences(part.root.text)
-                if cleaned_text != part.root.text:
-                    cleaned_parts.append(Part(root=TextPart(text=cleaned_text)))
+            if part.text is not None and part.text:
+                cleaned_text = strip_markdown_fences(part.text)
+                if cleaned_text != part.text:
+                    cleaned_parts.append(Part.from_text(cleaned_text))
                     changed = True
                 else:
                     cleaned_parts.append(part)
@@ -458,7 +457,7 @@ class OpenAIModel:
             # Note: Pydantic models raise AttributeError for unknown fields,
             # so getattr() with a default doesn't work. Use try-except.
             elif reasoning_text := MessageAdapter(delta).reasoning_content:
-                reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
+                reasoning_part = Part.from_reasoning(reasoning_text)
                 accumulated_content.append(reasoning_part)
                 callback(
                     ModelResponseChunk(

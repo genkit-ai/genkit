@@ -20,8 +20,7 @@ from pathlib import Path
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, Message, Role
-from genkit._core._typing import TextPart
+from genkit import Genkit, Message, Part, Role
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-3-flash-preview'))
 
@@ -34,10 +33,10 @@ handbook = handbook + ('\n# appendix\n' * 20_000)
 # The cache lives on the model turn of this prefix. Later generate()
 # calls pass the same messages and only pay for the new question.
 cached = [
-    Message(role=Role.USER, content=[TextPart(text=handbook)]),
+    Message(role=Role.USER, content=[Part.from_text(handbook)]),
     Message(
         role=Role.MODEL,
-        content=[TextPart(text='Handbook cached. Ask a question.')],
+        content=[Part.from_text('Handbook cached. Ask a question.')],
         metadata={'cache': {'ttl_seconds': 300}},
     ),
 ]

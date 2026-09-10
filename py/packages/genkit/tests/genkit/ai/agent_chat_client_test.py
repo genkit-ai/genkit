@@ -35,28 +35,28 @@ from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
 from genkit._core._channel import CloseableQueue
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentStreamChunk,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    ModelResponseChunk as ModelResponseChunkModel,
+    SessionSnapshot,
+    SessionState,
+)
+from genkit._core._typing import (
+    AgentFinishReason,
     FinishReason,
     JsonPatch,
     JsonPatchOp,
     JsonPatchOperation,
-    MessageData,
-    ModelResponseChunk,
     Role,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
     ToolResponse,
-    ToolResponsePart,
     TurnEnd,
 )
 from genkit.exp import Genkit
@@ -155,6 +155,7 @@ def test_restart_applies_replace_input() -> None:
     intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
     part = intr.restart(replace_input={'amount': 50, 'approved': True})
 
+    assert part.tool_request is not None
     assert part.tool_request.input == {'amount': 50, 'approved': True}
     assert part.metadata is not None
     assert part.metadata.get('replacedInput') == {'amount': 100}
@@ -228,7 +229,7 @@ async def test_wire_init_derives_from_live_session_state() -> None:
 
     transport.final_output = AgentOutput(
         snapshot_id='snap-1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Hi'))]),
+        message=Message(role='model', content=[Part.from_text('Hi')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -255,11 +256,11 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     # Every turn ships the whole session back; the client copies it verbatim.
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        message=Message(role='model', content=[Part.from_text('Final output!')]),
         state=SessionState(
             messages=[
-                MessageData(role='user', content=[Part(root=TextPart(text='Weather in Tokyo?'))]),
-                MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+                Message(role='user', content=[Part.from_text('Weather in Tokyo?')]),
+                Message(role='model', content=[Part.from_text('Final output!')]),
             ],
             custom={'unit': 'celsius'},
         ),
@@ -270,10 +271,8 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     turn = chat.send_stream('Weather in Tokyo?')
 
     # Queue up chunks to simulate streaming
-    transport.push_chunk(
-        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
-    )
-    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Weather is ')])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Sunny.')])))
     transport.push_chunk(
         AgentStreamChunk(
             custom_patch=JsonPatch(
@@ -303,13 +302,13 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     assert output.finish_reason == AgentFinishReason.STOP
     assert output.message is not None
     assert output.message.content is not None
-    assert output.message.content[0].root.text == 'Final output!'
+    assert output.message.content[0].text == 'Final output!'
 
     # Verify chat fields are updated after turn completion
     assert chat.snapshot_id == 'snapshot_1'
     assert len(chat.messages) == 2  # Turn 1 User input + model final output
-    assert chat.messages[0].content[0].root.text == 'Weather in Tokyo?'
-    assert chat.messages[1].content[0].root.text == 'Final output!'
+    assert chat.messages[0].content[0].text == 'Weather in Tokyo?'
+    assert chat.messages[1].content[0].text == 'Final output!'
 
 
 class _Progress(BaseModel):
@@ -322,7 +321,7 @@ async def test_state_schema_coerces_custom_into_model() -> None:
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snap-1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='ok'))]),
+        message=Message(role='model', content=[Part.from_text('ok')]),
         state=SessionState(custom={'turns': 1}),
         finish_reason=AgentFinishReason.STOP,
     )
@@ -350,7 +349,7 @@ async def test_no_state_schema_leaves_custom_as_dict() -> None:
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snap-1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='ok'))]),
+        message=Message(role='model', content=[Part.from_text('ok')]),
         state=SessionState(custom={'turns': 1}),
         finish_reason=AgentFinishReason.STOP,
     )
@@ -373,7 +372,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
 
     transport.final_output = AgentOutput(
         snapshot_id='snap-1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='A1'))]),
+        message=Message(role='model', content=[Part.from_text('A1')]),
         finish_reason=AgentFinishReason.STOP,
     )
     turn = chat.send_stream('U1')
@@ -381,11 +380,11 @@ async def test_server_managed_appends_messages_incrementally() -> None:
     await turn.response
 
     assert chat.snapshot_id == 'snap-1'
-    assert [m.content[0].root.text for m in chat.messages] == ['U1', 'A1']
+    assert [m.content[0].text for m in chat.messages] == ['U1', 'A1']
 
     transport.final_output = AgentOutput(
         snapshot_id='snap-2',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='A2'))]),
+        message=Message(role='model', content=[Part.from_text('A2')]),
         finish_reason=AgentFinishReason.STOP,
     )
     turn2 = chat.send_stream('U2')
@@ -393,7 +392,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
     await turn2.response
 
     assert chat.snapshot_id == 'snap-2'
-    assert [m.content[0].root.text for m in chat.messages] == ['U1', 'A1', 'U2', 'A2']
+    assert [m.content[0].text for m in chat.messages] == ['U1', 'A1', 'U2', 'A2']
 
 
 @pytest.mark.asyncio
@@ -407,7 +406,7 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
     # The wire returns only the snapshot id + the final reply.
     transport.final_output = AgentOutput(
         snapshot_id='snap-1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+        message=Message(role='model', content=[Part.from_text('It is 12C in Tokyo.')]),
         finish_reason=AgentFinishReason.STOP,
     )
     turn = chat.send_stream('Weather in Tokyo?')
@@ -418,7 +417,7 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
             model_chunk=ModelResponseChunk(
                 role=Role.MODEL,
                 index=0,
-                content=[Part(root=TextPart(text='Let me '))],
+                content=[Part.from_text('Let me ')],
             )
         )
     )
@@ -428,12 +427,8 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
                 role=Role.MODEL,
                 index=0,
                 content=[
-                    Part(root=TextPart(text='check.')),
-                    Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(name='weather', ref='c1', input={'city': 'Tokyo'})
-                        )
-                    ),
+                    Part.from_text('check.'),
+                    Part(tool_request=ToolRequest(name='weather', ref='c1', input={'city': 'Tokyo'})),
                 ],
             )
         )
@@ -444,18 +439,14 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
             model_chunk=ModelResponseChunk(
                 role=Role.TOOL,
                 index=1,
-                content=[
-                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='weather', ref='c1', output='12C')))
-                ],
+                content=[Part(tool_response=ToolResponse(name='weather', ref='c1', output='12C'))],
             )
         )
     )
     # Final model message, streamed as text deltas (superseded by raw.message).
     transport.push_chunk(
         AgentStreamChunk(
-            model_chunk=ModelResponseChunk(
-                role=Role.MODEL, index=2, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]
-            )
+            model_chunk=ModelResponseChunk(role=Role.MODEL, index=2, content=[Part.from_text('It is 12C in Tokyo.')])
         )
     )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
@@ -467,15 +458,15 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
     # User input, the tool-calling model message (deltas merged + tool request),
     # the tool reply, then the authoritative final reply.
     user_msg, tool_call_msg, tool_reply_msg, final_msg = chat.messages
-    assert user_msg.content[0].root.text == 'Weather in Tokyo?'
-    assert tool_call_msg.content[0].root.text == 'Let me check.'
-    tool_req = tool_call_msg.content[1].root
-    assert isinstance(tool_req, ToolRequestPart)
+    assert user_msg.content[0].text == 'Weather in Tokyo?'
+    assert tool_call_msg.content[0].text == 'Let me check.'
+    tool_req = tool_call_msg.content[1]
+    assert tool_req.tool_request is not None
     assert tool_req.tool_request.name == 'weather'
-    tool_resp = tool_reply_msg.content[0].root
-    assert isinstance(tool_resp, ToolResponsePart)
+    tool_resp = tool_reply_msg.content[0]
+    assert tool_resp.tool_response is not None
     assert tool_resp.tool_response.output == '12C'
-    assert final_msg.content[0].root.text == 'It is 12C in Tokyo.'
+    assert final_msg.content[0].text == 'It is 12C in Tokyo.'
 
 
 @pytest.mark.asyncio
@@ -493,7 +484,7 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
     # session_id inside the round-tripped state is adopted so the next turn's
     # state blob stays self-describing.
     transport.final_output = AgentOutput(
-        message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+        message=Message(role='model', content=[Part.from_text('It is 12C in Tokyo.')]),
         state=SessionState(session_id='sess-client-1', custom={'unit': 'celsius'}),
         finish_reason=AgentFinishReason.STOP,
     )
@@ -505,8 +496,8 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
                 role=Role.MODEL,
                 index=0,
                 content=[
-                    Part(root=TextPart(text='Let me check.')),
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo'))),
+                    Part.from_text('Let me check.'),
+                    Part(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')),
                 ],
             )
         )
@@ -516,17 +507,13 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
             model_chunk=ModelResponseChunk(
                 role=Role.TOOL,
                 index=1,
-                content=[
-                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='weather', ref='c1', output='12C')))
-                ],
+                content=[Part(tool_response=ToolResponse(name='weather', ref='c1', output='12C'))],
             )
         )
     )
     transport.push_chunk(
         AgentStreamChunk(
-            model_chunk=ModelResponseChunk(
-                role=Role.MODEL, index=2, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]
-            )
+            model_chunk=ModelResponseChunk(role=Role.MODEL, index=2, content=[Part.from_text('It is 12C in Tokyo.')])
         )
     )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP)))
@@ -535,10 +522,10 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
     # Same stitched shape as the server-managed tool loop: the tool steps are
     # present even though raw.state never carried them.
     assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
-    tool_req = chat.messages[1].content[1].root
-    assert isinstance(tool_req, ToolRequestPart)
+    tool_req = chat.messages[1].content[1]
+    assert tool_req.tool_request is not None
     assert tool_req.tool_request.name == 'weather'
-    assert chat.messages[-1].content[0].root.text == 'It is 12C in Tokyo.'
+    assert chat.messages[-1].content[0].text == 'It is 12C in Tokyo.'
     # Custom is adopted from the round-tripped output.
     assert chat.state == {'unit': 'celsius'}
     assert chat.session_id == 'sess-client-1'
@@ -571,24 +558,24 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
             finish_reason=FinishReason.STOP,
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+                content=[Part(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo'))],
             ),
         )
     )
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('It is 12C in Tokyo.')]),
         )
     )
     pm.chunks = [
         [
             ModelResponseChunkModel(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+                content=[Part(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo'))],
             )
         ],
-        [ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))])],
+        [ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('It is 12C in Tokyo.')])],
     ]
 
     chat = agent.chat()
@@ -596,13 +583,13 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
 
     # The running view carries the whole turn, not just user + final reply.
     assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
-    call_req = chat.messages[1].content[0].root
-    assert isinstance(call_req, ToolRequestPart)
+    call_req = chat.messages[1].content[0]
+    assert call_req.tool_request is not None
     assert call_req.tool_request.name == 'weather'
-    reply_resp = chat.messages[2].content[0].root
-    assert isinstance(reply_resp, ToolResponsePart)
+    reply_resp = chat.messages[2].content[0]
+    assert reply_resp.tool_response is not None
     assert reply_resp.tool_response.output == '12C'
-    assert chat.messages[3].content[0].root.text == 'It is 12C in Tokyo.'
+    assert chat.messages[3].content[0].text == 'It is 12C in Tokyo.'
 
     # And it matches the durable store snapshot the server actually persisted.
     snapshot = await chat.get_snapshot()
@@ -641,13 +628,13 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
     pm, _ = define_programmable_model(ai)
     pm.chunks = [
         [
-            ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Hi '))]),
-            ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='there!'))]),
+            ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi ')]),
+            ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('there!')]),
         ]
     ]
     pm.responses.append(
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
             finish_reason=FinishReason.STOP,
         )
     )
@@ -658,7 +645,7 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
 
     assert out.text == 'Hi there!'
     assert len(chat.messages) == 2
-    assert chat.messages[1].content[0].root.text == 'Hi there!'
+    assert chat.messages[1].content[0].text == 'Hi there!'
     assert chat.session_id is not None
     assert chat.snapshot_id is None
 
@@ -694,17 +681,12 @@ class _ServerEmulatingClientManagedTransport(AgentTransport[Any]):
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         loaded = list(init.state.messages or []) if init.state else []
-        self.init_histories.append([
-            root.text
-            for m in loaded
-            for part in (m.content or [])
-            if isinstance((root := getattr(part, 'root', part)), TextPart) and root.text
-        ])
+        self.init_histories.append([part.text for m in loaded for part in (m.content or []) if part.text])
 
         if agent_input.message:
             loaded.append(agent_input.message)
         self._model_turn += 1
-        model_msg = MessageData(role='model', content=[Part(root=TextPart(text=f'reply-{self._model_turn}'))])
+        model_msg = Message(role='model', content=[Part.from_text(f'reply-{self._model_turn}')])
         loaded.append(model_msg)
         server_state = SessionState(messages=loaded)
 
@@ -740,12 +722,12 @@ async def test_client_managed_does_not_double_append_messages() -> None:
     await chat.send('hello')
     # The new message must NOT ride along in init — the server records it from input.
     assert transport.init_histories[0] == []
-    assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1']
+    assert [m.content[0].text for m in chat.messages] == ['hello', 'reply-1']
 
     await chat.send('again')
     # Turn 2's init replays the prior two messages, never the message in flight.
     assert transport.init_histories[1] == ['hello', 'reply-1']
-    assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1', 'again', 'reply-2']
+    assert [m.content[0].text for m in chat.messages] == ['hello', 'reply-1', 'again', 'reply-2']
 
 
 @pytest.mark.asyncio
@@ -758,7 +740,7 @@ async def test_session_id_populated_from_output_state() -> None:
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
         session_id='session_abc',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Done.'))]),
+        message=Message(role='model', content=[Part.from_text('Done.')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -782,14 +764,12 @@ async def test_session_handling_tool_interrupt() -> None:
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
         finish_reason=AgentFinishReason.INTERRUPTED,
-        message=MessageData(
+        message=Message(
             role='model',
             content=[
                 Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500}),
-                        metadata={'interrupt': True},
-                    )
+                    tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500}),
+                    metadata={'interrupt': True},
                 )
             ],
         ),
@@ -802,13 +782,7 @@ async def test_session_handling_tool_interrupt() -> None:
     transport.push_chunk(
         AgentStreamChunk(
             model_chunk=ModelResponseChunk(
-                content=[
-                    Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500})
-                        )
-                    )
-                ]
+                content=[Part(tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500}))]
             )
         )
     )
@@ -827,7 +801,7 @@ async def test_session_handling_tool_interrupt() -> None:
     # This mock resume expects sending tool response to transport
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_2',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Transfer done.'))]),
+        message=Message(role='model', content=[Part.from_text('Transfer done.')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -847,6 +821,7 @@ async def test_session_handling_tool_interrupt() -> None:
     sent_resume = transport.send_payloads[1].resume
     assert sent_resume is not None
     assert sent_resume.respond is not None
+    assert sent_resume.respond[0].tool_response is not None
     assert sent_resume.respond[0].tool_response.name == 'userApproval'
     assert sent_resume.respond[0].tool_response.output == {'approved': True}
 
@@ -857,20 +832,16 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
         finish_reason=AgentFinishReason.INTERRUPTED,
-        message=MessageData(
+        message=Message(
             role='model',
             content=[
                 Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100}),
-                        metadata={'interrupt': True},
-                    )
+                    tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100}),
+                    metadata={'interrupt': True},
                 ),
                 Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200}),
-                        metadata={'interrupt': True},
-                    )
+                    tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200}),
+                    metadata={'interrupt': True},
                 ),
             ],
         ),
@@ -883,16 +854,8 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
         AgentStreamChunk(
             model_chunk=ModelResponseChunk(
                 content=[
-                    Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100})
-                        )
-                    ),
-                    Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200})
-                        )
-                    ),
+                    Part(tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100})),
+                    Part(tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200})),
                 ]
             )
         )
@@ -921,7 +884,10 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     assert sent_resume is not None
     assert sent_resume.restart is not None
     assert len(sent_resume.restart) == 2
-    assert {p.tool_request.name for p in sent_resume.restart} == {'transferA', 'transferB'}
+    assert {p.tool_request.name for p in sent_resume.restart if p.tool_request is not None} == {
+        'transferA',
+        'transferB',
+    }
 
 
 @pytest.mark.asyncio
@@ -937,13 +903,13 @@ async def test_in_process_persistent_connection() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='Echo 1'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Echo 1')]),
         )
     )
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='Echo 2'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Echo 2')]),
         )
     )
 
@@ -956,7 +922,7 @@ async def test_in_process_persistent_connection() -> None:
     res1 = await turn1.response
     assert res1.message is not None
     assert res1.message.content is not None
-    assert res1.message.content[0].root.text == 'Echo 1'
+    assert res1.message.content[0].text == 'Echo 1'
 
     # Turn 2
     turn2 = chat.send_stream('World')
@@ -966,7 +932,7 @@ async def test_in_process_persistent_connection() -> None:
     res2 = await turn2.response
     assert res2.message is not None
     assert res2.message.content is not None
-    assert res2.message.content[0].root.text == 'Echo 2'
+    assert res2.message.content[0].text == 'Echo 2'
 
 
 @pytest.mark.asyncio
@@ -985,7 +951,7 @@ async def test_attached_turn_abort() -> None:
         await asyncio.sleep(5)
         return ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Slow response finished'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Slow response finished')]),
         )
 
     pm.response_cb = slow_response
@@ -1005,7 +971,7 @@ async def test_attached_turn_abort() -> None:
 
     # Abort is a client-side detach only: the prompt was still asked, so the
     # optimistic user message stays in history (just without a reply).
-    texts_after_abort = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    texts_after_abort = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
     assert texts_after_abort == ['Hello']
 
     # Restore normal fast response for the second turn
@@ -1013,7 +979,7 @@ async def test_attached_turn_abort() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
         )
     )
 
@@ -1022,11 +988,11 @@ async def test_attached_turn_abort() -> None:
     res2 = await turn2.response
 
     # The detached turn's 'Hello' is still there, followed by the new exchange.
-    texts = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    texts = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
     assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
     assert res2.message is not None
     assert res2.message.content is not None
-    assert res2.message.content[0].root.text == 'Second turn echo'
+    assert res2.message.content[0].text == 'Second turn echo'
 
 
 @pytest.mark.asyncio
@@ -1043,7 +1009,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
         await asyncio.sleep(5)
         return ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='too late'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
         )
 
     pm.response_cb = slow_response
@@ -1059,7 +1025,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
         await asyncio.wait_for(_await_turn(), 0.2)
 
     # Detach kept the optimistic prompt; the session reads as a turn with no reply.
-    texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
     assert texts_after == ['Hello']
 
     # And we can continue cleanly.
@@ -1067,12 +1033,12 @@ async def test_await_turn_under_timeout_detaches() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
         )
     )
     res2 = await chat.send('Continue conversation')
     assert res2.message is not None
-    assert res2.message.content[0].root.text == 'Second turn echo'
+    assert res2.message.content[0].text == 'Second turn echo'
 
 
 @pytest.mark.asyncio
@@ -1088,7 +1054,7 @@ async def test_stream_turn_under_timeout_detaches() -> None:
         await asyncio.sleep(5)
         return ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='too late'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
         )
 
     pm.response_cb = slow_response
@@ -1103,7 +1069,7 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(_drain(), 0.2)
 
-    texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
     assert texts_after == ['Hello']
 
 
@@ -1139,11 +1105,7 @@ async def test_session_abort() -> None:
             finish_reason=FinishReason.STOP,
             message=Message(
                 role=Role.MODEL,
-                content=[
-                    Part(
-                        root=ToolRequestPart(tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking'))
-                    )
-                ],
+                content=[Part(tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking'))],
             ),
         )
     )
@@ -1192,7 +1154,7 @@ async def test_agent_turn_direct_async_iteration() -> None:
     # Configure final output
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        message=Message(role='model', content=[Part.from_text('Final output!')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -1200,10 +1162,8 @@ async def test_agent_turn_direct_async_iteration() -> None:
     turn = chat.send_stream('Weather in Tokyo?')
 
     # Queue up chunks
-    transport.push_chunk(
-        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
-    )
-    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Weather is ')])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Sunny.')])))
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
@@ -1222,7 +1182,7 @@ async def test_agent_turn_direct_async_iteration() -> None:
     output = await turn.response
     assert output.message is not None
     assert output.message.content is not None
-    assert output.message.content[0].root.text == 'Final output!'
+    assert output.message.content[0].text == 'Final output!'
 
 
 @pytest.mark.asyncio
@@ -1231,16 +1191,14 @@ async def test_agent_turn_direct_await() -> None:
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        message=Message(role='model', content=[Part.from_text('Final output!')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
     chat = AgentChat(transport)
     turn = chat.send_stream('Weather in Tokyo?')
 
-    transport.push_chunk(
-        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='ignored chunk'))]))
-    )
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('ignored chunk')])))
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
@@ -1250,7 +1208,7 @@ async def test_agent_turn_direct_await() -> None:
 
     assert output.message is not None
     assert output.message.content is not None
-    assert output.message.content[0].root.text == 'Final output!'
+    assert output.message.content[0].text == 'Final output!'
 
 
 @pytest.mark.asyncio
@@ -1262,17 +1220,15 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        message=Message(role='model', content=[Part.from_text('Final output!')]),
         finish_reason=AgentFinishReason.STOP,
     )
 
     chat = AgentChat(transport)
     turn = chat.send_stream('Weather in Tokyo?')
 
-    transport.push_chunk(
-        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
-    )
-    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Weather is ')])))
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Sunny.')])))
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
@@ -1282,7 +1238,7 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
 
     output = await turn.response
     assert output.message is not None
-    assert output.message.content[0].root.text == 'Final output!'
+    assert output.message.content[0].text == 'Final output!'
 
 
 # ---------------------------------------------------------------------------
@@ -1334,7 +1290,7 @@ async def text_chunks(turn: Any) -> list[str]:
 
 
 def text_chunk(text: str) -> AgentStreamChunk:
-    return AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text=text))]))
+    return AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text(text)]))
 
 
 def stop_end(snapshot_id: str) -> AgentStreamChunk:
@@ -1343,10 +1299,7 @@ def stop_end(snapshot_id: str) -> AgentStreamChunk:
 
 def interrupt_tool_part() -> Part:
     return Part(
-        root=ToolRequestPart(
-            tool_request=ToolRequest(name='userApproval', ref='c1', input={'amount': 1}),
-            metadata={'interrupt': True},
-        )
+        tool_request=ToolRequest(name='userApproval', ref='c1', input={'amount': 1}), metadata={'interrupt': True}
     )
 
 
@@ -1376,7 +1329,7 @@ class PerTurnMockTransport(AgentTransport[Any]):
             chunks=[*(text_chunk(t) for t in texts), stop_end(snapshot_id)],
             output=AgentOutput(
                 snapshot_id=snapshot_id,
-                message=MessageData(role='model', content=[Part(root=TextPart(text=final_text))]),
+                message=Message(role='model', content=[Part.from_text(final_text)]),
                 finish_reason=AgentFinishReason.STOP,
             ),
         )
@@ -1392,7 +1345,7 @@ class PerTurnMockTransport(AgentTransport[Any]):
             ],
             output=AgentOutput(
                 snapshot_id=snapshot_id,
-                message=MessageData(role='model', content=[part]),
+                message=Message(role='model', content=[part]),
                 finish_reason=AgentFinishReason.INTERRUPTED,
             ),
         )
@@ -1484,7 +1437,7 @@ async def test_send_applies_custom_patches_without_caller_stream() -> None:
 
     transport.final_output = AgentOutput(
         snapshot_id='snap-a',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='hi'))]),
+        message=Message(role='model', content=[Part.from_text('hi')]),
         finish_reason=AgentFinishReason.STOP,
     )
     turn = chat.send_stream('hello')
@@ -1502,7 +1455,7 @@ async def test_send_applies_custom_patches_without_caller_stream() -> None:
 
     transport.final_output = AgentOutput(
         snapshot_id='snap-b',
-        message=MessageData(role='model', content=[Part(root=TextPart(text='again'))]),
+        message=Message(role='model', content=[Part.from_text('again')]),
         finish_reason=AgentFinishReason.STOP,
     )
     send_task = asyncio.create_task(chat.send('next'))
@@ -1545,22 +1498,22 @@ async def test_inprocess_undrained_streams_stay_isolated() -> None:
 
     pm.chunks = [
         [
-            ModelResponseChunkModel(content=[Part(TextPart(text='ONE-A'))]),
-            ModelResponseChunkModel(content=[Part(TextPart(text='ONE-B'))]),
+            ModelResponseChunkModel(content=[Part.from_text('ONE-A')]),
+            ModelResponseChunkModel(content=[Part.from_text('ONE-B')]),
         ],
         [
-            ModelResponseChunkModel(content=[Part(TextPart(text='TWO-A'))]),
-            ModelResponseChunkModel(content=[Part(TextPart(text='TWO-B'))]),
+            ModelResponseChunkModel(content=[Part.from_text('TWO-A')]),
+            ModelResponseChunkModel(content=[Part.from_text('TWO-B')]),
         ],
     ]
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ONE-FINAL'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ONE-FINAL')]),
         ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='TWO-FINAL'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('TWO-FINAL')]),
         ),
     ]
 

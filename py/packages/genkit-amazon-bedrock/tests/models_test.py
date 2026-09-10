@@ -35,7 +35,6 @@ from botocore.exceptions import (
 from genkit_amazon_bedrock.models import BedrockModel
 
 from genkit import FinishReason, Message, ModelRequest, Part, Role
-from genkit._core._typing import TextPart
 from genkit.plugin_api import ActionRunContext, GenkitError
 
 
@@ -73,7 +72,7 @@ class FakeTransport:
 
 
 def text_request(text: str = 'hello') -> ModelRequest:
-    return ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])])
+    return ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text(text)])])
 
 
 def text_response(text: str = 'world') -> dict[str, Any]:
@@ -95,7 +94,7 @@ async def test_generate_round_trip() -> None:
     assert transport.kwargs['modelId'] == 'amazon.nova-lite-v1:0'
     assert transport.kwargs['messages'] == [{'role': 'user', 'content': [{'text': 'hello'}]}]
     assert response.message is not None
-    assert response.message.content[0].root.text == 'hi there'
+    assert response.message.content[0].text == 'hi there'
     assert response.finish_reason == FinishReason.STOP
     assert response.usage is not None
     assert response.usage.total_tokens == 3
@@ -120,9 +119,9 @@ async def test_streaming_context_routes_to_converse_stream() -> None:
     assert transport.stream_kwargs['modelId'] == 'amazon.nova-lite-v1:0'
     assert transport.stream_kwargs['messages'] == [{'role': 'user', 'content': [{'text': 'hello'}]}]
     assert transport.kwargs is None
-    assert [chunk.content[0].root.text for chunk in chunks] == ['strea', 'med']
+    assert [chunk.content[0].text for chunk in chunks] == ['strea', 'med']
     assert response.message is not None
-    assert response.message.content[0].root.text == 'streamed'
+    assert response.message.content[0].text == 'streamed'
     assert transport.stream_closed
 
 

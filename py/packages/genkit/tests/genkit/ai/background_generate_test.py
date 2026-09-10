@@ -33,11 +33,7 @@ from genkit._core._typing import (
     FinishReason,
     Operation,
     Role,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
 )
 
 
@@ -203,7 +199,7 @@ class SwallowsStart(BaseMiddleware):
             return await next_fn(params, ctx)
         except GenkitError:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='FLASH'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('FLASH')]),
                 finish_reason=FinishReason.STOP,
             )
 
@@ -253,15 +249,15 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
         await ai.generate(
             model='bg-model',
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+                Message(role=Role.USER, content=[Part.from_text('hi')]),
                 Message(
                     role=Role.MODEL,
                     content=[
-                        Part(root=ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1'))),
+                        Part(tool_request=ToolRequest(name='ping', input={}, ref='1')),
                     ],
                 ),
             ],
-            resume_respond=[ToolResponsePart(tool_response=ToolResponse(name='ping', ref='1', output='ok'))],
+            resume_respond=[Part.from_tool_response(name='ping', ref='1', output='ok')],
         )
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
@@ -378,7 +374,7 @@ async def test_define_model_returning_model_response_with_operation_raises(ai: G
 
     async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
         return ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Started'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Started')]),
             operation=Operation(id='lro-1', done=False),
         )
 
@@ -395,7 +391,7 @@ def test_model_response_messages_sees_request_set_after_first_read() -> None:
     resp = ModelResponse(operation=Operation(id='x'))
     assert resp.messages == []
     resp.request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
     )
     assert [m.text for m in resp.messages] == ['a cat']
 
@@ -412,13 +408,8 @@ def test_model_response_views_see_message_set_after_first_read() -> None:
     resp.message = Message(
         role=Role.MODEL,
         content=[
-            Part(
-                root=ToolRequestPart(
-                    tool_request=ToolRequest(name='ping', input={}),
-                    metadata={'interrupt': True},
-                )
-            ),
-            Part(root=TextPart(text='{"ok": true}')),
+            Part(tool_request=ToolRequest(name='ping', input={}), metadata={'interrupt': True}),
+            Part.from_text('{"ok": true}'),
         ],
     )
     assert resp.text == '{"ok": true}'
@@ -507,7 +498,7 @@ async def test_background_action_start_passes_context(ai: Genkit) -> None:
 
     bg = ai.define_background_model(name='bg-model', start=start, check=check)
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
     )
 
     await bg.start(request, context={'secrets': {'api_key': 'tenant'}})
@@ -741,8 +732,8 @@ class Reroute(BaseMiddleware[RerouteConfig]):
 
 def register_plain(ai: Genkit, *, name: str = 'plain', text: str = 'from-plain') -> None:
     async def model_fn(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text=text))]))
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]))
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(text)]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
     ai.define_model(name=name, fn=model_fn)
 
@@ -752,7 +743,7 @@ def register_tool_caller(ai: Genkit, *, name: str = 'flash') -> None:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1')))],
+                content=[Part(tool_request=ToolRequest(name='ping', input={}, ref='1'))],
             )
         )
 
@@ -761,20 +752,20 @@ def register_tool_caller(ai: Genkit, *, name: str = 'flash') -> None:
 
 def interrupted_history() -> list[Message]:
     return [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+        Message(role=Role.USER, content=[Part.from_text('hi')]),
         Message(
             role=Role.MODEL,
-            content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1')))],
+            content=[Part(tool_request=ToolRequest(name='ping', input={}, ref='1'))],
         ),
     ]
 
 
-def respond_ping() -> ToolResponsePart:
-    return ToolResponsePart(tool_response=ToolResponse(name='ping', ref='1', output='ok'))
+def respond_ping() -> Part:
+    return Part.from_tool_response(name='ping', ref='1', output='ok')
 
 
-def restart_ping() -> ToolRequestPart:
-    return ToolRequestPart(tool_request=ToolRequest(name='ping', input={}, ref='1'))
+def restart_ping() -> Part:
+    return Part.from_tool_request(name='ping', input={}, ref='1')
 
 
 def register_ping(ai: Genkit, runs: list[str] | None = None) -> None:
@@ -1112,7 +1103,7 @@ async def test_wrap_generate_short_circuit_skips_a_missing_model(ai: Genkit) -> 
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='FLASH'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('FLASH')]),
                 finish_reason=FinishReason.STOP,
             )
 

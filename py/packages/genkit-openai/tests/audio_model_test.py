@@ -37,13 +37,11 @@ from genkit_openai.models.audio import (
 
 from genkit import (
     GenkitError,
-    Media,
     Message,
     ModelRequest,
     Part,
     Role,
 )
-from genkit._core._typing import MediaPart, TextPart
 
 
 class TestExtractText:
@@ -53,7 +51,7 @@ class TestExtractText:
         """Verify text extraction from a simple request."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
+                Message(role=Role.USER, content=[Part.from_text('Hello')]),
             ],
         )
         got = _extract_text(request)
@@ -76,14 +74,7 @@ class TestExtractMedia:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    content_type='audio/mpeg',
-                                    url='data:audio/mpeg;base64,dGVzdA==',
-                                )
-                            )
-                        ),
+                        Part.from_media('data:audio/mpeg;base64,dGVzdA==', content_type='audio/mpeg'),
                     ],
                 ),
             ],
@@ -96,7 +87,7 @@ class TestExtractMedia:
         """Verify ValueError when no media content is found."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='no media'))]),
+                Message(role=Role.USER, content=[Part.from_text('no media')]),
             ],
         )
         with pytest.raises(ValueError, match='No media content found'):
@@ -110,7 +101,7 @@ class TestToTTSParams:
         """Verify required TTS params with defaults."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Say hello'))]),
+                Message(role=Role.USER, content=[Part.from_text('Say hello')]),
             ],
         )
         got = _to_tts_params('tts-1', request)
@@ -122,7 +113,7 @@ class TestToTTSParams:
         """Verify custom voice config is applied."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
+                Message(role=Role.USER, content=[Part.from_text('test')]),
             ],
             config={'voice': 'nova'},
         )
@@ -133,7 +124,7 @@ class TestToTTSParams:
         """Verify standard GenAI keys are stripped."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
+                Message(role=Role.USER, content=[Part.from_text('test')]),
             ],
             config={'temperature': 0.5, 'top_k': 40},
         )
@@ -154,8 +145,8 @@ class TestToTTSResponse:
         assert got.message is not None
         assert len(got.message.content) == 1
 
-        part = got.message.content[0].root
-        assert isinstance(part, MediaPart)
+        part = got.message.content[0]
+        assert part.media is not None
         assert part.media.content_type == 'audio/mpeg'
         assert str(part.media.url).startswith('data:audio/mpeg;base64,')
 
@@ -166,8 +157,8 @@ class TestToTTSResponse:
 
         got = _to_tts_response(mock_response, 'opus')
         assert got.message is not None
-        part = got.message.content[0].root
-        assert isinstance(part, MediaPart)
+        part = got.message.content[0]
+        assert part.media is not None
         assert part.media.content_type == 'audio/opus'
 
 
@@ -182,14 +173,7 @@ class TestToSTTParams:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    content_type='audio/mpeg',
-                                    url=f'data:audio/mpeg;base64,{audio_data}',
-                                )
-                            )
-                        ),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
                     ],
                 ),
             ],
@@ -206,15 +190,8 @@ class TestToSTTParams:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='Transcribe this meeting')),
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    content_type='audio/mpeg',
-                                    url=f'data:audio/mpeg;base64,{audio_data}',
-                                )
-                            )
-                        ),
+                        Part.from_text('Transcribe this meeting'),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
                     ],
                 ),
             ],
@@ -233,16 +210,16 @@ class TestToSTTResponse:
 
         got = _to_stt_response(mock_result)
         assert got.message is not None
-        part = got.message.content[0].root
-        assert isinstance(part, TextPart)
+        part = got.message.content[0]
+        assert part.text is not None
         assert part.text == 'Hello world'
 
     def test_string_result(self) -> None:
         """Verify plain string result is wrapped as text part."""
         got = _to_stt_response('Plain text')
         assert got.message is not None
-        part = got.message.content[0].root
-        assert isinstance(part, TextPart)
+        part = got.message.content[0]
+        assert part.text is not None
         assert part.text == 'Plain text'
 
 
@@ -287,7 +264,7 @@ class TestOpenAITTSModel:
         model = OpenAITTSModel('tts-1', mock_client)
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Say hello'))]),
+                Message(role=Role.USER, content=[Part.from_text('Say hello')]),
             ],
         )
 
@@ -298,8 +275,8 @@ class TestOpenAITTSModel:
         assert got.message is not None
         assert len(got.message.content) == 1
 
-        part = got.message.content[0].root
-        assert isinstance(part, MediaPart)
+        part = got.message.content[0]
+        assert part.media is not None
 
 
 class TestOpenAISTTModel:
@@ -321,14 +298,7 @@ class TestOpenAISTTModel:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    content_type='audio/mpeg',
-                                    url=f'data:audio/mpeg;base64,{audio_data}',
-                                )
-                            )
-                        ),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
                     ],
                 ),
             ],
@@ -348,8 +318,8 @@ class TestOpenAISTTModel:
         assert 'timestamp_granularities' not in translation_params
         assert got.message is not None
 
-        part = got.message.content[0].root
-        assert isinstance(part, TextPart)
+        part = got.message.content[0]
+        assert part.text is not None
         assert part.text == 'Translated text'
 
     @pytest.mark.parametrize('model_name', ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe'])
@@ -389,14 +359,7 @@ class TestOpenAISTTModel:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    content_type='audio/mpeg',
-                                    url=f'data:audio/mpeg;base64,{audio_data}',
-                                )
-                            )
-                        ),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
                     ],
                 ),
             ],
@@ -409,6 +372,6 @@ class TestOpenAISTTModel:
         mock_client.audio.transcriptions.create.assert_called_once()
         assert got.message is not None
 
-        part = got.message.content[0].root
-        assert isinstance(part, TextPart)
+        part = got.message.content[0]
+        assert part.text is not None
         assert part.text == 'Transcribed text'

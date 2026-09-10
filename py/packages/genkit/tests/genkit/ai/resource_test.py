@@ -36,7 +36,6 @@ from genkit._ai._resource import (
 )
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._registry import Registry
-from genkit._core._typing import TextPart
 
 
 @pytest.mark.asyncio
@@ -50,7 +49,7 @@ async def test_define_resource() -> None:
     registry = Registry()
 
     async def my_resource_fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
-        return {'content': [Part(TextPart(text=f'Content for {input.uri}'))]}
+        return {'content': [Part.from_text(f'Content for {input.uri}')]}
 
     act = define_resource(registry, {'uri': 'http://example.com/foo'}, my_resource_fn)
 
@@ -79,7 +78,7 @@ async def test_resolve_resources() -> None:
     registry = Registry()
 
     async def my_resource_fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
-        return {'content': [Part(TextPart(text=f'Content for {input.uri}'))]}
+        return {'content': [Part.from_text(f'Content for {input.uri}')]}
 
     act = define_resource(registry, {'name': 'my-resource', 'uri': 'http://example.com/foo'}, my_resource_fn)
 
@@ -173,7 +172,7 @@ async def test_parent_metadata() -> None:
     registry = Registry()
 
     async def fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
-        return {'content': [Part(TextPart(text='sub1', metadata={'resource': {'uri': f'{input.uri}/sub1.txt'}}))]}
+        return {'content': [Part.from_text('sub1', metadata={'resource': {'uri': f'{input.uri}/sub1.txt'}})]}
 
     res = define_resource(registry, {'template': 'file://{id}'}, fn)
 
@@ -192,7 +191,7 @@ def test_dynamic_resource_matching() -> None:
     """Verifies the matching logic for a simple static URI dynamic resource."""
 
     async def my_resource_fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
-        return {'content': [Part(TextPart(text='Match'))]}
+        return {'content': [Part.from_text('Match')]}
 
     res = resource({'uri': 'http://example.com/foo'}, my_resource_fn)
     assert res.matches is not None

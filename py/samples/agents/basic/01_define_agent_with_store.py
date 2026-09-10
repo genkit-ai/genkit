@@ -77,7 +77,8 @@ async def main() -> None:
     # send_stream when the UI should paint tokens (then await turn.response).
     async for chunk in turn.stream:
         for call in chunk.tool_requests:
-            print(f'  → {call.tool_request.name}')
+            if call.tool_request is not None:
+                print(f'  → {call.tool_request.name}')
         if chunk.text:
             print(chunk.accumulated_text, end='\r', flush=True)
 

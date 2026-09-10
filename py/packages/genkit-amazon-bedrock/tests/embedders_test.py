@@ -35,8 +35,7 @@ from genkit_amazon_bedrock.embedders import (
 )
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 
-from genkit import Media, Part
-from genkit._core._typing import DocumentData, MediaPart, TextPart
+from genkit import Document, Part
 from genkit.embedder import EmbedRequest
 from genkit.plugin_api import GenkitError
 
@@ -98,19 +97,19 @@ class ForbiddenTransport:
         raise AssertionError(f'no InvokeModel call expected, got {kwargs}')
 
 
-def text_doc(*texts: str) -> DocumentData:
-    return DocumentData(content=[Part(root=TextPart(text=text)) for text in texts])
+def text_doc(*texts: str) -> Document:
+    return Document(content=[Part.from_text(text) for text in texts])
 
 
-def media_doc(url: str, content_type: str | None = None) -> DocumentData:
-    return DocumentData(content=[Part(root=MediaPart(media=Media(url=url, content_type=content_type)))])
+def media_doc(url: str, content_type: str | None = None) -> Document:
+    return Document(content=[Part.from_media(url, content_type=content_type)])
 
 
-def mixed_doc(text: str, url: str, content_type: str | None = None) -> DocumentData:
-    return DocumentData(
+def mixed_doc(text: str, url: str, content_type: str | None = None) -> Document:
+    return Document(
         content=[
-            Part(root=TextPart(text=text)),
-            Part(root=MediaPart(media=Media(url=url, content_type=content_type))),
+            Part.from_text(text),
+            Part.from_media(url, content_type=content_type),
         ]
     )
 
@@ -127,7 +126,7 @@ def cohere_response(count: int) -> dict[str, Any]:
     return {'embeddings': {'float': [[float(i), 0.5] for i in range(count)]}}
 
 
-async def embed(model_id: str, transport: Any, documents: list[DocumentData], **kwargs: Any) -> list[list[float]]:
+async def embed(model_id: str, transport: Any, documents: list[Document], **kwargs: Any) -> list[list[float]]:
     embedder = BedrockEmbedder(model_id=model_id, transport=transport)
     response = await embedder.embed(EmbedRequest(input=documents, **kwargs))
     return [embedding.embedding for embedding in response.embeddings]
@@ -539,10 +538,10 @@ def test_document_text_ignores_media_parts() -> None:
         # Remote URLs only raise once the part is known to be an image.
         (media_doc('https://example.com/notes.pdf', 'application/pdf'), ('', '')),
         (text_doc('no media here'), ('', '')),
-        (DocumentData(content=[]), ('', '')),
+        (Document(content=[]), ('', '')),
     ],
 )
-def test_image_from_document(document: DocumentData, expected: tuple[str, str]) -> None:
+def test_image_from_document(document: Document, expected: tuple[str, str]) -> None:
     assert image_from_document(document) == expected
 
 
@@ -565,11 +564,11 @@ def test_image_from_document_rejects_remote_urls(url: str) -> None:
 
 
 def test_image_from_document_returns_the_first_image() -> None:
-    document = DocumentData(
+    document = Document(
         content=[
-            Part(root=MediaPart(media=Media(url=f'data:application/pdf;base64,{PNG_B64}'))),
-            Part(root=MediaPart(media=Media(url='data:image/png;base64,FIRST'))),
-            Part(root=MediaPart(media=Media(url='data:image/png;base64,SECOND'))),
+            Part.from_media(f'data:application/pdf;base64,{PNG_B64}'),
+            Part.from_media('data:image/png;base64,FIRST'),
+            Part.from_media('data:image/png;base64,SECOND'),
         ]
     )
     assert image_from_document(document) == ('image/png', 'FIRST')

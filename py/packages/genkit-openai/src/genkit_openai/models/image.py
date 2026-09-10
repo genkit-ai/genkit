@@ -28,7 +28,6 @@ from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 
 from genkit import (
-    Media,
     Message,
     ModelInfo,
     ModelRequest,
@@ -37,7 +36,6 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit._core._typing import MediaPart
 from genkit.model import FinishReason
 from genkit.plugin_api import ActionRunContext
 from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
@@ -160,7 +158,7 @@ def _to_generate_response(result: ImagesResponse) -> ModelResponse:
             url = f'data:image/png;base64,{image.b64_json}'
 
         if url:
-            content.append(Part(root=MediaPart(media=Media(content_type='image/png', url=url))))
+            content.append(Part.from_media(url, content_type='image/png'))
 
     return ModelResponse(
         message=Message(role=Role.MODEL, content=content),

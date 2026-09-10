@@ -60,7 +60,6 @@ from genkit import (
     Supports,
     ToolDefinition,
 )
-from genkit._core._typing import TextPart
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
@@ -1541,7 +1540,7 @@ class GeminiModel:
 
         # Ensure we always have at least one content item to avoid UI errors
         if not content:
-            content = [Part(root=TextPart(text=''))]
+            content = [Part.from_text('')]
 
         finish_reason = FinishReason.OTHER
         candidates = []
@@ -1555,7 +1554,7 @@ class GeminiModel:
                             c_content.append(converted)
 
                 if not c_content:
-                    c_content = [Part(root=TextPart(text=''))]
+                    c_content = [Part.from_text('')]
 
                 c_finish_reason = _to_finish_reason(c.finish_reason)
 

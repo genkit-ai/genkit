@@ -46,7 +46,6 @@ from genkit import (
     Role,
     ToolDefinition,
 )
-from genkit._core._typing import ReasoningPart, TextPart
 from genkit.plugin_api import GenkitError, ModelConfig
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfakeimagedata'
@@ -55,7 +54,7 @@ PNG_B64 = base64.b64encode(PNG_BYTES).decode()
 
 def user_text_request(text: str = 'hello', **kwargs) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text(text)])],
         **kwargs,
     )
 
@@ -230,8 +229,8 @@ def test_simple_text_round_trip_shape() -> None:
 def test_system_message_becomes_top_level_system() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='be terse'))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('be terse')]),
+            Message(role=Role.USER, content=[Part.from_text('hi')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -244,8 +243,8 @@ def test_empty_system_text_is_dropped() -> None:
     # rather than sent; regular message text has no such floor.
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=''))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text=''))]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('')]),
+            Message(role=Role.USER, content=[Part.from_text('')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -256,8 +255,8 @@ def test_empty_system_text_is_dropped() -> None:
 def test_cache_point_in_system_and_messages() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='rules')), cache_point_part()]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='hi')), cache_point_part()]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('rules'), cache_point_part()]),
+            Message(role=Role.USER, content=[Part.from_text('hi'), cache_point_part()]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -268,9 +267,9 @@ def test_cache_point_in_system_and_messages() -> None:
 def test_multi_turn_roles() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text='a'))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q2'))]),
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_text('a')]),
+            Message(role=Role.USER, content=[Part.from_text('q2')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -280,7 +279,7 @@ def test_multi_turn_roles() -> None:
 def test_empty_messages_are_dropped() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+            Message(role=Role.USER, content=[Part.from_text('hi')]),
             Message(role=Role.MODEL, content=[]),
         ]
     )
@@ -542,8 +541,8 @@ def test_trailing_assistant_message_rejected_when_tools_present() -> None:
     # constraint instead of silently dropping the caller's prefill.
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text='thinking...'))]),
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_text('thinking...')]),
         ],
         tools=[WEATHER_TOOL],
     )
@@ -555,8 +554,8 @@ def test_trailing_assistant_message_rejected_when_tools_present() -> None:
 def test_trailing_assistant_message_kept_without_tools() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text='a'))]),
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_text('a')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -567,8 +566,8 @@ def test_trailing_assistant_kept_under_tool_choice_none() -> None:
     # No toolConfig is sent under "none", so the prefill has nothing to violate.
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text='a'))]),
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_text('a')]),
         ],
         tools=[WEATHER_TOOL],
         config=BedrockConfig(tool_choice='none'),
@@ -590,16 +589,11 @@ def test_additional_model_request_fields_forwarded_verbatim() -> None:
 
 def test_bedrock_reasoning_part_round_trips() -> None:
     # The signature is a string on the Converse wire; it must replay verbatim.
-    part = Part(
-        root=ReasoningPart(
-            reasoning='step by step',
-            metadata={REASONING_SIGNATURE_METADATA_KEY: 'sig-abc123=='},
-        )
-    )
+    part = Part.from_reasoning('step by step', metadata={REASONING_SIGNATURE_METADATA_KEY: 'sig-abc123=='})
     request = ModelRequest(
         messages=[
             Message(role=Role.MODEL, content=[part]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='go on'))]),
+            Message(role=Role.USER, content=[Part.from_text('go on')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -609,12 +603,7 @@ def test_bedrock_reasoning_part_round_trips() -> None:
 
 
 def test_bytes_signature_form_is_tolerated() -> None:
-    part = Part(
-        root=ReasoningPart(
-            reasoning='step by step',
-            metadata={REASONING_SIGNATURE_METADATA_KEY: b'sig-abc123=='},
-        )
-    )
+    part = Part.from_reasoning('step by step', metadata={REASONING_SIGNATURE_METADATA_KEY: b'sig-abc123=='})
     request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
     block = kwargs['messages'][0]['content'][0]['reasoningContent']['reasoningText']
@@ -622,14 +611,12 @@ def test_bytes_signature_form_is_tolerated() -> None:
 
 
 def test_redacted_content_emitted_before_signed_text() -> None:
-    part = Part(
-        root=ReasoningPart(
-            reasoning='visible part',
-            metadata={
-                REASONING_SIGNATURE_METADATA_KEY: 'sig',
-                REDACTED_CONTENT_METADATA_KEY: base64.b64encode(b'redacted-blob').decode(),
-            },
-        )
+    part = Part.from_reasoning(
+        'visible part',
+        metadata={
+            REASONING_SIGNATURE_METADATA_KEY: 'sig',
+            REDACTED_CONTENT_METADATA_KEY: base64.b64encode(b'redacted-blob').decode(),
+        },
     )
     request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -640,12 +627,7 @@ def test_redacted_content_emitted_before_signed_text() -> None:
 
 def test_redacted_only_reasoning_part_still_replays() -> None:
     # Redacted-only parts have reasoning == '' and must not be dropped.
-    part = Part(
-        root=ReasoningPart(
-            reasoning='',
-            metadata={REDACTED_CONTENT_METADATA_KEY: base64.b64encode(b'blob').decode()},
-        )
-    )
+    part = Part.from_reasoning('', metadata={REDACTED_CONTENT_METADATA_KEY: base64.b64encode(b'blob').decode()})
     request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
     assert kwargs['messages'][0]['content'] == [{'reasoningContent': {'redactedContent': b'blob'}}]
@@ -654,8 +636,8 @@ def test_redacted_only_reasoning_part_still_replays() -> None:
 def test_generic_reasoning_part_is_not_replayed() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
-            Message(role=Role.MODEL, content=[Part(root=ReasoningPart(reasoning='foreign thoughts'))]),
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_reasoning('foreign thoughts')]),
         ]
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
@@ -681,19 +663,19 @@ def test_text_response_round_trip() -> None:
     response = to_model_response(converse_response(), request)
     assert response.message is not None
     assert response.message.role == Role.MODEL
-    assert response.message.content[0].root.text == 'hello'
+    assert response.message.content[0].text == 'hello'
     assert response.finish_reason == FinishReason.STOP
     assert response.usage is not None
     assert response.usage.input_tokens == 10
     assert response.usage.output_tokens == 5
     assert response.usage.total_tokens == 15
-    assert response.request is request
+    assert response.request == request
 
 
 def test_tool_use_block_becomes_tool_request_part() -> None:
     blocks = [{'toolUse': {'toolUseId': 'call-1', 'name': 'weather', 'input': {'city': 'Lagos'}}}]
     parts = content_blocks_to_parts(blocks)
-    tool_request = parts[0].root.tool_request
+    tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.ref == 'call-1'
     assert tool_request.name == 'weather'
@@ -702,7 +684,7 @@ def test_tool_use_block_becomes_tool_request_part() -> None:
 
 def test_tool_use_with_missing_input_gets_empty_object() -> None:
     parts = content_blocks_to_parts([{'toolUse': {'toolUseId': 'x', 'name': 'noop'}}])
-    tool_request = parts[0].root.tool_request
+    tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.input == {}
 
@@ -731,7 +713,7 @@ def test_tool_input_coerced_toward_schema() -> None:
         }
     ]
     parts = content_blocks_to_parts(blocks, [tool])
-    tool_request = parts[0].root.tool_request
+    tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.input == {'count': 7, 'ratio': 0.5, 'enabled': True, 'note': 'hi', 'extra': '1'}
 
@@ -747,7 +729,7 @@ def test_number_coerced_to_string_schema(value: object, expected: object) -> Non
     )
     blocks = [{'toolUse': {'toolUseId': 'c1', 'name': 'calc', 'input': {'note': value}}}]
     parts = content_blocks_to_parts(blocks, [tool])
-    tool_request = parts[0].root.tool_request
+    tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.input == {'note': expected}
 
@@ -757,7 +739,7 @@ def test_tool_input_float_truncates_for_integer_schema() -> None:
         name='calc', description='', input_schema={'type': 'object', 'properties': {'n': {'type': 'integer'}}}
     )
     parts = content_blocks_to_parts([{'toolUse': {'toolUseId': 'c', 'name': 'calc', 'input': {'n': 7.9}}}], [tool])
-    tool_request = parts[0].root.tool_request
+    tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.input == {'n': 7}
 
@@ -765,7 +747,7 @@ def test_tool_input_float_truncates_for_integer_schema() -> None:
 def test_reasoning_text_block_becomes_reasoning_part_with_both_keys() -> None:
     blocks = [{'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}}]
     parts = content_blocks_to_parts(blocks)
-    root = parts[0].root
+    root = parts[0]
     assert root.reasoning == 'because'
     assert root.metadata is not None
     assert root.metadata['signature'] == 'sig'
@@ -774,7 +756,7 @@ def test_reasoning_text_block_becomes_reasoning_part_with_both_keys() -> None:
 
 def test_redacted_content_block_becomes_reasoning_part() -> None:
     parts = content_blocks_to_parts([{'reasoningContent': {'redactedContent': b'blob'}}])
-    root = parts[0].root
+    root = parts[0]
     assert root.reasoning == ''
     assert root.metadata is not None
     # Stored as a base64 string so the part survives JSON serialization.
@@ -829,7 +811,7 @@ def test_empty_response_content_yields_placeholder_text_part() -> None:
     )
     model_response = to_model_response(response, user_text_request())
     assert model_response.message is not None
-    assert model_response.message.content[0].root.text == ''
+    assert model_response.message.content[0].text == ''
     assert model_response.finish_reason == FinishReason.BLOCKED
 
 
@@ -837,7 +819,7 @@ def test_missing_output_tolerated() -> None:
     response = converse_response(output={})
     model_response = to_model_response(response, user_text_request())
     assert model_response.message is not None
-    assert model_response.message.content[0].root.text == ''
+    assert model_response.message.content[0].text == ''
 
 
 def test_usage_maps_cache_read_tokens_only() -> None:

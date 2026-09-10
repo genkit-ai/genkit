@@ -29,21 +29,17 @@ from genkit._core._model import Message, ModelResponse
 from genkit._core._typing import (
     AgentFinishReason,
     FinishReason,
-    MessageData,
     Role,
     SnapshotStatus,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
     ToolResponse,
-    ToolResponsePart,
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import AgentError, InMemorySessionStore
 
 
 def test_tag_history_for_render_copies_messages() -> None:
-    original = Message(role=Role.USER, content=[Part(TextPart(text='hi'))], metadata={'keep': True})
+    original = Message(role=Role.USER, content=[Part.from_text('hi')], metadata={'keep': True})
     tagged = tag_history_for_render([original])[0]
 
     assert tagged.metadata is not None
@@ -53,8 +49,8 @@ def test_tag_history_for_render_copies_messages() -> None:
 
 
 def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() -> None:
-    history = Message(role=Role.USER, content=[Part(TextPart(text='turn 1'))], metadata={HISTORY_TAG: True})
-    system = Message(role=Role.SYSTEM, content=[Part(TextPart(text='be helpful'))])
+    history = Message(role=Role.USER, content=[Part.from_text('turn 1')], metadata={HISTORY_TAG: True})
+    system = Message(role=Role.SYSTEM, content=[Part.from_text('be helpful')])
 
     tagged = apply_preamble_tags([system, history])
 
@@ -63,7 +59,7 @@ def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() 
 
 
 def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
-    shared = Message(role=Role.SYSTEM, content=[Part(TextPart(text='static system'))])
+    shared = Message(role=Role.SYSTEM, content=[Part.from_text('static system')])
     tagged = apply_preamble_tags([shared])[0]
 
     assert tagged.metadata == {PREAMBLE_KEY: True}
@@ -81,7 +77,7 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
 
@@ -107,11 +103,11 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
     pm.responses.extend([
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='first'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('first')]),
         ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='second'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('second')]),
         ),
     ])
 
@@ -165,7 +161,7 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('response')]),
         )
     )
 
@@ -181,13 +177,13 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 3
     assert req_msgs[0].role == Role.SYSTEM
-    t0 = req_msgs[0].content[0].root.text
+    t0 = req_msgs[0].content[0].text
     assert t0 is not None
     assert 'Prefix' in t0
     assert req_msgs[1].role == Role.USER
-    assert req_msgs[1].content[0].root.text == 'turn 1'
+    assert req_msgs[1].content[0].text == 'turn 1'
     assert req_msgs[2].role == Role.USER
-    t2 = req_msgs[2].content[0].root.text
+    t2 = req_msgs[2].content[0].text
     assert t2 is not None
     assert 'Suffix' in t2
 
@@ -195,8 +191,8 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
     assert roles == [Role.USER, Role.MODEL]
-    assert session.messages[0].content[0].root.text == 'turn 1'
-    assert session.messages[1].content[0].root.text == 'response'
+    assert session.messages[0].content[0].text == 'turn 1'
+    assert session.messages[1].content[0].text == 'response'
 
 
 @pytest.mark.asyncio
@@ -228,7 +224,7 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('response')]),
         )
     )
 
@@ -243,18 +239,18 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     assert pm.last_request is not None
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 4
-    t1 = req_msgs[1].content[0].root.text
+    t1 = req_msgs[1].content[0].text
     assert t1 is not None
     assert 'Q: 1+1' in t1
-    t2 = req_msgs[2].content[0].root.text
+    t2 = req_msgs[2].content[0].text
     assert t2 is not None
     assert 'A: 2' in t2
 
     # Verify few-shots are stripped, and only runtime history & response are saved
     assert len(session.messages) == 2
     assert [m.role for m in session.messages] == [Role.USER, Role.MODEL]
-    assert session.messages[0].content[0].root.text == 'turn 1'
-    assert session.messages[1].content[0].root.text == 'response'
+    assert session.messages[0].content[0].text == 'turn 1'
+    assert session.messages[1].content[0].text == 'response'
 
 
 @pytest.mark.asyncio
@@ -274,30 +270,27 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='done'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
         )
     )
 
     # Pre-seed tool call and tool response history
     tool_request_msg = Message(
         role=Role.MODEL,
-        content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='myTool', ref='r1', input={'x': 1})))],
+        content=[Part(tool_request=ToolRequest(name='myTool', ref='r1', input={'x': 1}))],
     )
     tool_response_msg = Message(
         role=Role.TOOL,
-        content=[
-            Part(root=ToolResponsePart(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'})))
-        ],
+        content=[Part(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'}))],
     )
 
     history = [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='run tool'))]),
+        Message(role=Role.USER, content=[Part.from_text('run tool')]),
         tool_request_msg,
         tool_response_msg,
     ]
 
-    seed_messages = [MessageData.model_validate(m.model_dump()) for m in history]
-    session = agent.chat(messages=seed_messages)
+    session = agent.chat(messages=history)
     turn = session.send_stream('continue')
     async for _chunk in turn.stream:
         pass
@@ -316,9 +309,9 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     # Verify that tool request/responses are present in the session messages
     assert len(session.messages) == 5
     assert session.messages[1].role == Role.MODEL
-    assert isinstance(session.messages[1].content[0].root, ToolRequestPart)
+    assert session.messages[1].content[0].tool_request is not None
     assert session.messages[2].role == Role.TOOL
-    assert isinstance(session.messages[2].content[0].root, ToolResponsePart)
+    assert session.messages[2].content[0].tool_response is not None
 
 
 @pytest.mark.asyncio
@@ -335,7 +328,7 @@ async def test_prompt_agent_schema_miss_keeps_invalid_argument() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='not json'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
         )
     )
 
@@ -356,7 +349,7 @@ async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
             finish_message='safety',
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
         )
     )
 
@@ -372,7 +365,7 @@ async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
     resumed = await agent.chat(snapshot_id=out.snapshot_id).send('again')
@@ -382,7 +375,7 @@ async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
     again = await chat.send('try again')
@@ -401,11 +394,11 @@ async def test_prompt_agent_client_managed_blocked_is_not_next_turn_history() ->
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
             finish_message='safety',
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
         ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         ),
     ])
 
@@ -432,7 +425,7 @@ async def test_detach_blocked_keeps_blocked_finish_reason() -> None:
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
             finish_message='safety',
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='nope'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
         )
     )
 
@@ -446,7 +439,7 @@ async def test_detach_blocked_keeps_blocked_finish_reason() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
     resumed = await agent.chat(snapshot_id=task.snapshot_id).send('again')

@@ -25,7 +25,8 @@ from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import StateTransform
 from genkit._core._action import get_current_context
 from genkit._core._error import GenkitError
-from genkit._core._typing import SessionSnapshot, SnapshotStatus
+from genkit._core._model import SessionSnapshot
+from genkit._core._typing import SnapshotStatus
 
 DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000
 

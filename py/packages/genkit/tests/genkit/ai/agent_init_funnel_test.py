@@ -25,17 +25,11 @@ from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
 from genkit._core._action import ActionRunContext
+from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentFinishReason,
-    AgentInit,
-    AgentInput,
-    AgentResult,
-    MessageData,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
-    TextPart,
 )
 from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
 
@@ -44,11 +38,8 @@ async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentRe
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message and inp.message.content:
-            root = inp.message.content[0].root
-            text = getattr(root, 'text', '') or ''
-        await session_runner.add_messages([
-            MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))])
-        ])
+            text = inp.message.content[0].text or ''
+        await session_runner.add_messages([Message(role='model', content=[Part.from_text(f'Echo: {text}')])])
         return TurnResult(finish_reason=AgentFinishReason.STOP)
 
     await session_runner.run(handle_turn)
@@ -130,7 +121,7 @@ def test_chat_rejects_messages_on_server_managed_agent() -> None:
     agent = define_custom_agent(registry, 'serverChatMessages', echo_fn, store=store)
 
     with pytest.raises(AgentInitError) as exc:
-        agent.chat(messages=[MessageData(role='user', content=[Part(root=TextPart(text='hi'))])])
+        agent.chat(messages=[Message(role='user', content=[Part.from_text('hi')])])
 
     assert exc.value.status == 'FAILED_PRECONDITION'
     assert "Cannot send 'messages'" in str(exc.value)
@@ -145,7 +136,7 @@ def test_chat_rejects_messages_mixed_with_snapshot_id() -> None:
 
     with pytest.raises(AgentInitError) as exc:
         agent.chat(
-            messages=[MessageData(role='user', content=[Part(root=TextPart(text='hi'))])],
+            messages=[Message(role='user', content=[Part.from_text('hi')])],
             snapshot_id='snap-1',
         )
 

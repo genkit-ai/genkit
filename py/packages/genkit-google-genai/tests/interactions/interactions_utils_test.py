@@ -26,7 +26,6 @@ from genkit_google_genai.models.interactions_utils import (
 )
 
 from genkit import GenkitError
-from genkit._core._typing import TextPart
 
 
 def test_extract_version_strips_all_pasted_prefixes() -> None:
@@ -125,8 +124,8 @@ def test_steps_with_folded_system_instruction_prepends_system() -> None:
     from genkit import Message, Part, Role
 
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(TextPart(text='Be helpful.'))]),
-        Message(role=Role.USER, content=[Part(TextPart(text='Hello!'))]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('Be helpful.')]),
+        Message(role=Role.USER, content=[Part.from_text('Hello!')]),
     ]
     steps = steps_with_folded_system_instruction(messages)
     assert len(steps) == 2

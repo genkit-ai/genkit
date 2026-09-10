@@ -46,10 +46,7 @@ from genkit._core._action import Action
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._typing import (
-    Media,
-    MediaPart,
     Role,
-    TextPart,
 )
 from genkit.middleware import (
     BaseMiddleware,
@@ -213,7 +210,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 raise ValueError(f'Image too large ({len(raw):,} bytes; max {_MAX_READ_SLICE_BYTES:,}).')
             b64 = base64.b64encode(raw).decode('ascii')
             data_uri = f'data:{mime_type};base64,{b64}'
-            self._enqueue_parts([Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))])
+            self._enqueue_parts([Part.from_media(data_uri, content_type=mime_type)])
             return f'Image {file_path} queued as media part.'
 
         with open(abs_path, encoding='utf-8', errors='replace') as fh:
@@ -232,7 +229,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
         else:
             wrapped = f'<read_file path="{file_path}" totalLines="{total}">\n{sliced}\n</read_file>'
 
-        self._enqueue_parts([Part(root=TextPart(text=wrapped))])
+        self._enqueue_parts([Part.from_text(wrapped)])
         return f'File {file_path} read successfully. Content queued as user message.'
 
     def _write_file_impl(self, file_path: str, content: str) -> str:
@@ -370,5 +367,5 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            self._enqueue_parts([Part(root=TextPart(text=error_msg))])
+            self._enqueue_parts([Part.from_text(error_msg)])
             return MultipartToolResponse(output='Tool call failed; see user message below for details.')

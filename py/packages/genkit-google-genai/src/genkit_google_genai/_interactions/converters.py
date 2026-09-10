@@ -67,14 +67,6 @@ from genkit import (
     ToolRequest,
     ToolResponse,
 )
-from genkit._core._typing import (
-    CustomPart,
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
-)
 from genkit.model import Error, FinishReason, Message, ModelResponse, ModelUsage, Operation, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -171,20 +163,19 @@ def ensure_tool_ids(messages: list[Message]) -> list[Message]:
 
     for message in new_messages:
         for part in message.content:
-            root = part.root
-            if isinstance(root, ToolRequestPart) and root.tool_request:
-                if not root.tool_request.ref:
+            if part.tool_request is not None:
+                if not part.tool_request.ref:
                     new_id = f'genkit-auto-id-{next_id_counter}'
                     next_id_counter += 1
-                    root.tool_request.ref = new_id
-                request_ids.append(root.tool_request.ref)
+                    part.tool_request.ref = new_id
+                request_ids.append(part.tool_request.ref)
 
     # A response that already named its call isn't in the pairing pool.
     claimed = {
-        part.root.tool_response.ref
+        part.tool_response.ref
         for message in new_messages
         for part in message.content
-        if isinstance(part.root, ToolResponsePart) and part.root.tool_response and part.root.tool_response.ref
+        if part.tool_response is not None and part.tool_response.ref
     }
     available = [ref for ref in request_ids if ref not in claimed]
 
@@ -192,12 +183,11 @@ def ensure_tool_ids(messages: list[Message]) -> list[Message]:
     # ones get orphan IDs so the wire never sends an empty call_id.
     for message in new_messages:
         for part in message.content:
-            root = part.root
-            if isinstance(root, ToolResponsePart) and root.tool_response and not root.tool_response.ref:
+            if part.tool_response is not None and not part.tool_response.ref:
                 if available:
-                    root.tool_response.ref = available.pop(0)
+                    part.tool_response.ref = available.pop(0)
                 else:
-                    root.tool_response.ref = f'genkit-orphan-id-{next_id_counter}'
+                    part.tool_response.ref = f'genkit-orphan-id-{next_id_counter}'
                     next_id_counter += 1
 
     return new_messages
@@ -221,17 +211,16 @@ def to_interaction_tool(tool: ToolDefinition) -> FunctionParam:
 
 def to_interaction_content(part: Part) -> ContentParam | None:
     """Convert a Genkit part to an Interactions content block."""
-    root = part.root
-    if isinstance(root, TextPart):
-        text: TextContentParam = {'type': 'text', 'text': root.text}
+    if part.text is not None:
+        text: TextContentParam = {'type': 'text', 'text': part.text}
         return text
-    if isinstance(root, MediaPart) and root.media is not None:
-        return to_interaction_media(root)
+    if part.media is not None:
+        return to_interaction_media(part)
     logger.warning('Unsupported part type for Interaction input: %s', part.model_dump(by_alias=True))
     return None
 
 
-def to_interaction_media(part: MediaPart) -> ContentParam:
+def to_interaction_media(part: Part) -> ContentParam:
     """Convert a media part to an Interactions image/audio/video/document block."""
     if part.media is None:
         raise ValueError('Media part missing media')
@@ -274,7 +263,7 @@ def split_system_instruction(messages: list[Message]) -> tuple[str | None, list[
         if message.role != 'system':
             turns.append(message)
             continue
-        if any(not isinstance(part.root, TextPart) for part in message.content):
+        if any(part.text is None for part in message.content):
             logger.warning('Dropping non-text content from a system message; system instructions are text only.')
         if message.text:
             instructions.append(message.text)
@@ -385,14 +374,14 @@ def thought_from_custom(custom: dict[str, Any] | None) -> StepParam | None:
     return None
 
 
-def to_thought_step(part: ReasoningPart) -> StepParam:
+def to_thought_step(part: Part) -> StepParam:
     """Compile a Genkit reasoning part into a thought step."""
     original = thought_from_custom(part.custom)
     if original is not None:
         return original
     thought: ThoughtStepParam = {
         'type': 'thought',
-        'summary': [{'type': 'text', 'text': part.reasoning}],
+        'summary': [{'type': 'text', 'text': part.reasoning or ''}],
     }
     return with_signature(thought, part.metadata or {})
 
@@ -452,15 +441,14 @@ def to_server_tool_step(custom: dict[str, Any], metadata: dict[str, Any]) -> Ste
 
 def to_standalone_step(part: Part) -> StepParam | None:
     """Return the step a part compiles to on its own, or None if it is inline content."""
-    root = part.root
-    if isinstance(root, ToolRequestPart) and root.tool_request:
-        return to_function_call_step(root.tool_request)
-    if isinstance(root, ToolResponsePart) and root.tool_response:
-        return to_function_result_step(root.tool_response, root.metadata)
-    if isinstance(root, ReasoningPart):
-        return to_thought_step(root)
-    if isinstance(root, CustomPart):
-        custom = root.custom or {}
+    if part.tool_request:
+        return to_function_call_step(part.tool_request)
+    if part.tool_response:
+        return to_function_result_step(part.tool_response, part.metadata)
+    if part.reasoning is not None:
+        return to_thought_step(part)
+    if part.custom is not None:
+        custom = part.custom or {}
         original_thought = thought_from_custom(custom)
         if original_thought is not None:
             return original_thought
@@ -470,7 +458,7 @@ def to_standalone_step(part: Part) -> StepParam | None:
         server_result = custom.get(SERVER_FUNCTION_RESULT)
         if isinstance(server_result, dict):
             return to_server_function_result_step(server_result)
-        metadata = root.metadata or {}
+        metadata = part.metadata or {}
         step = to_server_tool_step(custom, metadata)
         return with_signature(step, metadata) if step is not None else None
     return None
@@ -519,9 +507,7 @@ def with_metadata(part: Part, key: str, value: object) -> Part:
     """Return a copy of the part carrying one more metadata entry."""
     if not value:
         return part
-    root = part.root
-    updated = root.model_copy(update={'metadata': {**(root.metadata or {}), key: value}})
-    return Part(updated)
+    return part.model_copy(update={'metadata': {**(part.metadata or {}), key: value}})
 
 
 def plain(value: object) -> object:
@@ -537,7 +523,7 @@ def plain(value: object) -> object:
 
 def server_tool_part(key: str, payload: dict[str, Any], *, signature: str | None, call_id: str | None = None) -> Part:
     """Wrap Google-side tool activity in the custom part Genkit round-trips."""
-    part = Part(CustomPart(custom={key: payload}, metadata={CALL_ID: call_id} if call_id else None))
+    part = Part.from_custom({key: payload}, metadata={CALL_ID: call_id} if call_id else None)
     return with_metadata(part, THOUGHT_SIGNATURE, signature)
 
 
@@ -594,12 +580,10 @@ def from_function_call_step(step: FunctionCallStep) -> Part:
     tool loop, so they use ToolRequestPart — not an opaque custom blob.
     """
     return Part(
-        ToolRequestPart(
-            tool_request=ToolRequest(
-                name=step.name or '',
-                input=plain(step.arguments) if step.arguments is not None else {},
-                ref=step.id,
-            )
+        tool_request=ToolRequest(
+            name=step.name or '',
+            input=plain(step.arguments) if step.arguments is not None else {},
+            ref=step.id,
         )
     )
 
@@ -610,55 +594,40 @@ def from_function_result_step(step: FunctionResultStep) -> Part:
     The API echoes the client's own tool result back on the model tape.
     Putting that on a ToolResponsePart would send it again next turn.
     """
-    return Part(
-        CustomPart(
-            custom={
-                SERVER_FUNCTION_RESULT: {
-                    'name': step.name or '',
-                    'result': plain(step.result),
-                    'call_id': step.call_id,
-                    'is_error': step.is_error,
-                }
-            }
-        )
-    )
+    return Part.from_custom({
+        SERVER_FUNCTION_RESULT: {
+            'name': step.name or '',
+            'result': plain(step.result),
+            'call_id': step.call_id,
+            'is_error': step.is_error,
+        }
+    })
 
 
-def from_media_content(content: ImageContent | AudioContent | DocumentContent | VideoContent) -> MediaPart:
+def from_media_content(content: ImageContent | AudioContent | DocumentContent | VideoContent) -> Part:
     """Convert wire media content to a Genkit media part."""
     url = content.uri
     if content.data and content.mime_type:
         url = f'data:{content.mime_type};base64,{content.data}'
-    return MediaPart(media=Media(url=url or '', content_type=content.mime_type))
+    return Part(media=Media(url=url or '', content_type=content.mime_type))
 
 
 def from_text_content(content: TextContent) -> Part:
     """Convert wire text content to a Genkit text part."""
     # Empty annotations still show up in metadata so round-trips stay stable.
-    return Part(
-        TextPart(
-            text=content.text or '',
-            metadata={'annotations': plain(content.annotations)},
-        )
-    )
+    return Part.from_text(content.text or '', metadata={'annotations': plain(content.annotations)})
 
 
 def from_visual_content(content: ImageContent | VideoContent) -> Part:
     """Convert wire image or video content, keeping the resolution it came back at."""
-    return with_metadata(Part(from_media_content(content)), 'resolution', content.resolution)
+    return with_metadata(from_media_content(content), 'resolution', content.resolution)
 
 
 def from_thought_step(step: ThoughtStep) -> Part:
     """Convert a thought step to a Genkit reasoning part."""
     summary = step.summary or []
     reasoning = '\n'.join(item.text or '' if isinstance(item, TextContent) else '[Image]' for item in summary)
-    return Part(
-        ReasoningPart(
-            reasoning=reasoning,
-            metadata={THOUGHT_SIGNATURE: step.signature},
-            custom={THOUGHT_CUSTOM: step.model_dump(mode='python')},
-        )
-    )
+    return Part.from_reasoning(reasoning, metadata={THOUGHT_SIGNATURE: step.signature})
 
 
 def from_interaction_content(content: Content) -> Part:
@@ -668,10 +637,10 @@ def from_interaction_content(content: Content) -> Part:
     if isinstance(content, (ImageContent, VideoContent)):
         return from_visual_content(content)
     if isinstance(content, (AudioContent, DocumentContent)):
-        return Part(from_media_content(content))
+        return from_media_content(content)
     if isinstance(content, UnknownContent):
-        return Part(CustomPart(custom={'unknownContent': content.model_dump(mode='python')}))
-    return Part(CustomPart(custom={'unknownContent': content}))
+        return Part.from_custom({'unknownContent': content.model_dump(mode='python')})
+    return Part.from_custom({'unknownContent': content})
 
 
 def from_interaction_step(step: Step) -> list[Part]:
@@ -696,8 +665,8 @@ def from_interaction_step(step: Step) -> list[Part]:
     if isinstance(step, FunctionResultStep):
         return [from_function_result_step(step)]
     if isinstance(step, BaseModel):
-        return [Part(CustomPart(custom={UNKNOWN_STEP: step.model_dump(mode='python')}))]
-    return [Part(CustomPart(custom={UNKNOWN_STEP: step}))]
+        return [Part.from_custom({UNKNOWN_STEP: step.model_dump(mode='python')})]
+    return [Part.from_custom({UNKNOWN_STEP: step})]
 
 
 def interaction_message_metadata(interaction: Interaction) -> dict[str, Any] | None:
@@ -783,7 +752,7 @@ def cancelled_response(interaction: Interaction) -> ModelResponse:
     """Build the ModelResponse for a cancelled Interaction."""
     return model_response(
         interaction,
-        content=[Part(TextPart(text='Operation cancelled.'))],
+        content=[Part.from_text('Operation cancelled.')],
         finish_reason=FinishReason.ABORTED,
         finish_message='Operation cancelled',
     )

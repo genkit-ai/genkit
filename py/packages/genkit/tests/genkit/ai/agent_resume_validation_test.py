@@ -29,30 +29,26 @@ import pytest
 from genkit import Part
 from genkit._ai._agents._base import validate_resume_against_history
 from genkit._core._error import GenkitError
+from genkit._core._model import Message, Resume
 from genkit._core._typing import (
-    MessageData,
-    Resume,
     Role,
     ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
 )
 
 
-def model_message_with_tools(*requests: ToolRequest) -> MessageData:
-    return MessageData(
+def model_message_with_tools(*requests: ToolRequest) -> Message:
+    return Message(
         role=Role.MODEL,
-        content=[Part(root=ToolRequestPart(tool_request=tr)) for tr in requests],
+        content=[Part(tool_request=tr) for tr in requests],
     )
 
 
-def restart(name: str, *, ref: str | None = None, input: object = None) -> ToolRequestPart:
-    return ToolRequestPart(tool_request=ToolRequest(name=name, ref=ref, input=input))
+def restart(name: str, *, ref: str | None = None, input: object = None) -> Part:
+    return Part.from_tool_request(name=name, ref=ref, input=input)
 
 
-def respond(name: str, *, ref: str | None = None) -> ToolResponsePart:
-    return ToolResponsePart(tool_response=ToolResponse(name=name, ref=ref))
+def respond(name: str, *, ref: str | None = None) -> Part:
+    return Part.from_tool_response(name=name, ref=ref)
 
 
 def test_valid_respond_passes() -> None:
@@ -101,7 +97,7 @@ def test_restart_input_match_is_order_insensitive() -> None:
 def test_searches_entire_history_not_just_last_message() -> None:
     history = [
         model_message_with_tools(ToolRequest(name='get_weather', ref='1', input={'city': 'sf'})),
-        MessageData(role=Role.USER, content=[]),
+        Message(role=Role.USER, content=[]),
         model_message_with_tools(ToolRequest(name='book', ref='2', input={'seat': '3A'})),
     ]
     validate_resume_against_history(Resume(respond=[respond('get_weather', ref='1')]), history)
@@ -118,9 +114,9 @@ def test_tool_request_in_non_model_message_does_not_count() -> None:
     # A tool request only counts if the *model* asked for it; a matching name in a
     # user message must not satisfy the resume.
     history = [
-        MessageData(
+        Message(
             role=Role.USER,
-            content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='book', ref='1', input={})))],
+            content=[Part(tool_request=ToolRequest(name='book', ref='1', input={}))],
         )
     ]
     with pytest.raises(GenkitError) as exc:

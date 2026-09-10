@@ -7,7 +7,6 @@
 
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._text import TextFormat
-from genkit._core._typing import TextPart
 
 
 class TestTextFormatStreaming:
@@ -19,12 +18,12 @@ class TestTextFormatStreaming:
         fmt = text_fmt.handle(None)
 
         # Chunk 1: "Hello"
-        chunk1 = ModelResponseChunk(content=[Part(root=TextPart(text='Hello'))])
+        chunk1 = ModelResponseChunk(content=[Part.from_text('Hello')])
         result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == 'Hello'
 
         # Chunk 2: " world" - should return only this chunk's text, not accumulated
-        chunk2 = ModelResponseChunk(content=[Part(root=TextPart(text=' world'))])
+        chunk2 = ModelResponseChunk(content=[Part.from_text(' world')])
         result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == ' world'
 
@@ -33,7 +32,7 @@ class TestTextFormatStreaming:
         text_fmt = TextFormat()
         fmt = text_fmt.handle(None)
 
-        chunk = ModelResponseChunk(content=[Part(root=TextPart(text=''))])
+        chunk = ModelResponseChunk(content=[Part.from_text('')])
         result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
         assert result == ''
 
@@ -46,7 +45,7 @@ class TestTextFormatMessage:
         text_fmt = TextFormat()
         fmt = text_fmt.handle(None)
 
-        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text='Hello world'))])))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('Hello world')]))
         assert result == 'Hello world'
 
     def test_handles_empty_response(self) -> None:
@@ -54,7 +53,7 @@ class TestTextFormatMessage:
         text_fmt = TextFormat()
         fmt = text_fmt.handle(None)
 
-        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text=''))])))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('')]))
         assert result == ''
 
     def test_handles_multiline_text(self) -> None:
@@ -62,9 +61,7 @@ class TestTextFormatMessage:
         text_fmt = TextFormat()
         fmt = text_fmt.handle(None)
 
-        result = fmt.parse_message(
-            Message(Message(role='model', content=[Part(root=TextPart(text='Line 1\nLine 2\nLine 3'))]))
-        )
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('Line 1\nLine 2\nLine 3')]))
         assert result == 'Line 1\nLine 2\nLine 3'
 
 

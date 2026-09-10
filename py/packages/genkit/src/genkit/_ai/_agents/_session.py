@@ -28,11 +28,8 @@ from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._error import GenkitError
 from genkit._core._loop_cache import _loop_local_client
+from genkit._core._model import Artifact, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
-    Artifact,
-    MessageData,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
 )
 
@@ -267,18 +264,18 @@ class Session(Generic[StateT]):
         async with self.lock:
             return self.session_state.model_copy(deep=True)
 
-    async def get_messages(self) -> list[MessageData]:
+    async def get_messages(self) -> list[Message]:
         async with self.lock:
             return list(self.session_state.messages or [])
 
-    async def add_messages(self, messages: list[MessageData]) -> None:
+    async def add_messages(self, messages: list[Message]) -> None:
         async with self.lock:
             if self.session_state.messages is None:
                 self.session_state.messages = []
             self.session_state.messages.extend(messages)
             self.version += 1
 
-    async def set_messages(self, messages: list[MessageData]) -> None:
+    async def set_messages(self, messages: list[Message]) -> None:
         async with self.lock:
             self.session_state.messages = list(messages)
             self.version += 1

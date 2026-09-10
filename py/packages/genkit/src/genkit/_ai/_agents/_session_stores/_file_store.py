@@ -42,7 +42,7 @@ from genkit._ai._agents._session_stores._util import (
     session_id_of,
     subscribe,
 )
-from genkit._core._typing import SessionSnapshot
+from genkit._core._model import SessionSnapshot
 
 
 class FileSessionStore(SessionStoreLock, SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):

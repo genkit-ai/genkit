@@ -33,7 +33,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._typing import MediaPart, TextPart
 from genkit.plugin_api import ActionRunContext, GenkitError, ModelConfig, to_json_schema
 
 TITAN_IMAGE = 'amazon.titan-image-generator-v1'
@@ -85,11 +84,11 @@ class ForbiddenTransport:
 
 
 def text_part(text: str) -> Part:
-    return Part(root=TextPart(text=text))
+    return Part.from_text(text)
 
 
 def media_part(url: str = PNG_DATA_URL) -> Part:
-    return Part(root=MediaPart(media=Media(url=url, content_type='image/png')))
+    return Part.from_media(url, content_type='image/png')
 
 
 def user_message(*parts: Part) -> Message:
@@ -133,7 +132,7 @@ async def generate(
 def media(response: ModelResponse) -> list[Media]:
     """The media payloads of a response, in order."""
     assert response.message is not None
-    return [part.root.media for part in response.message.content if isinstance(part.root, MediaPart)]
+    return [part.media for part in response.message.content if part.media is not None]
 
 
 # ---- Classification ---------------------------------------------------------
@@ -452,7 +451,7 @@ async def test_response_carries_one_media_part_per_image() -> None:
         None,
         None,
     )
-    assert response.request is request
+    assert response.request == request
 
 
 @pytest.mark.asyncio

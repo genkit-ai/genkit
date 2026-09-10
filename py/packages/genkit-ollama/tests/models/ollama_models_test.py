@@ -31,19 +31,12 @@ from pydantic import ValidationError
 from genkit import (
     ActionRunContext,
     GenkitError,
-    Media,
     Message,
     ModelRequest,
     ModelResponseChunk,
     ModelUsage,
     Part,
     Role,
-)
-from genkit._core._typing import (
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
 )
 from genkit.plugin_api import ModelConfig
 
@@ -54,7 +47,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         """Common setup for all async tests."""
         self.mock_client = MagicMock()
-        self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+        self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
         self.ctx = ActionRunContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
 
@@ -147,7 +140,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
         cast(Any, ollama_model)._generate_ollama_response = AsyncMock()
         cast(Any, ollama_model)._build_multimodal_chat_response = MagicMock(
-            return_value=[Part(root=TextPart(text='Parsed chat content'))],
+            return_value=[Part.from_text('Parsed chat content')],
         )
         cast(Any, ollama_model).get_usage_info = MagicMock(
             return_value=ModelUsage(
@@ -175,7 +168,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.message)
         self.assertEqual(cast(Message, response.message).role, Role.MODEL)
         self.assertEqual(len(cast(Message, response.message).content), 1)
-        self.assertEqual(cast(Message, response.message).content[0].root.text, 'Parsed chat content')
+        self.assertEqual(cast(Message, response.message).content[0].text, 'Parsed chat content')
         self.assertIsNotNone(response.usage)
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, 5)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 10)
@@ -230,7 +223,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.message)
         self.assertEqual(cast(Message, response.message).role, Role.MODEL)
         self.assertEqual(len(cast(Message, response.message).content), 1)
-        self.assertEqual(cast(Message, response.message).content[0].root.text, 'Generated text')
+        self.assertEqual(cast(Message, response.message).content[0].text, 'Generated text')
         self.assertIsNotNone(response.usage)
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, 7)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 14)
@@ -256,7 +249,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             return_value=mock_chat_response,
         )
         cast(Any, ollama_model)._build_multimodal_chat_response = MagicMock(
-            return_value=[Part(root=TextPart(text='Parsed chat content'))],
+            return_value=[Part.from_text('Parsed chat content')],
         )
         cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
         cast(Any, ollama_model).get_usage_info = MagicMock(
@@ -281,7 +274,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.message)
         self.assertEqual(
             cast(Message, response.message).content,
-            [Part(root=TextPart(text='Parsed chat content'))],
+            [Part.from_text('Parsed chat content')],
         )
 
     @patch(
@@ -327,7 +320,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.message)
         self.assertEqual(
             cast(Message, response.message).content,
-            [Part(root=TextPart(text='Generated text'))],
+            [Part.from_text('Generated text')],
         )
 
     @patch(
@@ -349,7 +342,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         cast(AsyncMock, ollama_model._chat_with_ollama).assert_awaited_once()
         cast(MagicMock, ollama_model._build_multimodal_chat_response).assert_not_called()
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content[0].root.text, 'Failed to get response from Ollama API')
+        self.assertEqual(cast(Message, response.message).content[0].text, 'Failed to get response from Ollama API')
         self.assertIsNotNone(response.usage)
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, None)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
@@ -371,7 +364,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
 
         cast(AsyncMock, ollama_model._generate_ollama_response).assert_awaited_once()
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content[0].root.text, 'Failed to get response from Ollama API')
+        self.assertEqual(cast(Message, response.message).content[0].text, 'Failed to get response from Ollama API')
         self.assertIsNotNone(response.usage)
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, None)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
@@ -424,7 +417,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
         self.model_definition = ModelDefinition(name='test-chat-model', api_type=OllamaAPITypes.CHAT)
         self.ollama_model = OllamaModel(client=self.mock_ollama_client_factory, model_definition=self.model_definition)
-        self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+        self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
         self.ctx = ActionRunContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
 
@@ -439,7 +432,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         self.patcher_build_multimodal_response = patch.object(
             self.ollama_model,
             '_build_multimodal_chat_response',
-            return_value=[Part(root=TextPart(text='mocked content'))],
+            return_value=[Part.from_text('mocked content')],
         )
 
         self.mock_build_chat_messages = self.patcher_build_chat_messages.start()
@@ -492,7 +485,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         and model keep-alive.
         """
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])],
             config={'think': 'low', 'keepAlive': '5m'},
         )
         self.mock_ollama_client_instance.chat.return_value = ollama_api.ChatResponse(
@@ -576,9 +569,9 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.message.thinking, 'step1 step2')
 
         parts = OllamaModel._build_multimodal_chat_response(chat_response=response)
-        reasoning_parts = [p for p in parts if isinstance(p.root, ReasoningPart)]
+        reasoning_parts = [p for p in parts if p.reasoning is not None]
         self.assertEqual(len(reasoning_parts), 1)
-        self.assertEqual(reasoning_parts[0].root.reasoning, 'step1 step2')
+        self.assertEqual(reasoning_parts[0].reasoning, 'step1 step2')
 
     async def test_streaming_chat_accumulates_tool_calls(self) -> None:
         """Tool calls from a mid-stream chunk survive into the returned response."""
@@ -743,7 +736,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='Test generate message'))],
+                    content=[Part.from_text('Test generate message')],
                 )
             ],
             config={'temperature': 0.8},
@@ -773,7 +766,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
     async def test_think_and_keep_alive_forwarded_as_top_level_kwargs(self) -> None:
         """think/keep_alive reach the generate call as top-level kwargs, matching chat."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])],
             config={'think': True, 'keepAlive': '10m'},
         )
         self.mock_ollama_client_instance.generate.return_value = ollama_api.GenerateResponse(response='ok')
@@ -831,10 +824,10 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(cast(MagicMock, self.ctx.send_chunk).call_count, 2)
         cast(MagicMock, self.ctx.send_chunk).assert_any_call(
-            chunk=ModelResponseChunk(role=Role.MODEL, index=1, content=[Part(root=TextPart(text='chunk1 '))])
+            chunk=ModelResponseChunk(role=Role.MODEL, index=1, content=[Part.from_text('chunk1 ')])
         )
         cast(MagicMock, self.ctx.send_chunk).assert_any_call(
-            chunk=ModelResponseChunk(role=Role.MODEL, index=2, content=[Part(root=TextPart(text='chunk2'))])
+            chunk=ModelResponseChunk(role=Role.MODEL, index=2, content=[Part.from_text('chunk2')])
         )
 
     async def test_generate_api_raises_exception(self) -> None:
@@ -1096,10 +1089,10 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == '2+2 is 4'
-        assert isinstance(content[1].root, TextPart)
-        assert content[1].root.text == 'The answer is 4.'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == '2+2 is 4'
+        assert content[1].text is not None
+        assert content[1].text == 'The answer is 4.'
 
     def test_no_thinking_has_no_reasoning_part(self) -> None:
         """Without ``thinking`` no ReasoningPart is emitted."""
@@ -1108,7 +1101,7 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response)
 
-        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+        assert all(not part.reasoning is not None for part in content)
 
     def test_think_tag_fallback_extracts_reasoning(self) -> None:
         """With thinking requested and no dedicated field, inline <think> tags are
@@ -1118,10 +1111,10 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == '2+2 is 4'
-        assert isinstance(content[1].root, TextPart)
-        assert content[1].root.text == 'The answer is 4.'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == '2+2 is 4'
+        assert content[1].text is not None
+        assert content[1].text == 'The answer is 4.'
 
     def test_think_tag_not_parsed_when_thinking_disabled(self) -> None:
         """Without an explicit think request, <think> tags stay verbatim in the text."""
@@ -1130,8 +1123,8 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=False)
 
-        assert all(not isinstance(part.root, ReasoningPart) for part in content)
-        assert content[0].root.text == '<think>hidden</think>visible'
+        assert all(not part.reasoning is not None for part in content)
+        assert content[0].text == '<think>hidden</think>visible'
 
     def test_dedicated_thinking_field_wins_over_tags(self) -> None:
         """The dedicated thinking field takes precedence; content tags are left intact."""
@@ -1140,10 +1133,10 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == 'structured'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == 'structured'
         # The content tags are not double-processed when the dedicated field exists.
-        assert content[1].root.text == '<think>inline</think>answer'
+        assert content[1].text == '<think>inline</think>answer'
 
     def test_multiple_think_blocks_joined_and_stripped(self) -> None:
         """Multiple <think>/<thinking> blocks are joined with blank lines and removed."""
@@ -1155,8 +1148,8 @@ class TestReasoning:
         )
         content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
 
-        assert content[0].root.reasoning == 'first\n\nsecond'
-        assert content[1].root.text == 'midend'
+        assert content[0].reasoning == 'first\n\nsecond'
+        assert content[1].text == 'midend'
 
     def test_think_only_content_yields_no_text_part(self) -> None:
         """Content that is entirely a think block produces reasoning but no text."""
@@ -1166,8 +1159,8 @@ class TestReasoning:
         content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
 
         assert len(content) == 1
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == 'just reasoning'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == 'just reasoning'
 
 
 class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
@@ -1193,14 +1186,14 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
         sent: list[ModelResponseChunk] = []
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
-        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
         with patch.object(model, 'build_chat_messages', new_callable=AsyncMock, return_value=[]):
             await model._chat_with_ollama(request=request, ctx=ctx)
 
         assert len(sent) == 1
         first_part = sent[0].content[0]
-        assert isinstance(first_part.root, ReasoningPart)
-        assert first_part.root.reasoning == '2+2'
+        assert first_part.reasoning is not None
+        assert first_part.reasoning == '2+2'
 
     async def test_streaming_chunk_does_not_parse_think_tags(self) -> None:
         """Inline <think> tags in a streamed chunk are left untouched even when think
@@ -1225,7 +1218,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             config=OllamaConfig(think=True),
         )
         with patch.object(model, 'build_chat_messages', new_callable=AsyncMock, return_value=[]):
@@ -1233,8 +1226,8 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
 
         assert len(sent) == 1
         parts = sent[0].content
-        assert all(not isinstance(part.root, ReasoningPart) for part in parts)
-        assert parts[0].root.text == '<think>partial'
+        assert all(not part.reasoning is not None for part in parts)
+        assert parts[0].text == '<think>partial'
 
 
 class TestReasoningGenerate:
@@ -1245,17 +1238,17 @@ class TestReasoningGenerate:
         response = ollama_api.GenerateResponse(response='The answer is 4.', thinking='2+2 is 4')
         content = OllamaModel._build_generate_response(generate_response=response)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == '2+2 is 4'
-        assert isinstance(content[1].root, TextPart)
-        assert content[1].root.text == 'The answer is 4.'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == '2+2 is 4'
+        assert content[1].text is not None
+        assert content[1].text == 'The answer is 4.'
 
     def test_no_thinking_has_no_reasoning_part(self) -> None:
         """Without ``thinking`` no ReasoningPart is emitted."""
         response = ollama_api.GenerateResponse(response='Hi')
         content = OllamaModel._build_generate_response(generate_response=response)
 
-        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+        assert all(not part.reasoning is not None for part in content)
 
     def test_think_tag_fallback_extracts_reasoning(self) -> None:
         """With thinking requested and no dedicated field, inline <think> tags are
@@ -1263,27 +1256,27 @@ class TestReasoningGenerate:
         response = ollama_api.GenerateResponse(response='<think>2+2 is 4</think>The answer is 4.')
         content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=True)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == '2+2 is 4'
-        assert isinstance(content[1].root, TextPart)
-        assert content[1].root.text == 'The answer is 4.'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == '2+2 is 4'
+        assert content[1].text is not None
+        assert content[1].text == 'The answer is 4.'
 
     def test_think_tag_not_parsed_when_thinking_disabled(self) -> None:
         """Without an explicit think request, <think> tags stay verbatim in the text."""
         response = ollama_api.GenerateResponse(response='<think>hidden</think>visible')
         content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=False)
 
-        assert all(not isinstance(part.root, ReasoningPart) for part in content)
-        assert content[0].root.text == '<think>hidden</think>visible'
+        assert all(not part.reasoning is not None for part in content)
+        assert content[0].text == '<think>hidden</think>visible'
 
     def test_dedicated_thinking_field_wins_over_tags(self) -> None:
         """The dedicated thinking field takes precedence; content tags are left intact."""
         response = ollama_api.GenerateResponse(response='<think>inline</think>answer', thinking='structured')
         content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=True)
 
-        assert isinstance(content[0].root, ReasoningPart)
-        assert content[0].root.reasoning == 'structured'
-        assert content[1].root.text == '<think>inline</think>answer'
+        assert content[0].reasoning is not None
+        assert content[0].reasoning == 'structured'
+        assert content[1].text == '<think>inline</think>answer'
 
 
 class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
@@ -1307,14 +1300,14 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
         sent: list[ModelResponseChunk] = []
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
-        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
         with patch.object(model, 'build_prompt', return_value='hi'):
             await model._generate_ollama_response(request=request, ctx=ctx)
 
         assert len(sent) == 1
         first_part = sent[0].content[0]
-        assert isinstance(first_part.root, ReasoningPart)
-        assert first_part.root.reasoning == '2+2'
+        assert first_part.reasoning is not None
+        assert first_part.reasoning == '2+2'
 
     async def test_streaming_chunk_does_not_parse_think_tags(self) -> None:
         """Inline <think> tags in a streamed generate chunk are left untouched even when
@@ -1337,7 +1330,7 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             config=OllamaConfig(think=True),
         )
         with patch.object(model, 'build_prompt', return_value='hi'):
@@ -1345,8 +1338,8 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
 
         assert len(sent) == 1
         parts = sent[0].content
-        assert all(not isinstance(part.root, ReasoningPart) for part in parts)
-        assert parts[0].root.text == '<think>partial'
+        assert all(not part.reasoning is not None for part in parts)
+        assert parts[0].text == '<think>partial'
 
 
 class TestThinkingRequested:
@@ -1453,8 +1446,8 @@ class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='Describe this image')),
-                        Part(root=MediaPart(media=Media(url='data:image/jpeg;base64,AAAA', content_type='image/jpeg'))),
+                        Part.from_text('Describe this image'),
+                        Part.from_media('data:image/jpeg;base64,AAAA', content_type='image/jpeg'),
                     ],
                 )
             ]
@@ -1474,7 +1467,7 @@ class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=MediaPart(media=Media(url='data:image/png;base64,BBB', content_type='image/png'))),
+                        Part.from_media('data:image/png;base64,BBB', content_type='image/png'),
                     ],
                 )
             ]
@@ -1527,15 +1520,15 @@ class TestBuildPrompt:
 
     def test_single_message(self) -> None:
         """A single text message is returned verbatim."""
-        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
         assert OllamaModel.build_prompt(request) == 'Hello'
 
     def test_multiple_messages(self) -> None:
         """Text across messages is concatenated in order."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='System. '))]),
-                Message(role=Role.USER, content=[Part(root=TextPart(text='User.'))]),
+                Message(role=Role.SYSTEM, content=[Part.from_text('System. ')]),
+                Message(role=Role.USER, content=[Part.from_text('User.')]),
             ]
         )
         assert OllamaModel.build_prompt(request) == 'System. User.'
@@ -1551,8 +1544,8 @@ class TestBuildPrompt:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='see ')),
-                        Part(root=MediaPart(media=Media(url='data:image/png;base64,AAAA', content_type='image/png'))),
+                        Part.from_text('see '),
+                        Part.from_media('data:image/png;base64,AAAA', content_type='image/png'),
                     ],
                 )
             ]
@@ -1624,8 +1617,8 @@ class TestBuildMultimodalChatResponse:
         )
 
         assert len(parts) == 1
-        assert isinstance(parts[0].root, TextPart)
-        assert parts[0].root.text == 'Hello'
+        assert parts[0].text is not None
+        assert parts[0].text == 'Hello'
 
     def test_tool_calls(self) -> None:
         """Tool calls become ToolRequestParts carrying name and input."""
@@ -1642,8 +1635,8 @@ class TestBuildMultimodalChatResponse:
         parts = OllamaModel._build_multimodal_chat_response(self._response(message))
 
         assert len(parts) == 1
-        root = parts[0].root
-        assert isinstance(root, ToolRequestPart)
+        root = parts[0]
+        assert root.tool_request is not None
         assert root.tool_request.name == 'search'
         assert root.tool_request.input == {'q': 'test'}
 
@@ -1680,4 +1673,4 @@ class TestBuildMultimodalChatResponse:
         parts = OllamaModel._build_multimodal_chat_response(self._response(message))
 
         assert len(parts) == 1
-        assert isinstance(parts[0].root, MediaPart)
+        assert parts[0].media is not None
