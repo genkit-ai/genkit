@@ -1108,6 +1108,63 @@ async def test__generate_stream_tolerates_a_null_arguments_fragment(
 
 
 @pytest.mark.asyncio
+async def test__generate_stream_parses_a_zero_argument_tool_call(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """A tool call whose arguments stay empty ends with an empty input, not a parse error."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'index': 0, 'id': 'tool123', 'type': 'function', 'function': {'name': 'ping', 'arguments': ''}}
+            ],
+        ),
+    ])
+
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    fragments = [root for chunk in collected for root in _roots(chunk) if isinstance(root, ToolRequestPart)]
+    assert [root.tool_request.input for root in fragments] == ['']
+
+    assert response.message is not None
+    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    assert len(requests) == 1
+    assert requests[0].name == 'ping'
+    assert requests[0].input == {}
+
+
+@pytest.mark.asyncio
+async def test__generate_parses_a_zero_argument_tool_call(
+    sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+) -> None:
+    """A non-streamed tool call whose arguments are empty ends with an empty input."""
+    completion = make_completion(
+        content=None,
+        choice={
+            'finish_reason': 'tool_calls',
+            'message': {
+                'role': 'assistant',
+                'content': None,
+                'tool_calls': [{'id': 'tool123', 'type': 'function', 'function': {'name': 'ping', 'arguments': ''}}],
+            },
+        },
+    )
+    model = OpenAIModel(model='gpt-4', client=_client(completion))
+
+    response = await model._generate(sample_request)
+
+    assert response.message is not None
+    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    assert len(requests) == 1
+    assert requests[0].name == 'ping'
+    assert requests[0].input == {}
+
+
+@pytest.mark.asyncio
 async def test__generate_stream_skips_a_delta_with_nothing_to_report(
     sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
 ) -> None:

@@ -588,7 +588,7 @@ class MessageConverter:
         default_args = str(func_args) if func_args else ''
         args_input: str | dict[str, Any] | None = args_segment if args_segment is not None else default_args
         if args_parser and isinstance(args_input, str):
-            args_input = args_parser(args_input)
+            args_input = args_parser(args_input) if args_input else {}
 
         return Part(
             root=ToolRequestPart(

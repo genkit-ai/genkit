@@ -571,6 +571,19 @@ class TestMessageConverterReasoningContent:
         assert isinstance(msg.content[1].root, ToolRequestPart)
         assert msg.content[1].root.tool_request.input == {'location': 'NYC'}
 
+    def test_zero_argument_tool_call_has_empty_input(self) -> None:
+        """A tool call whose arguments are an empty string parses to an empty input."""
+        adapter = DictMessageAdapter({
+            'content': None,
+            'tool_calls': [{'id': 'call_1', 'function': {'name': 'ping', 'arguments': ''}}],
+            'role': 'assistant',
+        })
+        msg = MessageConverter.to_genkit(adapter)
+        assert len(msg.content) == 1
+        assert isinstance(msg.content[0].root, ToolRequestPart)
+        assert msg.content[0].root.tool_request.name == 'ping'
+        assert msg.content[0].root.tool_request.input == {}
+
     def test_role_defaults_to_model(self) -> None:
         """Default role should be MODEL when not provided."""
         adapter = DictMessageAdapter({
