@@ -27,7 +27,7 @@ from genkit._ai._testing import (
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
-from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
+from genkit._core._model import GenerateActionOptions, ModelRequest, Resume, as_model_request
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -120,6 +120,28 @@ async def test_simple_text_generate_request(
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
     assert response.messages[0].text == 'hi'
     assert response.messages[1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_response_request_equals_by_fields_not_identity(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """response.request compares equal by fields, not identity."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('bye')]),
+        )
+    )
+    response = await ai.generate(
+        model='programmableModel',
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+    )
+    assert response.request is not None
+    twin = as_model_request(response.request)
+    assert twin == response.request
+    assert twin is not response.request
 
 
 @pytest.mark.asyncio

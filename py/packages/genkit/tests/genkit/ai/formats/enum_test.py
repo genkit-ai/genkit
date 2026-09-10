@@ -10,6 +10,7 @@ import pytest
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._enum import EnumFormat
 from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._model import stream_chunk
 
 
 class TestEnumFormatMessage:
@@ -68,7 +69,7 @@ class TestEnumFormatStreaming:
         chunk2 = ModelResponseChunk(content=[Part.from_text('oo"')])
 
         result = fmt.parse_chunk(
-            ModelResponseChunk(
+            stream_chunk(
                 chunk2,
                 index=0,
                 previous_chunks=[chunk1],
