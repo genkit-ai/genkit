@@ -1165,6 +1165,45 @@ async def test__generate_parses_a_zero_argument_tool_call(
 
 
 @pytest.mark.asyncio
+async def test__generate_stream_final_message_orders_parts_like_to_genkit(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """Whatever order the deltas arrive in, the final message is reasoning, text, then tool calls."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(make_chunk, content='Sure,'),
+        _delta_chunk(make_chunk, reasoning_content='Need a tool.'),
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'index': 0, 'id': 'call_1', 'type': 'function', 'function': {'name': 'get_weather', 'arguments': '{}'}}
+            ],
+        ),
+        _delta_chunk(make_chunk, content=' one moment.'),
+    ])
+
+    model = OpenAIModel(model='deepseek-reasoner', client=mock_client)
+    collected: list[ModelResponseChunk] = []
+
+    response = await model._generate_stream(sample_request, collected.append)
+
+    assert [[type(root).__name__ for root in _roots(chunk)] for chunk in collected] == [
+        ['TextPart'],
+        ['ReasoningPart'],
+        ['ToolRequestPart'],
+        ['TextPart'],
+    ]
+
+    assert response.message is not None
+    final = [part.root for part in response.message.content]
+    assert [type(root).__name__ for root in final] == ['ReasoningPart', 'TextPart', 'TextPart', 'ToolRequestPart']
+    assert final[0].reasoning == 'Need a tool.'
+    assert [root.text for root in final if isinstance(root, TextPart)] == ['Sure,', ' one moment.']
+    assert isinstance(final[3], ToolRequestPart)
+    assert final[3].tool_request.input == {}
+
+
+@pytest.mark.asyncio
 async def test__generate_stream_skips_a_delta_with_nothing_to_report(
     sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
 ) -> None:

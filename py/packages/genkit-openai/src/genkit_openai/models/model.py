@@ -516,7 +516,8 @@ class OpenAIModel:
         stream = await self._openai_client.chat.completions.create(**openai_config)
 
         tool_calls: dict[int, Any] = {}
-        accumulated_content: list[Part] = []
+        reasoning_parts: list[Part] = []
+        text_parts: list[Part] = []
         metadata: dict[str, Any] = {}
         usage: CompletionUsage | None = None
         saw_choice = False
@@ -546,18 +547,16 @@ class OpenAIModel:
             if delta.refusal:
                 refusal_fragments.append(delta.refusal)
 
-            # Reasoning content (DeepSeek R1 / reasoner models). Pydantic
-            # models raise AttributeError for unknown fields, so the lookup
-            # goes through MessageAdapter.
+            # Reasoning content (DeepSeek R1 / reasoner models).
             if reasoning_text := MessageAdapter(delta).reasoning_content:
                 reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
-                accumulated_content.append(reasoning_part)
+                reasoning_parts.append(reasoning_part)
                 parts.append(reasoning_part)
 
             # Text content
             if delta.content:
                 text_part = MessageConverter.text_part_to_genkit(delta.content)
-                accumulated_content.append(text_part)
+                text_parts.append(text_part)
                 parts.append(text_part)
 
             # Tool calls (partial function calls)
@@ -585,6 +584,7 @@ class OpenAIModel:
                 details={'usage': _usage_from_completion(usage).model_dump(exclude_none=True)},
             )
 
+        accumulated_content: list[Part] = [*reasoning_parts, *text_parts]
         if tool_calls:
             message = MessageConverter.to_genkit(
                 DictMessageAdapter({'tool_calls': tool_calls.values(), 'role': Role.MODEL})
