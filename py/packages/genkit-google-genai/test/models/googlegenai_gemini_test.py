@@ -1453,3 +1453,39 @@ async def test_gemini_model__unknown_speech_config_key_is_rejected(
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'speech_config' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_caller_response_modalities_on_tts_model(mocker: MockerFixture) -> None:
+    """A TTS model keeps the response modalities the caller asked for."""
+    version = 'gemini-2.5-flash-preview-tts'
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({'responseModalities': ['AUDIO', 'TEXT']}),
+    )
+    candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
+
+    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert sent_config.response_modalities == ['AUDIO', 'TEXT']
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: MockerFixture) -> None:
+    """An image model keeps the response modalities the caller asked for."""
+    version = 'gemini-2.5-flash-image'
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiImageConfigSchema.model_validate({'responseModalities': ['IMAGE']}),
+    )
+    candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
+
+    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert sent_config.response_modalities == ['IMAGE']

@@ -1419,13 +1419,15 @@ class GeminiModel:
         if is_tts_model(model_name):
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
-            request_cfg.response_modalities = ['AUDIO']
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['AUDIO']
 
         # Image models require response_modalities: ["TEXT", "IMAGE"]
         if is_image_model(model_name):
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
-            request_cfg.response_modalities = ['TEXT', 'IMAGE']
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['TEXT', 'IMAGE']
 
         # Resolve the client before building messages so context-cache
         # operations run against the same (possibly overridden) region as the
