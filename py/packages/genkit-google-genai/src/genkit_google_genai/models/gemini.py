@@ -453,11 +453,28 @@ class GeminiConfigSchema(ModelConfig):
     stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
 
 
+class SpeakerVoiceConfigSchema(BaseModel):
+    """Speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker: str | None = None
+    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+
+
+class MultiSpeakerVoiceConfigSchema(BaseModel):
+    """Multi-speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
+
+
 class SpeechConfigSchema(BaseModel):
     """Speech config schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    language_code: str | None = Field(None, alias='languageCode')
+    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
 
     http_options: Any | None = Field(None, exclude=True)
     tools: Any | None = Field(None, exclude=True)

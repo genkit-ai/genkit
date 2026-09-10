@@ -1378,6 +1378,35 @@ def tts_model_instance() -> GeminiModel:
     )
 
 
+def test_speech_config_schema_declares_sdk_fields() -> None:
+    """Language code and multi-speaker voice config validate as typed fields, by name or alias."""
+    config = SpeechConfigSchema.model_validate({
+        'language_code': 'en-US',
+        'multiSpeakerVoiceConfig': {
+            'speakerVoiceConfigs': [
+                {'speaker': 'Alice', 'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}},
+            ]
+        },
+    })
+
+    assert config.language_code == 'en-US'
+    assert config.multi_speaker_voice_config is not None
+    speakers = config.multi_speaker_voice_config.speaker_voice_configs
+    assert speakers is not None
+    assert speakers[0].speaker == 'Alice'
+    assert speakers[0].voice_config is not None
+    assert speakers[0].voice_config.prebuilt_voice_config is not None
+    assert speakers[0].voice_config.prebuilt_voice_config.voice_name == 'Kore'
+
+
+def test_tts_config_json_schema_exposes_speech_config_fields() -> None:
+    """The Dev UI schema lists every speech config field the SDK accepts."""
+    schema = GeminiTtsConfigSchema.model_json_schema(by_alias=True)
+    speech = schema['$defs']['SpeechConfigSchema']['properties']
+
+    assert {'voiceConfig', 'languageCode', 'multiSpeakerVoiceConfig'} <= set(speech)
+
+
 def test_speech_config_schema_populates_by_field_name() -> None:
     """The speech config validates from snake_case field names, not only aliases."""
     config = SpeechConfigSchema.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
