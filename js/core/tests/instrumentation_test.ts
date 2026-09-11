@@ -16,6 +16,8 @@
 
 import type { Span as ApiSpan } from '@opentelemetry/api';
 import * as assert from 'assert';
+import * as http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { logger } from '../src/logging.js';
 import { initNodeFeatures } from '../src/node.js';
@@ -31,6 +33,7 @@ import {
   type InstrumentationSpanInfo,
   type LogRecordingInstrumentation,
 } from '../src/tracing.js';
+import { sleep } from './utils.js';
 
 initNodeFeatures();
 
@@ -163,5 +166,112 @@ describe('instrumentation abstraction', () => {
     assert.equal(fake.logs.length, 1);
     assert.equal(fake.logs[0].severity, 'info');
     assert.equal(fake.logs[0].body, 'hello world');
+  });
+});
+
+describe('DirectTelemetryInstrumentation realtime export', () => {
+  let server: http.Server;
+  let url: string;
+  const posted: any[] = [];
+  const prevRealtime = process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+
+  beforeEach(async () => {
+    posted.length = 0;
+    server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        if (req.url === '/api/traces') posted.push(JSON.parse(body));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    );
+    const addr = server.address() as AddressInfo;
+    url = `http://127.0.0.1:${addr.port}`;
+    setTelemetryServerUrl(url);
+    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
+    resetInstrumentation();
+  });
+
+  afterEach(async () => {
+    if (prevRealtime === undefined) {
+      delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+    } else {
+      process.env.GENKIT_ENABLE_REALTIME_TELEMETRY = prevRealtime;
+    }
+    setTelemetryServerUrl('');
+    resetInstrumentation();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  // Waits for the fire-and-forget POSTs to land for the given span.
+  async function postsFor(spanId: string) {
+    for (let i = 0; i < 50; i++) {
+      const spans = posted
+        .flatMap((t) => Object.values(t.spans ?? {}))
+        .filter((s: any) => s.spanId === spanId);
+      if (spans.length >= 2) return spans as any[];
+      await sleep(10);
+    }
+    return posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .filter((s: any) => s.spanId === spanId) as any[];
+  }
+
+  it('exports a pending span (endTime 0) on start, then a final span', async () => {
+    let spanId = '';
+    let pendingSeen: any[] = [];
+
+    await runInNewSpan(
+      { metadata: { name: 'realtime' }, labels: { 'genkit:type': 'flow' } },
+      async (_m, span) => {
+        spanId = span.spanContext().spanId;
+        // Let the fire-and-forget start POST land while we're still running.
+        for (let i = 0; i < 50 && pendingSeen.length === 0; i++) {
+          await sleep(10);
+          pendingSeen = posted
+            .flatMap((t) => Object.values(t.spans ?? {}))
+            .filter((s: any) => s.spanId === spanId);
+        }
+      }
+    );
+
+    // While running, the span was exported with endTime 0 (pending).
+    assert.equal(pendingSeen.length, 1, 'expected an in-progress export');
+    assert.equal(pendingSeen[0].endTime, 0);
+
+    // After completion, a final export carries a real endTime.
+    const all = await postsFor(spanId);
+    const final = all.find((s: any) => s.endTime > 0);
+    assert.ok(final, 'expected a final export with a non-zero endTime');
+    assert.ok(final.endTime >= final.startTime);
+  });
+
+  it('does not export on start when realtime is disabled', async () => {
+    delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+    resetInstrumentation();
+
+    let spanId = '';
+    let midRun: any[] = [];
+    await runInNewSpan(
+      { metadata: { name: 'norealtime' }, labels: { 'genkit:type': 'flow' } },
+      async (_m, span) => {
+        spanId = span.spanContext().spanId;
+        await sleep(30);
+        midRun = posted
+          .flatMap((t) => Object.values(t.spans ?? {}))
+          .filter((s: any) => s.spanId === spanId);
+      }
+    );
+
+    assert.equal(midRun.length, 0, 'should not export before completion');
+    const all = await postsFor(spanId);
+    assert.ok(
+      all.some((s: any) => s.endTime > 0),
+      'still exports once on completion'
+    );
   });
 });
