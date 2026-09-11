@@ -67,8 +67,7 @@ export interface InstrumentationSpanInfo {
  */
 export type InstrumentationNext<T> = (
   span: ApiSpan,
-  ctx: GenkitSpanContext,
-  isRoot: boolean
+  ctx: GenkitSpanContext
 ) => Promise<T>;
 
 /**
