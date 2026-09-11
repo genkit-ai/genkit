@@ -14,8 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package jsonschema contains JSON Schema helpers shared by Genkit provider plugins.
-package jsonschema
+// Package schemautil contains JSON Schema helpers shared by Genkit provider plugins.
+package schemautil
 
 import "encoding/json"
 
