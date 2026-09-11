@@ -467,15 +467,15 @@ class OpenAI(Plugin):
             dimensions: int | None = None
             encoding_format: Literal['base64', 'float'] | None = None
             if request.options:
-                if dim_val := request.options.get('dimensions'):
-                    try:
-                        dimensions = int(dim_val)
-                    except (TypeError, ValueError) as e:
+                dim_val = request.options.get('dimensions')
+                if dim_val is not None:
+                    # bool is an int subclass, so True would otherwise pass as 1.
+                    if not isinstance(dim_val, int) or isinstance(dim_val, bool):
                         raise GenkitError(
                             status='INVALID_ARGUMENT',
                             message=f'dimensions must be an int, got {dim_val!r}',
-                            cause=e,
-                        ) from e
+                        )
+                    dimensions = dim_val
                 enc_val = request.options.get('encodingFormat')
                 if enc_val in ('float', 'base64'):
                     encoding_format = cast(Literal['base64', 'float'], enc_val)

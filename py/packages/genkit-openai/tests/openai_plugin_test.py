@@ -274,6 +274,17 @@ def _embedder_client(error: Exception) -> MagicMock:
     return client
 
 
+def _embedding_client() -> MagicMock:
+    """Create a stub client whose embeddings call returns one vector."""
+    client = MagicMock()
+    item = MagicMock()
+    item.embedding = [0.1, 0.2]
+    result = MagicMock()
+    result.data = [item]
+    client.embeddings.create = AsyncMock(return_value=result)
+    return client
+
+
 async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> None:
     """Run the embedder action function against a stub client."""
     action = _plugin_with(client)._create_embedder_action('openai/text-embedding-3-small')
@@ -316,7 +327,11 @@ async def test_embedder_carries_retry_after_metadata() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('dimensions', ['lots', [256]], ids=['non-numeric', 'wrong-type'])
+@pytest.mark.parametrize(
+    'dimensions',
+    ['lots', '256', 256.9, True, [256]],
+    ids=['non-numeric-str', 'numeric-str', 'float', 'bool', 'list'],
+)
 async def test_embedder_classifies_bad_dimensions_option(dimensions: Any) -> None:
     """A dimensions option that is not an int is INVALID_ARGUMENT, before any API call."""
     client = MagicMock()
@@ -328,6 +343,16 @@ async def test_embedder_classifies_bad_dimensions_option(dimensions: Any) -> Non
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'dimensions' in str(exc_info.value)
     client.embeddings.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_embedder_forwards_zero_dimensions() -> None:
+    """A dimensions of 0 reaches the API rather than being dropped as falsy."""
+    client = _embedding_client()
+
+    await _run_embedder(client, options={'dimensions': 0})
+
+    assert client.embeddings.create.await_args.kwargs['dimensions'] == 0
 
 
 @pytest.mark.asyncio
