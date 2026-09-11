@@ -1500,6 +1500,47 @@ describe('toOpenAiRequestBody', () => {
       },
     });
   });
+
+  it('applies visualDetailLevel to image URLs without leaking it into the request body', () => {
+    const request = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { text: 'describe this image' },
+            {
+              media: {
+                contentType: 'image/jpeg',
+                url: 'https://example.com/image.jpg',
+              },
+            },
+          ],
+        },
+      ],
+      config: {
+        visualDetailLevel: 'high',
+      },
+    } as GenerateRequest;
+
+    const actualOutput = toOpenAIRequestBody('gpt-4o', request);
+
+    expect(actualOutput).not.toHaveProperty('visualDetailLevel');
+    expect(actualOutput.messages).toStrictEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe this image' },
+          {
+            type: 'image_url',
+            image_url: {
+              url: 'https://example.com/image.jpg',
+              detail: 'high',
+            },
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('openAIModelRunner', () => {
