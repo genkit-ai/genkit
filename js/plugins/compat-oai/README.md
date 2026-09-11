@@ -54,6 +54,35 @@ const response = await ai.generate({
 console.log(response.text);
 ```
 
+### Structured Outputs
+
+Use `config.strict: true` with an output schema on a model that supports OpenAI Structured Outputs:
+
+```typescript
+import { z } from 'genkit';
+import { openAI } from '@genkit-ai/compat-oai/openai';
+
+const response = await ai.generate({
+  model: openAI.model('gpt-5'),
+  prompt: 'Extract the answer from the text.',
+  output: {
+    schema: z
+      .object({
+        answer: z.string(),
+      })
+      .strict(),
+  },
+  config: {
+    strict: true,
+  },
+});
+
+console.log(response.output);
+```
+
+Apply `.strict()` to every object in the schema; Genkit does not automatically set `additionalProperties: false`.
+See the [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+
 ### Multi-modal prompt
 
 ```typescript
