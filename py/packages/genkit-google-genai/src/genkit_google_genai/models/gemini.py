@@ -454,10 +454,28 @@ class GeminiConfigSchema(ModelConfig):
     stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
 
 
+class SpeakerVoiceConfigSchema(BaseModel):
+    """Speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker: str | None = None
+    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+
+
+class MultiSpeakerVoiceConfigSchema(BaseModel):
+    """Multi-speaker voice config schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
+
+
 class SpeechConfigSchema(BaseModel):
     """Speech config schema."""
 
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    language_code: str | None = Field(None, alias='languageCode')
+    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
 
     http_options: Any | None = Field(None, exclude=True)
     tools: Any | None = Field(None, exclude=True)
@@ -555,6 +573,16 @@ GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
         constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
+)
+
+GEMINI_2_5_PRO = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
 )
 
 GEMINI_2_5_FLASH_LITE = ModelInfo(
@@ -672,6 +700,11 @@ GEMINI_3_1_FLASH_LITE = ModelInfo(
     ),
 )
 
+GEMINI_FLASH_LITE_LATEST = ModelInfo(
+    label='Google AI - Gemini Flash Lite Latest',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
 GEMINI_IMAGE_SUPPORTS = Supports(
     multiturn=True,
     media=True,
@@ -711,6 +744,50 @@ GEMINI_2_5_FLASH_IMAGE_PREVIEW = ModelInfo(
     supports=GEMINI_IMAGE_SUPPORTS,
 )
 
+GEMINI_TTS_SUPPORTS = Supports(
+    multiturn=False,
+    media=False,
+    tools=False,
+    tool_choice=False,
+    system_role=False,
+    constrained=Constrained.ALL,
+)
+
+GEMINI_2_5_FLASH_PREVIEW_TTS = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Preview TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_2_5_PRO_PREVIEW_TTS = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro Preview TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_TTS_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash TTS Preview',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMMA_SUPPORTS = Supports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=Constrained.ALL,
+    output=['text', 'json'],
+)
+
+GEMMA_4_26B_A4B_IT = ModelInfo(
+    label='Google AI - Gemma 4 26B A4B IT',
+    supports=GEMMA_SUPPORTS,
+)
+
+GEMMA_4_31B_IT = ModelInfo(
+    label='Google AI - Gemma 4 31B IT',
+    supports=GEMMA_SUPPORTS,
+)
+
 GENERIC_GEMINI_MODEL = ModelInfo(
     label='Google AI - Gemini',
     supports=Supports(
@@ -726,14 +803,7 @@ GENERIC_GEMINI_MODEL = ModelInfo(
 
 GENERIC_TTS_MODEL = ModelInfo(
     label='Google AI - Gemini TTS',
-    supports=Supports(
-        multiturn=False,
-        media=False,
-        tools=False,
-        tool_choice=False,
-        system_role=True,
-        constrained=Constrained.ALL,
-    ),
+    supports=GEMINI_TTS_SUPPORTS,
 )
 
 GENERIC_IMAGE_MODEL = ModelInfo(
@@ -751,15 +821,7 @@ GENERIC_IMAGE_MODEL = ModelInfo(
 
 GENERIC_GEMMA_MODEL = ModelInfo(
     label='Google AI - Gemma',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        tool_choice=True,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['text', 'json'],
-    ),
+    supports=GEMMA_SUPPORTS,
 )
 
 
@@ -778,6 +840,7 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
     GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
     GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
@@ -793,6 +856,8 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
     GEMMA_3_4B_IT = 'gemma-3-4b-it'
     GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
+    GEMMA_4_26B_A4B_IT = 'gemma-4-26b-a4b-it'
+    GEMMA_4_31B_IT = 'gemma-4-31b-it'
 
 
 class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
@@ -809,6 +874,7 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
     GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
     GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
     GEMINI_3_1_FLASH_IMAGE_PREVIEW = 'gemini-3.1-flash-image-preview'
@@ -823,6 +889,8 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
     GEMMA_3_4B_IT = 'gemma-3-4b-it'
     GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
+    GEMMA_4_26B_A4B_IT = 'gemma-4-26b-a4b-it'
+    GEMMA_4_31B_IT = 'gemma-4-31b-it'
 
 
 # Quote autocomplete needs a Literal. The version enums above and the
@@ -833,6 +901,7 @@ KnownGemini: TypeAlias = Literal[
     'gemini-2.5-pro',
     'gemini-2.5-flash-lite',
     'gemini-flash-latest',
+    'gemini-flash-lite-latest',
     'gemini-pro-latest',
     'gemini-3-flash-preview',
     'gemini-3-pro-preview',
@@ -851,6 +920,7 @@ KnownGemini: TypeAlias = Literal[
 KnownGeminiTts: TypeAlias = Literal[
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
+    'gemini-3.1-flash-tts-preview',
 ]
 KnownGeminiImage: TypeAlias = Literal[
     'gemini-2.5-flash-image',
@@ -866,6 +936,8 @@ KnownGemma: TypeAlias = Literal[
     'gemma-3-12b-it',
     'gemma-3-27b-it',
     'gemma-3n-e4b-it',
+    'gemma-4-26b-a4b-it',
+    'gemma-4-31b-it',
 ]
 
 
@@ -884,7 +956,10 @@ _add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
 _add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
 _add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
 _add_model(GEMINI_2_5_FLASH_PREVIEW_04_17, ['gemini-2.5-flash-preview-04-17'])
+_add_model(GEMINI_2_5_PRO, ['gemini-2.5-pro'])
+_add_model(GEMINI_2_5_FLASH, ['gemini-2.5-flash'])
 _add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
+_add_model(GEMINI_FLASH_LITE_LATEST, ['gemini-flash-lite-latest'])
 _add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
 _add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
 _add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
@@ -900,6 +975,11 @@ _add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
 _add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_TTS, ['gemini-2.5-flash-preview-tts'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_TTS, ['gemini-2.5-pro-preview-tts'])
+_add_model(GEMINI_3_1_FLASH_TTS_PREVIEW, ['gemini-3.1-flash-tts-preview'])
+_add_model(GEMMA_4_26B_A4B_IT, ['gemma-4-26b-a4b-it'])
+_add_model(GEMMA_4_31B_IT, ['gemma-4-31b-it'])
 
 # Frozen at import so quote-autocomplete tests do not see ids that
 # resolve() writes into SUPPORTED_MODELS later.
@@ -1356,13 +1436,15 @@ class GeminiModel:
         if is_tts_model(model_name):
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
-            request_cfg.response_modalities = ['AUDIO']
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['AUDIO']
 
         # Image models require response_modalities: ["TEXT", "IMAGE"]
         if is_image_model(model_name):
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
-            request_cfg.response_modalities = ['TEXT', 'IMAGE']
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['TEXT', 'IMAGE']
 
         # Resolve the client before building messages so context-cache
         # operations run against the same (possibly overridden) region as the

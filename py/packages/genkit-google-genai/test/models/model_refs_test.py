@@ -278,3 +278,16 @@ class TestKnownIdLiterals:
         assert all(is_imagen_model_name(value) for value in get_args(KnownImagen))
         assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
+
+    def test_latest_aliases_autocomplete_on_gemini_model(self) -> None:
+        """Every rotating ``-latest`` alias is offered by ``gemini_model``."""
+        assert {'gemini-pro-latest', 'gemini-flash-latest', 'gemini-flash-lite-latest'} <= set(get_args(KnownGemini))
+
+    def test_infix_tts_id_autocompletes_on_the_tts_constructor(self) -> None:
+        """A ``-tts`` infix belongs to the TTS constructor, not the text one."""
+        assert 'gemini-3.1-flash-tts-preview' in get_args(KnownGeminiTts)
+        assert 'gemini-3.1-flash-tts-preview' not in get_args(KnownGemini)
+
+    def test_gemma_4_autocompletes_on_gemma_model(self) -> None:
+        """The gemma-4 ids are offered by ``gemma_model``."""
+        assert {'gemma-4-26b-a4b-it', 'gemma-4-31b-it'} <= set(get_args(KnownGemma))
