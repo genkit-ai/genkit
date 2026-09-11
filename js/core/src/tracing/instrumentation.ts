@@ -321,15 +321,16 @@ function makeCompositeSpan(ctx: GenkitSpanContext): ApiSpan {
 function makeCompositeContext(
   contexts: GenkitSpanContext[]
 ): GenkitSpanContext {
+  // A third-party provider may call next() without a ctx, so guard each access.
   return {
     get traceId() {
-      return firstNonEmpty(contexts.map((c) => c.traceId));
+      return firstNonEmpty(contexts.map((c) => c?.traceId));
     },
     get spanId() {
-      return firstNonEmpty(contexts.map((c) => c.spanId));
+      return firstNonEmpty(contexts.map((c) => c?.spanId));
     },
     setMetadata(values: Record<string, unknown>) {
-      for (const c of contexts) c.setMetadata(values);
+      for (const c of contexts) c?.setMetadata(values);
     },
   };
 }
