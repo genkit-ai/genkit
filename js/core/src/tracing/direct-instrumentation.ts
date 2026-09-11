@@ -89,8 +89,13 @@ export class DirectTelemetryInstrumentation
       code: SpanStatusCode.UNSET,
     };
 
-    const exportSpan = () => {
-      const endTime = startTime + (performance.now() - startPerf);
+    const exportSpan = (final: boolean) => {
+      // In-progress spans report endTime 0. This matches the old OTel realtime
+      // path (an open span's endTime is [0,0], and hrTimeToMilliseconds([0,0])
+      // is 0). The telemetry server and Dev UI treat a falsy endTime as "still
+      // running"; a real endTime here would render the span as already complete
+      // and suppress the pending state.
+      const endTime = final ? startTime + (performance.now() - startPerf) : 0;
       const spanData = buildSpanData({
         info,
         traceId,
@@ -108,7 +113,10 @@ export class DirectTelemetryInstrumentation
       if (!spanData.parentSpanId) {
         traceData.displayName = spanData.displayName;
         traceData.startTime = spanData.startTime;
-        traceData.endTime = spanData.endTime;
+        // Leave the trace endTime unset until the root span finishes.
+        if (final) {
+          traceData.endTime = spanData.endTime;
+        }
       }
       // Fire-and-forget; telemetry must never block or fail the operation.
       postToTelemetryServer('/api/traces', traceData).catch((e) =>
@@ -120,7 +128,7 @@ export class DirectTelemetryInstrumentation
     // UI can show running traces. Gated on the same flag the OTel-backed
     // RealtimeSpanProcessor used; the on-end export below is unconditional.
     if (process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true') {
-      exportSpan();
+      exportSpan(false);
     }
 
     try {
@@ -129,7 +137,7 @@ export class DirectTelemetryInstrumentation
         { traceId, spanId } as DirectParent,
         () => next(otSpan, spanCtx)
       );
-      exportSpan();
+      exportSpan(true);
       return output;
     } catch (e) {
       status = { code: SpanStatusCode.ERROR, message: getErrorMessage(e) };
@@ -140,7 +148,7 @@ export class DirectTelemetryInstrumentation
           ...(e.stack ? { 'exception.stacktrace': e.stack } : {}),
         });
       }
-      exportSpan();
+      exportSpan(true);
       throw e;
     }
   }
