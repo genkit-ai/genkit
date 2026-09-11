@@ -226,7 +226,10 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     let pendingSeen: any[] = [];
 
     await runInNewSpan(
-      { metadata: { name: 'realtime' }, labels: { 'genkit:type': 'flow' } },
+      {
+        metadata: { name: 'realtime', input: { q: 'hello' } },
+        labels: { 'genkit:type': 'flow' },
+      },
       async (_m, span) => {
         spanId = span.spanContext().spanId;
         // Let the fire-and-forget start POST land while we're still running.
@@ -239,9 +242,14 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
       }
     );
 
-    // While running, the span was exported with endTime 0 (pending).
+    // While running, the span was exported with endTime 0 (pending)...
     assert.equal(pendingSeen.length, 1, 'expected an in-progress export');
     assert.equal(pendingSeen[0].endTime, 0);
+    // ...and it already carries the input provided when the span was opened.
+    assert.equal(
+      pendingSeen[0].attributes['genkit:input'],
+      JSON.stringify({ q: 'hello' })
+    );
 
     // After completion, a final export carries a real endTime.
     const all = await postsFor(spanId);
