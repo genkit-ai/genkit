@@ -56,7 +56,7 @@ export async function postToTelemetryServer(
   if (!url) {
     return;
   }
-  await context.with(suppressTracing(context.active()), () =>
+  const response = await context.with(suppressTracing(context.active()), () =>
     fetch(`${url}${endpoint}`, {
       method: 'POST',
       headers: {
@@ -66,6 +66,12 @@ export async function postToTelemetryServer(
       body: JSON.stringify(payload),
     })
   );
+  // fetch resolves on 4xx/5xx; surface it so a misconfigured server isn't silent.
+  if (!response.ok) {
+    logger.debug(
+      `Telemetry server POST ${endpoint} failed: ${response.status}`
+    );
+  }
 }
 
 /**

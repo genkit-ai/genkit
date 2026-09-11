@@ -167,7 +167,15 @@ export class DirectTelemetryInstrumentation
       bodyValue = { intValue: record.body };
     else if (typeof record.body === 'boolean')
       bodyValue = { boolValue: record.body };
-    else bodyValue = { stringValue: JSON.stringify(record.body) };
+    else {
+      // A circular body would make JSON.stringify throw; keep the log record
+      // rather than dropping it.
+      try {
+        bodyValue = { stringValue: JSON.stringify(record.body) };
+      } catch {
+        bodyValue = { stringValue: '[unserializable log body]' };
+      }
+    }
 
     const payload = {
       resourceLogs: [
