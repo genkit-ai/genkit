@@ -40,6 +40,35 @@ export function setTelemetryServerUrl(url: string) {
 }
 
 /**
+ * Fire-and-forget POST to a telemetry server endpoint. Tracing is suppressed so
+ * auto-instrumented fetch (e.g. undici) does not recurse into new spans.
+ * Shared by TraceServerExporter and DirectTelemetryInstrumentation.
+ *
+ * @hidden
+ */
+export async function postToTelemetryServer(
+  endpoint: string,
+  payload: unknown
+): Promise<void> {
+  // In dev the CLI passes the server URL via env; the handshake only calls
+  // setTelemetryServerUrl when the env var is absent, so fall back to it here.
+  const url = telemetryServerUrl ?? process.env.GENKIT_TELEMETRY_SERVER;
+  if (!url) {
+    return;
+  }
+  await context.with(suppressTracing(context.active()), () =>
+    fetch(`${url}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+/**
  * Exports collected OpenTelemetetry spans to the telemetry server.
  */
 export class TraceServerExporter implements SpanExporter {

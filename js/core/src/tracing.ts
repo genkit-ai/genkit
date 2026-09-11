@@ -27,16 +27,19 @@ const instrumentationKey = '__GENKIT_TELEMETRY_INSTRUMENTED';
 const telemetryProviderKey = '__GENKIT_TELEMETRY_PROVIDER';
 
 /**
+ * Ensures any implicit, flag-gated telemetry setup has run before a span is
+ * opened.
+ *
+ * Historically this also booted a NodeSDK (`enableTelemetry({})`) so the dev
+ * path had an exporter. That coupled instrumentation (span creation) to
+ * collection (export). Instrumentation is now pluggable and the Developer UI is
+ * fed by `DirectTelemetryInstrumentation`, so the only survivor here is the
+ * flag-gated Firebase auto-init.
+ *
  * @hidden
  */
 export async function ensureBasicTelemetryInstrumentation() {
   await checkFirebaseMonitoringAutoInit();
-
-  if (global[instrumentationKey]) {
-    return await global[instrumentationKey];
-  }
-
-  await enableTelemetry({});
 }
 
 /**
