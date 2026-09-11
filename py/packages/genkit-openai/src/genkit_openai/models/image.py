@@ -110,6 +110,12 @@ def _to_image_generate_params(
     prompt = _extract_prompt_text(request)
     config = extract_config_dict(request)
 
+    has_snake_case_response_format = 'response_format' in config
+    response_format = config.pop('response_format', None)
+    camel_case_response_format = config.pop('responseFormat', None)
+    if not has_snake_case_response_format:
+        response_format = camel_case_response_format
+
     # Start with required params.
     effective_model = config.pop('version', None) or model_name
     params: dict[str, Any] = {
@@ -120,12 +126,22 @@ def _to_image_generate_params(
     # GPT Image 1 rejects the response_format parameter; its API always
     # returns base64 image data. DALL-E models retain the existing default.
     if 'gpt-image' not in effective_model.lower():
-        params['response_format'] = config.pop('response_format', 'b64_json')
-    else:
-        config.pop('response_format', None)
+        params['response_format'] = response_format or 'b64_json'
 
     # Strip standard GenAI config keys that don't apply to image generation.
-    for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
+    for key in (
+        'temperature',
+        'max_output_tokens',
+        'maxOutputTokens',
+        'stop_sequences',
+        'stopSequences',
+        'top_k',
+        'topK',
+        'top_p',
+        'topP',
+        'api_key',
+        'apiKey',
+    ):
         config.pop(key, None)
 
     # Pass remaining config through (size, quality, style, n, etc.).
