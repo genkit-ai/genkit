@@ -64,7 +64,7 @@ class FakeInstrumentation
         traceFlags: 1,
       }),
     } as ApiSpan;
-    return next(span, ctx, info.metadata.isRoot === true);
+    return next(span, ctx);
   }
 
   recordLog(record: GenkitLogRecord): void {
