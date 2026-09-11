@@ -115,19 +115,19 @@ async function checksEvalInstance<ResponseType extends z.ZodTypeAny>(
   partialRequest: any,
   responseSchema: ResponseType
 ): Promise<z.infer<ResponseType>> {
+  const request = {
+    ...partialRequest,
+  };
   return await runInNewSpan(
     ai,
     {
       metadata: {
         name: 'EvaluationService#evaluateInstances',
+        // Seed input up front so the realtime "pending" span export carries it.
+        input: request,
       },
     },
     async (metadata, _otSpan) => {
-      const request = {
-        ...partialRequest,
-      };
-
-      metadata.input = request;
       const client = await auth.getClient();
       const url =
         'https://checks.googleapis.com/v1alpha/aisafety:classifyContent';
