@@ -127,7 +127,7 @@ export class DirectTelemetryInstrumentation
       const output = await getAsyncContext().run(
         directAlsKey,
         { traceId, spanId } as DirectParent,
-        () => next(otSpan, spanCtx, info.metadata.isRoot === true)
+        () => next(otSpan, spanCtx)
       );
       exportSpan();
       return output;

@@ -71,8 +71,7 @@ interface RunInNewSpanOpts {
 
 type RunInNewSpanFn<T> = (
   metadata: SpanMetadata,
-  otSpan: ApiSpan,
-  isRoot: boolean
+  otSpan: ApiSpan
 ) => Promise<T>;
 
 // ---------------------------------------------------------------------------
@@ -196,7 +195,6 @@ export async function runInNewSpan<T>(
 
   const parentStep =
     getAsyncContext().getStore<SpanContext>(spanMetadataAlsKey);
-  const isInRoot = parentStep?.metadata?.isRoot === true;
   if (!parentStep) opts.metadata.isRoot ||= true;
 
   // Genkit-semantic setup (backend independent). Providers only encode the
@@ -241,13 +239,7 @@ export async function runInNewSpan<T>(
     const compositeSpan = makeCompositeSpan(compositeCtx);
 
     return await getAsyncContext().run(spanMetadataAlsKey, spanContext, () =>
-      runWithGenkitState(
-        opts.metadata,
-        spanContext,
-        compositeSpan,
-        isInRoot,
-        fn
-      )
+      runWithGenkitState(opts.metadata, spanContext, compositeSpan, fn)
     );
   };
 
@@ -286,11 +278,10 @@ async function runWithGenkitState<T>(
   metadata: SpanMetadata,
   spanContext: SpanContext,
   compositeSpan: ApiSpan,
-  isInRoot: boolean,
   fn: RunInNewSpanFn<T>
 ): Promise<T> {
   try {
-    const output = await fn(metadata, compositeSpan, isInRoot);
+    const output = await fn(metadata, compositeSpan);
     if (metadata.state !== 'error') {
       metadata.state = 'success';
     }

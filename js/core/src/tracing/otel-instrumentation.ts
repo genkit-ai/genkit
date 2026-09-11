@@ -85,7 +85,7 @@ export class OTelInstrumentation
           },
         };
         try {
-          return await next(otSpan, spanCtx, metadata.isRoot === true);
+          return await next(otSpan, spanCtx);
         } catch (e) {
           otSpan.setStatus({
             code: SpanStatusCode.ERROR,
