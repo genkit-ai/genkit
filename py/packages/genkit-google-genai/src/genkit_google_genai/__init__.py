@@ -79,8 +79,10 @@ from genkit_google_genai.google import (
 from genkit_google_genai.models.antigravity import AntigravityConfig
 from genkit_google_genai.models.deep_research import DeepResearchConfig
 from genkit_google_genai.models.embedder import (
+    EmbeddingConfigSchema,
     EmbeddingTaskType,
     GeminiEmbeddingModels,
+    VertexEmbeddingConfigSchema,
     VertexEmbeddingModels,
 )
 from genkit_google_genai.models.gemini import (
@@ -111,6 +113,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'EmbeddingConfigSchema',
     'EmbeddingTaskType',
     'GeminiConfigSchema',
     'GeminiEmbeddingModels',
@@ -135,6 +138,7 @@ __all__ = [
     'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
+    'VertexEmbeddingConfigSchema',
     'VertexEmbeddingModels',
     'package_name',
 ]
