@@ -405,13 +405,13 @@ export class GenAiInstrumentation implements Instrumentation {
     response: GenerateResponseData,
     failed: boolean
   ): string[] {
-    const content = response.message?.content ?? [];
+    const content = resolveMessage(response)?.content ?? [];
     if (content.some(isToolRequestPart)) {
       // Following the OpenAI GenAI profile: a turn ending in tool calls is the
       // more informative signal for consumers.
       return ['tool_calls'];
     }
-    return [mapFinishReason(response.finishReason, failed)];
+    return [mapFinishReason(resolveFinishReason(response), failed)];
   }
 
   private recordContent(
@@ -423,11 +423,10 @@ export class GenAiInstrumentation implements Instrumentation {
       ? normalizeMessages(request.messages)
       : undefined;
     const outputMessages: Record<string, unknown>[] = [];
-    if (response?.message) {
-      const reason = this.resolveFinishReasons(response, false)[0];
-      outputMessages.push(
-        mapOutputMessage(response.message as MessageData, reason)
-      );
+    const message = response ? resolveMessage(response) : undefined;
+    if (message) {
+      const reason = this.resolveFinishReasons(response!, false)[0];
+      outputMessages.push(mapOutputMessage(message, reason));
     }
 
     if (this.contentMode === 'span') {
@@ -496,6 +495,20 @@ export class GenAiInstrumentation implements Instrumentation {
 function errorTypeOf(e: unknown): string {
   if (e instanceof Error) return e.name;
   return typeof e;
+}
+
+/**
+ * Resolves the response message. Modern plugins set `message` directly; legacy
+ * plugins return it under `candidates[0]` (only the first candidate is used).
+ * Mirrors core's `GenerateResponse` constructor.
+ */
+function resolveMessage(r: GenerateResponseData): MessageData | undefined {
+  return r.message ?? r.candidates?.[0]?.message;
+}
+
+/** Resolves the finish reason with the same candidates fallback as the message. */
+function resolveFinishReason(r: GenerateResponseData): string | undefined {
+  return r.finishReason ?? r.candidates?.[0]?.finishReason;
 }
 
 /** A backend-independent span context derived from the OTel span. */
