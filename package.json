@@ -5,6 +5,7 @@
     "preinstall": "npx only-allow pnpm",
     "setup": "npm-run-all pnpm-install-js pnpm-install-genkit-tools build link-genkit-cli",
     "format": "(prettier . --write) && (tsx scripts/copyright.ts)",
+    "local-telemetry": "tsx scripts/local-telemetry.ts",
     "format:check": "(prettier . --check) && (tsx scripts/copyright.ts --check)",
     "format:biome": "pnpm dlx @biomejs/biome check --formatter-enabled=true --linter-enabled=false --organize-imports-enabled=true --fix . && bin/add_license",
     "lint:biome": "pnpm dlx @biomejs/biome lint --fix . && bin/add_license",

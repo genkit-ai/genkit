@@ -16,22 +16,16 @@
 
 import { googleAI } from '@genkit-ai/google-genai';
 import { GenAiInstrumentation } from '@genkit-ai/otel';
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { genkit } from 'genkit';
 import { configureInstrumentation } from 'genkit/tracing';
 
-// The application owns the OTel SDK. With no OTEL_* env vars it defaults to
-// http://localhost:4318 (OTLP http/proto), which a local collector accepts.
-// See README.md for a Docker-free local Jaeger + collector setup.
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter(),
-  metricReader: new PeriodicExportingMetricReader({
-    exporter: new OTLPMetricExporter(),
-  }),
-});
+// The application owns the OTel SDK. With no arguments NodeSDK configures
+// traces, metrics, and logs from the standard OTEL_* env vars, defaulting to
+// the OTLP http/proto exporter at http://localhost:4318, which a local
+// collector accepts. See README.md for a Docker-free local Jaeger + collector
+// setup.
+const sdk = new NodeSDK();
 sdk.start();
 
 // captureContent is opt-in (it may contain PII). 'span' mode is the easiest to
@@ -59,5 +53,4 @@ async function main() {
 
 main().catch((e) => {
   console.error(e);
-  process.exit(1);
 });
