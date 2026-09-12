@@ -25,6 +25,7 @@ import {
   type Tracer,
 } from '@opentelemetry/api';
 import { logs } from '@opentelemetry/api-logs';
+import { logger } from 'genkit/logging';
 import type {
   GenerateRequest,
   GenerateResponseData,
@@ -148,6 +149,7 @@ export class GenAiInstrumentation implements Instrumentation {
 
   private cachedTracer?: Tracer;
   private cachedMetrics?: GenAiMetrics;
+  private warnedNotRecording = false;
 
   constructor(options: GenAiInstrumentationOptions = {}) {
     this.captureContent = options.captureContent ?? captureContentFromEnv();
@@ -215,6 +217,7 @@ export class GenAiInstrumentation implements Instrumentation {
       `${GenAiOperation.chat} ${model}`,
       { kind: SpanKind.CLIENT, attributes: attrs },
       async (span) => {
+        this.maybeWarnNotRecording(span);
         try {
           const output = await next(span, spanContextOf(span));
           const response = asGenerateResponse(output);
@@ -256,6 +259,7 @@ export class GenAiInstrumentation implements Instrumentation {
       `${GenAiOperation.executeTool} ${info.metadata.name}`,
       { kind: SpanKind.INTERNAL, attributes: attrs },
       async (span) => {
+        this.maybeWarnNotRecording(span);
         try {
           const output = await next(span, spanContextOf(span));
           this.maybeCaptureActionIO(span, info.metadata.input, output);
@@ -282,6 +286,7 @@ export class GenAiInstrumentation implements Instrumentation {
       info.metadata.name,
       { kind: SpanKind.INTERNAL, attributes: attrs },
       async (span) => {
+        this.maybeWarnNotRecording(span);
         try {
           const output = await next(span, spanContextOf(span));
           this.maybeCaptureActionIO(span, info.metadata.input, output);
@@ -475,6 +480,21 @@ export class GenAiInstrumentation implements Instrumentation {
       eventName: genAiOperationDetailsEvent,
       attributes: eventAttrs,
     });
+  }
+
+  /**
+   * Warns once if the SDK isn't collecting. When no TracerProvider is
+   * registered, `@opentelemetry/api` returns a non-recording span, so all
+   * telemetry is silently dropped; surface that instead of failing quietly.
+   */
+  private maybeWarnNotRecording(span: Span): void {
+    if (span.isRecording() || this.warnedNotRecording) return;
+    this.warnedNotRecording = true;
+    logger.warn(
+      'GenAiInstrumentation is configured but no OpenTelemetry SDK is ' +
+        'recording, so GenAI telemetry will not be exported. Initialize the ' +
+        'OTel SDK (e.g. @opentelemetry/sdk-node) before constructing Genkit.'
+    );
   }
 
   private recordError(span: Span, e: unknown): void {
