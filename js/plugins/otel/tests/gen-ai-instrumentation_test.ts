@@ -287,6 +287,36 @@ describe('GenAiInstrumentation', () => {
     assert.strictEqual(span.status.code, 2 /* ERROR */);
   });
 
+  it('warns once when no SDK is recording', async () => {
+    // No injected tracer and no registered SDK -> the API returns a
+    // non-recording span, so telemetry would be silently dropped.
+    const inst = new GenAiInstrumentation();
+    const warnings: unknown[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args[0]);
+    };
+    try {
+      const modelInfo = info({
+        metadata: { name: 'googleai/gemini-flash-latest' },
+        labels: { 'genkit:metadata:subtype': 'model' },
+      });
+      await inst.runInNewSpan(modelInfo, async () => ({
+        finishReason: 'stop',
+      }));
+      // A second call must not warn again.
+      await inst.runInNewSpan(modelInfo, async () => ({
+        finishReason: 'stop',
+      }));
+    } finally {
+      console.warn = originalWarn;
+    }
+    const notRecording = warnings.filter(
+      (w) => typeof w === 'string' && w.includes('no OpenTelemetry SDK')
+    );
+    assert.strictEqual(notRecording.length, 1);
+  });
+
   it('exposes trace/span ids and setMetadata through the context', async () => {
     const inst = new GenAiInstrumentation({ tracer });
     let captured: GenkitSpanContext | undefined;
