@@ -114,8 +114,12 @@ function captureContentFromEnv(): boolean {
   return process.env[captureContentEnvVar]?.toLowerCase() === 'true';
 }
 
-/** The label the dispatcher stores the Genkit action type under. */
+// Genkit records the action type in two places: action-based spans (model,
+// tool, flow, ...) set `genkit:metadata:subtype`, while directly-wrapped spans
+// (generate, dotprompt, promptTemplate, helper, flowStep) set only
+// `genkit:type`. Prefer the subtype, fall back to the type.
 const SUBTYPE_LABEL = 'genkit:metadata:subtype';
+const TYPE_LABEL = 'genkit:type';
 
 /**
  * An {@link Instrumentation} that emits OpenTelemetry telemetry following the
@@ -171,15 +175,16 @@ export class GenAiInstrumentation implements Instrumentation {
     info: InstrumentationSpanInfo,
     next: Next<T>
   ): Promise<T> {
-    const subtype = info.labels?.[SUBTYPE_LABEL];
-    switch (subtype) {
+    const actionType =
+      info.labels?.[SUBTYPE_LABEL] ?? info.labels?.[TYPE_LABEL];
+    switch (actionType) {
       case 'model':
         return this.runModelSpan(info, next);
       case 'tool':
         if (this.emitToolSpans) return this.runToolSpan(info, next);
-        return this.runGenericSpan(info, next, subtype);
+        return this.runGenericSpan(info, next, actionType);
       default:
-        return this.runGenericSpan(info, next, subtype);
+        return this.runGenericSpan(info, next, actionType);
     }
   }
 
