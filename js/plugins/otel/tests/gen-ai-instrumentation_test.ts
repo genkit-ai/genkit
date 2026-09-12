@@ -183,6 +183,44 @@ describe('GenAiInstrumentation', () => {
     assert.strictEqual(outputMessages[0].finish_reason, 'stop');
   });
 
+  it('reads message and finish reason from legacy candidates[0]', async () => {
+    const inst = new GenAiInstrumentation({
+      tracer,
+      captureContent: true,
+      contentMode: 'span',
+    });
+    // Legacy plugin shape: no top-level message/finishReason, only candidates.
+    const span = await runAndGetSpan(
+      inst,
+      info({
+        metadata: {
+          name: 'googleai/gemini-flash-latest',
+          input: { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+        },
+        labels: { 'genkit:metadata:subtype': 'model' },
+      }),
+      {
+        usage: { inputTokens: 3, outputTokens: 7 },
+        candidates: [
+          {
+            index: 0,
+            finishReason: 'stop',
+            message: { role: 'model', content: [{ text: 'hello there' }] },
+          },
+        ],
+      }
+    );
+    assert.deepStrictEqual(span.attributes['gen_ai.response.finish_reasons'], [
+      'stop',
+    ]);
+    const outputMessages = JSON.parse(
+      span.attributes['gen_ai.output.messages'] as string
+    );
+    assert.strictEqual(outputMessages[0].role, 'assistant');
+    assert.strictEqual(outputMessages[0].parts[0].content, 'hello there');
+    assert.strictEqual(outputMessages[0].finish_reason, 'stop');
+  });
+
   it('does not capture content by default', async () => {
     const inst = new GenAiInstrumentation({ tracer });
     const span = await runAndGetSpan(
