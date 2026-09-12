@@ -111,6 +111,7 @@ export const pineconeIndexerRef = (params: {
 PINECONE_API_KEY. If not set, the PINECONE_API_KEY environment variable will
 be used instead.
  * @param params.indexId The name of the index
+ * @param params.indexHostUrl The host url for the index. If not set, only indexId will be used to target the index
  * @param params.embedder The embedder to use for the indexer and retriever
  * @param params.embedderOptions  Options to customize the embedder
  * @returns The Pinecone Genkit plugin
@@ -119,6 +120,7 @@ export function pinecone<EmbedderCustomOptions extends z.ZodTypeAny>(
   params: {
     clientParams?: PineconeConfiguration;
     indexId: string;
+    indexHostUrl?: string;
     contentKey?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
     embedderOptions?: z.infer<EmbedderCustomOptions>;
@@ -137,6 +139,7 @@ export default pinecone;
  * @param ai A Genkit instance
  * @param params The params for the retriever
  * @param params.indexId The name of the retriever
+ * @param params.indexHostUrl The host url for the index. If not set, only the indexId will be used to target the index
  * @param params.clientParams PineconeConfiguration containing the
 PINECONE_API_KEY. If not set, the PINECONE_API_KEY environment variable will
 be used instead.
@@ -153,6 +156,7 @@ export function configurePineconeRetriever<
   ai: Genkit,
   params: {
     indexId: string;
+    indexHostUrl?: string;
     clientParams?: PineconeConfiguration;
     /**
      * @deprecated use contentKey instead.
@@ -163,13 +167,13 @@ export function configurePineconeRetriever<
     embedderOptions?: z.infer<EmbedderCustomOptions>;
   }
 ) {
-  const { indexId, embedder, embedderOptions } = {
+  const { indexId, indexHostUrl, embedder, embedderOptions } = {
     ...params,
   };
   const pineconeConfig = params.clientParams ?? getDefaultConfig();
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
-  const index = pinecone.index(indexId);
+  const index = pinecone.index(indexId, indexHostUrl);
 
   return ai.defineRetriever(
     {
@@ -218,6 +222,7 @@ export function configurePineconeRetriever<
  * @param ai A Genkit instance
  * @param params The params for the indexer
  * @param params.indexId The name of the indexer
+ * @param params.indexHostUrl The host url for the index. If not set, only the indexId will be used to target the index
  * @param params.clientParams PineconeConfiguration containing the
 PINECONE_API_KEY. If not set, the PINECONE_API_KEY environment variable will
 be used instead.
@@ -234,6 +239,7 @@ export function configurePineconeIndexer<
   ai: Genkit,
   params: {
     indexId: string;
+    indexHostUrl?: string;
     clientParams?: PineconeConfiguration;
     /**
      * @deprecated use contentKey instead.
@@ -244,13 +250,13 @@ export function configurePineconeIndexer<
     embedderOptions?: z.infer<EmbedderCustomOptions>;
   }
 ) {
-  const { indexId, embedder, embedderOptions } = {
+  const { indexId, indexHostUrl, embedder, embedderOptions } = {
     ...params,
   };
   const pineconeConfig = params.clientParams ?? getDefaultConfig();
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
-  const index = pinecone.index(indexId);
+  const index = pinecone.index(indexId, indexHostUrl);
 
   return ai.defineIndexer(
     {
