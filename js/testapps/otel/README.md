@@ -42,5 +42,14 @@ the collector log (`tail -f .otel/collector.log`).
 - `execute_tool <name>` spans if the model calls tools (this sample enables
   `emitToolSpans`).
 - The two GenAI client metrics per model call.
-- With `captureContent: true` and `contentMode: 'span'`, `gen_ai.input.messages`
-  / `gen_ai.output.messages` on the span (may contain PII).
+- This sample uses `contentCapturingMode: 'SPAN_ONLY'`, so
+  `gen_ai.input.messages` / `gen_ai.output.messages` land on the span (may
+  contain PII) and render in Jaeger's GenAI tab.
+
+> [!NOTE]
+> Switching to `EVENT_ONLY` moves content to the OpenTelemetry logs signal, so
+> it no longer appears in Jaeger (neither the GenAI tab nor "Trace Logs"). The
+> collector still logs it via its debug exporter, so `tail -f
+.otel/collector.log` to see the `gen_ai.client.inference.operation.details`
+> record. Use `SPAN_ONLY` or `SPAN_AND_EVENT` to keep content visible in
+> Jaeger.

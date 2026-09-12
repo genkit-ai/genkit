@@ -45,7 +45,9 @@ import {
   genAiOperationDetailsEvent,
   GenkitAttr,
   mapFinishReason,
+  parseContentCapturingMode,
   splitModelName,
+  type ContentCapturingMode,
 } from './genai/gen-ai-attributes.js';
 import {
   isToolRequestPart,
@@ -57,30 +59,18 @@ import { GenAiMetrics } from './genai/gen-ai-metrics.js';
 /** The continuation passed by the dispatcher; returns the raw action result. */
 type Next<T> = (span: Span, ctx: GenkitSpanContext) => Promise<T>;
 
-/** Where captured prompt/response content is recorded. */
-export type GenAiContentMode =
-  /**
-   * Emit a single `gen_ai.client.inference.operation.details` event carrying
-   * the content, correlated to the span via context. Keeps large bodies off
-   * the span. This is the default when content capture is enabled.
-   */
-  | 'event'
-  /** Attach content directly to the span as `gen_ai.*` JSON-string attributes. */
-  | 'span';
-
 /** Options for {@link GenAiInstrumentation}. */
 export interface GenAiInstrumentationOptions {
   /**
-   * Whether to capture spec-shaped GenAI message content on model spans, i.e.
-   * the `gen_ai.*.messages` attributes / operation.details event.
+   * Where spec-shaped GenAI message content (`gen_ai.system_instructions`,
+   * `gen_ai.input.messages`, `gen_ai.output.messages`) is recorded.
    *
-   * Content may contain PII, so it is off by default. Also enabled when the
-   * env var `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` is set.
+   * Content may contain PII, so the default is `NO_CONTENT`. When omitted, the
+   * env var `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is consulted
+   * (spec enum names: `NO_CONTENT`, `SPAN_ONLY`, `EVENT_ONLY`,
+   * `SPAN_AND_EVENT`). An explicit value here overrides the env var.
    */
-  captureContent?: boolean;
-
-  /** Where captured content is recorded (event vs span attributes). */
-  contentMode?: GenAiContentMode;
+  contentCapturingMode?: ContentCapturingMode;
 
   /**
    * Whether to capture raw Genkit action input/output as `genkit.input` /
@@ -111,8 +101,18 @@ export interface GenAiInstrumentationOptions {
   meter?: Meter;
 }
 
-function captureContentFromEnv(): boolean {
-  return process.env[captureContentEnvVar]?.toLowerCase() === 'true';
+function contentCapturingModeFromEnv(): ContentCapturingMode {
+  const raw = process.env[captureContentEnvVar];
+  const mode = parseContentCapturingMode(raw);
+  if (mode === undefined) {
+    logger.warn(
+      `Invalid ${captureContentEnvVar}="${raw}"; expected one of ` +
+        'NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT. ' +
+        'Defaulting to NO_CONTENT.'
+    );
+    return 'NO_CONTENT';
+  }
+  return mode;
 }
 
 // Genkit records the action type in two places: action-based spans (model,
@@ -138,8 +138,9 @@ const TYPE_LABEL = 'genkit:type';
  * [spec]: https://github.com/open-telemetry/semantic-conventions-genai
  */
 export class GenAiInstrumentation implements Instrumentation {
-  private readonly captureContent: boolean;
-  private readonly contentMode: GenAiContentMode;
+  private readonly contentCapturingMode: ContentCapturingMode;
+  private readonly captureOnSpan: boolean;
+  private readonly captureOnEvent: boolean;
   private readonly captureActionIO: boolean;
   private readonly emitToolSpans: boolean;
   private readonly emitMetrics: boolean;
@@ -152,8 +153,14 @@ export class GenAiInstrumentation implements Instrumentation {
   private warnedNotRecording = false;
 
   constructor(options: GenAiInstrumentationOptions = {}) {
-    this.captureContent = options.captureContent ?? captureContentFromEnv();
-    this.contentMode = options.contentMode ?? 'event';
+    this.contentCapturingMode =
+      options.contentCapturingMode ?? contentCapturingModeFromEnv();
+    this.captureOnSpan =
+      this.contentCapturingMode === 'SPAN_ONLY' ||
+      this.contentCapturingMode === 'SPAN_AND_EVENT';
+    this.captureOnEvent =
+      this.contentCapturingMode === 'EVENT_ONLY' ||
+      this.contentCapturingMode === 'SPAN_AND_EVENT';
     this.captureActionIO = options.captureActionIO ?? false;
     this.emitToolSpans = options.emitToolSpans ?? false;
     this.emitMetrics = options.emitMetrics ?? true;
@@ -222,7 +229,9 @@ export class GenAiInstrumentation implements Instrumentation {
           const output = await next(span, spanContextOf(span));
           const response = asGenerateResponse(output);
           if (response) this.addResponseAttributes(span, response, false);
-          if (this.captureContent) this.recordContent(span, request, response);
+          if (this.contentCapturingMode !== 'NO_CONTENT') {
+            this.recordContent(span, request, response);
+          }
           this.maybeCaptureActionIO(span, info.metadata.input, output);
           if (this.emitMetrics) {
             this.recordModelMetrics(startTime, metricAttrs, response);
@@ -439,7 +448,8 @@ export class GenAiInstrumentation implements Instrumentation {
       outputMessages.push(mapOutputMessage(message, reason));
     }
 
-    if (this.contentMode === 'span') {
+    // SPAN_ONLY / SPAN_AND_EVENT: attach content to the span as JSON strings.
+    if (this.captureOnSpan) {
       if (inputMessages) {
         this.setJsonAttribute(
           span,
@@ -457,29 +467,30 @@ export class GenAiInstrumentation implements Instrumentation {
       if (outputMessages.length) {
         this.setJsonAttribute(span, GenAiAttr.outputMessages, outputMessages);
       }
-      return;
     }
 
-    // Event mode (default): emit a single operation.details event correlated
-    // to the span via the active context.
-    const eventAttrs: Attributes = {};
-    if (inputMessages) {
-      eventAttrs[GenAiAttr.inputMessages] = JSON.stringify(
-        inputMessages.messages
-      );
-      if (inputMessages.systemInstructions.length) {
-        eventAttrs[GenAiAttr.systemInstructions] = JSON.stringify(
-          inputMessages.systemInstructions
+    // EVENT_ONLY / SPAN_AND_EVENT: emit a single operation.details event
+    // correlated to the span via the active context.
+    if (this.captureOnEvent) {
+      const eventAttrs: Attributes = {};
+      if (inputMessages) {
+        eventAttrs[GenAiAttr.inputMessages] = JSON.stringify(
+          inputMessages.messages
         );
+        if (inputMessages.systemInstructions.length) {
+          eventAttrs[GenAiAttr.systemInstructions] = JSON.stringify(
+            inputMessages.systemInstructions
+          );
+        }
       }
+      if (outputMessages.length) {
+        eventAttrs[GenAiAttr.outputMessages] = JSON.stringify(outputMessages);
+      }
+      logs.getLogger(this.scopeName).emit({
+        eventName: genAiOperationDetailsEvent,
+        attributes: eventAttrs,
+      });
     }
-    if (outputMessages.length) {
-      eventAttrs[GenAiAttr.outputMessages] = JSON.stringify(outputMessages);
-    }
-    logs.getLogger(this.scopeName).emit({
-      eventName: genAiOperationDetailsEvent,
-      attributes: eventAttrs,
-    });
   }
 
   /**
