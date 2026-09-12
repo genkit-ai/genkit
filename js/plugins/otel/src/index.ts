@@ -22,7 +22,6 @@
 
 export {
   GenAiInstrumentation,
-  type GenAiContentMode,
   type GenAiInstrumentationOptions,
 } from './gen-ai-instrumentation.js';
 export {
@@ -33,4 +32,6 @@ export {
   captureContentEnvVar,
   genAiOperationDetailsEvent,
   genAiSemConvVersion,
+  parseContentCapturingMode,
+  type ContentCapturingMode,
 } from './genai/gen-ai-attributes.js';

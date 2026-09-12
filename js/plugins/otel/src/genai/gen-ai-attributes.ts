@@ -114,6 +114,46 @@ export const captureContentEnvVar =
   'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT';
 
 /**
+ * Where captured message content is recorded, mirroring the OTel GenAI
+ * `ContentCapturingMode`.
+ *
+ * Content may contain PII and is often large, so the default is `NO_CONTENT`.
+ * `EVENT_ONLY` keeps structured content on a dedicated log event and is
+ * preferred for production; `SPAN_ONLY` puts it on span attributes as a JSON
+ * string (easy to eyeball, but subject to backend attribute/envelope limits),
+ * best for development.
+ */
+export type ContentCapturingMode =
+  | 'NO_CONTENT'
+  | 'SPAN_ONLY'
+  | 'EVENT_ONLY'
+  | 'SPAN_AND_EVENT';
+
+/**
+ * Parses the spec env var into a {@link ContentCapturingMode}. Accepts the
+ * spec's enum names (case-insensitive); unset/empty maps to `NO_CONTENT`.
+ * Returns `undefined` for an unrecognized value so the caller can warn.
+ */
+export function parseContentCapturingMode(
+  raw: string | undefined
+): ContentCapturingMode | undefined {
+  switch (raw?.trim().toUpperCase()) {
+    case undefined:
+    case '':
+    case 'NO_CONTENT':
+      return 'NO_CONTENT';
+    case 'SPAN_ONLY':
+      return 'SPAN_ONLY';
+    case 'EVENT_ONLY':
+      return 'EVENT_ONLY';
+    case 'SPAN_AND_EVENT':
+      return 'SPAN_AND_EVENT';
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Splits a fully qualified Genkit model name into `(prefix, model)`.
  *
  * `googleai/gemini-flash-latest` -> `{ prefix: 'googleai', model: 'gemini-flash-latest' }`.
