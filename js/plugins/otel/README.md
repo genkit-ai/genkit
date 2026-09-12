@@ -56,17 +56,39 @@ console.log(text);
 
 `new GenAiInstrumentation(options)` accepts:
 
-| Option            | Default   | Description                                                                 |
-| ----------------- | --------- | --------------------------------------------------------------------------- |
-| `captureContent`  | env-gated | Capture spec-shaped message content. Off unless `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`. |
-| `contentMode`     | `'event'` | Where captured content lands: an operation-details event or span attributes. |
-| `captureActionIO` | `false`   | Record raw Genkit input/output as `genkit.input` / `genkit.output`.         |
-| `emitToolSpans`   | `false`   | Emit `execute_tool` spans for tool actions.                                 |
-| `emitMetrics`     | `true`    | Emit the GenAI client metrics.                                              |
-| `scopeName`       | `'genkit-genai'` | Instrumentation scope for the tracer/meter/logger.                  |
-| `tracer`/`meter`  | resolved  | Escape hatches to inject explicit instruments.                             |
+| Option                 | Default          | Description                                                         |
+| ---------------------- | ---------------- | ------------------------------------------------------------------- |
+| `contentCapturingMode` | env-gated        | Where spec-shaped message content is recorded (see below).          |
+| `captureActionIO`      | `false`          | Record raw Genkit input/output as `genkit.input` / `genkit.output`. |
+| `emitToolSpans`        | `false`          | Emit `execute_tool` spans for tool actions.                         |
+| `emitMetrics`          | `true`           | Emit the GenAI client metrics.                                      |
+| `scopeName`            | `'genkit-genai'` | Instrumentation scope for the tracer/meter/logger.                  |
+| `tracer`/`meter`       | resolved         | Escape hatches to inject explicit instruments.                      |
 
-Content and raw IO may contain PII, so both are opt-in.
+### Content capture
+
+`contentCapturingMode` mirrors the OTel GenAI `ContentCapturingMode` and takes
+one of:
+
+| Value            | Effect                                                                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NO_CONTENT`     | Default. No message content is recorded.                                                                                                            |
+| `SPAN_ONLY`      | Content on span attributes as JSON strings. Easy to eyeball in Jaeger, but subject to backend attribute/envelope size limits. Best for development. |
+| `EVENT_ONLY`     | Content on a dedicated `gen_ai.client.inference.operation.details` log event in structured form. Preferred for production.                          |
+| `SPAN_AND_EVENT` | Both of the above.                                                                                                                                  |
+
+When `contentCapturingMode` is omitted, the env var
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is consulted (same enum
+names); an explicit option overrides the env var. Content and raw IO may
+contain PII, so both are opt-in.
+
+> [!NOTE] > `EVENT_ONLY` emits content on the OpenTelemetry **logs** signal (a
+> `gen_ai.client.inference.operation.details` log record), not on the span.
+> Trace-only backends like Jaeger cannot display it: the GenAI tab reads span
+> attributes, and the "Trace Logs" tab reads span events, neither of which is
+> the logs signal. Use `SPAN_ONLY` or `SPAN_AND_EVENT` to see content in
+> Jaeger, or send logs to a logs-capable backend (e.g. Grafana Loki,
+> Elasticsearch/OpenSearch) for `EVENT_ONLY`.
 
 The sources of Genkit are available on
 [GitHub](https://github.com/genkit-ai/genkit).

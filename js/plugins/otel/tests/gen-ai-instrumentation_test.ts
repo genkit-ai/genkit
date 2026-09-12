@@ -158,11 +158,10 @@ describe('GenAiInstrumentation', () => {
     assert.strictEqual(span.attributes['genkit.action.type'], 'util');
   });
 
-  it('captures content on the span in span mode', async () => {
+  it('captures content on the span in SPAN_ONLY mode', async () => {
     const inst = new GenAiInstrumentation({
       tracer,
-      captureContent: true,
-      contentMode: 'span',
+      contentCapturingMode: 'SPAN_ONLY',
     });
     const span = await runAndGetSpan(
       inst,
@@ -201,8 +200,7 @@ describe('GenAiInstrumentation', () => {
   it('reads message and finish reason from legacy candidates[0]', async () => {
     const inst = new GenAiInstrumentation({
       tracer,
-      captureContent: true,
-      contentMode: 'span',
+      contentCapturingMode: 'SPAN_ONLY',
     });
     // Legacy plugin shape: no top-level message/finishReason, only candidates.
     const span = await runAndGetSpan(
@@ -236,7 +234,7 @@ describe('GenAiInstrumentation', () => {
     assert.strictEqual(outputMessages[0].finish_reason, 'stop');
   });
 
-  it('does not capture content by default', async () => {
+  it('does not capture content by default (NO_CONTENT)', async () => {
     const inst = new GenAiInstrumentation({ tracer });
     const span = await runAndGetSpan(
       inst,
@@ -250,6 +248,54 @@ describe('GenAiInstrumentation', () => {
       { finishReason: 'stop' }
     );
     assert.strictEqual(span.attributes['gen_ai.input.messages'], undefined);
+  });
+
+  it('does not set span content attributes in EVENT_ONLY mode', async () => {
+    const inst = new GenAiInstrumentation({
+      tracer,
+      contentCapturingMode: 'EVENT_ONLY',
+    });
+    const span = await runAndGetSpan(
+      inst,
+      info({
+        metadata: {
+          name: 'googleai/gemini-flash-latest',
+          input: { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+        },
+        labels: { 'genkit:metadata:subtype': 'model' },
+      }),
+      {
+        finishReason: 'stop',
+        message: { role: 'model', content: [{ text: 'hello' }] },
+      }
+    );
+    // Content goes to the log event, not span attributes.
+    assert.strictEqual(span.attributes['gen_ai.input.messages'], undefined);
+    assert.strictEqual(span.attributes['gen_ai.output.messages'], undefined);
+  });
+
+  it('sets span content attributes in SPAN_AND_EVENT mode', async () => {
+    const inst = new GenAiInstrumentation({
+      tracer,
+      contentCapturingMode: 'SPAN_AND_EVENT',
+    });
+    const span = await runAndGetSpan(
+      inst,
+      info({
+        metadata: {
+          name: 'googleai/gemini-flash-latest',
+          input: { messages: [{ role: 'user', content: [{ text: 'hi' }] }] },
+        },
+        labels: { 'genkit:metadata:subtype': 'model' },
+      }),
+      {
+        finishReason: 'stop',
+        message: { role: 'model', content: [{ text: 'hello' }] },
+      }
+    );
+    // Span attributes are present (the event sink is exercised separately).
+    assert.ok(span.attributes['gen_ai.input.messages']);
+    assert.ok(span.attributes['gen_ai.output.messages']);
   });
 
   it('captures raw action IO only when enabled', async () => {

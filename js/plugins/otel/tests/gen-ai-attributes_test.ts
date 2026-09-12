@@ -20,6 +20,7 @@ import {
   deriveOutputType,
   deriveProviderName,
   mapFinishReason,
+  parseContentCapturingMode,
   splitModelName,
 } from '../src/genai/gen-ai-attributes.js';
 
@@ -78,6 +79,33 @@ describe('mapFinishReason', () => {
     assert.strictEqual(mapFinishReason('other', false), 'stop');
     assert.strictEqual(mapFinishReason('other', true), 'error');
     assert.strictEqual(mapFinishReason(undefined, true), 'error');
+  });
+});
+
+describe('parseContentCapturingMode', () => {
+  it('maps the spec enum names (case-insensitive)', () => {
+    assert.strictEqual(parseContentCapturingMode('NO_CONTENT'), 'NO_CONTENT');
+    assert.strictEqual(parseContentCapturingMode('SPAN_ONLY'), 'SPAN_ONLY');
+    assert.strictEqual(parseContentCapturingMode('EVENT_ONLY'), 'EVENT_ONLY');
+    assert.strictEqual(
+      parseContentCapturingMode('SPAN_AND_EVENT'),
+      'SPAN_AND_EVENT'
+    );
+    assert.strictEqual(parseContentCapturingMode('span_only'), 'SPAN_ONLY');
+    assert.strictEqual(
+      parseContentCapturingMode('  Event_Only  '),
+      'EVENT_ONLY'
+    );
+  });
+
+  it('treats unset/empty as NO_CONTENT', () => {
+    assert.strictEqual(parseContentCapturingMode(undefined), 'NO_CONTENT');
+    assert.strictEqual(parseContentCapturingMode(''), 'NO_CONTENT');
+  });
+
+  it('returns undefined for an unrecognized value', () => {
+    assert.strictEqual(parseContentCapturingMode('true'), undefined);
+    assert.strictEqual(parseContentCapturingMode('yes'), undefined);
   });
 });
 

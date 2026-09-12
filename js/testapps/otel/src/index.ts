@@ -28,12 +28,12 @@ import { configureInstrumentation } from 'genkit/tracing';
 const sdk = new NodeSDK();
 sdk.start();
 
-// captureContent is opt-in (it may contain PII). 'span' mode is the easiest to
-// eyeball in Jaeger; switch to 'event' to keep bodies off the span.
+// Content capture is opt-in (it may contain PII). SPAN_ONLY is the easiest to
+// eyeball in Jaeger; use EVENT_ONLY to keep bodies off the span (preferred for
+// production), or SPAN_AND_EVENT for both.
 configureInstrumentation(
   new GenAiInstrumentation({
-    captureContent: true,
-    contentMode: 'span',
+    contentCapturingMode: 'SPAN_ONLY',
     emitToolSpans: true,
   })
 );
