@@ -143,6 +143,21 @@ describe('GenAiInstrumentation', () => {
     assert.strictEqual(span.attributes['genkit.action.type'], 'flow');
   });
 
+  it('falls back to genkit:type when there is no subtype', async () => {
+    // Directly-wrapped spans (generate, dotprompt, ...) carry only genkit:type.
+    const inst = new GenAiInstrumentation({ tracer });
+    const span = await runAndGetSpan(
+      inst,
+      info({
+        metadata: { name: 'generate' },
+        labels: { 'genkit:type': 'util' },
+      }),
+      'ok'
+    );
+    assert.strictEqual(span.name, 'generate');
+    assert.strictEqual(span.attributes['genkit.action.type'], 'util');
+  });
+
   it('captures content on the span in span mode', async () => {
     const inst = new GenAiInstrumentation({
       tracer,
