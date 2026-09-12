@@ -80,3 +80,6 @@ next-env.d.ts
 js/plugins/compat-oai/coverage/
 
 scratch/
+
+# Local telemetry stack cache (scripts/local-telemetry.ts)
+.otel/
