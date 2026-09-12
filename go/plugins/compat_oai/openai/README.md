@@ -86,6 +86,21 @@ The advertised schema is reflected from the openai-go version your build
 links, so a field OpenAI ships tomorrow becomes usable, and validated, by
 bumping `github.com/openai/openai-go` in your own go.mod.
 
+## Image generation
+
+The plugin registers `dall-e-3` and `gpt-image-1` as image generation
+models. Image responses are returned as Genkit media parts.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(oai.ImageModelRef("dall-e-3", &oai.ImageGenerationConfig{
+        Quality: openai.ImageGenerateParamsQualityHD,
+        Size:    openai.ImageGenerateParamsSize1024x1024,
+    })),
+    ai.WithPrompt("A watercolor painting of a lighthouse at sunrise"),
+)
+```
+
 ## Embedders
 
 `text-embedding-3-large`, `text-embedding-3-small`, and
