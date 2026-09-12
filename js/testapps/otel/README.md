@@ -18,17 +18,22 @@ pnpm dev
 
 ## Local telemetry stack
 
-The quickest Docker-free option is Jaeger v2, which ingests OTLP directly and
-serves a UI on http://localhost:16686:
+The repo ships a Docker-free helper that downloads Jaeger v2 and an
+`otelcol-contrib` collector, wires them together, and serves the Jaeger UI on
+http://localhost:16686. Run it from the repo root in a separate terminal:
 
 ```bash
-jaeger   # from a Jaeger v2 release binary; listens on OTLP 4317/4318
+pnpm local-telemetry
 ```
 
-Then open http://localhost:16686 and look for `chat gemini-flash-latest` client
-spans carrying `gen_ai.*` attributes. To also inspect metrics
-(`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`), run an
-`otelcol-contrib` collector with a `debug` exporter in front of Jaeger.
+It listens for OTLP on `http://localhost:4318` (http) and `localhost:4317`
+(grpc), forwards traces to Jaeger, and debug-logs metrics/logs to
+`.otel/collector.log`. Leave it running, then start the sample.
+
+Open http://localhost:16686 and look for `chat gemini-flash-latest` client
+spans carrying `gen_ai.*` attributes. Metrics
+(`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) show up in
+the collector log (`tail -f .otel/collector.log`).
 
 ## What to expect
 
