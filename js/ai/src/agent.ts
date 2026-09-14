@@ -34,6 +34,7 @@ import {
   type AgentAPI,
   type AgentTransport,
   type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from './agent-core.js';
 
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
@@ -115,6 +116,30 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000;
 
 /**
+ * Default cadence (ms) at which a wait re-reads a pending snapshot when the
+ * store cannot push status changes (no `onSnapshotStateChange`), and at which
+ * any wait retries after a transient read failure.
+ */
+const DEFAULT_SNAPSHOT_WAIT_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Bound (ms) on one store read inside a wait. A wait is long by design and a
+ * read is not, and only the wait can tell the two apart, so this is where a
+ * hung store is caught: without it an unbounded wait would freeze on one
+ * rather than surface the read error. Generous, because it guards against a
+ * hang and not against a slow store.
+ */
+const SNAPSHOT_WAIT_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * Consecutive transient read failures a wait rides out, at its re-read
+ * cadence, before surfacing the error. A wait runs for as long as the work
+ * does, so one store blip must not fail it; dead ends (see
+ * {@link isDeadEndReadError}) surface at once.
+ */
+const SNAPSHOT_WAIT_READ_RETRIES = 3;
+
+/**
  * Returns `true` when a snapshot is a `pending` (detached, in-flight) snapshot
  * whose heartbeat is older than `timeoutMs` - i.e. its background worker is
  * presumed dead. A pending snapshot that has not yet written a first heartbeat
@@ -132,6 +157,199 @@ function isHeartbeatExpired(
     return false;
   }
   return Date.now() - last > timeoutMs;
+}
+
+/**
+ * Returns `true` when a snapshot status is settled: no further transition will
+ * happen on its own. `pending` is the only status that can still change (an
+ * absent status counts as the documented `completed` default), so waiters stop
+ * on `completed`, `failed`, `aborted`, and `expired` alike. An expired
+ * snapshot's stored row is still `pending`, but its worker is presumed dead,
+ * so nothing will finalize it.
+ */
+function isTerminalSnapshotStatus(status: SessionSnapshot['status']): boolean {
+  return status !== 'pending';
+}
+
+/**
+ * Returns `true` when a snapshot read failure inside a wait cannot be helped
+ * by retrying: the request itself is rejected, or the row is gone. Anything
+ * else (a store blip, a read that hit {@link SNAPSHOT_WAIT_READ_TIMEOUT_MS})
+ * is presumed transient.
+ */
+function isDeadEndReadError(e: unknown): boolean {
+  const status = (e as { status?: unknown } | undefined)?.status;
+  return (
+    status === 'NOT_FOUND' ||
+    status === 'INVALID_ARGUMENT' ||
+    status === 'FAILED_PRECONDITION'
+  );
+}
+
+/**
+ * Rejects with `DEADLINE_EXCEEDED` when `promise` has not settled within `ms`.
+ */
+function withReadTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new GenkitError({
+            status: 'DEADLINE_EXCEEDED',
+            message: `Snapshot read did not complete within ${ms}ms.`,
+          })
+        ),
+      ms
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+/**
+ * Waits until the snapshot `read` resolves settles, returning the terminal
+ * snapshot with the same shaping `read` applies (heartbeat expiry, client
+ * transform), or `undefined` when the snapshot does not exist. A snapshot that
+ * is already terminal returns at once, so the wait costs one read in the
+ * common case.
+ *
+ * Where the store implements `onSnapshotStateChange` the wait is push-driven:
+ * it subscribes before it would re-read, so a settlement racing the
+ * subscription is still delivered. It still re-reads on an interval, because
+ * expiry is not a write: a dead worker leaves the row `pending` and only its
+ * heartbeat goes stale, so no notification can report it. Without a
+ * subscription that same interval is the whole mechanism, so it is much
+ * shorter. A notification only means "re-read now": the row is what the caller
+ * gets back, and a store may notify before the write is visible to a reader.
+ *
+ * A read that fails transiently is retried at the poll cadence, up to
+ * {@link SNAPSHOT_WAIT_READ_RETRIES} consecutive failures; a dead end (the
+ * request is rejected, the row is gone) surfaces at once, including on the
+ * first read. Aborting `abortSignal` ends the wait with the signal's reason.
+ */
+async function waitForSnapshotInStore<S>(
+  store: SessionStore<S>,
+  snapshotId: string,
+  read: () => Promise<SessionSnapshot | undefined>,
+  opts: {
+    abortSignal?: AbortSignal;
+    pollIntervalMs?: number;
+    context?: ActionContext;
+  }
+): Promise<SessionSnapshot | undefined> {
+  const { abortSignal } = opts;
+  abortSignal?.throwIfAborted();
+
+  const subscribable = typeof store.onSnapshotStateChange === 'function';
+  const pollIntervalMs =
+    opts.pollIntervalMs ?? DEFAULT_SNAPSHOT_WAIT_POLL_INTERVAL_MS;
+  // A subscribed wait re-reads only to notice a stale heartbeat. Expiry needs
+  // two missed beats (the timeout is twice the interval), so checking once per
+  // beat cannot miss a stale row by more than one beat.
+  const livenessIntervalMs =
+    opts.pollIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+
+  // RETRY marks a transient read failure the wait rides out.
+  const RETRY = Symbol('retry');
+  let readFailures = 0;
+  const readOrRetry = async (): Promise<
+    SessionSnapshot | undefined | typeof RETRY
+  > => {
+    try {
+      const snap = await withReadTimeout(read(), SNAPSHOT_WAIT_READ_TIMEOUT_MS);
+      readFailures = 0;
+      return snap;
+    } catch (e) {
+      if (isDeadEndReadError(e) || readFailures >= SNAPSHOT_WAIT_READ_RETRIES) {
+        throw e;
+      }
+      readFailures++;
+      return RETRY;
+    }
+  };
+
+  // Wake-ups: a terminal notification from the store, the re-read tick, or the
+  // abort signal. A notification that lands while a read is in flight is
+  // remembered, so the next pass re-reads without waiting for the tick.
+  let notified = false;
+  let wake: (() => void) | undefined;
+  const wakeUp = () => {
+    notified = true;
+    wake?.();
+  };
+  const onAbort = () => wake?.();
+  abortSignal?.addEventListener('abort', onAbort, { once: true });
+  // Subscribe before the first read, so a settlement that lands between the
+  // two is still delivered: the bundled stores do not replay the current
+  // status on subscribe, and a wait that read a pending row just before the
+  // settling write would otherwise learn of it only on its next tick.
+  let unsubscribe: void | (() => void) = undefined;
+  if (subscribable) {
+    unsubscribe = store.onSnapshotStateChange!(
+      snapshotId,
+      (snap) => {
+        if (isTerminalSnapshotStatus(snap.status)) wakeUp();
+      },
+      { context: opts.context }
+    );
+  }
+  try {
+    // The first read prices the common already-terminal case at exactly one
+    // read. A transient failure falls into the wait below and is retried
+    // there, because a store blip at the moment a wait starts is no more fatal
+    // than one in the middle of it.
+    const first = await readOrRetry();
+    if (first !== RETRY && (!first || isTerminalSnapshotStatus(first.status))) {
+      return first;
+    }
+
+    // The next re-read comes soon after a transient failure, or after a
+    // notification that raced the write's visibility: a subscribed wait's
+    // terminal notification fires once and has been consumed, so the re-read
+    // is the only path left to the settled row and must not be a liveness
+    // beat away.
+    let intervalMs =
+      first === RETRY || !subscribable ? pollIntervalMs : livenessIntervalMs;
+    while (true) {
+      await new Promise<void>((resolve) => {
+        if (notified || abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(() => {
+          wake = undefined;
+          resolve();
+        }, intervalMs);
+        wake = () => {
+          clearTimeout(timer);
+          wake = undefined;
+          resolve();
+        };
+      });
+      abortSignal?.throwIfAborted();
+      const wokenByNotification = notified;
+      notified = false;
+      const cur = await readOrRetry();
+      if (cur !== RETRY && (!cur || isTerminalSnapshotStatus(cur.status))) {
+        return cur;
+      }
+      intervalMs =
+        cur === RETRY || wokenByNotification || !subscribable
+          ? pollIntervalMs
+          : livenessIntervalMs;
+    }
+  } finally {
+    abortSignal?.removeEventListener('abort', onAbort);
+    if (typeof unsubscribe === 'function') unsubscribe();
+  }
 }
 
 /**
@@ -674,15 +892,41 @@ export type GetSnapshotDataAction<S = unknown> = Action<
 >;
 
 /**
+ * Input for {@link Agent.waitForSnapshotData}: the snapshot to follow, plus
+ * how to bound the wait. It extends {@link GetSnapshotDataInput} so a caller
+ * switching from a read to a wait keeps its payload, but `snapshotId` is
+ * required: a session's latest snapshot can change under a wait.
+ */
+export interface WaitForSnapshotDataInput extends GetSnapshotDataInput {
+  snapshotId: string;
+  /**
+   * Ends the wait early: the promise rejects with the signal's reason (e.g. a
+   * `TimeoutError` from `AbortSignal.timeout`), and the snapshot keeps
+   * whatever status it has.
+   */
+  abortSignal?: AbortSignal;
+  /**
+   * How often (ms) the wait re-reads the snapshot: to notice a stale heartbeat
+   * on a store that pushes status changes, or as the whole mechanism on one
+   * that does not. Defaults to the heartbeat interval with a subscription and
+   * to 2s without.
+   */
+  pollIntervalMs?: number;
+}
+
+/**
  * Represents a configured, registered Agent.
  *
  * An `Agent` exposes two surfaces:
  *
  * 1. The ergonomic, transport-agnostic {@link AgentAPI} (`chat`, `loadChat`,
- *    `getSnapshot`, `abort`) - the same surface returned by `remoteAgent` on
- *    the client, so server- and client-side code share one interface.
+ *    `getSnapshot`, `waitForSnapshot`, `abort`) - the same surface returned by
+ *    `remoteAgent` on the client, so server- and client-side code share one
+ *    interface.
  * 2. The lower-level {@link BidiAction} surface (`run`, `streamBidi`, …) for
- *    advanced use and for serving over HTTP.
+ *    advanced use and for serving over HTTP, plus the companion actions
+ *    (`getSnapshotDataAction`, `waitForSnapshotAction`, `abortAgentAction`)
+ *    to mount next to it.
  */
 export interface Agent<State = unknown>
   extends BidiAction<
@@ -696,12 +940,32 @@ export interface Agent<State = unknown>
     opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
 
+  /**
+   * Blocks until the snapshot settles (`completed`, `failed`, `aborted`, or
+   * `expired`) and returns it with the same shaping as
+   * {@link getSnapshotData}, or `undefined` when no such snapshot exists.
+   * Requires a server store. A snapshot that failed, aborted, or expired is
+   * returned like any other, so a rejection means the wait itself could not
+   * proceed: reads failed past the wait's transient-retry budget, or
+   * `abortSignal` ended it.
+   */
+  waitForSnapshotData(
+    opts: WaitForSnapshotDataInput
+  ): Promise<SessionSnapshot<State> | undefined>;
+
   abort(
     snapshotId: string,
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
+  /**
+   * The `waitForSnapshot` companion action (`agent-wait`): `getSnapshot`'s
+   * blocking counterpart, taking the same request (with `snapshotId`
+   * required) and returning the snapshot once it settles. Mount it next to
+   * the agent so a remote client follows a detached turn in one request.
+   */
+  readonly waitForSnapshotAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<
     typeof AgentAbortRequestSchema,
     typeof AgentAbortResponseSchema
@@ -1341,6 +1605,27 @@ export function defineCustomAgent<State = unknown>(
     return toClientSnapshot(effective);
   };
 
+  // Waits through the same shaped read as `resolveSnapshot`, so a settled
+  // snapshot comes back exactly as a `getSnapshotData` read would return it.
+  const runWait = async (
+    opts: WaitForSnapshotDataInput
+  ): Promise<SessionSnapshot | undefined> => {
+    requireStore(config.store, 'waitForSnapshotData', config.name);
+    if (!opts.snapshotId) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `waitForSnapshotData requires a 'snapshotId' for agent '${config.name}'.`,
+      });
+    }
+    const { abortSignal, pollIntervalMs, ...lookup } = opts;
+    return waitForSnapshotInStore(
+      config.store,
+      opts.snapshotId,
+      () => resolveSnapshot(lookup),
+      { abortSignal, pollIntervalMs, context: lookup.context }
+    );
+  };
+
   const runAbort = (
     snapshotId: string,
     options?: SessionStoreOptions
@@ -1371,6 +1656,43 @@ export function defineCustomAgent<State = unknown>(
     }
   );
 
+  // waitForSnapshot takes getSnapshot's request, so a caller switching from
+  // one to the other keeps its payload, but it requires the snapshot ID: a
+  // session's latest snapshot is whichever one is latest at resolution time,
+  // and waiting on that is a race with the session's next turn. The wait runs
+  // on the request's abort signal, so a client that hangs up ends it.
+  const waitForSnapshotAction = defineAction(
+    registry,
+    {
+      name: config.name,
+      description: `Waits until a snapshot of ${config.name} settles (completed, failed, aborted, or expired) and returns it. Requires a snapshotId.`,
+      actionType: 'agent-wait',
+      inputSchema: GetSnapshotRequestSchema,
+      outputSchema: SessionSnapshotSchema,
+    },
+    async (lookup, { abortSignal }) => {
+      if (!lookup.snapshotId) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: `waitForSnapshot requires a 'snapshotId' for agent '${config.name}'.`,
+        });
+      }
+      const snap = await runWait({
+        ...lookup,
+        snapshotId: lookup.snapshotId,
+        context: getContext(),
+        abortSignal,
+      });
+      if (!snap) {
+        throw new GenkitError({
+          status: 'NOT_FOUND',
+          message: `Snapshot '${lookup.snapshotId}' not found for agent '${config.name}'.`,
+        });
+      }
+      return snap;
+    }
+  );
+
   const abortAgentAction = defineAction(
     registry,
     {
@@ -1388,10 +1710,13 @@ export function defineCustomAgent<State = unknown>(
 
   const composite = Object.assign(primaryAction, {
     getSnapshotData: (opts: GetSnapshotDataInput) => resolveSnapshot(opts),
+    waitForSnapshotData: (opts: WaitForSnapshotDataInput) => runWait(opts),
     abort: (snapshotId: string, options?: SessionStoreOptions) =>
       runAbort(snapshotId, options),
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
+    waitForSnapshotAction:
+      waitForSnapshotAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
       typeof AgentAbortRequestSchema,
       typeof AgentAbortResponseSchema
@@ -1415,7 +1740,8 @@ export function defineCustomAgent<State = unknown>(
 
   // In-process transport: drives the agent action directly (no HTTP). This lets
   // the server-side agent expose the same ergonomic AgentAPI (`chat`,
-  // `loadChat`, `getSnapshot`, `abort`) as the HTTP `remoteAgent` client.
+  // `loadChat`, `getSnapshot`, `waitForSnapshot`, `abort`) as the HTTP
+  // `remoteAgent` client.
   const transport: AgentTransport = {
     stateManagement: config.store ? 'server' : 'client',
 
@@ -1428,6 +1754,14 @@ export function defineCustomAgent<State = unknown>(
       return composite.getSnapshotData(lookup);
     },
 
+    waitForSnapshot(snapshotId: string, opts?: WaitForSnapshotOptions) {
+      return composite.waitForSnapshotData({
+        snapshotId,
+        abortSignal: opts?.abortSignal,
+        pollIntervalMs: opts?.intervalMs,
+      });
+    },
+
     abort(snapshotId: string) {
       return composite.abort(snapshotId);
     },
@@ -1435,13 +1769,14 @@ export function defineCustomAgent<State = unknown>(
 
   const agentApi = createAgentAPI<State>(transport);
 
-  // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`
-  // already exist on the composite (richer signatures); we add `chat`,
-  // `loadChat`, and `getSnapshot`.
+  // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`/
+  // `waitForSnapshotData` already exist on the composite (richer signatures);
+  // we add `chat`, `loadChat`, `getSnapshot`, and `waitForSnapshot`.
   Object.assign(composite, {
     chat: agentApi.chat,
     loadChat: agentApi.loadChat,
     getSnapshot: agentApi.getSnapshot,
+    waitForSnapshot: agentApi.waitForSnapshot,
   });
 
   return composite as unknown as Agent<State>;
