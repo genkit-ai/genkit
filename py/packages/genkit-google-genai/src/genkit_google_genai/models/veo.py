@@ -62,30 +62,27 @@ class VeoVersion(StrEnum):
     """Supported Veo video generation models.
 
     Note: Models are discovered dynamically. This enum provides convenience
-    constants for commonly used Veo models.
+    constants for commonly used Veo models. Google AI serves Veo 3.1 as the
+    ``-preview`` ids; Vertex AI serves it as the ``-001`` ids.
     """
 
-    VEO_2_0 = 'veo-2.0-generate-001'
-    VEO_2_0_EXP = 'veo-2.0-generate-exp'
-    VEO_3_0 = 'veo-3.0-generate-001'
-    VEO_3_0_FAST = 'veo-3.0-fast-generate-001'
     VEO_3_1_PREVIEW = 'veo-3.1-generate-preview'
     VEO_3_1_FAST_PREVIEW = 'veo-3.1-fast-generate-preview'
+    VEO_3_1_LITE_PREVIEW = 'veo-3.1-lite-generate-preview'
     VEO_3_1 = 'veo-3.1-generate-001'
     VEO_3_1_FAST = 'veo-3.1-fast-generate-001'
+    VEO_3_1_LITE = 'veo-3.1-lite-generate-001'
 
 
 # Quote autocomplete needs a Literal. The enum above is the catalog; a test
 # requires these members and the enum values to be the same set.
 KnownVeo: TypeAlias = Literal[
-    'veo-2.0-generate-001',
-    'veo-2.0-generate-exp',
-    'veo-3.0-generate-001',
-    'veo-3.0-fast-generate-001',
     'veo-3.1-generate-preview',
     'veo-3.1-fast-generate-preview',
+    'veo-3.1-lite-generate-preview',
     'veo-3.1-generate-001',
     'veo-3.1-fast-generate-001',
+    'veo-3.1-lite-generate-001',
 ]
 
 

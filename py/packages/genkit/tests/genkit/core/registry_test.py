@@ -538,8 +538,8 @@ async def test_resolve_model_finds_plugin_background_model() -> None:
             return Action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=_bg_start)
 
     ai = Genkit(plugins=[VeoPlugin()])
-    got = await ai.registry.resolve_model('plug/veo-2.0-generate-001')
+    got = await ai.registry.resolve_model('plug/veo-3.1-generate-preview')
 
     assert got is not None
     assert got.kind == ActionKind.BACKGROUND_MODEL
-    assert got.name == 'plug/veo-2.0-generate-001'
+    assert got.name == 'plug/veo-3.1-generate-preview'

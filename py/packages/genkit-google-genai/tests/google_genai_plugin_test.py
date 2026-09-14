@@ -303,8 +303,8 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
     mock_list_models.return_value = GenaiModels()
 
     for plugin, name in (
-        (GoogleAI(api_key='test-key'), 'googleai/veo-3.0-generate-001'),
-        (VertexAI(project='test-project'), 'vertexai/veo-3.0-generate-001'),
+        (GoogleAI(api_key='test-key'), 'googleai/veo-3.1-generate-preview'),
+        (VertexAI(project='test-project'), 'vertexai/veo-3.1-generate-001'),
     ):
         action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, name)
         assert action is not None
@@ -345,7 +345,7 @@ async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicM
     mock_client.return_value.aio.models.generate_videos = AsyncMock(return_value=op)
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
+    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.1-generate-001')
     assert action is not None
 
     started = await action.run({
@@ -360,7 +360,7 @@ async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicM
     assert cfg.duration_seconds == 5
     assert cfg.http_options is not None
     assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
-    assert started.response.action == '/background-model/vertexai/veo-3.0-generate-001'
+    assert started.response.action == '/background-model/vertexai/veo-3.1-generate-001'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -371,7 +371,7 @@ async def test_veo_action_run_rejects_bad_duration(mock_list_models: MagicMock, 
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
+    action = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.1-generate-001')
     assert action is not None
 
     with pytest.raises(GenkitError) as exc_info:
@@ -392,7 +392,7 @@ async def test_veo_check_is_typed(mock_list_models: MagicMock, mock_client: Magi
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.0-generate-001/check')
+    action = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.1-generate-001/check')
     assert action is not None
     hints = get_type_hints(action._fn)  # noqa: SLF001
     assert hints['op'] is Operation
@@ -566,7 +566,7 @@ async def test_googleai_resolve_veo_as_model_returns_none(mock_list_models: Magi
     mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.MODEL, 'googleai/veo-3.0-generate-001')
+    action = await plugin.resolve(ActionKind.MODEL, 'googleai/veo-3.1-generate-preview')
 
     assert action is None
 
@@ -579,7 +579,7 @@ async def test_vertexai_resolve_veo_as_model_returns_none(mock_list_models: Magi
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.MODEL, 'vertexai/veo-3.0-generate-001')
+    action = await plugin.resolve(ActionKind.MODEL, 'vertexai/veo-3.1-generate-001')
 
     assert action is None
 
@@ -592,11 +592,11 @@ async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock
     mock_list_models.return_value = GenaiModels()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    action = await ai.registry.resolve_model('googleai/veo-3.0-generate-001')
+    action = await ai.registry.resolve_model('googleai/veo-3.1-generate-preview')
 
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
-    assert action.name == 'googleai/veo-3.0-generate-001'
+    assert action.name == 'googleai/veo-3.1-generate-preview'
 
 
 @patch('genkit_google_genai.models.veo.genai.Client')
@@ -622,7 +622,7 @@ async def test_generate_and_check_operation_apply_veo_context_and_config(
     context = {'secrets': {'api_key': 'tenant-key'}}
 
     operation = await ai.generate_operation(
-        model='googleai/veo-3.0-generate-001',
+        model='googleai/veo-3.1-generate-preview',
         prompt='a cat walking',
         config={'aspectRatio': '16:9', 'baseUrl': 'https://request.example', 'apiVersion': 'v1'},
         context=context,
@@ -659,18 +659,18 @@ async def test_vertexai_resolve_veo_background_model(mock_list_models: MagicMock
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
-    check = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.0-generate-001/check')
+    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.1-generate-001')
+    check = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.1-generate-001/check')
 
     assert start is not None
     assert start.kind == ActionKind.BACKGROUND_MODEL
-    assert start.name == 'vertexai/veo-3.0-generate-001'
+    assert start.name == 'vertexai/veo-3.1-generate-001'
     model_meta = cast('dict[str, object]', start.metadata['model'])
     supports = cast('dict[str, object]', model_meta['supports'])
     assert supports['longRunning'] is True
     assert check is not None
     assert check.kind == ActionKind.CHECK_OPERATION
-    assert check.name == 'vertexai/veo-3.0-generate-001/check'
+    assert check.name == 'vertexai/veo-3.1-generate-001/check'
 
 
 @patch('genkit_google_genai.google.create_vertex_evaluators')
@@ -682,7 +682,7 @@ async def test_vertexai_init_registers_veo_as_background(
 ) -> None:
     """Vertex init registers Veo start/check, never a blocking MODEL action."""
     models = GenaiModels()
-    models.veo = ['veo-3.0-generate-001']
+    models.veo = ['veo-3.1-generate-001']
     mock_list_models.return_value = models
     mock_evaluators.return_value = []
 
@@ -700,7 +700,7 @@ async def test_vertexai_init_registers_veo_as_background(
 async def test_list_actions_advertises_veo_as_background(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Both plugins list Veo with the kind that resolve() actually serves."""
     models = GenaiModels()
-    models.veo = ['veo-3.0-generate-001']
+    models.veo = ['veo-3.1-generate-001']
     mock_list_models.return_value = models
 
     googleai_actions = await GoogleAI(api_key='test-key').list_actions()
@@ -709,7 +709,7 @@ async def test_list_actions_advertises_veo_as_background(mock_list_models: Magic
     for actions, plugin_name in ((googleai_actions, 'googleai'), (vertexai_actions, 'vertexai')):
         veo_entries = [a for a in actions if 'veo' in a.name]
         assert len(veo_entries) == 1
-        assert veo_entries[0].name == f'{plugin_name}/veo-3.0-generate-001'
+        assert veo_entries[0].name == f'{plugin_name}/veo-3.1-generate-001'
         assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
 
 
@@ -726,7 +726,7 @@ def test_list_genai_models_vertex_skips_substring_veo_and_unsupported_image() ->
     client = MagicMock()
     client.models.list.return_value = [
         _model('publishers/google/models/gemini-2.5-flash'),
-        _model('publishers/google/models/veo-3.0-generate-001'),
+        _model('publishers/google/models/veo-3.1-generate-001'),
         _model('publishers/google/models/braveo-lab'),
         _model('publishers/google/models/imagegeneration@006'),
         _model('publishers/google/models/virtual-try-on-001'),
@@ -738,7 +738,7 @@ def test_list_genai_models_vertex_skips_substring_veo_and_unsupported_image() ->
     assert vars(catalog) == {
         'gemini': ['gemini-2.5-flash'],
         'embedders': [],
-        'veo': ['veo-3.0-generate-001'],
+        'veo': ['veo-3.1-generate-001'],
     }
 
 
@@ -749,19 +749,19 @@ async def test_veo_start_stamps_background_action_key(mock_list_models: MagicMoc
     """Start and check stamp ``/background-model/{name}`` so a later check can resolve."""
     mock_list_models.return_value = GenaiModels()
     plugin = VertexAI(project='test-project')
-    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.0-generate-001')
-    check = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.0-generate-001/check')
+    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/veo-3.1-generate-001')
+    check = await plugin.resolve(ActionKind.CHECK_OPERATION, 'vertexai/veo-3.1-generate-001/check')
     assert start is not None
     assert check is not None
 
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a clip'))])])
     with patch.object(VeoModel, 'start', new=AsyncMock(return_value=Operation(id='ops/1'))):
         started = await start.run(request)
-    assert started.response.action == '/background-model/vertexai/veo-3.0-generate-001'
+    assert started.response.action == '/background-model/vertexai/veo-3.1-generate-001'
 
     with patch.object(VeoModel, 'check', new=AsyncMock(return_value=Operation(id='ops/1'))):
         checked = await check.run(Operation(id='ops/1'))
-    assert checked.response.action == '/background-model/vertexai/veo-3.0-generate-001'
+    assert checked.response.action == '/background-model/vertexai/veo-3.1-generate-001'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
