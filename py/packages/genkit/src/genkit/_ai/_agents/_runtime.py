@@ -104,6 +104,10 @@ class SessionRunner(Generic[StateT]):
         self.turn_index: int = 0
         self.last_turn_finish_reason: AgentFinishReason | None = None
         self.last_turn_error: GenkitRuntimeError | None = None
+        # Leftover generate() already wrote the why on finish_message. That is
+        # not an exception, so it must not take the last-good recovery path —
+        # but send() still raises and needs the string on AgentOutput.error.
+        self.last_returned_error: GenkitRuntimeError | None = None
         self.last_good_state: SessionState | None = None
         self.last_good_state_version: int | None = None
         self.last_good_finish_reason: AgentFinishReason | None = None
@@ -170,6 +174,7 @@ class SessionRunner(Generic[StateT]):
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
+                    self.last_returned_error = turn_result.error if turn_result else None
 
                     snapshot_id: str | None = None
                     if self.on_end_turn is not None:
@@ -194,6 +199,7 @@ class SessionRunner(Generic[StateT]):
             except Exception as exc:
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
                 self.last_turn_error = to_error_details(exc)
+                self.last_returned_error = None
 
                 if self.on_end_turn is not None:
                     await self.on_end_turn(AgentFinishReason.FAILED)
@@ -636,7 +642,7 @@ class AgentRuntime:
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
-            error=self.session_runner.last_turn_error,
+            error=self.session_runner.last_turn_error or self.session_runner.last_returned_error,
             force=is_failed,
         )
         # turnEnd is just the boundary marker. The full session rides home on
@@ -999,6 +1005,7 @@ class AgentRuntime:
             message=result.message if result else None,
             artifacts=list(result.artifacts) if result and result.artifacts else [],
             finish_reason=finish_reason,
+            error=self.session_runner.last_returned_error,
         )
         # Client-managed has no store, so the client is the source of truth: ship
         # the whole session and let it copy verbatim. Server-managed returns only
@@ -1063,12 +1070,25 @@ async def generate_prompt_agent_turn(
 
     # Return the turn result wrapping the model finish reason
     finish_reason = to_agent_finish_reason(response.finish_reason) if response.finish_reason is not None else None
-    return TurnResult(finish_reason=finish_reason)
+    return TurnResult(finish_reason=finish_reason, error=leftover_error(response=response))
 
 
 # ---------------------------------------------------------------------------
 # Internal Helper Functions
 # ---------------------------------------------------------------------------
+
+
+def leftover_error(*, response: ModelResponse) -> GenkitRuntimeError | None:
+    # send() raises on failed and reads AgentOutput.error. The leftover why
+    # already lives on finish_message; copy it so the catcher sees that string.
+    if response.finish_reason != FinishReason.FAILED or not response.finish_message:
+        return None
+    status = (
+        'NOT_FOUND'
+        if response.finish_message.startswith('Tool ') and response.finish_message.endswith(' not found')
+        else 'INVALID_ARGUMENT'
+    )
+    return GenkitRuntimeError(status=status, message=response.finish_message)
 
 
 def to_error_details(exc: Exception) -> GenkitRuntimeError:

@@ -322,26 +322,76 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prompt_agent_schema_miss_keeps_invalid_argument() -> None:
-    """A leftover Recipe is a failed turn with the generate() status, not UNKNOWN."""
+async def test_prompt_agent_schema_leftover_raises_with_finish_message() -> None:
+    """A leftover Recipe is a failed turn; send() raises with generate()'s why."""
 
     class Recipe(BaseModel):
         title: str
 
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='cook', model='programmableModel', output_schema=Recipe)
-    agent = ai.define_prompt_agent(name='cook')
-    pm.responses.append(
+    store = InMemorySessionStore()
+    ai.define_prompt(
+        name='cook',
+        model='programmableModel',
+        output_schema=Recipe,
+        output_format='json',
+    )
+    agent = ai.define_prompt_agent(name='cook', store=store)
+    pm.responses.extend([
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Soup"}'))]),
+        ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(TextPart(text='not json'))]),
+        ),
+    ])
+
+    chat = agent.chat()
+    ok = await chat.send('hello')
+    assert ok.finish_reason == AgentFinishReason.STOP
+    history_before = list(chat.messages)
+
+    with pytest.raises(AgentError) as raised:
+        await chat.send('give me a recipe')
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'not valid JSON' in raised.value.message
+    assert raised.value.response.finish_reason == AgentFinishReason.FAILED
+    assert chat.messages == history_before
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_wrong_shape_raises_with_schema_mismatch() -> None:
+    """Parsed JSON that is not a Recipe is the same raise, different string."""
+
+    class Recipe(BaseModel):
+        title: str
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    ai.define_prompt(
+        name='cookShape',
+        model='programmableModel',
+        output_schema=Recipe,
+        output_format='json',
+    )
+    agent = ai.define_prompt_agent(name='cookShape')
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"name": "Soup"}'))]),
         )
     )
 
     with pytest.raises(AgentError) as raised:
         await agent.chat().send('give me a recipe')
-    assert raised.value.status == 'UNKNOWN'
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'title' in raised.value.message
+    assert raised.value.response.finish_reason == AgentFinishReason.FAILED
 
 
 @pytest.mark.asyncio
