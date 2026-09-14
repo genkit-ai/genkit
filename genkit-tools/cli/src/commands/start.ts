@@ -46,6 +46,7 @@ interface RunOptions {
   corsOrigin?: string;
   experimentalReflectionV2?: boolean;
   writeEnvFile?: string;
+  useOtel?: boolean;
 }
 
 /** Command to run code in dev mode and/or the Dev UI. */
@@ -78,6 +79,12 @@ export const start = new Command('start')
   )
   .option('--reflection-v2-host <host>', REFLECTION_V2_HOST_OPTION_HELP)
   .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
+  .option(
+    '--use-otel',
+    "point the app's own OpenTelemetry SDK at the dev telemetry server " +
+      '(via OTLP env vars) instead of enabling native direct telemetry; ' +
+      'renders only OTel-instrumented spans in the Dev UI'
+  )
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -111,6 +118,7 @@ export const start = new Command('start')
       experimentalReflectionV2: options.experimentalReflectionV2,
       reflectionV2Host: options.reflectionV2Host,
       auth,
+      useOtel: options.useOtel,
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
 
@@ -137,6 +145,7 @@ export const start = new Command('start')
           disableRealtimeTelemetry: options.disableRealtimeTelemetry,
           corsOrigin: options.corsOrigin,
           experimentalReflectionV2: options.experimentalReflectionV2,
+          useOtel: options.useOtel,
           envVars,
           telemetryServerUrl,
           reflectionV2Port,
@@ -158,6 +167,7 @@ export const start = new Command('start')
         // Reuse the secret getDevEnvVars resolved for this run (env-provided,
         // or generated for --write-env-file).
         reflectionSecret: envVars[REFLECTION_SECRET_ENV],
+        useOtel: options.useOtel,
       });
       processPromise = new Promise(() => {});
     }

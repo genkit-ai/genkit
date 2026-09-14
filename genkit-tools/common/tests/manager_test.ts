@@ -22,6 +22,7 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import axios from 'axios';
 import fs from 'fs/promises';
 import http from 'http';
 import os from 'os';
@@ -41,6 +42,8 @@ jest.mock('chokidar', () => ({
     close: jest.fn(),
   }),
 }));
+
+jest.mock('axios');
 
 describe('RuntimeManager', () => {
   it('should allow unsubscribing from runtime events', async () => {
@@ -62,6 +65,49 @@ describe('RuntimeManager', () => {
     expect(listener).toHaveBeenCalledTimes(1); // Should not have increased
 
     await manager.stop();
+  });
+
+  describe('notifyRuntime', () => {
+    const runtime = { id: 'r1', reflectionServerUrl: 'http://localhost:9999' };
+
+    it('sends telemetryServerUrl to the runtime by default', async () => {
+      const postSpy = jest
+        .spyOn(axios, 'post')
+        .mockResolvedValue({ data: {} } as any);
+      const manager = await RuntimeManager.create({
+        projectRoot: '.',
+        telemetryServerUrl: 'http://localhost:4033',
+      });
+
+      await (manager as any).notifyRuntime(runtime);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'http://localhost:9999/api/notify',
+        expect.objectContaining({ telemetryServerUrl: 'http://localhost:4033' })
+      );
+      await manager.stop();
+    });
+
+    it('withholds telemetryServerUrl when suppressRuntimeTelemetry is set, but keeps it for UI reads', async () => {
+      const postSpy = jest
+        .spyOn(axios, 'post')
+        .mockResolvedValue({ data: {} } as any);
+      const manager = await RuntimeManager.create({
+        projectRoot: '.',
+        telemetryServerUrl: 'http://localhost:4033',
+        suppressRuntimeTelemetry: true,
+      });
+
+      await (manager as any).notifyRuntime(runtime);
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'http://localhost:9999/api/notify',
+        expect.objectContaining({ telemetryServerUrl: undefined })
+      );
+      // The manager still knows the URL so the Dev UI can read traces/logs.
+      expect(manager.telemetryServerUrl).toBe('http://localhost:4033');
+      await manager.stop();
+    });
   });
 });
 
