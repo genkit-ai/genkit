@@ -39,6 +39,7 @@ func (g *GenAiInstrumentation) recordContent(ctx context.Context, span oteltrace
 	}
 	var outputMessages []map[string]any
 	if msg := resolveMessage(response); msg != nil {
+		// resolveFinishReasons always returns exactly one element.
 		reason := resolveFinishReasons(response, false)[0]
 		outputMessages = append(outputMessages, genai.MapOutputMessage(msg, reason))
 	}
