@@ -82,6 +82,9 @@ func addResponseAttributes(span oteltrace.Span, response *ai.ModelResponse, fail
 // A turn ending in tool calls reports tool_calls, following the OpenAI GenAI
 // profile: it is the more informative signal for consumers.
 func resolveFinishReasons(response *ai.ModelResponse, failed bool) []string {
+	if response == nil {
+		return []string{genai.MapFinishReason("", failed)}
+	}
 	if msg := resolveMessage(response); msg != nil && genai.HasToolRequestPart(msg.Content) {
 		return []string{"tool_calls"}
 	}

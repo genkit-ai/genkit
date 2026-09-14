@@ -53,6 +53,19 @@ func TestMapPart(t *testing.T) {
 	}
 }
 
+func TestMapPartNilPointers(t *testing.T) {
+	// A part whose kind says tool request/response but whose pointer is nil
+	// (malformed payload) must not panic.
+	tr := MapPart(&ai.Part{Kind: ai.PartToolRequest})
+	if tr["type"] != "tool_call" || tr["name"] != "" || tr["arguments"] != nil {
+		t.Errorf("nil tool request part = %+v", tr)
+	}
+	resp := MapPart(&ai.Part{Kind: ai.PartToolResponse})
+	if resp["type"] != "tool_call_response" || resp["response"] != nil {
+		t.Errorf("nil tool response part = %+v", resp)
+	}
+}
+
 func TestNormalizeMessages(t *testing.T) {
 	msgs := []*ai.Message{
 		ai.NewSystemTextMessage("be nice"),

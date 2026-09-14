@@ -54,6 +54,9 @@ func MapPart(part *ai.Part) map[string]any {
 		return map[string]any{"type": "reasoning", "content": part.Text}
 	case part.IsToolRequest():
 		tr := part.ToolRequest
+		if tr == nil {
+			return map[string]any{"type": "tool_call", "name": "", "arguments": nil}
+		}
 		m := map[string]any{"type": "tool_call", "name": tr.Name, "arguments": tr.Input}
 		if tr.Ref != "" {
 			m["id"] = tr.Ref
@@ -61,6 +64,9 @@ func MapPart(part *ai.Part) map[string]any {
 		return m
 	case part.IsToolResponse():
 		tr := part.ToolResponse
+		if tr == nil {
+			return map[string]any{"type": "tool_call_response", "response": nil}
+		}
 		m := map[string]any{"type": "tool_call_response", "response": tr.Output}
 		if tr.Ref != "" {
 			m["id"] = tr.Ref
