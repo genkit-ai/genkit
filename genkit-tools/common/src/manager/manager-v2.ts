@@ -120,13 +120,15 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     readonly manageHealth: boolean,
     projectRoot: string,
     processManager?: ProcessManager,
-    disableRealtimeTelemetry: boolean = false
+    disableRealtimeTelemetry: boolean = false,
+    suppressRuntimeTelemetry: boolean = false
   ) {
     super(
       telemetryServerUrl,
       projectRoot,
       processManager,
-      disableRealtimeTelemetry
+      disableRealtimeTelemetry,
+      suppressRuntimeTelemetry
     );
   }
 
@@ -138,7 +140,8 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       options.manageHealth ?? true,
       options.projectRoot,
       options.processManager,
-      options.disableRealtimeTelemetry
+      options.disableRealtimeTelemetry,
+      options.suppressRuntimeTelemetry
     );
     await manager.startWebSocketServer(options.reflectionV2Port);
     return manager;
@@ -221,7 +224,12 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
         JSON.stringify({
           jsonrpc: '2.0',
           result: {
-            telemetryServerUrl: this.telemetryServerUrl,
+            // Withheld in --use-otel mode so the runtime keeps native direct
+            // export off; the manager still uses telemetryServerUrl for its own
+            // UI reads.
+            telemetryServerUrl: this.suppressRuntimeTelemetry
+              ? undefined
+              : this.telemetryServerUrl,
           },
           id: request.id,
         })

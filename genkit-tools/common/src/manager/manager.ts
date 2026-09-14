@@ -66,6 +66,14 @@ export interface RuntimeManagerOptions {
   experimentalReflectionV2?: boolean;
   /** Reflection V2 Port */
   reflectionV2Port?: number;
+  /**
+   * When true, the manager keeps `telemetryServerUrl` for its own Dev UI reads
+   * but does not hand it to the runtime over the reflection handshake. This
+   * keeps Genkit's native direct-export instrumentation off, so only what the
+   * app's own OTel SDK exports (e.g. via `genkit start --use-otel`) reaches the
+   * telemetry server. Defaults to false.
+   */
+  suppressRuntimeTelemetry?: boolean;
 }
 
 export abstract class BaseRuntimeManager {
@@ -73,7 +81,8 @@ export abstract class BaseRuntimeManager {
     readonly telemetryServerUrl: string | undefined,
     readonly projectRoot: string,
     readonly processManager?: ProcessManager,
-    readonly disableRealtimeTelemetry: boolean = false
+    readonly disableRealtimeTelemetry: boolean = false,
+    readonly suppressRuntimeTelemetry: boolean = false
   ) {}
 
   abstract listRuntimes(): RuntimeInfo[];
@@ -324,13 +333,15 @@ export class RuntimeManager extends BaseRuntimeManager {
     private manageHealth: boolean,
     projectRoot: string,
     processManager?: ProcessManager,
-    disableRealtimeTelemetry?: boolean
+    disableRealtimeTelemetry?: boolean,
+    suppressRuntimeTelemetry?: boolean
   ) {
     super(
       telemetryServerUrl,
       projectRoot,
       processManager,
-      disableRealtimeTelemetry
+      disableRealtimeTelemetry,
+      suppressRuntimeTelemetry
     );
   }
 
@@ -350,7 +361,8 @@ export class RuntimeManager extends BaseRuntimeManager {
       options.manageHealth ?? true,
       options.projectRoot,
       options.processManager,
-      options.disableRealtimeTelemetry
+      options.disableRealtimeTelemetry,
+      options.suppressRuntimeTelemetry
     );
     await manager.setupRuntimesWatcher();
     await manager.setupDevUiWatcher();
@@ -724,7 +736,11 @@ export class RuntimeManager extends BaseRuntimeManager {
   private async notifyRuntime(runtime: RuntimeInfo) {
     try {
       await axios.post(`${runtime.reflectionServerUrl}/api/notify`, {
-        telemetryServerUrl: this.telemetryServerUrl,
+        // Withheld in --use-otel mode so the runtime keeps native direct export
+        // off; the manager still uses telemetryServerUrl for its own UI reads.
+        telemetryServerUrl: this.suppressRuntimeTelemetry
+          ? undefined
+          : this.telemetryServerUrl,
         reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
       });
     } catch (error) {
