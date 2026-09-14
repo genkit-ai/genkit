@@ -165,6 +165,10 @@ func (g *GenAiInstrumentation) genAiMetrics() *genai.Metrics {
 // RunInNewSpan dispatches on the Genkit action type and encodes the span using
 // the OTel GenAI conventions.
 func (g *GenAiInstrumentation) RunInNewSpan(ctx context.Context, info *tracing.SpanInfo, next tracing.NextFunc) (any, error) {
+	if info == nil {
+		// Nothing to encode; keep the chain intact.
+		return next(ctx, nil)
+	}
 	actionType := info.Subtype()
 	if actionType == "" {
 		actionType = info.Type()
