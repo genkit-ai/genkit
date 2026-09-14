@@ -57,7 +57,7 @@ from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
-from google.genai.types import HttpOptions, HttpOptionsDict
+from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai.constants as const
@@ -181,102 +181,68 @@ class GenaiModels:
         self.veo = []
 
 
-def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
-    """Discover and categorize available models from the Google GenAI API.
+def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool) -> None:
+    """Add a model to the appropriate catalog bucket."""
+    name = m.name
+    if not name:
+        return
 
-    This function queries the API for all available models and categorizes them.
-    Models marked as deprecated are excluded.
+    # Cleanup prefix
+    if is_vertex:
+        if name.startswith('publishers/google/models/'):
+            name = name[25:]
+    elif name.startswith('models/'):
+        name = name[7:]
 
-    Two categorization strategies are used depending on the backend:
+    description = (m.description or '').lower()
+    if 'deprecated' in description:
+        return
 
-    - Google AI populates each model's ``supported_actions`` field, so models
-      are categorized by action:
-        - 'embedContent' action → embedders
-        - 'predict' + Imagen name (``imagen-``) → imagen
-        - 'generateVideos' or Veo name (``veo-``) → veo
-        - 'generateContent' + 'gemini'/'gemma' in name → gemini
-    - Vertex AI returns ``supported_actions = None`` for every publisher model,
-      so categorizing by action would skip them all. The Vertex path instead
-      categorizes by model name:
-        - Imagen name (``imagen-``) → imagen
-        - Veo name (``veo-``) → veo
-        - 'gemini'/'gemma' in name (and not an embedding) → gemini
-      Ids with no working generate path here (``imagegeneration@*``,
-      ``imagetext@*``, ``virtual-try-on-*``) are not categorized at all, so
-      they are never advertised or registered.
-      Embedders are intentionally NOT discovered here. The Vertex catalog
-      over-lists embedders that are published but not callable, so they
-      are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
-
-    Args:
-        client: The Google GenAI client instance.
-        is_vertex: True if using Vertex AI, False for Google AI.
-
-    Returns:
-        GenaiModels containing categorized model names.
-
-    Note:
-        Model name prefixes are stripped for consistency:
-        - Vertex AI: 'publishers/google/models/' prefix removed
-        - Google AI: 'models/' prefix removed
-    """
-    models = GenaiModels()
-
-    for m in client.models.list():
-        name = m.name
-        if not name:
-            continue
-
-        # Cleanup prefix
-        if is_vertex:
-            if name.startswith('publishers/google/models/'):
-                name = name[25:]
-        elif name.startswith('models/'):
-            name = name[7:]
-
-        description = (m.description or '').lower()
-        if 'deprecated' in description:
-            continue
-
-        # Vertex AI returns supported_actions=None for every publisher model, so
-        # categorize by name. Embedders are deliberately excluded: the catalog
-        # over-lists embedders that are not callable, so they are advertised from a curated list
-        # (VERTEX_KNOWN_EMBEDDERS) rather than discovered here.
-        if is_vertex:
-            lower_name = name.lower()
-            if 'embedding' in lower_name:
-                continue
-            elif is_unsupported_image_model_name(name):
-                continue
-            elif is_imagen_model_name(name):
-                models.imagen.append(name)
-            elif is_veo_model(name):
-                models.veo.append(name)
-            elif 'gemini' in lower_name or 'gemma' in lower_name:
-                models.gemini.append(name)
-            continue
-
-        if not m.supported_actions:
-            continue
-
-        # Embedders
-        if 'embedContent' in m.supported_actions:
-            models.embedders.append(name)
-
-        # Imagen (imagen- prefix, not a bare "image" substring)
-        if 'predict' in m.supported_actions and is_imagen_model_name(name):
+    # Vertex AI returns supported_actions=None for every publisher model, so
+    # categorize by name. Embedders are deliberately excluded: the catalog
+    # over-lists embedders that are not callable, so they are advertised from a curated list
+    # (VERTEX_KNOWN_EMBEDDERS) rather than discovered here.
+    if is_vertex:
+        lower_name = name.lower()
+        if 'embedding' in lower_name:
+            return
+        elif is_unsupported_image_model_name(name):
+            return
+        elif is_imagen_model_name(name):
             models.imagen.append(name)
-
-        # Veo
-        if 'generateVideos' in m.supported_actions or is_veo_model(name):
+        elif is_veo_model(name):
             models.veo.append(name)
+        elif 'gemini' in lower_name or 'gemma' in lower_name:
+            models.gemini.append(name)
+        return
 
-        # Gemini / Gemma
-        if 'generateContent' in m.supported_actions:
-            lower_name = name.lower()
-            if 'gemini' in lower_name or 'gemma' in lower_name:
-                models.gemini.append(name)
+    if not m.supported_actions:
+        return
 
+    # Embedders
+    if 'embedContent' in m.supported_actions:
+        models.embedders.append(name)
+
+    # Imagen (imagen- prefix, not a bare "image" substring)
+    if 'predict' in m.supported_actions and is_imagen_model_name(name):
+        models.imagen.append(name)
+
+    # Veo
+    if 'generateVideos' in m.supported_actions or is_veo_model(name):
+        models.veo.append(name)
+
+    # Gemini / Gemma
+    if 'generateContent' in m.supported_actions:
+        lower_name = name.lower()
+        if 'gemini' in lower_name or 'gemma' in lower_name:
+            models.gemini.append(name)
+
+
+async def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
+    """Discover and categorize models through the SDK's asynchronous client."""
+    models = GenaiModels()
+    async for listed_model in await client.aio.models.list():
+        _categorize_genai_model(listed_model, models, is_vertex)
     return models
 
 
@@ -732,7 +698,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         Returns:
             List of Action objects for known/supported models.
         """
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
 
         actions: list[Action] = []
         # Gemini Models
@@ -782,38 +748,6 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         for name in genai_models.embedders:
             actions.append(self._resolve_embedder(googleai_name(name)))
 
-        return actions
-
-    def _list_known_models(self) -> list[Action]:
-        """List known Gemini and Imagen models as Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
-        actions = []
-        for name in genai_models.gemini:
-            if action := self._resolve_model(googleai_name(name)):
-                actions.append(action)
-        for name in genai_models.imagen:
-            if action := self._resolve_model(googleai_name(name)):
-                actions.append(action)
-        return actions
-
-    def _list_known_veo_models(self) -> list[Action]:
-        """List known Veo models as background model Action objects.
-
-        Returns:
-            List of Action objects for known Veo video generation models.
-        """
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
-        actions = []
-        for name in genai_models.veo:
-            actions.extend(_background_actions(self._resolve_veo_model(googleai_name(name))))
-        return actions
-
-    def _list_known_embedders(self) -> list[Action]:
-        """List known embedders as Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
-        actions = []
-        for name in genai_models.embedders:
-            actions.append(self._resolve_embedder(googleai_name(name)))
         return actions
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
@@ -964,7 +898,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
         actions_list = []
 
         for name in genai_models.gemini:
@@ -1178,7 +1112,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             List of Action objects for known/supported models.
         """
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
         actions: list[Action] = []
 
         for name in genai_models.gemini:
@@ -1217,28 +1151,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             )
         )
 
-        return actions
-
-    def _list_known_models(self) -> list[Action]:
-        """List known models as Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions = []
-        for name in genai_models.gemini:
-            if action := self._resolve_model(vertexai_name(name)):
-                actions.append(action)
-        for name in genai_models.imagen:
-            if action := self._resolve_model(vertexai_name(name)):
-                actions.append(action)
-        return actions
-
-    def _list_known_veo_models(self) -> list[Action]:
-        """List known Veo models as background model Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions = []
-        for name in genai_models.veo:
-            bg_action = self._resolve_veo_model(vertexai_name(name))
-            actions.append(bg_action.start_action)
-            actions.append(bg_action.check_action)
         return actions
 
     def _list_known_embedders(self) -> list[Action]:
@@ -1431,7 +1343,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
         actions_list = []
 
         for name in genai_models.gemini:

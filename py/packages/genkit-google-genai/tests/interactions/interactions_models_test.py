@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -38,6 +39,15 @@ from google.genai.interactions import Interaction
 
 from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
+
+
+async def _empty_model_pager() -> AsyncIterator[Any]:
+    for model in ():
+        yield model
+
+
+def _set_empty_async_model_list(mock_client: MagicMock) -> None:
+    mock_client.aio.models.list = AsyncMock(side_effect=_empty_model_pager)
 
 
 def test_split_system_instruction_folds_system_turns() -> None:
@@ -648,7 +658,7 @@ async def test_deep_research_background_action_sets_action() -> None:
 @pytest.mark.asyncio
 async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -663,7 +673,7 @@ async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
 @pytest.mark.asyncio
 async def test_googleai_plugin_registers_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -684,7 +694,7 @@ async def test_googleai_plugin_registers_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_googleai_resolve_routes_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -722,7 +732,7 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_googleai_list_actions_includes_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -737,7 +747,7 @@ async def test_googleai_list_actions_includes_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_vertex_keeps_interactions_families_fail_closed() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = VertexAI(project='p', location='us-central1')
