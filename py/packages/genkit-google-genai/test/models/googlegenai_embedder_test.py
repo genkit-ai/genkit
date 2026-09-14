@@ -19,6 +19,7 @@
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -165,6 +166,70 @@ async def test_vertex_only_options_are_not_forwarded_on_gemini_api(mocker: Mocke
     assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
 
 
+def _embedder_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Warnings logged by the embedder module, as formatted messages."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == Embedder.__module__ and record.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('options', 'expected'),
+    [
+        ({'mimeType': 'text/plain'}, 'mimeType'),
+        ({'mime_type': 'text/plain', 'autoTruncate': False}, 'mime_type, autoTruncate'),
+    ],
+    ids=['one_key', 'several_keys'],
+)
+async def test_gemini_api_warns_about_dropped_vertex_only_options(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture, options: dict[str, object], expected: str
+) -> None:
+    """A Gemini API embedder names the Vertex-only options it drops instead of ignoring them silently."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, client)
+
+    with caplog.at_level(logging.WARNING, logger=Embedder.__module__):
+        await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
+
+    assert _embedder_warnings(caplog) == [
+        f'Dropping {expected} from the gemini-embedding-001 embed config: '
+        'Vertex AI only, not accepted by the Gemini Developer API.'
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vertex_does_not_warn_about_vertex_only_options(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Vertex embedders type mimeType and autoTruncate, so nothing is dropped and nothing is logged."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('text-embedding-005', client, is_vertex=True)
+
+    with caplog.at_level(logging.WARNING, logger=Embedder.__module__):
+        await embedder.generate(
+            EmbedRequest(input=[Document.from_text('text')], options={'mimeType': 'text/plain', 'autoTruncate': False})
+        )
+
+    assert _embedder_warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_other_unknown_option_keys_do_not_warn(mocker: MockerFixture, caplog: pytest.LogCaptureFixture) -> None:
+    """Unknown keys other than the Vertex-only ones are kept quietly."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, client)
+
+    with caplog.at_level(logging.WARNING, logger=Embedder.__module__):
+        await embedder.generate(
+            EmbedRequest(input=[Document.from_text('text')], options={'someFutureFlag': True, 'mime': 'text/plain'})
+        )
+
+    assert _embedder_warnings(caplog) == []
+
+
 @pytest.mark.asyncio
 async def test_unknown_option_keys_are_tolerated(mocker: MockerFixture) -> None:
     """Unknown option keys do not raise and are not forwarded to the config."""
@@ -177,6 +242,22 @@ async def test_unknown_option_keys_are_tolerated(mocker: MockerFixture) -> None:
 
     config = client.aio.models.embed_content.call_args.kwargs['config']
     assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
+
+
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'taskType': 'CLUSTERING', 'task_type': 'RETRIEVAL_QUERY'},
+        {'task_type': 'RETRIEVAL_QUERY', 'taskType': 'CLUSTERING'},
+    ],
+    ids=['camel_case_first', 'snake_case_first'],
+)
+def test_camel_case_option_key_wins_over_snake_case(options: dict[str, str]) -> None:
+    """When both spellings are given the camelCase one is the field, whatever the key order."""
+    parsed = EmbeddingConfigSchema.model_validate(options)
+
+    assert parsed.task_type == EmbeddingTaskType.CLUSTERING
+    assert parsed.model_extra == {'task_type': 'RETRIEVAL_QUERY'}
 
 
 @pytest.mark.asyncio
@@ -954,3 +1035,55 @@ async def test_multimodal_embedding_failure_leaves_queued_requests_unsent(mocker
         await embedder.generate(EmbedRequest(input=_numbered_media_docs(count)))
 
     assert client_mock._api_client.async_request.call_count < count
+
+
+class _BlockedRequests:
+    """Mocked embedding requests that never finish on their own."""
+
+    def __init__(self) -> None:
+        """Initialize the counters and the gate every request waits on."""
+        self.started = 0
+        self.completed = 0
+        self.gate = asyncio.Event()
+
+    async def side_effect(
+        self, *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        """Block a request on the gate, counting entry and completion."""
+        self.started += 1
+        await self.gate.wait()
+        self.completed += 1
+        return _indexed_embed_content(model=model, contents=contents, config=config)
+
+
+async def _yield_until(predicate: Callable[[], bool], limit: int = 100) -> None:
+    """Hand the event loop back until the predicate holds, without sleeping."""
+    for _ in range(limit):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_cancellation_cancels_in_flight_requests(mocker: MockerFixture) -> None:
+    """Cancelling the caller cancels the in-flight batches instead of leaving them running."""
+    count = 3
+    blocked = _BlockedRequests()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = blocked.side_effect
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    task = asyncio.create_task(embedder.generate(EmbedRequest(input=_numbered_docs(count))))
+    await _yield_until(lambda: blocked.started == count)
+    assert blocked.started == count
+
+    task.cancel()
+    results = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(results[0], asyncio.CancelledError)
+
+    # Releasing the gate must not revive anything: the requests are gone, not
+    # merely unobserved.
+    blocked.gate.set()
+    await _yield_until(lambda: blocked.completed > 0)
+    assert blocked.completed == 0
+    assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task()] == []

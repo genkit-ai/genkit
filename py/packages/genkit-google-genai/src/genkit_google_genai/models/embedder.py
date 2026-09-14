@@ -18,6 +18,7 @@
 
 import asyncio
 import json
+import logging
 import sys
 from collections.abc import Coroutine
 from typing import Any, Protocol, TypeVar, cast
@@ -39,6 +40,8 @@ from genkit.plugin_api import to_json_schema
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models._sdk_config import sdk_config_error
 from genkit_google_genai.models.utils import PartConverter
+
+logger = logging.getLogger(__name__)
 
 
 class VertexEmbeddingModels(StrEnum):
@@ -132,6 +135,11 @@ VERTEXAI_EMBED_BATCH_SIZE = 250
 # exhaust the client's connection pool.
 EMBED_CONCURRENCY_LIMIT = 10
 
+# Option names that only VertexEmbeddingConfigSchema declares, in both accepted
+# spellings. On the Gemini Developer API they land in model_extra, since the
+# schemas keep unknown keys, and are dropped instead of being forwarded.
+VERTEX_ONLY_OPTION_NAMES: tuple[str, ...] = ('mimeType', 'mime_type', 'autoTruncate', 'auto_truncate')
+
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
@@ -223,8 +231,9 @@ async def _run_bounded(calls: list[Coroutine[Any, Any, _T]]) -> list[_T]:
         The results, in the order the calls were given.
 
     Raises:
-        BaseException: The failure of the earliest failing call in that order,
-            so the reported error does not depend on completion order.
+        BaseException: The failure of the earliest call in that order among the
+            calls that completed. A call still pending when another one fails is
+            cancelled, so its own outcome is never reported.
     """
     if not calls:
         return []
@@ -240,7 +249,15 @@ async def _run_bounded(calls: list[Coroutine[Any, Any, _T]]) -> list[_T]:
             raise
 
     tasks = [asyncio.create_task(_bounded(call)) for call in calls]
-    _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    try:
+        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    except BaseException:
+        # asyncio.wait leaves the tasks running when whoever awaits it is
+        # cancelled, so without this they keep calling the API unobserved.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     for task in pending:
         # Without this the rest of the batch still bills one call each.
         task.cancel()
@@ -383,13 +400,36 @@ class Embedder:
         if options is None:
             return schema()
         if isinstance(options, EmbeddingConfigSchema) and type(options) is schema:
-            return options
-        if isinstance(options, BaseModel):
-            options = options.model_dump(exclude_none=True)
-        try:
-            return schema.model_validate(options)
-        except ValidationError as e:
-            raise sdk_config_error(action_name=str(self._version), error=e) from e
+            parsed = options
+        else:
+            if isinstance(options, BaseModel):
+                options = options.model_dump(exclude_none=True)
+            try:
+                parsed = schema.model_validate(options)
+            except ValidationError as e:
+                raise sdk_config_error(action_name=str(self._version), error=e) from e
+        self._warn_vertex_only_options(parsed)
+        return parsed
+
+    def _warn_vertex_only_options(self, options: EmbeddingConfigSchema) -> None:
+        """Log the Vertex-only options a Gemini Developer API embedder drops.
+
+        Other unknown keys stay silent: the schemas keep them on purpose, so
+        warning about them would be noise.
+
+        Args:
+            options: Validated embedding options.
+        """
+        if self._is_vertex:
+            return
+        extra = options.model_extra or {}
+        dropped = [name for name in VERTEX_ONLY_OPTION_NAMES if name in extra]
+        if dropped:
+            logger.warning(
+                'Dropping %s from the %s embed config: Vertex AI only, not accepted by the Gemini Developer API.',
+                ', '.join(dropped),
+                self._version,
+            )
 
     def _embed_model(self, options: EmbeddingConfigSchema) -> str:
         """API model id: options.version overlays the action's registered id."""
@@ -625,8 +665,9 @@ class Embedder:
     def _genkit_to_googleai_cfg(self, options: EmbeddingConfigSchema) -> genai.types.EmbedContentConfig | None:
         """Translate embedding options into a google-genai EmbedContentConfig.
 
-        ``mime_type`` and ``auto_truncate`` are forwarded only from a
-        VertexEmbeddingConfigSchema; the Gemini API rejects them.
+        ``mime_type`` and ``auto_truncate`` are fields of
+        VertexEmbeddingConfigSchema alone, so they are forwarded on the Vertex AI
+        backend only and left out on the Gemini Developer API.
 
         Args:
             options: Validated embedding options.
