@@ -89,7 +89,7 @@ func (s *directSpan) SetMetadata(md map[string]string) {
 // RunInNewSpan mints ids, runs next, then builds and exports the span. It
 // exports on start too (as in progress) when realtime export is active, so a
 // long-lived root span shows up in the Dev UI before it closes.
-func (d *DirectTelemetryInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, next NextFunc) (any, error) {
+func (d *DirectTelemetryInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, next NextFunc) (out any, err error) {
 	parent := directParentKey.FromContext(ctx)
 	traceID := genID(16)
 	if parent != nil {
@@ -102,10 +102,13 @@ func (d *DirectTelemetryInstrumentation) RunInNewSpan(ctx context.Context, info 
 	if realtimeTelemetryEnabled() {
 		d.exportStart(info, span, parent, start)
 	}
+	// Deferred so a panic in next still finalizes the span, matching the OTel
+	// provider's defer span.End(); otherwise the Dev UI shows it stuck "in
+	// progress".
+	defer func() { d.exportEnd(info, span, parent, start, time.Now(), err) }()
 
 	ctx = directParentKey.NewContext(ctx, &directParent{traceID: traceID, spanID: spanID})
-	out, err := next(ctx, span)
-	d.exportEnd(info, span, parent, start, time.Now(), err)
+	out, err = next(ctx, span)
 	return out, err
 }
 
