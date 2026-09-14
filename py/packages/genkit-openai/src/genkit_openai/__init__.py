@@ -42,12 +42,14 @@ Example:
     ```
 
 Requirements:
-    - Requires the ``OPENAI_API_KEY`` environment variable or explicit ``api_key``.
+    - ``OpenAI`` requires ``OPENAI_API_KEY`` or an explicit ``api_key``.
+    - ``DeepSeek`` requires ``DEEPSEEK_API_KEY`` or an explicit ``api_key``.
 
 See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
 """
 
+from .deepseek import DeepSeek, DeepSeekConfig, deepseek_model
 from .models.model_info import KnownGpt
 from .openai_plugin import OpenAI, openai_model
 from .typing import OpenAIConfig
@@ -58,4 +60,13 @@ def package_name() -> str:
     return 'genkit_openai'
 
 
-__all__ = ['KnownGpt', 'OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
+__all__ = [
+    'KnownGpt',
+    'DeepSeek',
+    'DeepSeekConfig',
+    'OpenAI',
+    'OpenAIConfig',
+    'deepseek_model',
+    'openai_model',
+    'package_name',
+]
