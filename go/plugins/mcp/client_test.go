@@ -68,12 +68,10 @@ func TestCreateTransportHonorsStreamableHTTPClient(t *testing.T) {
 		t.Fatalf("createTransport() error = %v", err)
 	}
 
-	// Ordering guard: WithHTTPTimeout mutates the client currently installed,
-	// so the custom client must have been applied before it. If it weren't, the
-	// timeout would land on an internal default client and this field would
-	// remain zero.
-	if customClient.Timeout != 7*time.Second {
-		t.Errorf("custom client Timeout = %v, want 7s; WithHTTPBasicClient must be applied before WithHTTPTimeout", customClient.Timeout)
+	// The caller's client must NOT be mutated: the transport receives a shallow
+	// copy, so a timeout configured here must not leak back onto customClient.
+	if customClient.Timeout != 0 {
+		t.Errorf("custom client Timeout = %v, want 0; the transport must not mutate the caller's client", customClient.Timeout)
 	}
 
 	// Drive one request through the transport to prove it uses the custom client.
