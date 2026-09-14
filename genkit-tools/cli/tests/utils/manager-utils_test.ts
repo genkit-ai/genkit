@@ -15,11 +15,73 @@
  */
 
 import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import {
+  getDevEnvVars,
   waitForActionKeys,
   waitForRuntime,
 } from '../../src/utils/manager-utils';
+
+describe('getDevEnvVars', () => {
+  // Setting GENKIT_TELEMETRY_SERVER makes resolveTelemetryServer return it
+  // directly instead of spinning up a real telemetry server.
+  const TELEMETRY_URL = 'http://localhost:4033';
+  let prev: string | undefined;
+
+  beforeEach(() => {
+    prev = process.env.GENKIT_TELEMETRY_SERVER;
+    process.env.GENKIT_TELEMETRY_SERVER = TELEMETRY_URL;
+  });
+
+  afterEach(() => {
+    if (prev === undefined) {
+      delete process.env.GENKIT_TELEMETRY_SERVER;
+    } else {
+      process.env.GENKIT_TELEMETRY_SERVER = prev;
+    }
+  });
+
+  it('uses native direct telemetry env vars by default', async () => {
+    const { envVars, telemetryServerUrl } = await getDevEnvVars('/root');
+
+    expect(telemetryServerUrl).toBe(TELEMETRY_URL);
+    expect(envVars).toEqual({
+      GENKIT_ENV: 'dev',
+      GENKIT_TELEMETRY_SERVER: TELEMETRY_URL,
+      GENKIT_ENABLE_REALTIME_TELEMETRY: 'true',
+    });
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
+  });
+
+  it('uses OTLP env vars (and drops native ones) when useOtel is set', async () => {
+    const { envVars, telemetryServerUrl } = await getDevEnvVars('/root', {
+      useOtel: true,
+    });
+
+    // Manager still gets the URL for its own Dev UI reads.
+    expect(telemetryServerUrl).toBe(TELEMETRY_URL);
+
+    expect(envVars.GENKIT_TELEMETRY_SERVER).toBeUndefined();
+    expect(envVars.GENKIT_ENABLE_REALTIME_TELEMETRY).toBeUndefined();
+
+    expect(envVars.GENKIT_ENV).toBe('dev');
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/traces`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL).toBe('http/json');
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/logs`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBe('http/json');
+  });
+});
 
 describe('waitForRuntime', () => {
   let mockManager: any;

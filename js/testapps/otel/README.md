@@ -35,6 +35,26 @@ spans carrying `gen_ai.*` attributes. Metrics
 (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) show up in
 the collector log (`tail -f .otel/collector.log`).
 
+## Genkit Dev UI (`genkit start --use-otel`)
+
+The Genkit Dev UI can render these OTel traces too, no Jaeger or collector
+needed. `genkit start --use-otel` points the app's own OTel SDK at the dev
+telemetry server's OTLP endpoint (via standard `OTEL_EXPORTER_OTLP_*` env vars)
+instead of enabling Genkit's native dev instrumentation:
+
+```bash
+export GEMINI_API_KEY=...
+genkit start --use-otel -- npx tsx src/index.ts
+```
+
+This is the "what would my traces look like in prod" view: only what the app's
+own OTel instrumentation emits shows up (the `gen_ai.*` client spans), not
+Genkit's more detailed native dev spans. For the richer native view, run
+`genkit start` without `--use-otel`.
+
+Note: the dev telemetry server ingests OTLP traces and logs (`http/json`) but
+ignores metrics, so the two GenAI client metrics won't appear in the Dev UI.
+
 ## What to expect
 
 - A `chat gemini-flash-latest` CLIENT span with `gen_ai.request.*` config and
