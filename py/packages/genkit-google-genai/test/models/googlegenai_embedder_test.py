@@ -627,7 +627,7 @@ async def test_multimodal_embedding_rejects_multiple_videos(mocker: MockerFixtur
 
 @pytest.mark.asyncio
 async def test_multimodal_embedding_rejects_http_url(mocker: MockerFixture) -> None:
-    """http(s) media URLs are rejected; Vertex gcsUri only accepts gs:// (diverges from JS)."""
+    """http(s) media URLs are rejected; Vertex gcsUri only accepts gs://."""
     request = EmbedRequest(input=[Document.from_media('https://example.com/cat.png', 'image/png')])
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
