@@ -34,7 +34,6 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type testState struct {
@@ -262,56 +261,52 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	}
 }
 
-// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
-// finished spans so a test can assert on their attributes.
+// spanCollector records the spans a run produces via the Direct
+// instrumentation, so a test can assert on their genkit attributes without an
+// OpenTelemetry SDK. It reads the SpanData the telemetry client accumulates.
 type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
+	client *tracing.TestOnlyTelemetryClient
 }
 
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// byName returns the first recorded span with the given name, or nil.
-func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, s := range c.spans {
-		if s.Name() == name {
+// byName returns the first recorded span with the given display name, or nil.
+func (c *spanCollector) byName(name string) *tracing.SpanData {
+	for _, s := range c.client.Spans() {
+		if s.DisplayName == name {
 			return s
 		}
 	}
 	return nil
 }
 
-// collectSpans registers an in-memory exporter on the global tracer provider
-// (the one tracing.RunInNewSpan writes through) for the duration of the test.
-// The SimpleSpanProcessor exports each span synchronously as it ends, so by
-// the time a turn completes its span is already recorded.
+// collectSpans routes the run's spans through a Direct instrumentation over an
+// in-memory client for the duration of the test, so spans (and agent.go's
+// custom metadata) are captured with their genkit attributes and no
+// OpenTelemetry SDK is involved. Reset on cleanup.
 func collectSpans(t *testing.T) *spanCollector {
 	t.Helper()
-	c := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(c)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
-	return c
+	client := tracing.NewTestOnlyTelemetryClient()
+	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	t.Cleanup(tracing.ResetInstrumentation)
+	return &spanCollector{client: client}
 }
 
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
+// The full span-attribute keys agent identifiers land under: agent.go records
+// them as custom metadata (agent:sessionId / agent:snapshotId), which the
+// instrumentation stores with the genkit:metadata: prefix.
+const (
+	sessionIDSpanAttrKey  = "genkit:metadata:" + sessionIDMetaKey
+	snapshotIDSpanAttrKey = "genkit:metadata:" + snapshotIDMetaKey
+)
+
+// spanAttr returns the string value of the named genkit span attribute, if
+// present.
+func spanAttr(span *tracing.SpanData, key string) (string, bool) {
+	v, ok := span.Attributes[key]
+	if !ok {
+		return "", false
 	}
-	return "", false
+	s, ok := v.(string)
+	return s, ok
 }
 
 // TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
@@ -1645,18 +1640,18 @@ func TestAgent_SetMessages(t *testing.T) {
 // turnSpanState parses a turn span's genkit:output attribute, which the agent
 // records as {"state": <session state>} (see turnSpanOutput), and returns the
 // embedded state.
-func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+func turnSpanState(t *testing.T, span *tracing.SpanData) *SessionState[testState] {
 	t.Helper()
 	raw, ok := spanAttr(span, "genkit:output")
 	if !ok {
-		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+		t.Fatalf("span %q: missing genkit:output attribute", span.DisplayName)
 	}
 	var out turnSpanOutput[testState]
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.DisplayName, raw, err)
 	}
 	if out.State == nil {
-		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+		t.Fatalf("span %q: genkit:output %q carries no state", span.DisplayName, raw)
 	}
 	return out.State
 }

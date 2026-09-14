@@ -27,8 +27,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // startLogCollector runs a test telemetry server that accumulates OTLP log
@@ -103,11 +101,12 @@ func TestLogExportHandler(t *testing.T) {
 	e, collect := startLogCollector(t)
 	l := slog.New(&logExportHandler{exporter: e})
 
-	sc := otrace.NewSpanContext(otrace.SpanContextConfig{
-		TraceID: otrace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SpanID:  otrace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
-	})
-	ctx := otrace.ContextWithSpanContext(context.Background(), sc)
+	// Correlation now reads Genkit's own span metadata (composite ids), not the
+	// OTel active context, so seed the metadata the dispatcher would have set.
+	wantTraceID := "0102030405060708090a0b0c0d0e0f10"
+	wantSpanID := "0102030405060708"
+	ctx := spanMetaKey.NewContext(context.Background(),
+		&spanMetadata{TraceInfo: TraceInfo{TraceID: wantTraceID, SpanID: wantSpanID}})
 
 	l.Log(ctx, slog.LevelInfo, "correlated message",
 		"str", "value",
@@ -123,11 +122,11 @@ func TestLogExportHandler(t *testing.T) {
 	recs := waitForRecords(t, collect, 1)
 	rec := recs[0]
 
-	if got, want := rec.TraceID, sc.TraceID().String(); got != want {
-		t.Errorf("traceId = %q, want %q", got, want)
+	if got := rec.TraceID; got != wantTraceID {
+		t.Errorf("traceId = %q, want %q", got, wantTraceID)
 	}
-	if got, want := rec.SpanID, sc.SpanID().String(); got != want {
-		t.Errorf("spanId = %q, want %q", got, want)
+	if got := rec.SpanID; got != wantSpanID {
+		t.Errorf("spanId = %q, want %q", got, wantSpanID)
 	}
 	if rec.SeverityText != "INFO" || rec.SeverityNumber != 9 {
 		t.Errorf("severity = %q/%d, want INFO/9", rec.SeverityText, rec.SeverityNumber)
