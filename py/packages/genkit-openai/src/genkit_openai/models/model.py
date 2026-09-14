@@ -68,9 +68,7 @@ def _uses_max_completion_tokens(model: str | None) -> bool:
         if len(parts) > 1:
             model_id = parts[1]
     reasoning_prefixes = ('o1', 'o3', 'o4', 'gpt-5', 'gpt-6')
-    return model_id.startswith(reasoning_prefixes) or any(
-        f'-{prefix}' in model_id for prefix in reasoning_prefixes
-    )
+    return model_id.startswith(reasoning_prefixes) or any(f'-{prefix}' in model_id for prefix in reasoning_prefixes)
 
 
 def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> dict[str, Any]:
