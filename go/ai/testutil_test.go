@@ -20,14 +20,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // newTestRegistry creates a fresh registry for testing with formats configured.
@@ -316,69 +314,57 @@ func defineFakeTool(t *testing.T, r api.Registry, name, description string) Tool
 		})
 }
 
-// spanCollector is a minimal sdktrace.SpanExporter that records finished
-// spans so a test can assert on their attributes.
+// spanCollector records the spans a run produces via the Direct
+// instrumentation, so a test can assert on their genkit attributes without an
+// OpenTelemetry SDK. It reads the SpanData the telemetry client accumulates.
 type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
+	client *tracing.TestOnlyTelemetryClient
 }
 
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// allByName returns every recorded span with the given name.
-func (c *spanCollector) allByName(name string) []sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var out []sdktrace.ReadOnlySpan
-	for _, s := range c.spans {
-		if s.Name() == name {
+// allByName returns every recorded span with the given display name.
+func (c *spanCollector) allByName(name string) []*tracing.SpanData {
+	var out []*tracing.SpanData
+	for _, s := range c.client.Spans() {
+		if s.DisplayName == name {
 			out = append(out, s)
 		}
 	}
 	return out
 }
 
-// collectSpans registers an in-memory exporter on the global tracer provider
-// (the one tracing.RunInNewSpan writes through) for the duration of the test.
-// The SimpleSpanProcessor exports each span synchronously as it ends, so by
-// the time the call under test returns its spans are already recorded.
+// collectSpans routes the run's spans through a Direct instrumentation over an
+// in-memory client for the duration of the test, so spans are captured with
+// their genkit attributes and no OpenTelemetry SDK is involved. Reset on
+// cleanup.
 func collectSpans(t *testing.T) *spanCollector {
 	t.Helper()
-	c := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(c)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
-	return c
+	client := tracing.NewTestOnlyTelemetryClient()
+	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	t.Cleanup(tracing.ResetInstrumentation)
+	return &spanCollector{client: client}
 }
 
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
+// spanAttr returns the string value of the named genkit span attribute, if
+// present.
+func spanAttr(span *tracing.SpanData, key string) (string, bool) {
+	v, ok := span.Attributes[key]
+	if !ok {
+		return "", false
 	}
-	return "", false
+	s, ok := v.(string)
+	return s, ok
 }
 
 // assertSpanAttr fails the test unless span carries key with value want.
-func assertSpanAttr(t *testing.T, span sdktrace.ReadOnlySpan, key, want string) {
+func assertSpanAttr(t *testing.T, span *tracing.SpanData, key, want string) {
 	t.Helper()
 	got, ok := spanAttr(span, key)
 	if !ok {
-		t.Errorf("span %q: missing attribute %q", span.Name(), key)
+		t.Errorf("span %q: missing attribute %q", span.DisplayName, key)
 		return
 	}
 	if got != want {
-		t.Errorf("span %q: %s = %q, want %q", span.Name(), key, got, want)
+		t.Errorf("span %q: %s = %q, want %q", span.DisplayName, key, got, want)
 	}
 }
 

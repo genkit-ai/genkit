@@ -17,10 +17,10 @@
 /*
 Package tracing provides execution trace support for Genkit operations.
 
-This package implements OpenTelemetry-based tracing for Genkit actions and flows.
-Traces capture the execution path, inputs, outputs, and timing of operations,
-enabling observability and debugging through the Genkit Developer UI and
-external telemetry systems.
+Tracing is pluggable: [RunInNewSpan] dispatches to instrumentation providers,
+with OpenTelemetry as the default. Traces capture the execution path, inputs,
+outputs, and timing of operations, enabling observability and debugging through
+the Genkit Developer UI and external telemetry systems.
 
 # Automatic Tracing
 
@@ -40,32 +40,29 @@ Use [core.Run] within flows to create traced sub-steps:
 	// In a real scenario, 'r' would be the registry from your Genkit instance.
 	flow.Register(r)
 
-# Tracer Access
+# OpenTelemetry Integration
 
-Access the OpenTelemetry tracer provider for custom instrumentation:
+Genkit does not configure OpenTelemetry or install a global TracerProvider. To
+export traces to an external system, set up OpenTelemetry in your application,
+for example:
 
-	provider := tracing.TracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+	))
 
-	// Get a tracer for custom spans
-	tracer := tracing.Tracer()
+Use the contrib autoexport package if you want the standard OTEL_* environment
+variables (OTEL_TRACES_EXPORTER, OTEL_EXPORTER_OTLP_ENDPOINT, ...) honored, or
+use the Google Cloud / Firebase plugins, which configure OpenTelemetry for you.
 
-# Telemetry Export
-
-Configure trace export to send telemetry to external systems. For immediate
-export (suitable for local storage):
-
-	tracing.WriteTelemetryImmediate(client)
-
-For batched export (more efficient for network calls):
-
-	shutdown := tracing.WriteTelemetryBatch(client)
-	defer shutdown(ctx)
+Genkit reads whatever provider you register (otel.GetTracerProvider) to create
+its spans; when nothing is configured, spans carry no trace ids and are not
+exported.
 
 # Dev UI Integration
 
-When the GENKIT_ENV environment variable is set to "dev", traces are
-automatically sent to the Genkit Developer UI's telemetry server. The Dev UI
-provides:
+When the GENKIT_ENV environment variable is set to "dev", traces are sent to the
+Genkit Developer UI's telemetry server directly, without an OpenTelemetry SDK on
+that path. The Dev UI provides:
 
   - Visual trace exploration with timing breakdown
   - Input/output inspection for each action
