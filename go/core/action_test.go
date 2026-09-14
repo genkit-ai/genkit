@@ -26,7 +26,6 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
-	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -201,25 +200,24 @@ func TestActionStreaming(t *testing.T) {
 
 func TestActionTracing(t *testing.T) {
 	r := registry.New()
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
+	// Traces are captured by the package-wide Direct client wired in TestMain.
+	tc := testTelemetryClient
 	name := api.NewName("test", "TestTracing-inc")
 	a := defineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The same trace store is used for all tests, so there might be several traces.
-	// Look for this one, which has a unique name.
-	for _, td := range tc.Traces {
-		if td.DisplayName == name {
-			// Spot check: expect a single span.
-			if g, w := len(td.Spans), 1; g != w {
-				t.Errorf("got %d spans, want %d", g, w)
-			}
-			return
+	// The package-wide client captures every test's spans, so filter to this
+	// action's uniquely named span. Expect exactly one.
+	var got int
+	for _, s := range tc.Spans() {
+		if s.DisplayName == name {
+			got++
 		}
 	}
-	t.Fatalf("did not find trace named %q", name)
+	if got != 1 {
+		t.Fatalf("got %d spans named %q, want 1", got, name)
+	}
 }
 
 func TestNewAction(t *testing.T) {

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +30,6 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -50,17 +48,6 @@ func (e *markedError) Unwrap() error {
 	return e.error
 }
 
-// markErrorAsHandled marks an error as already handled for failure source tracking
-func markErrorAsHandled(err error) error {
-	var me *markedError
-	if errors.As(err, &me) {
-		me.marked = true
-		return me
-	}
-
-	return &markedError{error: err, marked: true}
-}
-
 // isErrorAlreadyMarked checks if an error has already been marked as a failure source
 func isErrorAlreadyMarked(err error) bool {
 	var me *markedError
@@ -70,44 +57,17 @@ func isErrorAlreadyMarked(err error) bool {
 	return false
 }
 
-// captureStackTrace captures the current Go stack trace for error reporting
-func captureStackTrace() string {
-	buf := make([]byte, 4096)
-	n := runtime.Stack(buf, false)
-	stackTrace := string(buf[:n])
-	lines := strings.Split(stackTrace, "\n")
-	var cleanLines []string
-	skipNext := false
-
-	for _, line := range lines {
-
-		if strings.Contains(line, "github.com/firebase/genkit/go/core/tracing") ||
-			strings.Contains(line, "runtime.") ||
-			strings.Contains(line, "captureStackTrace") {
-			skipNext = true
-			continue
-		}
-
-		if skipNext {
-			skipNext = false
-			continue
-		}
-
-		cleanLines = append(cleanLines, line)
-
-		if len(cleanLines) > 20 {
-			break
-		}
-	}
-
-	return strings.Join(cleanLines, "\n")
-}
-
 var (
 	providerInitOnce sync.Once
 )
 
 // TracerProvider returns the global tracer provider, creating it if needed.
+//
+// Deprecated: Genkit no longer owns the global OpenTelemetry TracerProvider.
+// Configure OpenTelemetry yourself (otel.SetTracerProvider with your own
+// exporters, or the contrib autoexport package to honor OTEL_* env vars), or
+// use the Google Cloud / Firebase plugins. Retained for backwards compatibility
+// and removed in the next major version.
 func TracerProvider() *sdktrace.TracerProvider {
 	if tp := otel.GetTracerProvider(); tp != nil {
 		if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
@@ -115,22 +75,22 @@ func TracerProvider() *sdktrace.TracerProvider {
 		}
 	}
 
+	// Lazily create the SDK provider so OTel ids and any user-configured
+	// exporters keep working. It no longer auto-registers the telemetry-server
+	// processor: feeding the Dev UI is now the Direct instrumentation's job
+	// (axis 1), decoupled from tracer-provider bootstrap (axis 2).
 	providerInitOnce.Do(func() {
 		otel.SetTracerProvider(sdktrace.NewTracerProvider())
-		if telemetryURL := os.Getenv("GENKIT_TELEMETRY_SERVER"); telemetryURL != "" {
-			client := NewHTTPTelemetryClient(telemetryURL)
-			if realtimeTelemetryEnabled() {
-				WriteTelemetryRealtime(client)
-			} else {
-				WriteTelemetryImmediate(client)
-			}
-		}
 	})
 
 	return otel.GetTracerProvider().(*sdktrace.TracerProvider)
 }
 
 // Tracer returns a tracer from the global tracer provider.
+//
+// Deprecated: Genkit no longer manages the global TracerProvider. Get a tracer
+// from your own OpenTelemetry setup (otel.GetTracerProvider().Tracer(...)).
+// Removed in the next major version.
 func Tracer() trace.Tracer {
 	return TracerProvider().Tracer("genkit-tracer", trace.WithInstrumentationVersion("v1"))
 }
@@ -139,6 +99,11 @@ func Tracer() trace.Tracer {
 // Traces are saved immediately as they are finished.
 // Use this for a gtrace.Store with a fast Save method,
 // such as one that writes to a file.
+//
+// Deprecated: registers a span processor on the Genkit-managed global
+// TracerProvider. Configure OpenTelemetry export yourself, or rely on the dev
+// UI's Direct export / the Google Cloud / Firebase plugins. Removed in the next
+// major version.
 func WriteTelemetryImmediate(client TelemetryClient) {
 	e := newTelemetryServerExporter(client)
 	TracerProvider().RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(e))
@@ -151,6 +116,11 @@ func WriteTelemetryImmediate(client TelemetryClient) {
 //
 // Callers must invoke the returned function at the end of the program to flush the final batch
 // and perform other cleanup.
+//
+// Deprecated: registers a span processor on the Genkit-managed global
+// TracerProvider. Configure OpenTelemetry export yourself, or rely on the dev
+// UI's Direct export / the Google Cloud / Firebase plugins. Removed in the next
+// major version.
 func WriteTelemetryBatch(client TelemetryClient) (shutdown func(context.Context) error) {
 	e := newTelemetryServerExporter(client)
 	TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(e))
@@ -164,6 +134,11 @@ func WriteTelemetryBatch(client TelemetryClient) (shutdown func(context.Context)
 // of a bidirectional connection. Use this for a fast Save method (such as one
 // that writes to a file or a local server); for an end-only export use
 // [WriteTelemetryImmediate].
+//
+// Deprecated: registers a span processor on the Genkit-managed global
+// TracerProvider. Configure OpenTelemetry export yourself, or rely on the dev
+// UI's Direct export / the Google Cloud / Firebase plugins. Removed in the next
+// major version.
 func WriteTelemetryRealtime(client TelemetryClient) {
 	TracerProvider().RegisterSpanProcessor(newRealtimeSpanProcessor(client))
 }
@@ -256,95 +231,78 @@ func RunInNewSpan[I, O any](
 		}
 	}
 
-	var opts []trace.SpanStartOption
-	if metadata.TelemetryLabels != nil {
-		var attrs []attribute.KeyValue
-		for k, v := range metadata.TelemetryLabels {
-			attrs = append(attrs, attribute.String(k, v))
+	info := &SpanInfo{Labels: metadata.TelemetryLabels, metadata: sm}
+
+	// runBody is the center of the instrumentation chain: it runs the caller's
+	// f under the new span's context and records Genkit's success/error
+	// bookkeeping (state, output, failure source). Providers finalize their
+	// backend spans around it. All backend-independent semantics stay here so
+	// providers only encode.
+	var output O
+	runBody := func(ctx context.Context, span Span) (any, error) {
+		sm.TraceInfo = span.TraceInfo()
+
+		// Fire the telemetry callback the moment ids are known. Omit blank ids
+		// so an uninstrumented run does not look like a broken exporter.
+		if cb := telemetryCallback(ctx); cb != nil && sm.TraceInfo.TraceID != "" {
+			cb(sm.TraceInfo.TraceID, sm.TraceInfo.SpanID)
 		}
-		opts = append(opts, trace.WithAttributes(attrs...))
-	}
 
-	// Seed the start-known genkit attributes (including genkit:type) as span-start
-	// options so a live-trace export taken the moment the span starts already
-	// carries its name, path, type, and subtype. The deferred end write below
-	// reasserts these and adds the run-determined output/state.
-	opts = append(opts, trace.WithAttributes(sm.startAttributes()...))
-	// Input and init are known now too, but JSON-marshaled, so seed them at start
-	// only when a live exporter will read them; otherwise the end write records
-	// them once. Without this an in-flight span (notably an agent's long-lived
-	// root span, whose call data lives entirely in genkit:init) shows no input
-	// until it finishes.
-	if realtimeTelemetryEnabled() {
-		opts = append(opts, trace.WithAttributes(sm.inputAttributes()...))
-	}
+		ctx = spanMetaKey.NewContext(ctx, sm)
+		// Expose the composite span so SetCustomMetadataAttributes can fan
+		// mid-run metadata out to every active provider.
+		ctx = currentSpanKey.NewContext(ctx, span)
 
-	ctx, span := Tracer().Start(ctx, metadata.Name, opts...)
-	sm.TraceInfo = TraceInfo{
-		TraceID: span.SpanContext().TraceID().String(),
-		SpanID:  span.SpanContext().SpanID().String(),
-	}
-
-	// Fire telemetry callback immediately if one was set on the context
-	if cb := telemetryCallback(ctx); cb != nil {
-		cb(sm.TraceInfo.TraceID, sm.TraceInfo.SpanID)
-	}
-
-	defer span.End()
-	defer func() { span.SetAttributes(sm.attributes()...) }()
-	ctx = spanMetaKey.NewContext(ctx, sm)
-
-	// These logs run under the new span's context, so they land on this span
-	// in the Dev UI. The deferred one is registered after the span.End defer,
-	// so it fires first, while the span is still recording. This is the
-	// hottest path in the framework, so the log arguments are only built when
-	// some handler accepts debug records (the console at GENKIT_LOG_LEVEL=
-	// debug, or the Dev UI export sink).
-	start := time.Now()
-	logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
-	if logDebug {
-		startArgs := []any{"name", metadata.Name}
-		if metadata.Type != "" {
-			startArgs = append(startArgs, "type", metadata.Type)
+		// These logs run under the new span's context, so they land on this
+		// span in the Dev UI. The deferred one fires while the span is still
+		// recording. This is the hottest path in the framework, so the log
+		// arguments are only built when some handler accepts debug records
+		// (the console at GENKIT_LOG_LEVEL=debug, or the Dev UI export sink).
+		start := time.Now()
+		logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
+		if logDebug {
+			startArgs := []any{"name", metadata.Name}
+			if metadata.Type != "" {
+				startArgs = append(startArgs, "type", metadata.Type)
+			}
+			if metadata.Subtype != "" {
+				startArgs = append(startArgs, "subtype", metadata.Subtype)
+			}
+			logger.Debug(ctx, "span started", startArgs...)
 		}
-		if metadata.Subtype != "" {
-			startArgs = append(startArgs, "subtype", metadata.Subtype)
-		}
-		logger.Debug(ctx, "span started", startArgs...)
-	}
-	defer func() {
-		if !logDebug {
-			return
-		}
-		endArgs := []any{"name", metadata.Name, "state", string(sm.State), "duration", time.Since(start).Round(time.Millisecond)}
-		if sm.Error != "" {
-			endArgs = append(endArgs, "error", sm.Error)
-		}
-		logger.Debug(ctx, "span finished", endArgs...)
-	}()
+		defer func() {
+			if !logDebug {
+				return
+			}
+			endArgs := []any{"name", metadata.Name, "state", string(sm.State), "duration", time.Since(start).Round(time.Millisecond)}
+			if sm.Error != "" {
+				endArgs = append(endArgs, "error", sm.Error)
+			}
+			logger.Debug(ctx, "span finished", endArgs...)
+		}()
 
-	output, err := f(ctx, input)
-
-	if err != nil {
-		sm.State = spanStateError
-		sm.Error = err.Error()
-		sm.IsFailureSource = true
-		if !isErrorAlreadyMarked(err) {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
-		// A failure can still carry a result: the generate loop returns the
-		// conversation it completed alongside its error. Record it so the
-		// span shows what the call produced and not only that it stopped.
-		// Guarded, because a function that returns nothing on error would
-		// otherwise stamp a null output on every failing span.
-		if !base.IsNil(output) {
+		var err error
+		output, err = f(ctx, input)
+		if err != nil {
+			sm.State = spanStateError
+			sm.Error = err.Error()
+			sm.IsFailureSource = true
+			// A failure can still carry a result: the generate loop returns the
+			// conversation it completed alongside its error. Record it so the
+			// span shows what the call produced and not only that it stopped.
+			// Guarded, because a function that returns nothing on error would
+			// otherwise stamp a null output on every failing span.
+			if !base.IsNil(output) {
+				sm.Output = output
+			}
+		} else {
+			sm.State = spanStateSuccess
 			sm.Output = output
 		}
-	} else {
-		sm.State = spanStateSuccess
-		sm.Output = output
+		return output, err
 	}
+
+	_, err := dispatch(ctx, activeInstrumentations(), info, runBody)
 	return output, err
 }
 
@@ -513,6 +471,10 @@ func (sm *spanMetadata) inputAttributes() []attribute.KeyValue {
 // spanMetaKey is for storing spanMetadatas in a context.
 var spanMetaKey = base.NewContextKey[*spanMetadata]()
 
+// currentSpanKey holds the composite Span of the running RunInNewSpan, so
+// SetCustomMetadataAttributes can reach it.
+var currentSpanKey = base.NewContextKey[Span]()
+
 // telemetryCbKey is the context key for telemetry callbacks.
 var telemetryCbKey = base.NewContextKey[func(traceID, spanID string)]()
 
@@ -546,7 +508,23 @@ func SpanPath(ctx context.Context) string {
 	return spanMetaKey.FromContext(ctx).Path
 }
 
-// TraceInfo returns the trace info as recorded in the current span metadata.
+// SpanTraceInfo returns the trace info recorded in the current span metadata,
+// or the zero TraceInfo when called outside any span (e.g. a log emitted before
+// a flow starts).
 func SpanTraceInfo(ctx context.Context) TraceInfo {
-	return spanMetaKey.FromContext(ctx).TraceInfo
+	if sm := spanMetaKey.FromContext(ctx); sm != nil {
+		return sm.TraceInfo
+	}
+	return TraceInfo{}
+}
+
+// SetCustomMetadataAttributes records custom metadata on the current span,
+// fanning out to every active instrumentation provider. Each entry is stored as
+// a genkit:metadata:<key> span attribute. It is a no-op when called outside a
+// span. This is the backend-independent way to annotate the running span; it
+// replaces writing to an OpenTelemetry span directly.
+func SetCustomMetadataAttributes(ctx context.Context, md map[string]string) {
+	if span := currentSpanKey.FromContext(ctx); span != nil {
+		span.SetMetadata(md)
+	}
 }

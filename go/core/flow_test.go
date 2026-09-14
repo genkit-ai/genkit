@@ -20,12 +20,10 @@ import (
 	"context"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestRunInFlow(t *testing.T) {
@@ -262,28 +260,16 @@ func TestFlowNameFromContextOutsideFlow(t *testing.T) {
 	})
 }
 
-// stepSpanCollector records finished spans so a test can assert on how they
-// nest. It is the same shape as the collector in ai/testutil_test.go, kept here
-// because tests live beside the file they cover.
+// stepSpanCollector records the spans a run produces via the Direct
+// instrumentation, so a test can assert on how they nest, without an
+// OpenTelemetry SDK.
 type stepSpanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
+	client *tracing.TestOnlyTelemetryClient
 }
 
-func (c *stepSpanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *stepSpanCollector) Shutdown(context.Context) error { return nil }
-
-func (c *stepSpanCollector) byName(name string) sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, s := range c.spans {
-		if s.Name() == name {
+func (c *stepSpanCollector) byName(name string) *tracing.SpanData {
+	for _, s := range c.client.Spans() {
+		if s.DisplayName == name {
 			return s
 		}
 	}
@@ -292,12 +278,15 @@ func (c *stepSpanCollector) byName(name string) sdktrace.ReadOnlySpan {
 
 func collectStepSpans(t *testing.T) *stepSpanCollector {
 	t.Helper()
-	c := &stepSpanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(c)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
-	return c
+	client := tracing.NewTestOnlyTelemetryClient()
+	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	// Restore the package-wide default (see TestMain) rather than clearing it,
+	// so later tests still capture spans.
+	t.Cleanup(func() {
+		tracing.ConfigureInstrumentation(
+			tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
+	})
+	return &stepSpanCollector{client: client}
 }
 
 // TestRunWithContextNesting is the reason RunWithContext exists: work started
@@ -334,7 +323,7 @@ func TestRunWithContextNesting(t *testing.T) {
 	step := c.byName("with-context")
 	nested := c.byName("inner-nested")
 	escaped := c.byName("inner-escaped")
-	for name, s := range map[string]sdktrace.ReadOnlySpan{
+	for name, s := range map[string]*tracing.SpanData{
 		"with-context": step, "inner-nested": nested, "inner-escaped": escaped,
 	} {
 		if s == nil {
@@ -342,10 +331,10 @@ func TestRunWithContextNesting(t *testing.T) {
 		}
 	}
 
-	if got, want := nested.Parent().SpanID(), step.SpanContext().SpanID(); got != want {
+	if got, want := nested.ParentSpanID, step.SpanID; got != want {
 		t.Errorf("inner-nested parent = %s, want the with-context step %s", got, want)
 	}
-	if got := escaped.Parent().SpanID(); got == c.byName("without-context").SpanContext().SpanID() {
+	if got := escaped.ParentSpanID; got == c.byName("without-context").SpanID {
 		t.Errorf("inner-escaped nested under its step, so Run now propagates context and this test is stale")
 	}
 }
