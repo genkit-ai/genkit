@@ -701,6 +701,9 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
     previous_chunks: list[ModelResponseChunk[Any]] = Field(default_factory=list, exclude=True)
     chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = Field(None, exclude=True)
     schema_type: type[BaseModel] | None = Field(None, exclude=True)
+    # Mid-tool send_chunk / send_partial stay on the stream; the next turn
+    # should only see completed tool returns.
+    _keep_in_history: bool = PrivateAttr(default=True)
 
     def __init__(
         self,
@@ -709,6 +712,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         index: int | float | None = None,
         chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = None,
         schema_type: type[BaseModel] | None = None,
+        keep_in_history: bool | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Initialize from a chunk or keyword arguments."""
@@ -727,6 +731,10 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         self.previous_chunks = previous_chunks or []
         self.chunk_parser = chunk_parser
         self.schema_type = schema_type
+        if keep_in_history is not None:
+            self._keep_in_history = keep_in_history
+        elif chunk is not None:
+            self._keep_in_history = getattr(chunk, '_keep_in_history', True)
 
     def __eq__(self, other: object) -> bool:
         """Check equality."""

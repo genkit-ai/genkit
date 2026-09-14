@@ -89,6 +89,26 @@ def coerce_part(value: object) -> Part | None:
     return None
 
 
+def normalize_send_chunk_parts(chunk: object) -> list[Part]:
+    """Require a Part or list of Parts for tool ``send_chunk``."""
+    if isinstance(chunk, Part):
+        return [chunk]
+    if isinstance(chunk, list):
+        out: list[Part] = []
+        for item in chunk:
+            if not isinstance(item, Part):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'send_chunk parts must be Part values, got {type(item).__name__}.',
+                )
+            out.append(item)
+        return out
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'send_chunk expects a Part or list of Parts, got {type(chunk).__name__}.',
+    )
+
+
 def normalize_response_parts(parts: Sequence[Part] | None) -> list[Part] | None:
     if parts is None:
         return None
@@ -345,6 +365,14 @@ class Tool:
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
 # Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).
 _tool_original_input: ContextVar[Any | None] = ContextVar('tool_original_input', default=None)  # noqa: ANN401
+# Generate-only sink: wraps send_chunk parts as a tool-role stream chunk.
+_tool_generate_chunk_sender: ContextVar[Callable[[list[Part]], None] | None] = ContextVar(
+    'tool_generate_chunk_sender', default=None
+)
+# Generate-only sink: wraps send_partial as a stamped tool-response part.
+_tool_generate_partial_sender: ContextVar[Callable[[object], None] | None] = ContextVar(
+    'tool_generate_partial_sender', default=None
+)
 
 
 class ToolRunContext(ActionRunContext):
@@ -370,6 +398,33 @@ class ToolRunContext(ActionRunContext):
         )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
+
+    def send_chunk(self, chunk: Part | list[Part]) -> None:  # type: ignore[override]
+        """Stream parts from this tool.
+
+        During ``generate_stream`` the parts become one tool-role
+        ``ModelResponseChunk``. On ``tool.stream()`` the same call still
+        delivers the ``Part`` or list you passed. With no listener this
+        validates and returns.
+        """
+        parts = normalize_send_chunk_parts(chunk)
+        sender = _tool_generate_chunk_sender.get()
+        if sender is not None:
+            sender(parts)
+            return
+        super().send_chunk(chunk)
+
+    def send_partial(self, value: object) -> None:
+        """Stream a progress value from this tool.
+
+        During ``generate_stream`` the value becomes one tool-role
+        ``ToolResponsePart`` with this call's name and ref and
+        ``metadata.partial``. On ``tool.stream()`` or with no listener
+        this is a no-op.
+        """
+        sender = _tool_generate_partial_sender.get()
+        if sender is not None:
+            sender(value)
 
     def is_resumed(self) -> bool:
         """Return True if this execution is resuming after an interrupt."""
@@ -505,6 +560,8 @@ async def run_tool_request(
     tool: Action,
     tool_request_part: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
@@ -515,6 +572,13 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
+    token_sender = _tool_generate_chunk_sender.set(on_tool_parts)
+
+    def send_partial_value(value: object) -> None:
+        if on_tool_partial is not None:
+            on_tool_partial(tool_request_part, value)
+
+    token_partial = _tool_generate_partial_sender.set(send_partial_value if on_tool_partial is not None else None)
     run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
@@ -527,6 +591,8 @@ async def run_tool_request(
             )
         ).response
     finally:
+        _tool_generate_partial_sender.reset(token_partial)
+        _tool_generate_chunk_sender.reset(token_sender)
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
 
@@ -559,6 +625,8 @@ async def run_tool_after_restart(
     tool: Action,
     restart_trp: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
@@ -566,7 +634,13 @@ async def run_tool_after_restart(
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     try:
-        raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+        raw = await run_tool_request(
+            tool=tool,
+            tool_request_part=restart_trp,
+            ctx=ctx,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
+        )
     except (GenkitError, Interrupt) as e:
         intr = (
             e.cause

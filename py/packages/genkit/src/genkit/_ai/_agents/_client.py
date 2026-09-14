@@ -743,6 +743,40 @@ def as_part(part: Any) -> Part:  # noqa: ANN401
     return part if isinstance(part, Part) else Part.model_validate(part)
 
 
+KEEP_IN_HISTORY_CUSTOM_KEY = 'keepInHistory'
+
+
+def chunk_kept_in_history(chunk: AgentStreamChunk) -> bool:
+    """Whether this generate chunk should land in the next turn's history.
+
+    Mid-tool send_chunk / send_partial were for the stream listener. The flag
+    rides ``custom.keepInHistory`` so a dump/validate hop still sees it.
+    """
+    mc = chunk.model_chunk
+    if mc is None:
+        return True
+    if getattr(mc, '_keep_in_history', True) is False:
+        return False
+    custom = mc.custom
+    if isinstance(custom, dict) and custom.get(KEEP_IN_HISTORY_CUSTOM_KEY) is False:
+        return False
+    return True
+
+
+def durable_history_part(*, role: Role | str, part: Part) -> bool:
+    """Whether this streamed part belongs in the next turn's history.
+
+    Mid-tool send_chunk / send_partial were for the stream listener. The next
+    turn should only see completed tool returns, same as generate history.
+    """
+    root = part.root
+    if isinstance(root, ToolResponsePart) and (root.metadata or {}).get('partial') is True:
+        return False
+    if role == Role.TOOL:
+        return isinstance(root, (ToolRequestPart, ToolResponsePart))
+    return True
+
+
 class StreamedMessageAccumulator:
     """Rebuilds a turn's messages from its chunk stream.
 
@@ -750,6 +784,7 @@ class StreamedMessageAccumulator:
     tool-request/tool-response steps; nothing else does. We stitch them back the
     same way the store records them: consecutive model deltas (same role and
     message index) merge into one message; a ``tool`` chunk arrives whole.
+    Mid-tool send_chunk / send_partial stay on the stream and out of this view.
     """
 
     def __init__(self) -> None:
@@ -763,13 +798,17 @@ class StreamedMessageAccumulator:
         mc = chunk.model_chunk
         if mc is None:
             return
+        if not chunk_kept_in_history(chunk):
+            return
         role = mc.role if mc.role is not None else Role.MODEL
         if self.role is not None and (role != self.role or mc.index != self.index):
             self.flush()
         self.role = role
         self.index = mc.index
         for part in mc.content or []:
-            self.parts.append(as_part(part))
+            converted = as_part(part)
+            if durable_history_part(role=role, part=converted):
+                self.parts.append(converted)
 
     def flush(self) -> None:
         if self.role is None:

@@ -682,6 +682,24 @@ async def generate_with_request(
     )
 
 
+KEEP_IN_HISTORY_CUSTOM_KEY = 'keepInHistory'
+
+
+def empty_chunk_output(_chunk: ModelResponseChunk[Any]) -> None:
+    """Tool-role leftover parse: the parts are the payload, not `.output`."""
+    return None
+
+
+def mark_stream_only(chunk: ModelResponseChunk[Any]) -> None:
+    """Mark a mid-tool update so a wire hop still leaves it off history."""
+    chunk._keep_in_history = False
+    custom = chunk.custom
+    if isinstance(custom, dict):
+        chunk.custom = {**custom, KEEP_IN_HISTORY_CUSTOM_KEY: False}
+    else:
+        chunk.custom = {KEEP_IN_HISTORY_CUSTOM_KEY: False}
+
+
 class ChunkAccumulator:
     """Tracks role and message-index state across a streaming turn's chunks.
 
@@ -709,18 +727,25 @@ class ChunkAccumulator:
         """Wrap a raw chunk with metadata and track message index changes."""
         if role != self.chunk_role and len(self.prev_chunks) > 0:
             self.message_index += 1
+            # Same-role sends concatenate; a role change starts a new bucket
+            # so model leftover JSON does not mix into tool parts.
+            self.prev_chunks = []
 
         self.chunk_role = role
 
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
+        # Leftover parse is the model's output. Tool-role chunks are the
+        # parts the tool sent, so `.output` stays empty.
+        apply_schema = role == Role.MODEL
         return ModelResponseChunk(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,
-            chunk_parser=self._chunk_parser,
-            schema_type=self.schema_type,
+            chunk_parser=self._chunk_parser if apply_schema else empty_chunk_output,
+            schema_type=self.schema_type if apply_schema else None,
+            keep_in_history=getattr(chunk, '_keep_in_history', True),
         )
 
     def stream_chunk(
@@ -729,10 +754,13 @@ class ChunkAccumulator:
         chunk: ModelResponseChunk[Any],
         role: Role,
         ctx: GenerateMiddlewareContext,
+        keep_in_history: bool = True,
     ) -> None:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
             return
+        if keep_in_history is False:
+            mark_stream_only(chunk)
         ctx.on_chunk(self.make(role=role, chunk=chunk))
 
     @contextlib.contextmanager
@@ -922,6 +950,60 @@ async def _generate_action_turn(
             turn_options = await apply_resources(registry, turn_options, run_ctx.abort_signal)
         assert_valid_tool_names(turn_tools)
 
+        chunks = ChunkAccumulator(
+            params.message_index,
+            turn.formatter,
+            schema_type=getattr(turn_options.output, 'schema_type', None) if turn_options.output else None,
+        )
+
+        def stream_tool_parts(parts: list[Part]) -> None:
+            """Put one send_chunk onto the generate stream without failing the tool."""
+            try:
+                chunks.stream_chunk(
+                    chunk=ModelResponseChunk(role=Role.TOOL, content=parts),
+                    role=Role.TOOL,
+                    ctx=run_ctx,
+                    keep_in_history=False,
+                )
+            except Exception as e:
+                logger.debug(
+                    'tool send_chunk callback failed; dropping update',
+                    error=str(e),
+                )
+
+        def stream_tool_partial(tool_request_part: ToolRequestPart, value: object) -> None:
+            """Put one send_partial onto the generate stream without failing the tool."""
+            try:
+                req = tool_request_part.tool_request
+                chunks.stream_chunk(
+                    chunk=ModelResponseChunk(
+                        role=Role.TOOL,
+                        content=[
+                            Part(
+                                root=ToolResponsePart(
+                                    tool_response=ToolResponse(
+                                        name=req.name,
+                                        ref=req.ref,
+                                        output=value,
+                                    ),
+                                    metadata={'partial': True},
+                                )
+                            )
+                        ],
+                    ),
+                    role=Role.TOOL,
+                    ctx=run_ctx,
+                    keep_in_history=False,
+                )
+            except Exception as e:
+                logger.debug(
+                    'tool send_partial callback failed; dropping update',
+                    error=str(e),
+                )
+
+        on_tool_parts = stream_tool_parts if run_ctx.on_chunk is not None else None
+        on_tool_partial = stream_tool_partial if run_ctx.on_chunk is not None else None
+
         (
             revised_request,
             interrupted_response,
@@ -930,6 +1012,8 @@ async def _generate_action_turn(
             registry=registry,
             raw_request=turn_options,
             mw_pipeline=mw_pipeline,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
         )
         # NOTE: in the future we should make it possible to interrupt a restart, but
         # at the moment it's too complicated because it's not clear how to return a
@@ -942,11 +1026,6 @@ async def _generate_action_turn(
             )
         turn_options = revised_request
 
-        chunks = ChunkAccumulator(
-            params.message_index,
-            turn.formatter,
-            schema_type=getattr(turn_options.output, 'schema_type', None) if turn_options.output else None,
-        )
         if resumed_tool_message:
             chunks.stream_chunk(
                 chunk=ModelResponseChunk(
@@ -1112,6 +1191,8 @@ async def _generate_action_turn(
             message=generated_msg,
             mw_pipeline=mw_pipeline,
             abort_signal=ctx.abort_signal,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
         )
 
         # if an interrupt message is returned, stop the tool loop and return a
@@ -1510,6 +1591,8 @@ async def resolve_tool_requests(
     message: Message,
     abort_signal: asyncio.Event,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> tuple[Message | None, Message | None]:
     """Execute tool requests in a message, returning responses or interrupt info."""
     tool_dict: dict[str, Action] = {}
@@ -1570,6 +1653,8 @@ async def resolve_tool_requests(
                 tool=p.tool,
                 tool_request_part=p.tool_request_part,
                 ctx=c,
+                on_tool_parts=on_tool_parts,
+                on_tool_partial=on_tool_partial,
             )
 
         try:
@@ -1656,6 +1741,8 @@ async def _resolve_tool_request(
     tool: Action,
     tool_request_part: ToolRequestPart,
     ctx: GenerateMiddlewareContext,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> MultipartToolResponse:
     """Execute a tool and return its response.
 
@@ -1669,7 +1756,15 @@ async def _resolve_tool_request(
     # the tool. We still watch abort_signal here so a tool that ignores it gets hard
     # cancelled instead of hanging past a client abort.
     abort_signal = ctx.abort_signal
-    tool_task = asyncio.create_task(run_tool_request(tool=tool, tool_request_part=tool_request_part, ctx=ctx))
+    tool_task = asyncio.create_task(
+        run_tool_request(
+            tool=tool,
+            tool_request_part=tool_request_part,
+            ctx=ctx,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
+        )
+    )
 
     async def watch_abort() -> None:
         await abort_signal.wait()
@@ -1735,6 +1830,8 @@ async def _resolve_resume_options(
     registry: Registry,
     raw_request: GenerateActionOptions,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> tuple[GenerateActionOptions, ModelResponse | None, Message | None]:
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not raw_request.resume:
@@ -1767,6 +1864,8 @@ async def _resolve_resume_options(
             raw_request=raw_request,
             tool_request_part=part,
             mw_pipeline=mw_pipeline,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
         )
         tool_responses.append(Part(root=resumed_response))
         updated_content[i] = Part(root=resumed_request)
@@ -1804,6 +1903,8 @@ async def _resolve_resumed_tool_request(
     raw_request: GenerateActionOptions,
     tool_request_part: Part,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> tuple[ToolRequestPart, ToolResponsePart]:
     """Resolve a single tool request from pending output, resume.respond, or resume.restart."""
     # Type narrowing: ensure we're working with a ToolRequestPart
@@ -1887,6 +1988,8 @@ async def _resolve_resumed_tool_request(
             tool=tool,
             restart_trp=restart_trp,
             mw_pipeline=mw_pipeline,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
         )
         metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
         interrupt = metadata.get('interrupt')
@@ -1917,6 +2020,8 @@ async def _run_restart_through_middleware(
     tool: Action,
     restart_trp: ToolRequestPart,
     mw_pipeline: _GenerateMiddlewarePipeline | None,
+    on_tool_parts: Callable[[list[Part]], None] | None = None,
+    on_tool_partial: Callable[[ToolRequestPart, object], None] | None = None,
 ) -> ToolResponsePart:
     """Run a restarted tool through the wrap_tool middleware chain.
 
@@ -1931,6 +2036,8 @@ async def _run_restart_through_middleware(
             tool=tool,
             restart_trp=restart_trp,
             ctx=mw_pipeline.ctx if mw_pipeline is not None else None,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
         )
 
     params = ToolHookParams(
@@ -1939,7 +2046,13 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
+        executed = await run_tool_after_restart(
+            tool=p.tool,
+            restart_trp=p.tool_request_part,
+            ctx=ctx,
+            on_tool_parts=on_tool_parts,
+            on_tool_partial=on_tool_partial,
+        )
         raw_content = executed.tool_response.content or []
         return MultipartToolResponse(
             output=executed.tool_response.output,
