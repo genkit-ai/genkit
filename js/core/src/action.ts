@@ -30,6 +30,7 @@ import {
   SPAN_TYPE_ATTR,
   runInNewSpan,
   setCustomMetadataAttributes,
+  telemetryJsonString,
 } from './tracing.js';
 
 export {
@@ -602,7 +603,7 @@ export function action<
           // otherwise we let upstream context carry through.
           const output = await runWithContext(options?.context, actFn);
 
-          metadata.output = JSON.stringify(output);
+          metadata.output = telemetryJsonString(output);
           return output;
         } catch (err) {
           if (typeof err === 'object') {
