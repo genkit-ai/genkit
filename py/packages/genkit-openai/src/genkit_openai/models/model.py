@@ -79,6 +79,8 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
     caller when ``OpenAIConfig.model`` is unset. Everything else, including
     extras, goes out under the Python field name. ``max_output_tokens`` is
     not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
+    For reasoning models, ``max_tokens`` is emitted as ``max_completion_tokens``
+    because the OpenAI API rejects the deprecated field.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
