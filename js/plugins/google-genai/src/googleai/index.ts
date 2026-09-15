@@ -129,7 +129,7 @@ async function listActions(
 export function googleAIPlugin(
   options?: GoogleAIPluginOptions
 ): GenkitPluginV2 {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[];
   return genkitPluginV2({
     name: 'googleai',
     init: async () => await initializer(options),
