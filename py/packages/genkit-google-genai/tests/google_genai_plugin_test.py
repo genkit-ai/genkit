@@ -47,7 +47,6 @@ from genkit_google_genai.models.gemini import (
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfig, VeoModel
 
 from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
@@ -83,7 +82,7 @@ def test_googleai_name() -> None:
 def test_vertexai_name() -> None:
     """Test vertexai_name helper function."""
     assert vertexai_name('gemini-2.0-flash') == 'vertexai/gemini-2.0-flash'
-    assert vertexai_name('imagen-3.0-generate-001') == 'vertexai/imagen-3.0-generate-001'
+    assert vertexai_name('gemini-2.5-flash-image') == 'vertexai/gemini-2.5-flash-image'
 
 
 def test_plugin_names() -> None:
@@ -179,7 +178,6 @@ def test_genai_models_container() -> None:
     """Test GenaiModels container initialization."""
     models = GenaiModels()
     assert models.gemini == []
-    assert models.imagen == []
     assert models.embedders == []
     assert models.veo == []
 
@@ -202,24 +200,10 @@ async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: 
 @patch('genkit_google_genai.google.genai.client.Client')
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
-async def test_googleai_resolve_imagen_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI plugin resolves Imagen image generation models."""
-    mock_list_models.return_value = GenaiModels()
-
-    plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.MODEL, 'googleai/imagen-3.0-generate-002')
-
-    assert action is not None
-    assert action.kind == ActionKind.MODEL
-    assert action.name == 'googleai/imagen-3.0-generate-002'
-    assert _custom_options(action) == to_json_schema(ImagenConfigSchema)
-
-
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
-@pytest.mark.asyncio
-async def test_googleai_resolve_gemini_image_is_not_imagen(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Native Gemini image models must not route through Imagen."""
+async def test_googleai_resolve_gemini_image_uses_image_config(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Native Gemini image models validate the image config schema."""
     mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
@@ -241,7 +225,6 @@ async def test_googleai_resolve_gemini_image_is_not_imagen(mock_list_models: Mag
         ('googleai/gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
         ('googleai/gemini-2.5-flash-image', GeminiImageConfigSchema),
         ('googleai/gemma-3-12b-it', GemmaConfigSchema),
-        ('googleai/imagen-3.0-generate-002', ImagenConfigSchema),
     ],
 )
 async def test_googleai_resolve_types_family_config(
@@ -271,7 +254,6 @@ async def test_googleai_resolve_types_family_config(
         ('vertexai/gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
         ('vertexai/gemini-2.5-flash-image', GeminiImageConfigSchema),
         ('vertexai/gemma-3-12b-it', GemmaConfigSchema),
-        ('vertexai/imagen-3.0-generate-002', ImagenConfigSchema),
     ],
 )
 async def test_vertexai_resolve_types_family_config(
@@ -417,39 +399,62 @@ async def test_veo_check_is_typed(mock_list_models: MagicMock, mock_client: Magi
     assert hints['return'] is Operation
 
 
+def test_list_genai_models_googleai_skips_imagen() -> None:
+    """A predict-only ``imagen-`` entry lands in no bucket."""
+
+    def _model(name: str, actions: list[str]) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = actions
+        item.description = ''
+        return item
+
+    client = MagicMock()
+    client.models.list.return_value = [
+        _model('models/gemini-2.5-flash', ['generateContent']),
+        _model('models/imagen-4.0-generate-001', ['predict']),
+        _model('models/imagen-4.0-ultra-generate-001', ['predict', 'generateContent']),
+    ]
+    catalog = _list_genai_models(client, is_vertex=False)
+    assert vars(catalog) == {'gemini': ['gemini-2.5-flash'], 'embedders': [], 'veo': []}
+
+
 @patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
-async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI init registers Imagen models from dynamic discovery."""
-    models = GenaiModels()
-    models.imagen = ['imagen-3.0-generate-002']
-    mock_list_models.return_value = models
+@pytest.mark.parametrize('backend', ['googleai', 'vertexai'])
+async def test_list_actions_never_advertise_imagen(mock_client: MagicMock, backend: str) -> None:
+    """An ``imagen-`` id served by the API reaches neither list_actions nor init."""
 
-    plugin = GoogleAI(api_key='test-key')
-    actions = await plugin.init()
+    def _model(name: str, actions: list[str] | None) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = actions
+        item.description = ''
+        return item
 
-    imagen_actions = [a for a in actions if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
-    assert imagen_actions[0].kind == ActionKind.MODEL
+    if backend == 'googleai':
+        plugin: GoogleAI | VertexAI = GoogleAI(api_key='test-key')
+        listing = [
+            _model('models/gemini-2.5-flash', ['generateContent']),
+            _model('models/imagen-4.0-generate-001', ['predict']),
+        ]
+    else:
+        plugin = VertexAI(project='test-project')
+        listing = [
+            _model('publishers/google/models/gemini-2.5-flash', None),
+            _model('publishers/google/models/imagen-4.0-generate-001', None),
+        ]
+    mock_client.return_value.models.list.return_value = listing
 
+    listed = await plugin.list_actions()
+    registered = await plugin.init()
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
-@pytest.mark.asyncio
-async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI list_actions includes Imagen models."""
-    models = GenaiModels()
-    models.imagen = ['imagen-3.0-generate-002']
-    mock_list_models.return_value = models
-
-    plugin = GoogleAI(api_key='test-key')
-    actions_list = await plugin.list_actions()
-
-    imagen_actions = [a for a in actions_list if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
+    # The Gemini id proves the listing reached discovery, so the imagen
+    # assertions below are not passing on an empty catalog.
+    assert any('gemini-2.5-flash' in a.name for a in listed)
+    assert any('gemini-2.5-flash' in a.name for a in registered)
+    assert not any('imagen' in a.name for a in listed)
+    assert not any('imagen' in a.name for a in registered)
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -503,6 +508,8 @@ async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: 
         'virtual-try-on-001',
         'imagegeneration@006',
         'imagetext@001',
+        'imagen-3.0-generate-002',
+        'imagen-4.0-generate-001',
         'lyria-002',
         'deep-research-pro-preview',
         'gemini-embedding-001',
@@ -531,6 +538,8 @@ async def test_vertexai_unroutable_ids_fail_closed(
         'virtual-try-on-001',
         'imagegeneration@006',
         'imagetext@001',
+        'imagen-3.0-generate-002',
+        'imagen-4.0-generate-001',
         'deep-research-pro-preview',
         'gemini-embedding-001',
         'models/deep-research-pro-preview',
@@ -704,8 +713,8 @@ async def test_list_actions_advertises_veo_as_background(mock_list_models: Magic
         assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
 
 
-def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> None:
-    """Discovery buckets on the ``veo-`` prefix, not a ``veo`` substring."""
+def test_list_genai_models_vertex_skips_substring_veo_and_unsupported_image() -> None:
+    """Discovery buckets on the ``veo-`` prefix and drops unsupported image ids."""
 
     def _model(name: str) -> MagicMock:
         item = MagicMock()
@@ -722,12 +731,15 @@ def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> Non
         _model('publishers/google/models/imagegeneration@006'),
         _model('publishers/google/models/virtual-try-on-001'),
         _model('publishers/google/models/imagetext@001'),
+        _model('publishers/google/models/imagen-3.0-generate-002'),
+        _model('publishers/google/models/imagen-4.0-generate-001'),
     ]
     catalog = _list_genai_models(client, is_vertex=True)
-    assert catalog.veo == ['veo-3.0-generate-001']
-    assert catalog.imagen == []
-    assert 'imagetext@001' not in catalog.gemini
-    assert 'braveo-lab' not in catalog.gemini
+    assert vars(catalog) == {
+        'gemini': ['gemini-2.5-flash'],
+        'embedders': [],
+        'veo': ['veo-3.0-generate-001'],
+    }
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
