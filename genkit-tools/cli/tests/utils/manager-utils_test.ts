@@ -81,6 +81,19 @@ describe('getDevEnvVars', () => {
     );
     expect(envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBe('http/json');
   });
+
+  it('normalizes a trailing slash on the telemetry server URL for OTLP endpoints', async () => {
+    process.env.GENKIT_TELEMETRY_SERVER = `${TELEMETRY_URL}/`;
+
+    const { envVars } = await getDevEnvVars('/root', { useOtel: true });
+
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/traces`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/logs`
+    );
+  });
 });
 
 describe('waitForRuntime', () => {
