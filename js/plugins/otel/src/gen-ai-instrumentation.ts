@@ -102,7 +102,12 @@ export interface GenAiInstrumentationOptions {
 }
 
 function contentCapturingModeFromEnv(): ContentCapturingMode {
-  const raw = process.env[captureContentEnvVar];
+  // Guard `process` so merely importing this module doesn't crash in non-Node
+  // runtimes (edge, workers, browser bundles).
+  const raw =
+    typeof process !== 'undefined'
+      ? process.env[captureContentEnvVar]
+      : undefined;
   const mode = parseContentCapturingMode(raw);
   if (mode === undefined) {
     logger.warn(
