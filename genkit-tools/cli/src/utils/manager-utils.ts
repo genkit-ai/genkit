@@ -132,9 +132,12 @@ export async function getDevEnvVars(
     // unset (and the handshake withholds the URL) so native direct export stays
     // off and only OTel-instrumented spans show up. Metrics are omitted: the
     // server ignores them.
-    envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${telemetryServerUrl}/api/otlp/v1/traces`;
+    // Strip trailing slashes: a user-supplied GENKIT_TELEMETRY_SERVER may end
+    // with one, and naive concatenation would yield a double slash.
+    const baseUrl = telemetryServerUrl.replace(/\/+$/, '');
+    envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${baseUrl}/api/otlp/v1/traces`;
     envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/json';
-    envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${telemetryServerUrl}/api/otlp/v1/logs`;
+    envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${baseUrl}/api/otlp/v1/logs`;
     envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/json';
   } else {
     envVars.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
