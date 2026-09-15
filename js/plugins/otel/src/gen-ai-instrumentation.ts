@@ -1,0 +1,600 @@
+/**
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  metrics,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+  type Attributes,
+  type Meter,
+  type Span,
+  type Tracer,
+} from '@opentelemetry/api';
+import { logs } from '@opentelemetry/api-logs';
+import { logger } from 'genkit/logging';
+import type {
+  GenerateRequest,
+  GenerateResponseData,
+  MessageData,
+} from 'genkit/model';
+import type {
+  GenkitSpanContext,
+  Instrumentation,
+  InstrumentationSpanInfo,
+} from 'genkit/tracing';
+import {
+  captureContentEnvVar,
+  deriveOutputType,
+  deriveProviderName,
+  GenAiAttr,
+  GenAiOperation,
+  genAiOperationDetailsEvent,
+  GenkitAttr,
+  mapFinishReason,
+  parseContentCapturingMode,
+  splitModelName,
+  type ContentCapturingMode,
+} from './genai/gen-ai-attributes.js';
+import {
+  isToolRequestPart,
+  mapOutputMessage,
+  normalizeMessages,
+} from './genai/gen-ai-message-mapping.js';
+import { GenAiMetrics } from './genai/gen-ai-metrics.js';
+
+/** The continuation passed by the dispatcher; returns the raw action result. */
+type Next<T> = (span: Span, ctx: GenkitSpanContext) => Promise<T>;
+
+/** Options for {@link GenAiInstrumentation}. */
+export interface GenAiInstrumentationOptions {
+  /**
+   * Where spec-shaped GenAI message content (`gen_ai.system_instructions`,
+   * `gen_ai.input.messages`, `gen_ai.output.messages`) is recorded.
+   *
+   * Content may contain PII, so the default is `NO_CONTENT`. When omitted, the
+   * env var `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is consulted
+   * (spec enum names: `NO_CONTENT`, `SPAN_ONLY`, `EVENT_ONLY`,
+   * `SPAN_AND_EVENT`). An explicit value here overrides the env var.
+   */
+  contentCapturingMode?: ContentCapturingMode;
+
+  /**
+   * Whether to capture raw Genkit action input/output as `genkit.input` /
+   * `genkit.output` JSON attributes on every span (model, tool, flow, etc.).
+   *
+   * Independent of {@link captureContent}: it records the raw Genkit payloads
+   * rather than the spec-shaped `gen_ai.*` content. May contain PII, off by
+   * default.
+   */
+  captureActionIO?: boolean;
+
+  /** Whether to emit `execute_tool` spans for tool actions. Off by default. */
+  emitToolSpans?: boolean;
+
+  /**
+   * Whether to emit the spec's GenAI client metrics (token usage, operation
+   * duration) for model operations. On by default; low cardinality and cheap.
+   */
+  emitMetrics?: boolean;
+
+  /** Instrumentation scope name for the tracer/logger/meter. */
+  scopeName?: string;
+
+  /** Optional explicit tracer (escape hatch). */
+  tracer?: Tracer;
+
+  /** Optional explicit meter (escape hatch). */
+  meter?: Meter;
+}
+
+function contentCapturingModeFromEnv(): ContentCapturingMode {
+  // Guard `process` so merely importing this module doesn't crash in non-Node
+  // runtimes (edge, workers, browser bundles).
+  const raw =
+    typeof process !== 'undefined'
+      ? process.env[captureContentEnvVar]
+      : undefined;
+  const mode = parseContentCapturingMode(raw);
+  if (mode === undefined) {
+    logger.warn(
+      `Invalid ${captureContentEnvVar}="${raw}"; expected one of ` +
+        'NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT. ' +
+        'Defaulting to NO_CONTENT.'
+    );
+    return 'NO_CONTENT';
+  }
+  return mode;
+}
+
+// Genkit records the action type in two places: action-based spans (model,
+// tool, flow, ...) set `genkit:metadata:subtype`, while directly-wrapped spans
+// (generate, dotprompt, promptTemplate, helper, flowStep) set only
+// `genkit:type`. Prefer the subtype, fall back to the type.
+const SUBTYPE_LABEL = 'genkit:metadata:subtype';
+const TYPE_LABEL = 'genkit:type';
+
+/**
+ * An {@link Instrumentation} that emits OpenTelemetry telemetry following the
+ * [OTel GenAI semantic conventions][spec].
+ *
+ * The application owns SDK setup: configure a TracerProvider / MeterProvider /
+ * LoggerProvider (e.g. via `@opentelemetry/sdk-node`) before constructing
+ * Genkit. When no provider is configured, `@opentelemetry/api` returns non-
+ * recording spans / no-op instruments and this provider is effectively inert.
+ *
+ * Wire it up with `configureInstrumentation(new GenAiInstrumentation())` from
+ * `genkit/tracing`. It composes with the built-in dev instrumentation, which
+ * feeds the Developer UI on a separate pipeline.
+ *
+ * [spec]: https://github.com/open-telemetry/semantic-conventions-genai
+ */
+export class GenAiInstrumentation implements Instrumentation {
+  private readonly contentCapturingMode: ContentCapturingMode;
+  private readonly captureOnSpan: boolean;
+  private readonly captureOnEvent: boolean;
+  private readonly captureActionIO: boolean;
+  private readonly emitToolSpans: boolean;
+  private readonly emitMetrics: boolean;
+  private readonly scopeName: string;
+  private readonly injectedTracer?: Tracer;
+  private readonly injectedMeter?: Meter;
+
+  private cachedTracer?: Tracer;
+  private cachedMetrics?: GenAiMetrics;
+  private warnedNotRecording = false;
+
+  constructor(options: GenAiInstrumentationOptions = {}) {
+    this.contentCapturingMode =
+      options.contentCapturingMode ?? contentCapturingModeFromEnv();
+    this.captureOnSpan =
+      this.contentCapturingMode === 'SPAN_ONLY' ||
+      this.contentCapturingMode === 'SPAN_AND_EVENT';
+    this.captureOnEvent =
+      this.contentCapturingMode === 'EVENT_ONLY' ||
+      this.contentCapturingMode === 'SPAN_AND_EVENT';
+    this.captureActionIO = options.captureActionIO ?? false;
+    this.emitToolSpans = options.emitToolSpans ?? false;
+    this.emitMetrics = options.emitMetrics ?? true;
+    this.scopeName = options.scopeName ?? 'genkit-genai';
+    this.injectedTracer = options.tracer;
+    this.injectedMeter = options.meter;
+  }
+
+  private get tracer(): Tracer {
+    return (this.cachedTracer ??=
+      this.injectedTracer ?? trace.getTracer(this.scopeName));
+  }
+
+  private get metrics(): GenAiMetrics {
+    return (this.cachedMetrics ??= new GenAiMetrics(
+      this.injectedMeter ?? metrics.getMeter(this.scopeName)
+    ));
+  }
+
+  async runInNewSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: Next<T>
+  ): Promise<T> {
+    const actionType =
+      info.labels?.[SUBTYPE_LABEL] ?? info.labels?.[TYPE_LABEL];
+    switch (actionType) {
+      case 'model':
+        return this.runModelSpan(info, next);
+      case 'tool':
+        if (this.emitToolSpans) return this.runToolSpan(info, next);
+        return this.runGenericSpan(info, next, actionType);
+      default:
+        return this.runGenericSpan(info, next, actionType);
+    }
+  }
+
+  private async runModelSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: Next<T>
+  ): Promise<T> {
+    const { model, prefix } = splitModelName(info.metadata.name);
+    const provider = deriveProviderName(prefix);
+    const request = asGenerateRequest(info.metadata.input);
+
+    const attrs: Attributes = {
+      [GenAiAttr.operationName]: GenAiOperation.chat,
+      [GenAiAttr.requestModel]: model,
+      ...(provider ? { [GenAiAttr.providerName]: provider } : {}),
+    };
+    if (request) this.addRequestConfigAttributes(attrs, request);
+
+    // Base metric attributes shared by both histograms: low cardinality only.
+    const metricAttrs: Attributes = {
+      [GenAiAttr.operationName]: GenAiOperation.chat,
+      [GenAiAttr.requestModel]: model,
+      ...(provider ? { [GenAiAttr.providerName]: provider } : {}),
+    };
+    const startTime = performance.now();
+
+    return this.tracer.startActiveSpan(
+      `${GenAiOperation.chat} ${model}`,
+      { kind: SpanKind.CLIENT, attributes: attrs },
+      async (span) => {
+        this.maybeWarnNotRecording(span);
+        try {
+          const output = await next(span, spanContextOf(span));
+          const response = asGenerateResponse(output);
+          if (response) this.addResponseAttributes(span, response, false);
+          if (this.contentCapturingMode !== 'NO_CONTENT') {
+            this.recordContent(span, request, response);
+          }
+          this.maybeCaptureActionIO(span, info.metadata.input, output);
+          if (this.emitMetrics) {
+            this.recordModelMetrics(startTime, metricAttrs, response);
+          }
+          return output;
+        } catch (e) {
+          this.recordError(span, e);
+          if (this.emitMetrics) {
+            this.recordModelMetrics(
+              startTime,
+              metricAttrs,
+              undefined,
+              errorTypeOf(e)
+            );
+          }
+          throw e;
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async runToolSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: Next<T>
+  ): Promise<T> {
+    const attrs: Attributes = {
+      [GenAiAttr.operationName]: GenAiOperation.executeTool,
+      [GenAiAttr.toolName]: info.metadata.name,
+      [GenAiAttr.toolType]: 'function',
+    };
+    return this.tracer.startActiveSpan(
+      `${GenAiOperation.executeTool} ${info.metadata.name}`,
+      { kind: SpanKind.INTERNAL, attributes: attrs },
+      async (span) => {
+        this.maybeWarnNotRecording(span);
+        try {
+          const output = await next(span, spanContextOf(span));
+          this.maybeCaptureActionIO(span, info.metadata.input, output);
+          return output;
+        } catch (e) {
+          this.recordError(span, e);
+          throw e;
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async runGenericSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: Next<T>,
+    subtype: string | undefined
+  ): Promise<T> {
+    const attrs: Attributes = subtype
+      ? { [GenkitAttr.actionType]: subtype }
+      : {};
+    return this.tracer.startActiveSpan(
+      info.metadata.name,
+      { kind: SpanKind.INTERNAL, attributes: attrs },
+      async (span) => {
+        this.maybeWarnNotRecording(span);
+        try {
+          const output = await next(span, spanContextOf(span));
+          this.maybeCaptureActionIO(span, info.metadata.input, output);
+          return output;
+        } catch (e) {
+          this.recordError(span, e);
+          throw e;
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  /** Records the token-usage and operation-duration metrics for a model call. */
+  private recordModelMetrics(
+    startTime: number,
+    baseAttrs: Attributes,
+    response?: GenerateResponseData,
+    errorType?: string
+  ): void {
+    const usage = response?.usage;
+    if (usage) {
+      this.metrics.recordTokenUsage(
+        baseAttrs,
+        usage.inputTokens,
+        usage.outputTokens
+      );
+    }
+    const seconds = (performance.now() - startTime) / 1000;
+    this.metrics.recordDuration(seconds, {
+      ...baseAttrs,
+      ...(errorType ? { [GenAiAttr.errorType]: errorType } : {}),
+    });
+  }
+
+  /**
+   * Records raw Genkit input/output on `span` as `genkit.*` JSON attributes
+   * when {@link captureActionIO} is enabled. Kept out of the reserved
+   * `gen_ai.*` namespace so GenAI-aware backends don't misrender it.
+   */
+  private maybeCaptureActionIO(
+    span: Span,
+    input: unknown,
+    output: unknown
+  ): void {
+    if (!this.captureActionIO) return;
+    this.setJsonAttribute(span, GenkitAttr.input, input);
+    this.setJsonAttribute(span, GenkitAttr.output, output);
+  }
+
+  private addRequestConfigAttributes(
+    attrs: Attributes,
+    request: GenerateRequest
+  ): void {
+    const config = (request.config ?? {}) as Record<string, unknown>;
+    const num = (v: unknown): number | undefined =>
+      typeof v === 'number' ? v : undefined;
+
+    const temperature = num(config.temperature);
+    if (temperature != null) attrs[GenAiAttr.requestTemperature] = temperature;
+    const topP = num(config.topP);
+    if (topP != null) attrs[GenAiAttr.requestTopP] = topP;
+    const topK = num(config.topK);
+    if (topK != null) attrs[GenAiAttr.requestTopK] = topK;
+    const maxTokens = num(config.maxOutputTokens);
+    if (maxTokens != null) attrs[GenAiAttr.requestMaxTokens] = maxTokens;
+    if (Array.isArray(config.stopSequences) && config.stopSequences.length) {
+      attrs[GenAiAttr.requestStopSequences] = config.stopSequences.map(String);
+    }
+    const frequencyPenalty = num(config.frequencyPenalty);
+    if (frequencyPenalty != null) {
+      attrs[GenAiAttr.requestFrequencyPenalty] = frequencyPenalty;
+    }
+    const presencePenalty = num(config.presencePenalty);
+    if (presencePenalty != null) {
+      attrs[GenAiAttr.requestPresencePenalty] = presencePenalty;
+    }
+    const seed = num(config.seed);
+    if (seed != null) attrs[GenAiAttr.requestSeed] = seed;
+    const choiceCount = num(config.candidateCount);
+    if (choiceCount != null && choiceCount !== 1) {
+      attrs[GenAiAttr.requestChoiceCount] = choiceCount;
+    }
+
+    const output = request.output;
+    if (output) {
+      const outputType = deriveOutputType(output.format, output.contentType);
+      if (outputType) attrs[GenAiAttr.outputType] = outputType;
+    }
+  }
+
+  private addResponseAttributes(
+    span: Span,
+    response: GenerateResponseData,
+    failed: boolean
+  ): void {
+    const finishReasons = this.resolveFinishReasons(response, failed);
+    if (finishReasons.length) {
+      span.setAttribute(GenAiAttr.responseFinishReasons, finishReasons);
+    }
+    const usage = response.usage;
+    if (usage) {
+      if (usage.inputTokens != null) {
+        span.setAttribute(GenAiAttr.usageInputTokens, usage.inputTokens);
+      }
+      if (usage.outputTokens != null) {
+        span.setAttribute(GenAiAttr.usageOutputTokens, usage.outputTokens);
+      }
+      if (usage.thoughtsTokens != null) {
+        span.setAttribute(
+          GenAiAttr.usageReasoningOutputTokens,
+          usage.thoughtsTokens
+        );
+      }
+      if (usage.cachedContentTokens != null) {
+        span.setAttribute(
+          GenAiAttr.usageCacheReadInputTokens,
+          usage.cachedContentTokens
+        );
+      }
+    }
+  }
+
+  private resolveFinishReasons(
+    response: GenerateResponseData,
+    failed: boolean
+  ): string[] {
+    const content = resolveMessage(response)?.content ?? [];
+    if (content.some(isToolRequestPart)) {
+      // Following the OpenAI GenAI profile: a turn ending in tool calls is the
+      // more informative signal for consumers.
+      return ['tool_calls'];
+    }
+    return [mapFinishReason(resolveFinishReason(response), failed)];
+  }
+
+  private recordContent(
+    span: Span,
+    request: GenerateRequest | undefined,
+    response: GenerateResponseData | undefined
+  ): void {
+    const inputMessages = request
+      ? normalizeMessages(request.messages)
+      : undefined;
+    const outputMessages: Record<string, unknown>[] = [];
+    const message = response ? resolveMessage(response) : undefined;
+    if (message) {
+      const reason = this.resolveFinishReasons(response!, false)[0];
+      outputMessages.push(mapOutputMessage(message, reason));
+    }
+
+    // SPAN_ONLY / SPAN_AND_EVENT: attach content to the span as JSON strings.
+    if (this.captureOnSpan) {
+      if (inputMessages) {
+        this.setJsonAttribute(
+          span,
+          GenAiAttr.inputMessages,
+          inputMessages.messages
+        );
+        if (inputMessages.systemInstructions.length) {
+          this.setJsonAttribute(
+            span,
+            GenAiAttr.systemInstructions,
+            inputMessages.systemInstructions
+          );
+        }
+      }
+      if (outputMessages.length) {
+        this.setJsonAttribute(span, GenAiAttr.outputMessages, outputMessages);
+      }
+    }
+
+    // EVENT_ONLY / SPAN_AND_EVENT: emit a single operation.details event
+    // correlated to the span via the active context.
+    if (this.captureOnEvent) {
+      const eventAttrs: Attributes = {};
+      if (inputMessages) {
+        eventAttrs[GenAiAttr.inputMessages] = JSON.stringify(
+          inputMessages.messages
+        );
+        if (inputMessages.systemInstructions.length) {
+          eventAttrs[GenAiAttr.systemInstructions] = JSON.stringify(
+            inputMessages.systemInstructions
+          );
+        }
+      }
+      if (outputMessages.length) {
+        eventAttrs[GenAiAttr.outputMessages] = JSON.stringify(outputMessages);
+      }
+      logs.getLogger(this.scopeName).emit({
+        eventName: genAiOperationDetailsEvent,
+        attributes: eventAttrs,
+      });
+    }
+  }
+
+  /**
+   * Warns once if the SDK isn't collecting. When no TracerProvider is
+   * registered, `@opentelemetry/api` returns a non-recording span, so all
+   * telemetry is silently dropped; surface that instead of failing quietly.
+   */
+  private maybeWarnNotRecording(span: Span): void {
+    if (span.isRecording() || this.warnedNotRecording) return;
+    this.warnedNotRecording = true;
+    logger.warn(
+      'GenAiInstrumentation is configured but no OpenTelemetry SDK is ' +
+        'recording, so GenAI telemetry will not be exported. Initialize the ' +
+        'OTel SDK (e.g. @opentelemetry/sdk-node) before constructing Genkit.'
+    );
+  }
+
+  private recordError(span: Span, e: unknown): void {
+    const message = e instanceof Error ? e.message : String(e);
+    span.setStatus({ code: SpanStatusCode.ERROR, message });
+    span.setAttribute(GenAiAttr.errorType, errorTypeOf(e));
+    if (e instanceof Error) span.recordException(e);
+  }
+
+  private setJsonAttribute(span: Span, key: string, value: unknown): void {
+    if (value == null) return;
+    let encoded: string;
+    try {
+      encoded = JSON.stringify(value);
+    } catch (e) {
+      encoded = `Unable to encode: ${e}`;
+    }
+    span.setAttribute(key, encoded);
+  }
+}
+
+/** Reports the error type for the `error.type` attribute. */
+function errorTypeOf(e: unknown): string {
+  if (e instanceof Error) return e.name;
+  return typeof e;
+}
+
+/**
+ * Resolves the response message. Modern plugins set `message` directly; legacy
+ * plugins return it under `candidates[0]` (only the first candidate is used).
+ * Mirrors core's `GenerateResponse` constructor.
+ */
+function resolveMessage(r: GenerateResponseData): MessageData | undefined {
+  return r.message ?? r.candidates?.[0]?.message;
+}
+
+/** Resolves the finish reason with the same candidates fallback as the message. */
+function resolveFinishReason(r: GenerateResponseData): string | undefined {
+  return r.finishReason ?? r.candidates?.[0]?.finishReason;
+}
+
+/** A backend-independent span context derived from the OTel span. */
+function spanContextOf(span: Span): GenkitSpanContext {
+  return {
+    get traceId() {
+      return span.spanContext().traceId;
+    },
+    get spanId() {
+      return span.spanContext().spanId;
+    },
+    setMetadata(values: Record<string, unknown>) {
+      for (const [k, v] of Object.entries(values)) {
+        span.setAttribute(
+          `genkit:metadata:${k}`,
+          typeof v === 'string' ? v : JSON.stringify(v)
+        );
+      }
+    },
+  };
+}
+
+/** Duck-types the span input as a GenerateRequest. Defensive, no zod parse. */
+function asGenerateRequest(input: unknown): GenerateRequest | undefined {
+  if (
+    input &&
+    typeof input === 'object' &&
+    Array.isArray((input as { messages?: unknown }).messages)
+  ) {
+    return input as GenerateRequest;
+  }
+  return undefined;
+}
+
+/** Duck-types the action result as a GenerateResponseData. */
+function asGenerateResponse(output: unknown): GenerateResponseData | undefined {
+  if (
+    output &&
+    typeof output === 'object' &&
+    ('message' in output ||
+      'finishReason' in output ||
+      'usage' in output ||
+      'candidates' in output)
+  ) {
+    return output as GenerateResponseData;
+  }
+  return undefined;
+}
