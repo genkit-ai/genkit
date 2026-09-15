@@ -44,12 +44,20 @@ func dec(_ context.Context, x int) (int, error) {
 	return x - 1, nil
 }
 
+// TestMain routes every test's spans through a Direct instrumentation over an
+// in-memory client, so runs carry real trace ids without an OpenTelemetry SDK.
+// Configured package-wide (rather than per test) because the instrumentation
+// registry is a global and TestServeMux runs parallel; per-test reset would
+// race it. No test in this package inspects OTel spans or expects empty ids.
+func TestMain(m *testing.M) {
+	tracing.ConfigureInstrumentation(
+		tracing.NewDirectTelemetryInstrumentation(tracing.NewTestOnlyTelemetryClient()))
+	os.Exit(m.Run())
+}
+
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
 		g := Init(context.Background())
-
-		tc := tracing.NewTestOnlyTelemetryClient()
-		tracing.WriteTelemetryImmediate(tc)
 
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
@@ -86,9 +94,6 @@ func TestReflectionServer(t *testing.T) {
 
 func TestServeMux(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
@@ -348,8 +353,6 @@ func TestServeMux(t *testing.T) {
 // This allows clients to get the trace ID immediately for cancellation or logging.
 func TestEarlyTraceIDTransmission(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
@@ -490,8 +493,6 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 //  3. Verify: cancel endpoint returns 200, action's ctx.Done() fires, response has error code 1 (gRPC CANCELLED)
 func TestActionCancellation(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	gotTraceID := make(chan string, 1)
 	gotCancelled := make(chan struct{})
@@ -671,9 +672,6 @@ func TestCancelActionEndpoint(t *testing.T) {
 // init on an action without init support fails loudly.
 func TestRunActionWithInit(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	type initConfig struct {
 		Prefix string `json:"prefix"`
@@ -878,8 +876,6 @@ func TestReflectionErrorCodeYieldsValidHTTPStatus(t *testing.T) {
 // server mid-response. That is every unclassified failure, which is the common
 // one: a provider SDK rejecting a request reaches here as its own error type.
 func TestRunActionPlainErrorResponse(t *testing.T) {
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	g := Init(context.Background())
 	defineTestAction(g.reg, "test/boom", api.ActionTypeCustom, nil, nil,

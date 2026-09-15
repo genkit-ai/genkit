@@ -52,8 +52,12 @@ type TelemetryClient interface {
 	Save(ctx context.Context, trace *Data) error
 }
 
-// TestOnlyTelemetryClient is a test-only implementation of TelemetryClient that stores traces in memory.
+// TestOnlyTelemetryClient is a test-only implementation of TelemetryClient that
+// stores traces in memory. It is safe for concurrent use: the Direct
+// instrumentation exports start-of-span saves from a goroutine, and actions
+// (e.g. bidi) run spans concurrently.
 type TestOnlyTelemetryClient struct {
+	mu     sync.Mutex
 	Traces map[string]*Data
 }
 
@@ -64,6 +68,20 @@ func NewTestOnlyTelemetryClient() *TestOnlyTelemetryClient {
 	}
 }
 
+// Spans returns a snapshot slice of every span stored so far, safe to read
+// while spans are still being exported from other goroutines.
+func (c *TestOnlyTelemetryClient) Spans() []*SpanData {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []*SpanData
+	for _, td := range c.Traces {
+		for _, s := range td.Spans {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // Save saves the data to an in-memory store.
 func (c *TestOnlyTelemetryClient) Save(ctx context.Context, trace *Data) error {
 	if trace == nil {
@@ -72,6 +90,8 @@ func (c *TestOnlyTelemetryClient) Save(ctx context.Context, trace *Data) error {
 	if trace.TraceID == "" {
 		return fmt.Errorf("trace ID cannot be empty")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if existing, ok := c.Traces[trace.TraceID]; ok {
 		for _, span := range trace.Spans {
 			existing.Spans[span.SpanID] = span

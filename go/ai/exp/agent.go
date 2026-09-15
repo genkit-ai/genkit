@@ -34,8 +34,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -1254,16 +1252,14 @@ type fnDoneResult[State any] struct {
 	ctxErr error
 }
 
-// sessionIDSpanAttrKey and snapshotIDSpanAttrKey are the full span-attribute
-// keys under which an agent records its identifiers: the session ID on the
-// root action span, and the turn-end snapshot ID on each server-managed turn
-// span. They are the "genkit:metadata:"-prefixed forms of the
-// "agent:sessionId" / "agent:snapshotId" custom-metadata keys every agent
-// records; the prefix is inlined here because Go's tracing package exposes no
-// custom-metadata helper.
+// sessionIDMetaKey and snapshotIDMetaKey are the custom-metadata keys under
+// which an agent records its identifiers: the session ID on the root action
+// span, and the turn-end snapshot ID on each server-managed turn span. They are
+// recorded via [tracing.SetCustomMetadataAttributes], which prefixes them with
+// "genkit:metadata:" on the span.
 const (
-	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
-	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
+	sessionIDMetaKey  = "agent:sessionId"
+	snapshotIDMetaKey = "agent:snapshotId"
 )
 
 func newAgentRuntime[State any](
@@ -1316,10 +1312,9 @@ func newAgentRuntime[State any](
 	// Tag the agent's root action span (the current span here, before any turn
 	// span is opened) with the session ID so traces from the same conversation
 	// can be correlated. It is written once at the start of the action body.
-	// trace.SpanFromContext never returns nil (it yields a no-op span when none
-	// is active), so the SetAttributes is always safe.
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
+	// SetCustomMetadataAttributes is a no-op outside a span, so this is safe.
+	tracing.SetCustomMetadataAttributes(ctx, map[string]string{
+		sessionIDMetaKey: session.state.SessionID})
 
 	rt := &agentRuntime[State]{
 		name:     name,
@@ -1389,8 +1384,8 @@ func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	// attribute omitted, when client-managed, when the turn failed without
 	// committing, or when a detach suspended snapshots.
 	if snapshotID != "" {
-		trace.SpanFromContext(ctx).SetAttributes(
-			attribute.String(snapshotIDSpanAttrKey, snapshotID))
+		tracing.SetCustomMetadataAttributes(ctx, map[string]string{
+			snapshotIDMetaKey: snapshotID})
 	}
 	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
