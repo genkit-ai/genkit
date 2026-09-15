@@ -48,6 +48,19 @@ func (f *fakeInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, 
 	return next(ctx, &fakeSpan{inst: f})
 }
 
+// TestSpanInfoAccessorsNilSafe covers the exported read-only view: a zero-value
+// or nil *SpanInfo (as an out-of-package provider or test might hold) must not
+// panic.
+func TestSpanInfoAccessorsNilSafe(t *testing.T) {
+	var nilInfo *SpanInfo
+	zero := &SpanInfo{}
+	for _, info := range []*SpanInfo{nilInfo, zero} {
+		if info.Name() != "" || info.Type() != "" || info.Subtype() != "" || info.Input() != nil {
+			t.Errorf("accessors on %v should be empty", info)
+		}
+	}
+}
+
 func TestConfigureInstrumentation_RoutesThroughProvider(t *testing.T) {
 	t.Cleanup(ResetInstrumentation)
 	ResetInstrumentation()

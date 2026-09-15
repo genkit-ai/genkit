@@ -34,10 +34,9 @@ import (
 // provider only encodes this into its backend.
 //
 // The running metadata (name, path, type, input/output/state, ...) is kept in
-// the unexported spanMetadata for now, so the only field an out-of-package
-// provider can read today is Labels. Built-in providers reach the metadata
-// directly. A future change promotes an exported, read-only view once the shape
-// settles.
+// the unexported spanMetadata. Built-in providers reach it directly; an
+// out-of-package provider reads it through the exported Labels field and the
+// Name/Type/Subtype/Input accessors below.
 type SpanInfo struct {
 	// Labels are the raw TelemetryLabels set directly as span attributes.
 	Labels map[string]string
@@ -46,6 +45,47 @@ type SpanInfo struct {
 	// (OTel, Direct) encode it via its attributes()/startAttributes() methods.
 	// It is fully populated (state, output, error) only after next returns.
 	metadata *spanMetadata
+}
+
+// The methods below are the read-only view an out-of-package Instrumentation
+// (e.g. the OTel GenAI plugin) needs to encode a span into its backend. Output
+// is deliberately absent: a provider reads it from the value next returns,
+// which is the only point it is known.
+
+// The accessors guard a nil receiver and nil metadata so an out-of-package
+// provider (or a test) that holds a zero-value *SpanInfo does not panic.
+
+// Name is the span name. For a model span it is the fully qualified model name
+// (e.g. "googleai/gemini-flash-latest").
+func (i *SpanInfo) Name() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Name
+}
+
+// Type is the Genkit span type ("action", "flowStep", "util", ...).
+func (i *SpanInfo) Type() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Type
+}
+
+// Subtype is the finer categorization ("model", "tool", "flow", ...), or "".
+func (i *SpanInfo) Subtype() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Subtype
+}
+
+// Input is the raw Genkit input the action was invoked with, before next runs.
+func (i *SpanInfo) Input() any {
+	if i == nil || i.metadata == nil {
+		return nil
+	}
+	return i.metadata.Input
 }
 
 // Span is the backend-independent handle a provider exposes for the span it
