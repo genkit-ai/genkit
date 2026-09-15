@@ -18,7 +18,9 @@
 """Tests for the OpenAI compatible plugin."""
 
 import asyncio
+import base64
 import queue
+import struct
 import threading
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -31,7 +33,7 @@ from genkit_openai.typing import SupportedOutputFormat
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 
-from genkit import Document, EmbedRequest, GenkitError, Supports
+from genkit import Document, EmbedRequest, EmbedResponse, GenkitError, Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
 
 
@@ -285,10 +287,10 @@ def _embedding_client() -> MagicMock:
     return client
 
 
-async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> None:
+async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
     """Run the embedder action function against a stub client."""
     action = _plugin_with(client)._create_embedder_action('openai/text-embedding-3-small')
-    await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
+    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
 
 
 @pytest.mark.asyncio
@@ -311,6 +313,31 @@ async def test_embedder_maps_status_errors_for_every_option_shape(options: dict[
 
     assert exc_info.value.status == 'UNAUTHENTICATED'
     assert exc_info.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_embedder_decodes_base64_encoding_format() -> None:
+    """encodingFormat=base64 returns usable float vectors, not raw strings.
+
+    Regression for https://github.com/genkit-ai/genkit/issues/6317: the OpenAI
+    SDK leaves base64 payloads as strings, which Embedding rejects.
+    """
+    values = [0.1, -0.25, 0.5]
+    encoded = base64.b64encode(struct.pack(f'<{len(values)}f', *values)).decode('ascii')
+    client = MagicMock()
+    item = MagicMock()
+    item.embedding = encoded
+    result = MagicMock()
+    result.data = [item]
+    client.embeddings.create = AsyncMock(return_value=result)
+
+    response = await _run_embedder(client, options={'encodingFormat': 'base64'})
+
+    assert client.embeddings.create.await_args.kwargs['encoding_format'] == 'base64'
+    assert len(response.embeddings) == 1
+    assert len(response.embeddings[0].embedding) == len(values)
+    for got, want in zip(response.embeddings[0].embedding, values, strict=True):
+        assert got == pytest.approx(want)
 
 
 @pytest.mark.asyncio
