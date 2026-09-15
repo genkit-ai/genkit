@@ -16,7 +16,9 @@
 
 """Family name checks for Google model routing."""
 
+import genkit_google_genai
 import pytest
+from genkit_google_genai.models import interactions_lyria, interactions_registry, lyria
 from genkit_google_genai.models._routing import classify_family, is_unroutable_model_id
 from genkit_google_genai.models.gemini import (
     is_gemini_model,
@@ -161,6 +163,14 @@ def test_is_veo_model_local_and_namespaced(name: str, expected: bool) -> None:
 def test_is_lyria_model(name: str, expected: bool) -> None:
     """Lyria is the ``lyria-`` prefix on the local name."""
     assert is_lyria_model(name) is expected
+
+
+def test_lyria_module_only_detects() -> None:
+    """The Lyria config and versions live in Interactions; this module only recognizes ids."""
+    assert not hasattr(lyria, 'LyriaConfig')
+    assert not hasattr(lyria, 'LyriaVersion')
+    assert genkit_google_genai.LyriaConfig is interactions_lyria.LyriaConfig
+    assert genkit_google_genai.LyriaVersion is interactions_registry.LyriaVersion
 
 
 @pytest.mark.parametrize(

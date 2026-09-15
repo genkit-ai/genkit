@@ -31,7 +31,7 @@ from typing import Any, Literal, TypeAlias
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
     GenkitError,
@@ -153,7 +153,98 @@ def vertexai_image_model_info(
 class ImagenConfigSchema(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    number_of_images: int | None = Field(
+        default=None, alias='numberOfImages', description='Number of images to generate. Defaults to 4 when unset.'
+    )
+    aspect_ratio: str | None = Field(
+        default=None,
+        alias='aspectRatio',
+        description='Aspect ratio of the generated images. Supported values: 1:1, 3:4, 4:3, 9:16, 16:9.',
+    )
+    negative_prompt: str | None = Field(
+        default=None,
+        alias='negativePrompt',
+        description='Free-form description of what to discourage in the generated images. Vertex AI only.',
+    )
+    guidance_scale: float | None = Field(
+        default=None,
+        alias='guidanceScale',
+        description=(
+            'How strongly the model should adhere to the prompt. Higher values increase prompt '
+            'alignment but may reduce image quality.'
+        ),
+    )
+    seed: int | None = Field(
+        default=None,
+        description='Deterministic seed for image generation. Cannot be combined with addWatermark. Vertex AI only.',
+    )
+    safety_filter_level: str | None = Field(
+        default=None,
+        alias='safetyFilterLevel',
+        description=(
+            'How strictly to block unsafe content: BLOCK_LOW_AND_ABOVE, BLOCK_MEDIUM_AND_ABOVE, '
+            'BLOCK_ONLY_HIGH, or BLOCK_NONE.'
+        ),
+    )
+    person_generation: str | None = Field(
+        default=None,
+        alias='personGeneration',
+        description='Controls generation of people: ALLOW_ALL, ALLOW_ADULT (no minors), or DONT_ALLOW.',
+    )
+    include_safety_attributes: bool | None = Field(
+        default=None,
+        alias='includeSafetyAttributes',
+        description='Return per-image and per-prompt safety scores in the response.',
+    )
+    include_rai_reason: bool | None = Field(
+        default=None,
+        alias='includeRaiReason',
+        description='Include the Responsible AI reason when an image is filtered out.',
+    )
+    language: str | None = Field(
+        default=None,
+        description='Language of the text in the prompt: auto, en, es, hi, ja, ko, pt, or zh.',
+    )
+    output_mime_type: str | None = Field(
+        default=None,
+        alias='outputMimeType',
+        description='MIME type of the generated image, e.g. image/png or image/jpeg.',
+    )
+    output_compression_quality: int | None = Field(
+        default=None,
+        alias='outputCompressionQuality',
+        description='JPEG compression quality, only applied when outputMimeType is image/jpeg.',
+    )
+    add_watermark: bool | None = Field(
+        default=None,
+        alias='addWatermark',
+        description='Embed a SynthID watermark in the generated images. Vertex AI only.',
+    )
+    output_gcs_uri: str | None = Field(
+        default=None,
+        alias='outputGcsUri',
+        description=(
+            'Cloud Storage URI to write generated images to. Images are returned inline when unset. Vertex AI only.'
+        ),
+    )
+    labels: dict[str, str] | None = Field(
+        default=None,
+        description='User-defined key/value metadata used to break down billed charges. Vertex AI only.',
+    )
+    image_size: str | None = Field(
+        default=None,
+        alias='imageSize',
+        description='Size of the longest image dimension. Supported sizes are 1K and 2K; Imagen 3 has no 2K.',
+    )
+    enhance_prompt: bool | None = Field(
+        default=None,
+        alias='enhancePrompt',
+        description=(
+            'Let the service rewrite the prompt for better results. Output may diverge slightly from '
+            'the literal prompt. Vertex AI only.'
+        ),
+    )
 
 
 class ImagenModel:

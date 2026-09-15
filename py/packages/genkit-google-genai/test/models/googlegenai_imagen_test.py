@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 import pytest
 from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenModel, ImagenVersion
 from google import genai
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from genkit import (
@@ -122,15 +123,85 @@ def test_imagen_rejects_raw_dicts() -> None:
 
 
 def test_imagen_invalid_sdk_field_is_invalid_argument() -> None:
-    """SDK type errors become a named INVALID_ARGUMENT."""
+    """SDK type errors on an untyped-but-known key become a named INVALID_ARGUMENT."""
     imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
-        config=ImagenConfigSchema.model_validate({'number_of_images': 'nope'}),
+        config=ImagenConfigSchema.model_validate({'http_options': 'nope'}),
     )
 
     with pytest.raises(GenkitError) as exc_info:
         imagen._get_config(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'number_of_images' in str(exc_info.value)
+    assert 'http_options' in str(exc_info.value)
+
+
+def test_imagen_bad_typed_field_is_rejected_by_the_schema() -> None:
+    """Typed fields are checked before the request is built."""
+    with pytest.raises(ValidationError):
+        ImagenConfigSchema.model_validate({'numberOfImages': 'nope'})
+
+
+def test_imagen_typed_config_reaches_generate_images_config() -> None:
+    """Every typed Imagen field lands on the SDK config rather than extra_body."""
+    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        config=ImagenConfigSchema.model_validate({
+            'numberOfImages': 2,
+            'aspectRatio': '16:9',
+            'negativePrompt': 'blurry',
+            'guidanceScale': 12.5,
+            'seed': 7,
+            'safetyFilterLevel': 'BLOCK_ONLY_HIGH',
+            'personGeneration': 'allow_adult',
+            'includeSafetyAttributes': True,
+            'includeRaiReason': True,
+            'language': 'en',
+            'outputMimeType': 'image/jpeg',
+            'outputCompressionQuality': 80,
+            'addWatermark': False,
+            'outputGcsUri': 'gs://bucket/prefix',
+            'labels': {'team': 'ads'},
+            'imageSize': '2K',
+            'enhancePrompt': True,
+        }),
+    )
+
+    cfg = imagen._get_config(request)
+
+    assert cfg is not None
+    assert cfg.number_of_images == 2
+    assert cfg.aspect_ratio == '16:9'
+    assert cfg.negative_prompt == 'blurry'
+    assert cfg.guidance_scale == 12.5
+    assert cfg.seed == 7
+    assert cfg.safety_filter_level == 'BLOCK_ONLY_HIGH'
+    assert cfg.person_generation == 'ALLOW_ADULT'
+    assert cfg.include_safety_attributes is True
+    assert cfg.include_rai_reason is True
+    assert cfg.language == 'en'
+    assert cfg.output_mime_type == 'image/jpeg'
+    assert cfg.output_compression_quality == 80
+    assert cfg.add_watermark is False
+    assert cfg.output_gcs_uri == 'gs://bucket/prefix'
+    assert cfg.labels == {'team': 'ads'}
+    assert cfg.image_size == '2K'
+    assert cfg.enhance_prompt is True
+    assert cfg.http_options is None
+
+
+def test_imagen_config_accepts_snake_case_keys() -> None:
+    """Typed fields populate by field name as well as by alias."""
+    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))])],
+        config=ImagenConfigSchema.model_validate({'number_of_images': 3, 'aspect_ratio': '9:16'}),
+    )
+
+    cfg = imagen._get_config(request)
+
+    assert cfg is not None
+    assert cfg.number_of_images == 3
+    assert cfg.aspect_ratio == '9:16'

@@ -23,6 +23,7 @@ import threading
 from typing import cast, get_args, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import genkit_google_genai
 import pytest
 from genkit_google_genai import (
     EmbeddingTaskType,
@@ -90,6 +91,12 @@ def test_plugin_names() -> None:
     """Test plugin name constants."""
     assert GOOGLEAI_PLUGIN_NAME == 'googleai'
     assert VERTEXAI_PLUGIN_NAME == 'vertexai'
+
+
+def test_public_surface_resolves() -> None:
+    """Every name in __all__ is importable from the package."""
+    for name in genkit_google_genai.__all__:
+        assert hasattr(genkit_google_genai, name), name
 
 
 def test_googleai_initialization_with_api_key() -> None:
