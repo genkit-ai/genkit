@@ -31,6 +31,7 @@ from genkit_google_genai import (
     KnownVeo,
     VertexAI,
 )
+from genkit_google_genai.models.embedder import EmbeddingConfigSchema, EmbeddingTaskType
 from genkit_google_genai.models.gemini import (
     GEMINI_CATALOG_IDS,
     GeminiConfigSchema,
@@ -235,6 +236,12 @@ class TestEmbeddingConstructor:
         assert isinstance(ref, EmbedderRef)
         assert not isinstance(ref, ModelRef)
         assert ref.name == 'googleai/gemini-embedding-001'
+
+    def test_embedding_accepts_config_schema_instance(self) -> None:
+        """A typed EmbeddingConfigSchema is carried on the ref as given."""
+        config = EmbeddingConfigSchema(task_type=EmbeddingTaskType.RETRIEVAL_QUERY, output_dimensionality=256)
+        ref = GoogleAI.embedding('gemini-embedding-001', config=config)
+        assert ref.config is config
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
