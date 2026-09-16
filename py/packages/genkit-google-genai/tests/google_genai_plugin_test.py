@@ -48,8 +48,10 @@ from genkit_google_genai.models.gemini import (
     GemmaConfigSchema,
 )
 from genkit_google_genai.models.veo import VeoConfig, VeoModel
+from genkit_google_genai.models.virtual_try_on import VirtualTryOnConfig
+from google.genai import types as genai_types
 
-from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Genkit, GenkitError, Media, MediaPart, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
 from genkit.plugin_api import Action, to_json_schema
 
@@ -502,10 +504,107 @@ async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: 
 @patch('genkit_google_genai.google.genai.client.Client')
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
+async def test_vertexai_resolve_virtual_try_on_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Virtual Try-On resolves to its own MODEL action, not the Gemini path."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, 'vertexai/virtual-try-on-001')
+
+    assert action is not None
+    assert action.kind == ActionKind.MODEL
+    assert action.name == 'vertexai/virtual-try-on-001'
+    assert _request_config_type(action) is VirtualTryOnConfig
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_virtual_try_on_is_vertex_only(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Google AI has no Virtual Try-On backend, so it neither resolves nor lists it."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+
+    assert await plugin.resolve(ActionKind.MODEL, 'googleai/virtual-try-on-001') is None
+    assert not [a for a in await plugin.list_actions() if 'virtual-try-on' in a.name]
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_registers_virtual_try_on_without_discovery(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """The curated catalog registers and advertises the model even when discovery is empty."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    actions = await plugin.init()
+    metadata = await plugin.list_actions()
+
+    registered = [a for a in actions if 'virtual-try-on' in a.name]
+    assert [a.name for a in registered] == ['vertexai/virtual-try-on-001']
+    assert registered[0].kind == ActionKind.MODEL
+
+    advertised = [a for a in metadata if 'virtual-try-on' in a.name]
+    assert [a.name for a in advertised] == ['vertexai/virtual-try-on-001']
+    assert advertised[0].action_type == ActionKind.MODEL
+
+
+@patch('genkit_google_genai.models.virtual_try_on.genai.Client')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_virtual_try_on_generate_applies_context_secret(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_try_on_client: MagicMock,
+) -> None:
+    """A tenant key on context.secrets reaches a request-scoped Vertex client, not the plugin one."""
+    mock_list_models.return_value = GenaiModels()
+    request_client = mock_try_on_client.return_value
+    request_client.aio.models.recontext_image = AsyncMock(
+        return_value=genai_types.RecontextImageResponse(
+            generated_images=[
+                genai_types.GeneratedImage(image=genai_types.Image(gcs_uri='gs://out/1.png', mime_type='image/png'))
+            ]
+        )
+    )
+    ai = Genkit(plugins=[VertexAI(project='plugin-project')])
+
+    response = await ai.generate(
+        model='vertexai/virtual-try-on-001',
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(MediaPart(media=Media(url='gs://in/person.png'), metadata={'type': 'personImage'})),
+                    Part(MediaPart(media=Media(url='gs://in/shirt.png'), metadata={'type': 'productImage'})),
+                ],
+            )
+        ],
+        context={'secrets': {'api_key': 'tenant-key'}},
+    )
+
+    kwargs = mock_try_on_client.call_args.kwargs
+    assert kwargs['api_key'] == 'tenant-key'
+    assert kwargs['vertexai'] is True
+    assert 'project' not in kwargs
+    mock_client.return_value.aio.models.recontext_image.assert_not_called()
+    request_client.aio.models.recontext_image.assert_awaited_once()
+    assert response.message is not None
+    part = response.message.content[0].root
+    assert isinstance(part, MediaPart)
+    assert part.media.url == 'gs://out/1.png'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     'model_id',
     [
-        'virtual-try-on-001',
         'imagegeneration@006',
         'imagetext@001',
         'imagen-3.0-generate-002',
@@ -714,7 +813,7 @@ async def test_list_actions_advertises_veo_as_background(mock_list_models: Magic
 
 
 def test_list_genai_models_vertex_skips_substring_veo_and_unsupported_image() -> None:
-    """Discovery buckets on the ``veo-`` prefix and drops unsupported image ids."""
+    """Discovery buckets on the ``veo-`` prefix and drops unsupported image ids and ids served from curated lists."""
 
     def _model(name: str) -> MagicMock:
         item = MagicMock()

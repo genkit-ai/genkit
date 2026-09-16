@@ -148,6 +148,14 @@ from genkit_google_genai.models.veo import (
     is_veo_model,
     veo_model_info,
 )
+from genkit_google_genai.models.virtual_try_on import (
+    VERTEX_KNOWN_VIRTUAL_TRY_ON,
+    KnownVirtualTryOn,
+    VirtualTryOnConfig,
+    VirtualTryOnModel,
+    is_virtual_try_on_model,
+    virtual_try_on_model_info,
+)
 
 
 class GenaiModels:
@@ -192,11 +200,13 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
         - Veo name (``veo-``) → veo
         - 'gemini'/'gemma' in name (and not an embedding) → gemini
       Ids with no working generate path here (``imagen-*``,
-      ``imagegeneration@*``, ``imagetext@*``, ``virtual-try-on-*``) are not
-      categorized at all, so they are never advertised or registered.
-      Embedders are intentionally NOT discovered here. The Vertex catalog
-      over-lists embedders that are published but not callable, so they
-      are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
+      ``imagegeneration@*``, ``imagetext@*``) are not categorized at all, so
+      they are never advertised or registered.
+      Embedders and Virtual Try-On are intentionally NOT discovered here. The
+      Vertex catalog over-lists embedders that are published but not callable,
+      and does not reliably list ``virtual-try-on-*`` at all, so both are
+      advertised from curated lists (``VERTEX_KNOWN_EMBEDDERS``,
+      ``VERTEX_KNOWN_VIRTUAL_TRY_ON``) instead.
 
     Args:
         client: The Google GenAI client instance.
@@ -997,6 +1007,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         |---|---|---|
         | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
         | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-3.1-generate-001`` |
+        | Virtual Try-On | MODEL | ``vertexai/virtual-try-on-001`` |
         | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
@@ -1029,6 +1040,21 @@ class VertexAI(GoogleFamilyRefs, Plugin):
     _vertexai = True
 
     name = VERTEXAI_PLUGIN_NAME
+
+    @classmethod
+    def virtual_try_on_model(
+        cls, name: KnownVirtualTryOn | str, *, config: VirtualTryOnConfig | None = None
+    ) -> ModelRef[VirtualTryOnConfig]:
+        """Typed ref for a Virtual Try-On model (``virtual-try-on-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='virtual-try-on',
+            method='virtual_try_on_model',
+            config_schema=VirtualTryOnConfig,
+            config=config,
+        )
 
     def __init__(
         self,
@@ -1130,6 +1156,10 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             bg_action = self._resolve_veo_model(vertexai_name(name))
             actions.append(bg_action.start_action)
             actions.append(bg_action.check_action)
+
+        for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
+            if action := self._resolve_model(vertexai_name(name)):
+                actions.append(action)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
@@ -1283,6 +1313,21 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
 
+        # Virtual Try-On before the shared fail-closed table so Google AI can
+        # keep the family unroutable while Vertex actually serves it.
+        if is_virtual_try_on_model(clean_name):
+
+            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+                model = VirtualTryOnModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
+                return await model.generate(request, ctx)
+
+            return _model_action(name, _run_try_on, virtual_try_on_model_info(clean_name), VirtualTryOnConfig)
+
         if is_unroutable_model_id(clean_name):
             return None
 
@@ -1369,6 +1414,15 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         for name in genai_models.veo:
             actions_list.append(_veo_background_action_metadata(vertexai_name(name)))
+
+        for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
+            actions_list.append(
+                model_action_metadata(
+                    name=vertexai_name(name),
+                    info=virtual_try_on_model_info(name).model_dump(by_alias=True),
+                    config_schema=VirtualTryOnConfig,
+                )
+            )
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions_list.append(

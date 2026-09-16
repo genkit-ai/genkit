@@ -30,7 +30,10 @@ from genkit_google_genai import (
     KnownGeminiTts,
     KnownGemma,
     KnownVeo,
+    KnownVirtualTryOn,
     VertexAI,
+    VirtualTryOnConfig,
+    VirtualTryOnVersion,
 )
 from genkit_google_genai.models.gemini import (
     GEMINI_CATALOG_IDS,
@@ -46,6 +49,7 @@ from genkit_google_genai.models.gemini import (
     is_tts_model,
 )
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion, is_veo_model
+from genkit_google_genai.models.virtual_try_on import is_virtual_try_on_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -162,7 +166,7 @@ class TestClosedRejectSet:
             'deep-research-pro-preview',  # Interactions API family
             'antigravity-code-1',  # Interactions API family
             'imagegeneration@006',  # retired June 2026
-            'virtual-try-on-001',  # predict shape not implemented
+            'virtual-try-on-001',  # Vertex-only family
             'gemini-embedding-001',  # embedder, not a generate model
             'imagen-3.0-generate-002',  # not a supported model
             'imagen-4.0-generate-001',  # not a supported model
@@ -199,8 +203,10 @@ class TestClosedRejectSet:
             VertexAI.gemini_model('deep-research-pro-preview')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
             GoogleAI.gemini_model('imagegeneration@006')
-        with pytest.raises(GenkitError, match=r'is not a supported model'):
+        with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
             GoogleAI.gemini_model('virtual-try-on-001')
+        with pytest.raises(GenkitError, match=r'virtual_try_on_model'):
+            VertexAI.gemini_model('virtual-try-on-001')
         with pytest.raises(GenkitError, match=r'GoogleAI\.gemini_image_model'):
             GoogleAI.gemini_model('imagen-4.0-generate-001')
         with pytest.raises(GenkitError, match=r'VertexAI\.gemini_image_model'):
@@ -274,6 +280,35 @@ class TestKnownIdLiterals:
         assert set(get_args(KnownGemma)) == _family_catalog(is_gemma_model)
         assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
+        assert set(get_args(KnownVirtualTryOn)) == {str(member.value) for member in VirtualTryOnVersion}
+        assert all(is_virtual_try_on_model(value) for value in get_args(KnownVirtualTryOn))
+
+
+class TestVirtualTryOnConstructor:
+    """virtual_try_on_model lives on VertexAI only."""
+
+    def test_mints_a_vertex_ref(self) -> None:
+        """The ref carries the Vertex namespace and the try-on config schema."""
+        ref = VertexAI.virtual_try_on_model('virtual-try-on-001')
+        assert isinstance(ref, ModelRef)
+        assert ref.name == 'vertexai/virtual-try-on-001'
+        assert ref.config_schema is VirtualTryOnConfig
+
+    @pytest.mark.parametrize('name', ['vertexai/virtual-try-on-001', 'models/virtual-try-on-001'])
+    def test_strips_pasted_prefixes(self, name: str) -> None:
+        """A pasted prefix resolves to the same ref as the bare id."""
+        assert VertexAI.virtual_try_on_model(name).name == 'vertexai/virtual-try-on-001'
+
+    @pytest.mark.parametrize('bad_id', ['gemini-2.5-flash', 'veo-3.0-generate-001', 'imagen-4.0-generate-001'])
+    def test_rejects_other_families(self, bad_id: str) -> None:
+        """Only virtual-try-on ids mint this ref."""
+        with pytest.raises(GenkitError) as exc_info:
+            VertexAI.virtual_try_on_model(bad_id)
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+    def test_not_offered_on_googleai(self) -> None:
+        """Virtual Try-On has no Google AI backend, so it has no constructor there."""
+        assert not hasattr(GoogleAI, 'virtual_try_on_model')
 
     def test_veo_catalog_is_the_3_1_family(self) -> None:
         """The Veo catalog is the 3.1 family only: preview ids on Google AI, 001 ids on Vertex AI."""
@@ -310,7 +345,7 @@ class TestNoImagenSurface:
         with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
             plugin.embedding('imagen-4.0-generate-001')
 
-    @pytest.mark.parametrize('bad_id', ['imagegeneration@006', 'imagetext@001', 'virtual-try-on-001'])
+    @pytest.mark.parametrize('bad_id', ['imagegeneration@006', 'imagetext@001'])
     def test_other_unsupported_ids_omit_the_image_hint(self, bad_id: str) -> None:
         """Only imagen- ids are redirected to image generation."""
         with pytest.raises(GenkitError) as exc_info:

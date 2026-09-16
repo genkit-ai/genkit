@@ -103,6 +103,36 @@ print(operation.output)
 
 Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media).
 
+### Virtual Try-On (Vertex AI)
+
+`virtual-try-on-001` dresses a person in one or more products and returns the
+composited images. The inputs are media parts on the last message, tagged so
+the model knows which is which: `metadata={'type': 'personImage'}` for the
+person and `metadata={'type': 'productImage'}` for each product. Each `url` is
+a `data:` url or a `gs://` path; http(s) urls are not fetched.
+
+```python
+from genkit import Genkit, Media, MediaPart, Message, Part, Role
+from genkit_google_genai import VertexAI
+
+ai = Genkit(plugins=[VertexAI()])
+
+response = await ai.generate(
+    model=VertexAI.virtual_try_on_model('virtual-try-on-001'),
+    messages=[
+        Message(
+            role=Role.USER,
+            content=[
+                Part(MediaPart(media=Media(url='gs://my-bucket/person.png'), metadata={'type': 'personImage'})),
+                Part(MediaPart(media=Media(url='gs://my-bucket/shirt.png'), metadata={'type': 'productImage'})),
+            ],
+        )
+    ],
+)
+for part in response.message.content:
+    print(part.root.media.url)
+```
+
 ### Vertex AI Evaluators
 
 Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:
