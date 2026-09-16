@@ -22,7 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_google_genai.models.virtual_try_on import VirtualTryOnConfig, VirtualTryOnModel
+from genkit_google_genai.models.virtual_try_on import VirtualTryOnConfig, VirtualTryOnModel, VirtualTryOnOutputOptions
 from google.auth.credentials import AnonymousCredentials
 from google.genai import models as genai_models, types as genai_types
 from google.genai._api_client import BaseApiClient
@@ -180,6 +180,26 @@ class TestRequestShape:
             _request(
                 parts=[
                     _media_part(f'data:image/png;base64,{encoded}', 'personImage'),
+                    _media_part(PRODUCT_URL, 'productImage'),
+                ]
+            ),
+        )
+
+        source = client.aio.models.recontext_image.await_args.kwargs['source']
+        assert source.person_image.image_bytes == image
+
+    @pytest.mark.asyncio
+    async def test_unpadded_base64_is_decoded(self) -> None:
+        """A payload whose encoder dropped the trailing '=' still decodes."""
+        client = _client()
+        image = PNG_BYTES[:-1]
+        encoded = base64.b64encode(image).decode('ascii')
+        assert encoded.endswith('=')
+        await _generate(
+            VirtualTryOnModel('virtual-try-on-001', client),
+            _request(
+                parts=[
+                    _media_part(f'data:image/png;base64,{encoded.rstrip("=")}', 'personImage'),
                     _media_part(PRODUCT_URL, 'productImage'),
                 ]
             ),
@@ -483,6 +503,13 @@ class TestRequestClient:
         kwargs = ctor.call_args.kwargs
         assert kwargs['location'] == 'europe-west4'
         assert kwargs['http_options'].base_url == 'https://egress-proxy.example'
+
+    def test_compression_quality_is_bounded(self) -> None:
+        """The JPEG quality range is 0-100; anything else fails before the request is built."""
+        for quality in (-1, 101):
+            with pytest.raises(ValidationError):
+                VirtualTryOnOutputOptions.model_validate({'compressionQuality': quality})
+        assert VirtualTryOnOutputOptions.model_validate({'compressionQuality': 100}).compression_quality == 100
 
     def test_client_knobs_are_typed(self) -> None:
         """The knobs are declared fields, so a wrong type fails validation before it reaches the SDK."""

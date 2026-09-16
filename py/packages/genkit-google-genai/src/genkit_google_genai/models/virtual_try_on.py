@@ -104,7 +104,11 @@ class VirtualTryOnOutputOptions(BaseModel):
     model_config = ConfigDict(extra='allow', populate_by_name=True)
     mime_type: str | None = Field(default=None, alias='mimeType', description='MIME type of the returned images.')
     compression_quality: int | None = Field(
-        default=None, alias='compressionQuality', description='Compression quality for lossy output formats.'
+        default=None,
+        alias='compressionQuality',
+        ge=0,
+        le=100,
+        description='Compression quality for lossy output formats.',
     )
 
 
@@ -168,7 +172,8 @@ _VERBATIM_FIELD_NAMES = {
 # read off the config before it is mapped, so they never reach the predict body.
 _CLIENT_OPTION_KEYS = frozenset({'base_url', 'baseUrl', 'api_version', 'apiVersion', 'location'})
 
-# Accept the URL-safe base64 alphabet as well as the standard one.
+# Accept the URL-safe base64 alphabet as well as the standard one; padding
+# is restored before decoding.
 _BASE64_URLSAFE = str.maketrans('-_', '+/')
 
 
@@ -202,6 +207,7 @@ def _to_image(url: str) -> genai_types.Image:
         )
     payload = url.partition(',')[2] if url.startswith('data:') else url
     payload = ''.join(payload.split()).translate(_BASE64_URLSAFE)
+    payload += '=' * (-len(payload) % 4)
     try:
         data = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError) as e:
