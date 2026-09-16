@@ -72,7 +72,8 @@ type Skills struct {
 
 // skillInfo records where a skill's SKILL.md lives and its description.
 type skillInfo struct {
-	Path        string
+	Path        string // absolute path to SKILL.md
+	Dir         string // absolute path to the skill directory
 	Description string
 }
 
@@ -102,17 +103,32 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 
 	useSkill := ai.NewTool(
 		useSkillToolName,
-		"Use a skill by its name.",
+		"Load a skill's instructions or supporting files by name. "+
+			"When filePath is omitted, returns the full SKILL.md. "+
+			"When filePath is provided (e.g. 'references/PROCEDURE.md'), returns that file from the skill directory.",
 		func(_ *ai.ToolContext, in struct {
-			SkillName string `json:"skillName" jsonschema_description:"The name of the skill to use."`
-		}) (string, error) {
+			SkillName string `json:"skillName" jsonschema:"description=The name of the skill to use."`
+			FilePath  string `json:"filePath,omitempty" jsonschema:"description=Optional relative path to a file within the skill directory (e.g. references/PROCEDURE.md). When omitted the full SKILL.md is returned."`
+		},
+		) (string, error) {
 			si, ok := info[in.SkillName]
 			if !ok {
 				return "", fmt.Errorf("skill %q not found", in.SkillName)
 			}
-			data, err := os.ReadFile(si.Path)
+
+			targetPath := si.Path
+			if in.FilePath != "" {
+				candidate := filepath.Join(si.Dir, filepath.FromSlash(in.FilePath))
+				rel, err := filepath.Rel(si.Dir, candidate)
+				if err != nil || strings.HasPrefix(rel, "..") {
+					return "", fmt.Errorf("file path %q escapes skill directory %q", in.FilePath, in.SkillName)
+				}
+				targetPath = candidate
+			}
+
+			data, err := os.ReadFile(targetPath)
 			if err != nil {
-				return "", fmt.Errorf("failed to read skill %q: %w", in.SkillName, err)
+				return "", fmt.Errorf("failed to read %q in skill %q: %w", targetPath, in.SkillName, err)
 			}
 			return string(data), nil
 		},
@@ -181,6 +197,7 @@ func scanSkills(ctx context.Context, paths []string, explicit bool) (map[string]
 			}
 			result[entry.Name()] = skillInfo{
 				Path:        skillMd,
+				Dir:         filepath.Join(abs, entry.Name()),
 				Description: desc,
 			}
 		}
@@ -225,6 +242,7 @@ func buildSkillsPrompt(info map[string]skillInfo) string {
 	b.WriteString("You have access to a library of skills that serve as specialized instructions/personas.\n")
 	b.WriteString("Strongly prefer to use them when working on anything related to them.\n")
 	b.WriteString("Only use them once to load the context.\n")
+	b.WriteString("Skills may reference sub-files by relative path. Use the use_skill tool with the filePath parameter to load them.\n")
 	b.WriteString("Here are the available skills:\n")
 	for _, name := range names {
 		desc := info[name].Description
