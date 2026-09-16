@@ -311,18 +311,28 @@ def test_convert_schema_property(mocker: MockerFixture) -> None:
     class Simple(BaseModel):
         foo: str = Field(description='foo field')
         bar: int = Field(description='bar field')
-        # Note: baz: list[str] | None generates anyOf schema which is not supported by _convert_schema_property yet
+        baz: list[str] | None = Field(None, description='baz field')
 
     assert gemini._convert_schema_property(to_json_schema(Simple)) == genai_types.Schema(
         type=genai_types.Type.OBJECT,
+        title='Simple',
         properties={
             'foo': genai_types.Schema(
                 type=genai_types.Type.STRING,
+                title='Foo',
                 description='foo field',
             ),
             'bar': genai_types.Schema(
                 type=genai_types.Type.INTEGER,
+                title='Bar',
                 description='bar field',
+            ),
+            'baz': genai_types.Schema(
+                type=genai_types.Type.ARRAY,
+                title='Baz',
+                description='baz field',
+                nullable=True,
+                items=genai_types.Schema(type=genai_types.Type.STRING),
             ),
         },
         required=['foo', 'bar'],
@@ -337,17 +347,21 @@ def test_convert_schema_property(mocker: MockerFixture) -> None:
 
     assert gemini._convert_schema_property(to_json_schema(WithNested)) == genai_types.Schema(
         type=genai_types.Type.OBJECT,
+        title='WithNested',
         properties={
             'foo': genai_types.Schema(
                 type=genai_types.Type.STRING,
+                title='Foo',
                 description='foo field',
             ),
             'bar': genai_types.Schema(
                 type=genai_types.Type.OBJECT,
+                title='Nested',
                 description='bar field',
                 properties={
                     'baz': genai_types.Schema(
                         type=genai_types.Type.INTEGER,
+                        title='Baz',
                         description='baz field',
                     ),
                 },
@@ -366,9 +380,11 @@ def test_convert_schema_property(mocker: MockerFixture) -> None:
 
     assert gemini._convert_schema_property(to_json_schema(WitEnum)) == genai_types.Schema(
         type=genai_types.Type.OBJECT,
+        title='WitEnum',
         properties={
             'foo': genai_types.Schema(
                 type=genai_types.Type.STRING,
+                title='TestEnum',
                 description='foo field',
                 enum=['foo', 'bar'],
             ),
@@ -968,6 +984,84 @@ def test_gemini_model__convert_schema_property_raises_exception(
         gemini_model_instance._convert_schema_property(input_schema, defs)
 
 
+def test_gemini_model__convert_schema_property_keeps_keywords(gemini_model_instance: GeminiModel) -> None:
+    """anyOf, type lists, format, title, default, bounds and propertyOrdering survive conversion."""
+    schema: dict[str, object] = {
+        'type': 'object',
+        'title': 'Thing',
+        'additionalProperties': False,
+        'propertyOrdering': ['count', 'label', 'kind', 'ratio', 'tags'],
+        'properties': {
+            'count': {'type': 'integer', 'title': 'Count', 'default': 1, 'minimum': 0, 'maximum': 10},
+            'label': {'type': ['string', 'null'], 'format': 'date-time'},
+            'kind': {'anyOf': [{'type': 'string'}, {'type': 'integer'}], 'description': 'string or int'},
+            'ratio': {'anyOf': [{'type': 'number'}, {'type': 'null'}], 'title': 'Ratio'},
+            'tags': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 3},
+            'anything': {'title': 'Anything'},
+        },
+    }
+
+    assert gemini_model_instance._convert_schema_property(schema) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        title='Thing',
+        property_ordering=['count', 'label', 'kind', 'ratio', 'tags'],
+        properties={
+            'count': genai_types.Schema(
+                type=genai_types.Type.INTEGER, title='Count', default=1, minimum=0.0, maximum=10.0
+            ),
+            'label': genai_types.Schema(type=genai_types.Type.STRING, format='date-time', nullable=True),
+            'kind': genai_types.Schema(
+                any_of=[
+                    genai_types.Schema(type=genai_types.Type.STRING),
+                    genai_types.Schema(type=genai_types.Type.INTEGER),
+                ],
+                description='string or int',
+            ),
+            'ratio': genai_types.Schema(type=genai_types.Type.NUMBER, title='Ratio', nullable=True),
+            'tags': genai_types.Schema(
+                type=genai_types.Type.ARRAY,
+                items=genai_types.Schema(type=genai_types.Type.STRING),
+                min_items=1,
+                max_items=3,
+            ),
+        },
+    )
+    assert gemini_model_instance._convert_schema_property({}) is None
+
+
+@pytest.mark.parametrize(
+    'input_schema, keyword',
+    [
+        ({'type': 'integer', 'minimum': 'zero'}, 'minimum'),
+        ({'type': 'object', 'propertyOrdering': 'ab'}, 'propertyOrdering'),
+    ],
+)
+def test_gemini_model__convert_schema_property_rejects_bad_keyword_value(
+    input_schema: dict[str, object],
+    keyword: str,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A keyword value that cannot be coerced raises INVALID_ARGUMENT naming the keyword."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(input_schema)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert keyword in exc_info.value.original_message
+
+
+@pytest.mark.parametrize('raw_type', ['bogus', None, 123])
+def test_gemini_model__convert_schema_property_rejects_unsupported_type(
+    raw_type: object,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A type the Gemini Schema cannot express raises INVALID_ARGUMENT instead of going out as written."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property({'type': raw_type})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'is not supported' in exc_info.value.original_message
+
+
 @pytest.mark.asyncio
 @patch(
     'genkit_google_genai.models.gemini.generate_cache_key',
@@ -1116,39 +1210,226 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
     assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
 
 
-def _json_output_request() -> ModelRequest:
+# A pydantic-style schema exercising anyOf, type lists, $ref, $defs and numeric bounds.
+_STRUCTURED_SCHEMA: dict[str, Any] = {
+    '$schema': 'http://json-schema.org/draft-07/schema#',
+    'type': 'object',
+    'title': 'Thing',
+    'properties': {
+        'a': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None},
+        'n': {'type': 'integer', 'minimum': 1, 'maximum': 5},
+        't': {'type': ['string', 'null'], 'format': 'date-time'},
+        'p': {'$ref': '#/$defs/P'},
+    },
+    '$defs': {'P': {'type': 'string', 'enum': ['x', 'y']}},
+    'required': ['n'],
+    'additionalProperties': False,
+}
+
+_STRUCTURED_RESPONSE_SCHEMA = genai_types.Schema(
+    type=genai_types.Type.OBJECT,
+    title='Thing',
+    required=['n'],
+    properties={
+        'a': genai_types.Schema(type=genai_types.Type.STRING, nullable=True),
+        'n': genai_types.Schema(type=genai_types.Type.INTEGER, minimum=1.0, maximum=5.0),
+        't': genai_types.Schema(type=genai_types.Type.STRING, format='date-time', nullable=True),
+        'p': genai_types.Schema(type=genai_types.Type.STRING, enum=['x', 'y']),
+    },
+)
+
+
+def _output_request(
+    *,
+    format: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    constrained: bool | None = None,
+    content_type: str | None = None,
+) -> ModelRequest:
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        output=OutputConfig(
-            format='json',
-            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-            constrained=True,
-        ),
+        output=OutputConfig(format=format, json_schema=json_schema, constrained=constrained, content_type=content_type),
     )
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__json_output_sets_constrained_config() -> None:
-    """A standard Gemini model receives response_mime_type and response_schema for JSON output."""
-    model = GeminiModel(version='gemini-2.5-flash', client=MagicMock(spec=genai.Client))
+async def test_gemini_model__json_constrained_sends_schema_verbatim(gemini_model_instance: GeminiModel) -> None:
+    """Constrained JSON output sends the JSON Schema untouched as response_json_schema."""
+    request = _output_request(
+        format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True, content_type='application/json'
+    )
 
-    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
 
     assert cfg is not None
     assert cfg.response_mime_type == 'application/json'
-    assert cfg.response_schema is not None
+    assert cfg.response_json_schema == _STRUCTURED_SCHEMA
+    assert cfg.response_schema is None
 
 
 @pytest.mark.asyncio
 async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
-    """A TTS model receives neither response_mime_type nor response_schema for JSON output."""
+    """A TTS model receives neither response_mime_type nor a schema for JSON output."""
     model = GeminiModel(version='gemini-2.5-flash-preview-tts', client=MagicMock(spec=genai.Client))
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
 
-    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+    cfg = await model._genkit_to_googleai_cfg(request)
 
     assert cfg is not None
     assert cfg.response_mime_type is None
     assert cfg.response_schema is None
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__array_format_is_json_mode(gemini_model_instance: GeminiModel) -> None:
+    """The array format reaches the API as JSON mode via its application/json content type."""
+    schema = {'type': 'array', 'items': {'type': 'string'}}
+    request = _output_request(format='array', json_schema=schema, constrained=True, content_type='application/json')
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema == schema
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__json_unconstrained_sets_mime_type_only(gemini_model_instance: GeminiModel) -> None:
+    """Unconstrained JSON output turns on JSON mode without a schema."""
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=False)
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__legacy_response_schema_sends_converted_schema() -> None:
+    """With legacy_response_schema the converted schema goes out as response_schema."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema == _STRUCTURED_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__legacy_untyped_output_schema_raises() -> None:
+    """A schema with no type cannot be sent as response_schema and fails loudly."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
+    request = _output_request(format='json', json_schema={'description': 'anything'}, constrained=True)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model._genkit_to_googleai_cfg(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'response_schema' in exc_info.value.original_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+@pytest.mark.parametrize('schema_type', ['string', 'enum'])
+async def test_gemini_model__enum_output_sets_text_x_enum(schema_type: str, legacy_response_schema: bool) -> None:
+    """Constrained enum output sends text/x.enum with a string schema listing the values."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=legacy_response_schema)
+    request = _output_request(
+        format='enum', json_schema={'type': schema_type, 'enum': ['a', 'b']}, constrained=True, content_type='text/enum'
+    )
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'text/x.enum'
+    assert cfg.response_schema == genai_types.Schema(type=genai_types.Type.STRING, enum=['a', 'b'])
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__constrained_output_skipped_without_model_support() -> None:
+    """A no-tools constrained model with tools attached gets no MIME type and no schema."""
+    model = GeminiModel('gemini-2.5-flash-lite', MagicMock(spec=genai.Client))
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
+    request.tools = [ToolDefinition(name='t', description='d', input_schema={'type': 'object'})]
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type is None
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('response_mime_type', 'application/json'),
+        ('response_schema', {'type': 'object'}),
+        ('response_json_schema', {'type': 'object'}),
+        ('responseMimeType', 'application/json'),
+        ('responseSchema', {'type': 'object'}),
+        ('responseJsonSchema', {'type': 'object'}),
+    ],
+)
+async def test_gemini_model__config_output_keys_are_rejected(
+    gemini_model_instance: GeminiModel, key: str, value: object
+) -> None:
+    """Config-level response fields are refused; output settings own them."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfigSchema.model_validate({key: value}),
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert key in exc_info.value.original_message
+    assert 'output_schema=' in exc_info.value.original_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+async def test_generate_json_output_pins_request_body(mocker: MockerFixture, legacy_response_schema: bool) -> None:
+    """The client receives JSON mode plus the schema in one response field, and nothing else."""
+    version = GoogleAIGeminiVersion.GEMINI_2_5_FLASH
+    request = _output_request(
+        format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True, content_type='application/json'
+    )
+    candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='{"n": 1}')]))
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(
+        candidates=[candidate]
+    )
+    gemini = GeminiModel(version, googleai_client_mock, legacy_response_schema=legacy_response_schema)
+
+    response = await gemini.generate(request, ActionRunContext())
+
+    if legacy_response_schema:
+        expected_config = genai.types.GenerateContentConfig(
+            response_mime_type='application/json',
+            response_schema=_STRUCTURED_RESPONSE_SCHEMA,
+        )
+    else:
+        expected_config = genai.types.GenerateContentConfig(
+            response_mime_type='application/json',
+            response_json_schema=_STRUCTURED_SCHEMA,
+        )
+    googleai_client_mock.aio.models.generate_content.assert_called_once_with(
+        model=version,
+        contents=[genai.types.Content(parts=[genai.types.Part(text='hi')], role=Role.USER)],
+        config=expected_config,
+    )
+    assert response.message is not None
+    assert response.message.content[0].text == '{"n": 1}'
 
 
 @pytest.mark.parametrize(

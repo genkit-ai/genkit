@@ -60,6 +60,22 @@ config = GeminiConfigSchema.model_validate({
 })
 ```
 
+### Structured output
+
+Set the output schema on the request; the plugin sends it to Gemini as
+`responseJsonSchema`, so `anyOf`, `$ref`, `additionalProperties` and numeric
+bounds reach the model as written. Config-level `response_schema`,
+`response_json_schema` and `response_mime_type` are rejected.
+
+```python
+country = await ai.generate(prompt='Give quick facts about Japan.', output_schema=Country)
+```
+
+To send the schema as the older OpenAPI-style `responseSchema` field instead,
+construct the plugin with `GoogleAI(legacy_response_schema=True)` or
+`VertexAI(legacy_response_schema=True)`. The schema is converted to that shape,
+and a schema that cannot be converted is rejected.
+
 ### Video generation (Veo)
 
 Video is a job, not a round-trip. `generate_operation` hands back a ticket;
