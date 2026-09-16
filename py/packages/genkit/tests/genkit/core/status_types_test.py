@@ -23,8 +23,10 @@ from genkit._core._error import (
     Status,
     StatusCodes,
     from_http_code,
+    http_code,
     http_status_code,
     parse_retry_after_ms,
+    retry_after_ms_from_error,
     wrap_http_error,
 )
 
@@ -128,13 +130,17 @@ def test_from_http_code_is_on_plugin_api() -> None:
     """Plugin authors classify provider HTTP errors from the public surface."""
     from genkit.plugin_api import (
         from_http_code as exported,
+        http_code as exported_http_code,
         parse_retry_after_ms as exported_parse,
+        retry_after_ms_from_error as exported_retry_after,
         wrap_http_error as exported_wrap,
     )
 
     assert exported is from_http_code
     assert exported_wrap is wrap_http_error
     assert exported_parse is parse_retry_after_ms
+    assert exported_http_code is http_code
+    assert exported_retry_after is retry_after_ms_from_error
 
 
 def test_http_status_code_invalid_input() -> None:

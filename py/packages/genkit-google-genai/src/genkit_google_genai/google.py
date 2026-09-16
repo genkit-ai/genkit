@@ -57,6 +57,7 @@ from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
+from google.genai.errors import APIError
 from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
@@ -88,6 +89,7 @@ from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
+from genkit_google_genai.models._errors import from_api_error
 from genkit_google_genai.models._model_refs import (
     family_embedder_ref,
     family_model_ref,
@@ -241,8 +243,11 @@ def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool)
 async def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """Discover and categorize models through the SDK's asynchronous client."""
     models = GenaiModels()
-    async for listed_model in await client.aio.models.list():
-        _categorize_genai_model(listed_model, models, is_vertex)
+    try:
+        async for listed_model in await client.aio.models.list():
+            _categorize_genai_model(listed_model, models, is_vertex)
+    except APIError as e:
+        raise from_api_error(e) from e
     return models
 
 

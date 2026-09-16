@@ -27,7 +27,9 @@ from genkit._core._error import (
     StatusName,
     from_http_code,
     get_callable_json,
+    http_code,
     parse_retry_after_ms,
+    retry_after_ms_from_error,
     wrap_http_error,
 )
 from genkit._core._http_client import get_cached_client
@@ -79,7 +81,9 @@ __all__ = [
     'StatusName',
     'GenkitError',
     'from_http_code',
+    'http_code',
     'parse_retry_after_ms',
+    'retry_after_ms_from_error',
     'wrap_http_error',
     # HTTP / version stamping
     'GENKIT_CLIENT_HEADER',
