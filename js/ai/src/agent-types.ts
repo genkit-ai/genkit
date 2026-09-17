@@ -71,8 +71,15 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   which point it is rewritten with the cumulative final state and a
  *   terminal status.
  * - `completed`: the snapshot captures a settled state.
- * - `aborted`: the snapshot's invocation was aborted via the `abort` companion
- *   action while detached.
+ * - `aborted`: the caller stopped the invocation: an attached caller aborted
+ *   the signal it passed, a detached one called the `abort` companion action,
+ *   or the run reached a limit the caller set. Its `error`, when the stopped
+ *   turn recorded one, says what stopped it, and its state is what the run
+ *   committed before the stop:
+ *   the turn in flight rolled back unless it committed. Resume is permitted,
+ *   as for `failed`. A row carrying no state is one caught between the
+ *   abort's status flip and the finalize that stamps the state on; resume
+ *   rejects it, saying whether to retry the same id or name an earlier one.
  * - `failed`: a turn ended with an error. The snapshot's `error` field
  *   describes the failure, and its state is what the turn committed before
  *   it: the conversation trimmed back to the last completed tool round.
@@ -102,7 +109,7 @@ export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
  * The first group mirrors the model-level `FinishReason` so a turn backed by a
  * single `generate` call can forward its reason verbatim. The remaining values
  * are agent-specific outcomes with no `generate`-level equivalent: `aborted`
- * (the turn/invocation was aborted), `detached` (the turn was moved to the
+ * (the caller stopped the turn or invocation), `detached` (the turn was moved to the
  * background), and `failed` (the turn ended in an error).
  */
 export const AgentFinishReasonSchema = z.enum([
@@ -191,8 +198,11 @@ export const AgentInitSchema = z.object({
  * `sessionId` (resume the session's latest snapshot - the simple case used by
  * `useChat`-style clients). When both are provided, `snapshotId` selects the
  * snapshot to resume and `sessionId` acts as an ownership guard: the snapshot
- * must belong to that session. For client-managed agents (no store) provide
- * the full `state`.
+ * must belong to that session. A `failed` or `aborted` snapshot resumes with
+ * what its run committed; a `pending` one is rejected while its detached
+ * invocation is still writing to it, and so is an `aborted` one that has not
+ * recorded its state yet. For client-managed agents (no store) provide the
+ * full `state`.
  *
  * Runtime variant of {@link AgentInitSchema}, generic over the custom state
  * type `S`.
@@ -234,11 +244,12 @@ export const AgentOutputSchema = z.object({
   /** The reason the invocation finished (e.g. `stop`, `interrupted`). */
   finishReason: AgentFinishReasonSchema.optional(),
   /**
-   * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape; the runtime resolves gracefully instead of
-   * throwing). The accompanying `state`/`snapshotId` hold the resume point:
-   * what the failed turn committed, or the last committed turn's state when
-   * the turn failed before committing anything.
+   * Present when `finishReason` is `failed` or `aborted`. Carries the original
+   * error details (RuntimeError shape; the runtime resolves gracefully instead
+   * of throwing): what broke, or what stopped the run. The accompanying
+   * `state`/`snapshotId` hold the resume point: what the turn committed, or
+   * the last committed turn's state when the turn ended before committing
+   * anything.
    */
   error: RuntimeErrorSchema.optional(),
 });
@@ -258,23 +269,24 @@ export interface AgentOutput<S = unknown> {
    * no store is configured, or when nothing has been committed yet: a
    * first-turn failure that rolled back on a fresh session. On a resumed
    * session whose first turn rolls back it is the resumed snapshot's id. When
-   * `finishReason` is
-   * `detached` it is the pending detach snapshot. When `failed`, it is the
-   * resume point: the failed turn's own snapshot when the turn committed
-   * anything, otherwise the last committed turn's snapshot.
+   * `finishReason` is `detached` it is the pending detach snapshot. When
+   * `failed` or `aborted`, it is the resume point: the turn's own snapshot
+   * when the turn committed anything, otherwise the last committed turn's
+   * snapshot.
    */
   snapshotId?: string;
   /**
    * Final conversation state (only when client-managed). When `finishReason`
-   * is `failed`, this is the resume point: what the failed turn committed, or
-   * the last successful turn's state when the turn failed before committing
-   * anything.
+   * is `failed` or `aborted`, this is the resume point: what the turn
+   * committed, or the last committed turn's state when the turn ended before
+   * committing anything.
    */
   state?: SessionState<S>;
   finishReason?: AgentFinishReason;
   /**
-   * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape); `state`/`snapshotId` hold the resume point.
+   * Present when `finishReason` is `failed` or `aborted`. Carries the original
+   * error details (RuntimeError shape): what broke, or what stopped the run;
+   * `state`/`snapshotId` hold the resume point.
    */
   error?: RuntimeError;
 }
