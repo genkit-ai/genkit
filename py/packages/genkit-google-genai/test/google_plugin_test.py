@@ -340,6 +340,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2-preview'),
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-001'),
         MockModel(supported_actions=['generateContent'], name='models/gemini-2.0-flash-tts'),  # TTS
+        MockModel(supported_actions=['generateVideos'], name='models/veo-2.0-generate-001'),  # Veo
     ]
 
     mock_client = MagicMock()
@@ -380,6 +381,11 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # from genkit_google_genai.models.gemini import GeminiTtsConfigSchema, GeminiConfigSchema
     # assert action3.config_schema == GeminiTtsConfigSchema
     # assert action1.config_schema == GeminiConfigSchema
+
+    # Check Veo
+    action4 = next((a for a in result if a.name == googleai_name('veo-2.0-generate-001')), None)
+    assert action4 is not None
+    assert action4.action_type == ActionKind.BACKGROUND_MODEL
 
 
 @pytest.mark.parametrize(
