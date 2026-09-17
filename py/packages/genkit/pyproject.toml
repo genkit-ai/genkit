@@ -89,6 +89,7 @@ fastapi               = ["genkit-fastapi"]
 flask                 = ["genkit-flask"]
 google-cloud          = ["genkit-google-cloud"]
 google-genai          = ["genkit-google-genai"]
+mcp                   = ["genkit-mcp"]
 middleware            = ["genkit-middleware"]
 otel                  = ["genkit-otel"]
 ollama                = ["genkit-ollama"]
@@ -123,6 +124,7 @@ genkit-fastapi                      = { workspace = true }
 genkit-flask                        = { workspace = true }
 genkit-google-cloud                 = { workspace = true }
 genkit-google-genai                 = { workspace = true }
+genkit-mcp                          = { workspace = true }
 genkit-middleware                   = { workspace = true }
 genkit-otel                         = { workspace = true }
 genkit-ollama                       = { workspace = true }

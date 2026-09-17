@@ -36,6 +36,7 @@ dependencies = [
   "genkit",
   "genkit-google-genai",
   "genkit-google-cloud",
+  "genkit-mcp",
   "genkit-ollama",
   "genkit-vertexai",
   "strenum>=0.4.15; python_version < '3.11'",
