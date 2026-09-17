@@ -827,13 +827,16 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
         return m
 
     mock_client = MagicMock()
-    _set_async_model_list(mock_client, [
-        mock_model('publishers/google/models/gemini-2.5-pro'),
-        mock_model('publishers/google/models/gemini-embedding-001'),
-        mock_model('publishers/google/models/gemini-embedding-2'),
-        mock_model('publishers/google/models/imagen-3.0-generate-002'),
-        mock_model('publishers/google/models/veo-2.0-generate-001'),
-    ])
+    _set_async_model_list(
+        mock_client,
+        [
+            mock_model('publishers/google/models/gemini-2.5-pro'),
+            mock_model('publishers/google/models/gemini-embedding-001'),
+            mock_model('publishers/google/models/gemini-embedding-2'),
+            mock_model('publishers/google/models/imagen-3.0-generate-002'),
+            mock_model('publishers/google/models/veo-2.0-generate-001'),
+        ],
+    )
     vertexai_plugin_instance._runtime_client = lambda: mock_client
 
     result = await vertexai_plugin_instance.list_actions()
