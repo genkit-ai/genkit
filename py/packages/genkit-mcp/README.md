@@ -30,9 +30,3 @@ client = define_mcp_client(
 result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
 await client.close()
 ```
-
-## Not wired into the workspace yet
-
-`py/pyproject.toml` declares `members = ["packages/*"]`, so this directory is already a uv workspace
-member, but the package is absent from the root dependency list, the type-checker source paths, the
-publish workflow and the packaging smoke test. Step 1 of the plan does that wiring and re-locks.

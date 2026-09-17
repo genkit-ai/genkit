@@ -28,6 +28,7 @@ dependencies = [
   "genkit-flask",
   "genkit-google-cloud",
   "genkit-google-genai",
+  "genkit-mcp",
   "genkit-middleware",
   "genkit-a2ui",
   "genkit-ollama",
@@ -46,7 +47,6 @@ dev = [
   "ipython~=8.22; python_version <= '3.10'",
   "ipython~=9.0.2; python_version >= '3.11'",
   "jupyter>=1.1.1",
-  "mcp>=1.25.0",
   "pytest-asyncio>=0.25.3",
   "pytest>=8.3.4",
   "pytest-cov>=6.0.0",
@@ -171,6 +171,7 @@ genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
+genkit-mcp          = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-a2ui         = { workspace = true }
 genkit-ollama       = { workspace = true }
@@ -375,6 +376,7 @@ root = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
@@ -406,6 +408,7 @@ extraPaths = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
@@ -435,6 +438,7 @@ project_excludes = [
 project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
+  "packages/genkit-mcp/src/**/*.py",
 ]
 
 # Search path for first-party code import resolution.
@@ -450,6 +454,7 @@ search-path = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
