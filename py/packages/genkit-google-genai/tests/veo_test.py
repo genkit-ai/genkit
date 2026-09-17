@@ -29,7 +29,7 @@ from genkit_google_genai.models.veo import (
     is_veo_model,
 )
 from google.genai import types as genai_types
-from google.genai.errors import APIError
+from google.genai.errors import APIError, ServerError
 
 from genkit import (
     ActionRunContext,
@@ -389,6 +389,19 @@ class TestVeoModelLifecycle:
 
         assert updated.done is True
         assert _media(updated.output)[0].url == 'https://example.com/done.mp4'
+
+    @pytest.mark.asyncio
+    async def test_start_wraps_api_error_into_genkit_error(self) -> None:
+        """A 503 on start is UNAVAILABLE and keeps the SDK error as cause."""
+        error = ServerError(503, {'error': {'code': 503, 'status': 'UNAVAILABLE', 'message': 'overloaded'}})
+        client = MagicMock()
+        client.aio.models.generate_videos = AsyncMock(side_effect=error)
+        model = VeoModel('veo-3.0-generate-001', client)
+
+        with pytest.raises(GenkitError) as raised:
+            await model.start(_text_request(), ActionRunContext())
+        assert raised.value.status == 'UNAVAILABLE'
+        assert raised.value.cause is error
 
     @pytest.mark.asyncio
     async def test_check_wraps_api_error_into_genkit_error(self) -> None:

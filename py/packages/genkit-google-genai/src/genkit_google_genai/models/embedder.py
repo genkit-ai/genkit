@@ -27,10 +27,12 @@ else:
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 
 from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
 from genkit._core._typing import DocumentData, MediaPart, TextPart
 from genkit.embedder import EmbedderInfo, EmbedderSupports
+from genkit_google_genai.models._errors import from_api_error
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 
@@ -177,11 +179,14 @@ class Embedder:
             return await self._generate_multimodal(request, model)
         contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
-        response = await self._client.aio.models.embed_content(
-            model=model,
-            contents=cast(genai_types.ContentListUnion, contents),
-            config=config,
-        )
+        try:
+            response = await self._client.aio.models.embed_content(
+                model=model,
+                contents=cast(genai_types.ContentListUnion, contents),
+                config=config,
+            )
+        except APIError as e:
+            raise from_api_error(e) from e
 
         embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
@@ -245,11 +250,14 @@ class Embedder:
                 'Multimodal embedding relies on google-genai client internals that are '
                 'unavailable in the installed google-genai version; install google-genai>=1.63.0.'
             )
-        http_response = await api_client.async_request(
-            http_method='post',
-            path=f'publishers/google/models/{model}:predict',
-            request_dict=payload,
-        )
+        try:
+            http_response = await api_client.async_request(
+                http_method='post',
+                path=f'publishers/google/models/{model}:predict',
+                request_dict=payload,
+            )
+        except APIError as e:
+            raise from_api_error(e) from e
         body = json.loads(http_response.body) if http_response.body else {}
         predictions = body.get('predictions', []) if isinstance(body, dict) else []
 

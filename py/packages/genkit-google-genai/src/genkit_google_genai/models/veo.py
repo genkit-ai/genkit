@@ -48,8 +48,9 @@ from genkit import (
     Supports,
 )
 from genkit.model import Error, Operation
-from genkit.plugin_api import ActionRunContext, wrap_http_error
+from genkit.plugin_api import ActionRunContext
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai.models._errors import from_api_error
 from genkit_google_genai.models._sdk_config import (
     dump_family_config,
     sdk_config_error,
@@ -375,7 +376,7 @@ class VeoModel:
                 config=config,
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise from_api_error(e) from e
 
         return _from_veo_operation(api_op=response)
 
@@ -399,7 +400,7 @@ class VeoModel:
                 operation=op_request
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise from_api_error(e) from e
 
         return _from_veo_operation(api_op=response)
 

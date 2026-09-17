@@ -19,6 +19,7 @@
 
 import base64
 import sys
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -45,7 +46,7 @@ from genkit_google_genai.models.gemini import (
 )
 from google import genai
 from google.genai import types as genai_types
-from google.genai.errors import APIError
+from google.genai.errors import APIError, ClientError, ServerError
 from pydantic import BaseModel, Field
 from pytest_mock import MockerFixture
 
@@ -1285,3 +1286,321 @@ def test_to_finish_reason_image_other_and_unexpected_tool() -> None:
     assert _to_finish_reason('NO_IMAGE') == FinishReason.OTHER
     assert _to_finish_reason('IMAGE_OTHER') == FinishReason.OTHER
     assert _to_finish_reason('UNEXPECTED_TOOL_CALL') == FinishReason.OTHER
+
+
+# ---------------------------------------------------------------------------
+# API error mapping and blocked prompts
+# ---------------------------------------------------------------------------
+
+RETRY_INFO_TYPE = 'type.googleapis.com/google.rpc.RetryInfo'
+
+
+def _text_request(text: str = 'hi') -> ModelRequest:
+    return ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])])
+
+
+def _server_error() -> ServerError:
+    return ServerError(503, {'error': {'code': 503, 'status': 'UNAVAILABLE', 'message': 'overloaded'}})
+
+
+def _quota_error(*, retry_info: bool = False, response: Any = None) -> ClientError:  # noqa: ANN401
+    body: dict[str, Any] = {'code': 429, 'status': 'RESOURCE_EXHAUSTED', 'message': 'quota'}
+    if retry_info:
+        body['details'] = [{'@type': RETRY_INFO_TYPE, 'retryDelay': '58s'}]
+    return ClientError(429, {'error': body}, response)
+
+
+def _text_chunk(
+    text: str, finish_reason: genai_types.FinishReason | None = None
+) -> genai_types.GenerateContentResponse:
+    candidate = genai_types.Candidate(
+        content=genai_types.Content(parts=[genai_types.Part(text=text)]),
+        finish_reason=finish_reason,
+    )
+    return genai_types.GenerateContentResponse(candidates=[candidate])
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_status_name_over_http_code(mocker: MockerFixture) -> None:
+    """The status name in the error body wins over the HTTP code."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.side_effect = ClientError(
+        400, {'error': {'code': 400, 'status': 'FAILED_PRECONDITION', 'message': 'billing disabled'}}
+    )
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext())
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_generate_attaches_retry_after_from_retry_info(mocker: MockerFixture) -> None:
+    """A 429 carrying RetryInfo exposes the delay through response_metadata."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.side_effect = _quota_error(retry_info=True)
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext())
+    assert raised.value.status == 'RESOURCE_EXHAUSTED'
+    assert raised.value.response_metadata == {'retry_after_ms': 58_000.0}
+
+
+@pytest.mark.asyncio
+async def test_generate_attaches_retry_after_from_header(mocker: MockerFixture) -> None:
+    """A 429 whose response carries only a Retry-After header still exposes the delay."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.side_effect = _quota_error(
+        response=SimpleNamespace(headers={'retry-after': '30'})
+    )
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext())
+    assert raised.value.status == 'RESOURCE_EXHAUSTED'
+    assert raised.value.response_metadata == {'retry_after_ms': 30_000.0}
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_attaches_retry_after_mid_stream(mocker: MockerFixture) -> None:
+    """A 429 raised while iterating still carries the RetryInfo delay."""
+
+    async def mid_stream_fail() -> Any:  # noqa: ANN401
+        yield _text_chunk('Hello')
+        raise _quota_error(retry_info=True)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = mid_stream_fail()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+    on_chunk = mocker.MagicMock()
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext(streaming_callback=on_chunk))
+    assert raised.value.status == 'RESOURCE_EXHAUSTED'
+    assert raised.value.response_metadata == {'retry_after_ms': 58_000.0}
+    assert on_chunk.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_classifies_server_error_on_setup(mocker: MockerFixture) -> None:
+    """A ServerError raised when opening the stream is UNAVAILABLE."""
+    error = _server_error()
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.side_effect = error
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is error
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_classifies_server_error_mid_stream(mocker: MockerFixture) -> None:
+    """A ServerError after the first chunk is UNAVAILABLE; the chunk before it was delivered."""
+
+    async def mid_stream_fail() -> Any:  # noqa: ANN401
+        yield _text_chunk('Hello')
+        raise _server_error()
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = mid_stream_fail()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+    on_chunk = mocker.MagicMock()
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_text_request(), ActionRunContext(streaming_callback=on_chunk))
+    assert raised.value.status == 'UNAVAILABLE'
+    assert on_chunk.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_prompt(mocker: MockerFixture) -> None:
+    """A prompt the service refused returns BLOCKED with the reason, the feedback, and usage."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        block_reason=genai_types.BlockedReason.SAFETY,
+        block_reason_message='unsafe prompt',
+    )
+    usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=7, total_token_count=7)
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(
+        prompt_feedback=feedback, usage_metadata=usage
+    )
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext())
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'unsafe prompt'
+    assert response.message is not None
+    assert response.message.role == Role.MODEL
+    assert response.candidates == []
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY', 'blockReasonMessage': 'unsafe prompt'}}
+    assert response.usage is not None
+    assert response.usage.input_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_prompt_default_message(mocker: MockerFixture) -> None:
+    """Without a service message the finish message names the block reason."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        block_reason=genai_types.BlockedReason.PROHIBITED_CONTENT
+    )
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext())
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'prompt blocked: PROHIBITED_CONTENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_unspecified_block_reason_is_not_blocked(mocker: MockerFixture) -> None:
+    """BLOCKED_REASON_UNSPECIFIED with no candidates is an ordinary empty response; the feedback is still exposed."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        block_reason=genai_types.BlockedReason.BLOCKED_REASON_UNSPECIFIED
+    )
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext())
+
+    assert response.finish_reason == FinishReason.OTHER
+    assert response.custom == {'promptFeedback': {'blockReason': 'BLOCKED_REASON_UNSPECIFIED'}}
+
+
+@pytest.mark.asyncio
+async def test_generate_with_candidates_ignores_block_reason(mocker: MockerFixture) -> None:
+    """Candidates win over a block reason in the prompt feedback."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+    answer = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    answer.prompt_feedback = feedback
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = answer
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext())
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].root.text == 'Hello'
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+
+
+@pytest.mark.asyncio
+async def test_generate_without_prompt_feedback_leaves_custom_empty(mocker: MockerFixture) -> None:
+    """A response with no prompt feedback keeps the default empty custom payload."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext())
+
+    assert response.custom == {}
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_blocked_prompt(mocker: MockerFixture) -> None:
+    """A blocked prompt on the streaming path returns BLOCKED and streams no chunks."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+    usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=3, total_token_count=3)
+
+    async def feedback_only() -> Any:  # noqa: ANN401
+        yield genai_types.GenerateContentResponse(prompt_feedback=feedback, usage_metadata=usage)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = feedback_only()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+    on_chunk = mocker.MagicMock()
+
+    response = await gemini.generate(_text_request(), ActionRunContext(streaming_callback=on_chunk))
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'prompt blocked: SAFETY'
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+    assert response.usage is not None
+    assert response.usage.input_tokens == 3
+    on_chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_block_reason_after_candidates_is_not_blocked(mocker: MockerFixture) -> None:
+    """A block reason arriving after streamed candidates does not turn the answer into BLOCKED."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+
+    async def answer_then_feedback() -> Any:  # noqa: ANN401
+        yield _text_chunk('Hello', genai_types.FinishReason.STOP)
+        yield genai_types.GenerateContentResponse(prompt_feedback=feedback)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = answer_then_feedback()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+    on_chunk = mocker.MagicMock()
+
+    response = await gemini.generate(_text_request(), ActionRunContext(streaming_callback=on_chunk))
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].root.text == 'Hello'
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+    assert on_chunk.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_exposes_prompt_feedback_without_block(mocker: MockerFixture) -> None:
+    """Prompt feedback that only carries safety ratings leaves the answer intact and is exposed in custom."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        safety_ratings=[
+            genai_types.SafetyRating(
+                category=genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                probability=genai_types.HarmProbability.NEGLIGIBLE,
+            )
+        ]
+    )
+    answer = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    answer.prompt_feedback = feedback
+
+    async def single_chunk() -> Any:  # noqa: ANN401
+        yield answer
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = single_chunk()
+    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, client)
+
+    response = await gemini.generate(_text_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].root.text == 'Hello'
+    assert response.custom == {
+        'promptFeedback': {'safetyRatings': [{'category': 'HARM_CATEGORY_HARASSMENT', 'probability': 'NEGLIGIBLE'}]}
+    }
+
+
+@pytest.mark.asyncio
+@patch('genkit_google_genai.models.gemini.generate_cache_key', new_callable=MagicMock)
+@patch('genkit_google_genai.models.gemini.validate_context_cache_request', new_callable=MagicMock)
+async def test_gemini_model__retrieve_cached_content_classifies_api_errors(
+    mock_generate_cache_key: MagicMock,
+    mock_validate_context_cache_request: MagicMock,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """API errors from the cache service are classified like generation errors."""
+    error = _server_error()
+    mock_client = MagicMock()
+    mock_client.aio.caches.list = AsyncMock(side_effect=error)
+    gemini_model_instance._client = mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini_model_instance._retrieve_cached_content(
+            request=_text_request(),
+            model_name='gemini-2.5-flash',
+            cache_config={},
+            contents=[],
+        )
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is error

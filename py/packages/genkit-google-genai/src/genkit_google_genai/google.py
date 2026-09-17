@@ -49,7 +49,7 @@ Example:
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from google import genai
@@ -57,7 +57,8 @@ from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
-from google.genai.types import HttpOptions, HttpOptionsDict
+from google.genai.errors import APIError
+from google.genai.types import HttpOptions, HttpOptionsDict, Model
 from pydantic import BaseModel
 
 import genkit_google_genai.constants as const
@@ -88,6 +89,7 @@ from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
+from genkit_google_genai.models._errors import from_api_error
 from genkit_google_genai.models._model_refs import (
     family_embedder_ref,
     family_model_ref,
@@ -181,6 +183,14 @@ class GenaiModels:
         self.veo = []
 
 
+def _iter_models(client: genai.Client) -> Iterator[Model]:
+    """Iterate the models the API lists, translating API errors raised while paging."""
+    try:
+        yield from client.models.list()
+    except APIError as e:
+        raise from_api_error(e) from e
+
+
 def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """Discover and categorize available models from the Google GenAI API.
 
@@ -222,7 +232,7 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """
     models = GenaiModels()
 
-    for m in client.models.list():
+    for m in _iter_models(client):
         name = m.name
         if not name:
             continue

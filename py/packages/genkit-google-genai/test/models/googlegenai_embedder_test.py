@@ -26,6 +26,7 @@ from genkit_google_genai.models.embedder import (
     get_embedder_info,
 )
 from google import genai
+from google.genai.errors import ServerError
 from pytest_mock import MockerFixture
 
 from genkit import (
@@ -33,6 +34,7 @@ from genkit import (
     DocumentPart,
     EmbedRequest,
     EmbedResponse,
+    GenkitError,
     Media,
     MediaPart,
     TextPart,
@@ -460,3 +462,34 @@ async def test_multimodal_embedding_guards_missing_private_transport(mocker: Moc
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     with pytest.raises(RuntimeError, match='google-genai>=1.63.0'):
         await embedder.generate(request)
+
+
+@pytest.mark.asyncio
+async def test_embedding_classifies_server_error(mocker: MockerFixture) -> None:
+    """A 5xx from embed_content becomes a GenkitError carrying the service's status."""
+    error = ServerError(503, {'error': {'code': 503, 'status': 'UNAVAILABLE', 'message': 'overloaded'}})
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = error
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('hi')]))
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is error
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_classifies_server_error(mocker: MockerFixture) -> None:
+    """A 5xx from the :predict transport becomes a GenkitError carrying the service's status."""
+    error = ServerError(503, {'error': {'code': 503, 'status': 'UNAVAILABLE', 'message': 'overloaded'}})
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = error
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(request)
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is error
