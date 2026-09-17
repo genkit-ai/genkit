@@ -7,6 +7,7 @@
     "start": "node lib/index.js",
     "dev": "tsx --watch src/index.ts",
     "genkit:dev": "genkit start -- tsx --watch src/index.ts",
+    "genkit:dev:headless": "genkit start --non-interactive -- tsx --watch src/index.ts",
     "compile": "tsc",
     "build": "pnpm build:clean && pnpm compile",
     "build:clean": "rimraf ./lib",
@@ -18,6 +19,7 @@
   "license": "ISC",
   "devDependencies": {
     "cross-env": "^10.1.0",
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
