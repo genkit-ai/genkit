@@ -18,3 +18,23 @@
 
 Exposes the tools of a stdio MCP server as Genkit ``tool.v2`` actions.
 """
+
+from genkit_mcp._client import McpClient, create_mcp_client, define_mcp_client
+from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._errors import (
+    McpClientError,
+    McpConnectionClosedError,
+    McpConnectionFailedError,
+    McpProtocolError,
+)
+
+__all__ = [
+    'McpClient',
+    'McpClientError',
+    'McpConnectionClosedError',
+    'McpConnectionFailedError',
+    'McpProtocolError',
+    'McpStdioServerConfig',
+    'create_mcp_client',
+    'define_mcp_client',
+]
