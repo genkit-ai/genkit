@@ -20,6 +20,7 @@ import {
   defineAction,
   defineBidiAction,
   getContext,
+  getErrorMessage,
   run,
   z,
   type Action,
@@ -28,6 +29,7 @@ import {
   type BidiAction,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
+import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
 import {
   createAgentAPI,
@@ -333,7 +335,30 @@ export class SessionRunner<State = unknown> {
   private lastSnapshotVersion: number = 0;
 
   private store?: SessionStore<State>;
+  /**
+   * True once the client detached. Per-turn snapshot writes are suspended
+   * from then on: the pending row written by {@link detach} already captures
+   * the invocation, and a single {@link finalizePendingSnapshot} rewrite
+   * records the cumulative state once the queued inputs drain.
+   */
   public isDetached: boolean = false;
+  /**
+   * The id of the pending row a detach wrote, which the finalize rewrites.
+   * Undefined until the client detaches.
+   */
+  public pendingSnapshotId?: string;
+  /**
+   * The pending row as written, kept so the finalize can rebuild it (its
+   * lineage and timestamps) even when the store no longer returns it.
+   */
+  private pendingRow?: SessionSnapshotInput<State>;
+  /**
+   * Serializes snapshot writes. The detach write and an in-flight turn-end
+   * write run on different tasks; under the lock the detach either waits for
+   * that write to land or suspends before it starts, so the two never land as
+   * sibling leaves and a turn-end write never follows the pending row.
+   */
+  private snapLock: Promise<unknown> = Promise.resolve();
   /**
    * Aborts in-flight turns. When set and aborted, a turn that rejects out of
    * `generate` is reported as `aborted` (not `failed`) and its failed snapshot
@@ -548,6 +573,13 @@ export class SessionRunner<State = unknown> {
     }
   }
 
+  /** Runs `fn` under the snapshot lock; see {@link snapLock}. */
+  private withSnapLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.snapLock.then(fn, fn);
+    this.snapLock = run.catch(() => {});
+    return run;
+  }
+
   /**
    * Saves a snapshot of the current session state to the persistent store.
    *
@@ -556,6 +588,11 @@ export class SessionRunner<State = unknown> {
    * that the snapshot has not been concurrently aborted before writing -
    * preventing a race where a "done" write could overwrite a concurrent
    * "aborted" status.
+   *
+   * Once the client has detached no per-turn row is written: the pending row
+   * {@link detach} wrote already captures the invocation, so this returns its
+   * id and the finalize records the cumulative state when the run settles.
+   * Pending rows themselves are written by {@link detach}, not here.
    */
   async maybeSnapshot(
     status?: 'pending' | 'completed' | 'failed',
@@ -563,63 +600,169 @@ export class SessionRunner<State = unknown> {
     snapshotId?: string,
     finishReason?: AgentFinishReason
   ): Promise<string | undefined> {
-    if (
-      !this.store ||
-      (this.isDetached && snapshotId !== this.lastSnapshot?.snapshotId)
-    )
-      return this.lastSnapshot?.snapshotId;
+    if (!this.store) return undefined;
+    return this.withSnapLock(async () => {
+      // Re-checked under the lock: a detach that landed while this write was
+      // waiting suspends it, so the turn's state goes to the finalize instead
+      // of landing beside the pending row.
+      if (this.isDetached) return this.pendingSnapshotId;
 
-    const currentVersion = this.session.getVersion();
-    if (currentVersion === this.lastSnapshotVersion && !status) {
-      return this.lastSnapshot?.snapshotId;
+      const currentVersion = this.session.getVersion();
+      if (currentVersion === this.lastSnapshotVersion && !status) {
+        return this.lastSnapshot?.snapshotId;
+      }
+
+      const currentState = this.session.getState();
+
+      const snapshotInput: SessionSnapshotInput<State> = {
+        ...(snapshotId || this.newSnapshotId
+          ? { snapshotId: (snapshotId || this.newSnapshotId)! }
+          : {}),
+        // Stamp the session id onto every snapshot in the chain so callers can
+        // resolve a snapshot's session without reaching into its state.
+        sessionId: this.session.sessionId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        state: currentState as SessionState<State>,
+        parentId: this.lastSnapshot?.snapshotId,
+        // Default to a resumable `completed` status. The only caller that omits a
+        // status is the post-invocation write (which fires when the handler
+        // mutates state after the last turn); persisting it as `completed` keeps
+        // it a valid resume target under the "only `completed` is resumable" rule.
+        status: status ?? 'completed',
+        ...(finishReason && { finishReason }),
+        error,
+      };
+
+      const effectiveId = snapshotId || this.newSnapshotId;
+
+      // Use the mutator-based saveSnapshot to atomically check the current
+      // status before writing.  If the snapshot was concurrently aborted,
+      // the mutator returns null and the write is skipped.
+      const assignedId = await this.store!.saveSnapshot(
+        effectiveId,
+        abortAwareMutator(snapshotInput),
+        { context: getContext() }
+      );
+      if (assignedId === null) {
+        // Snapshot was aborted concurrently; preserve the existing ID
+        // without overwriting.
+        return effectiveId;
+      }
+
+      this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
+      this.lastSnapshotVersion = currentVersion;
+
+      return assignedId;
+    });
+  }
+
+  /**
+   * Detaches the invocation: writes the pending row that stands for the
+   * background work and suspends per-turn snapshot writes from here on.
+   *
+   * The row carries no state. The live state holds an unfinished turn's
+   * mutations, and the state the row lands with is what
+   * {@link finalizePendingSnapshot} records once the run settles. Its id is
+   * the next turn's reserved id when one is waiting, so a handler naming
+   * external resources after its turn's `snapshotId` names the row the
+   * invocation finalizes.
+   *
+   * Idempotent: a second detach input returns the row already written.
+   * Resolves with the pending row's id.
+   */
+  async detach(): Promise<string> {
+    if (!this.store) {
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: 'Detach is only supported when a session store is provided.',
+      });
     }
+    return this.withSnapLock(async () => {
+      if (this.pendingSnapshotId) return this.pendingSnapshotId;
+      const snapshotId = this.newSnapshotId || reserveSnapshotId();
+      const now = new Date().toISOString();
+      const row: SessionSnapshotInput<State> = {
+        snapshotId,
+        sessionId: this.session.sessionId,
+        parentId: this.lastSnapshot?.snapshotId,
+        createdAt: now,
+        updatedAt: now,
+        status: 'pending',
+        // A background heartbeat loop refreshes this; if it goes stale the
+        // row is reported as `expired` on read (the worker is presumed dead).
+        heartbeatAt: now,
+      };
+      await this.store!.saveSnapshot(snapshotId, () => row, {
+        context: getContext(),
+      });
+      this.pendingRow = row;
+      this.pendingSnapshotId = snapshotId;
+      this.newSnapshotId = snapshotId;
+      this.isDetached = true;
+      this.onDetach?.(snapshotId);
+      return snapshotId;
+    });
+  }
 
-    const currentState = this.session.getState();
+  /**
+   * Rewrites the pending row a detach wrote with how the run ended: the
+   * cumulative session state, the terminal status, the last turn's finish
+   * reason, and the error when it failed. The row keeps its lineage and
+   * creation time; its heartbeat is cleared, since the row is settled.
+   *
+   * A late abort wins over the terminal the run was about to land: the row
+   * keeps `aborted` and only the finish reason is stamped, so the row is
+   * self-describing (the abort write flips the status; the runtime owns the
+   * reason). Nothing is written once that stamp is on.
+   *
+   * `cause` is an error the agent function itself threw, which fails the run
+   * whatever its turns did. Persistence is best-effort: a store failure is
+   * logged and does not surface.
+   */
+  async finalizePendingSnapshot(cause?: unknown): Promise<void> {
+    const store = this.store;
+    const snapshotId = this.pendingSnapshotId;
+    if (!store || !snapshotId) return;
 
-    const snapshotInput: SessionSnapshotInput<State> = {
-      ...(snapshotId || this.newSnapshotId
-        ? { snapshotId: (snapshotId || this.newSnapshotId)! }
-        : {}),
-      // Stamp the session id onto every snapshot in the chain so callers can
-      // resolve a snapshot's session without reaching into its state.
-      sessionId: this.session.sessionId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      state: currentState as SessionState<State>,
-      parentId: this.lastSnapshot?.snapshotId,
-      // Default to a resumable `completed` status. The only caller that omits a
-      // status is the post-invocation write (which fires when the handler
-      // mutates state after the last turn); persisting it as `completed` keeps
-      // it a valid resume target under the "only `completed` is resumable" rule.
-      status: status ?? 'completed',
-      // Stamp an initial heartbeat on a `pending` (detached, in-flight)
-      // snapshot. A background heartbeat loop refreshes it; if it goes stale the
-      // snapshot is reported as `expired` on read (the worker is presumed dead).
-      ...(status === 'pending' && { heartbeatAt: new Date().toISOString() }),
-      ...(finishReason && { finishReason }),
-      error,
-    };
+    const error =
+      cause !== undefined
+        ? toErrorDetails(cause)
+        : this.lastTurnFinishReason === 'failed'
+          ? this.lastTurnError
+          : undefined;
+    const status = error ? 'failed' : 'completed';
+    const finishReason = error ? 'failed' : this.lastTurnFinishReason;
+    const state = this.session.getState();
+    const now = new Date().toISOString();
 
-    const effectiveId = snapshotId || this.newSnapshotId;
-
-    // Use the mutator-based saveSnapshot to atomically check the current
-    // status before writing.  If the snapshot was concurrently aborted,
-    // the mutator returns null and the write is skipped.
-    const assignedId = await this.store.saveSnapshot(
-      effectiveId,
-      abortAwareMutator(snapshotInput),
-      { context: getContext() }
-    );
-    if (assignedId === null) {
-      // Snapshot was aborted concurrently; preserve the existing ID
-      // without overwriting.
-      return effectiveId;
+    try {
+      await this.withSnapLock(() =>
+        store.saveSnapshot(
+          snapshotId,
+          (existing) => {
+            const { heartbeatAt: _, ...base } = existing ?? this.pendingRow!;
+            if (base.status === 'aborted') {
+              if (base.finishReason === 'aborted') return null;
+              return { ...base, finishReason: 'aborted', updatedAt: now };
+            }
+            return {
+              ...base,
+              status,
+              ...(finishReason && { finishReason }),
+              error,
+              state,
+              updatedAt: now,
+            };
+          },
+          { context: getContext() }
+        )
+      );
+    } catch (e) {
+      logger.error(
+        `agent: failed to finalize detached snapshot ${snapshotId}: ${getErrorMessage(e)}`
+      );
     }
-
-    this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
-    this.lastSnapshotVersion = currentVersion;
-
-    return assignedId;
   }
 }
 
@@ -937,17 +1080,10 @@ function pipeInputWithDetach<State>(
               })
             );
           } else {
-            const runner = getRunner();
-            // Reserve the in-flight snapshot's id up front so the detached
-            // snapshot and any handler-named external resources share one id.
-            const turnSnapshotId = runner.newSnapshotId || reserveSnapshotId();
-            runner.newSnapshotId = turnSnapshotId;
-            await runner.maybeSnapshot('pending', undefined, turnSnapshotId);
-            runner.isDetached = true;
-
-            if (runner.onDetach) {
-              runner.onDetach(turnSnapshotId);
-            }
+            // Writes the pending row, suspends per-turn snapshots, and fires
+            // onDetach. Under the runner's snapshot lock, so an in-flight
+            // turn-end write either lands first or is suspended.
+            await getRunner().detach();
           }
           // Only forward to the runner if the input carries a payload beyond
           // the detach directive; a detach-only message has no turn to process.
@@ -1247,8 +1383,15 @@ export function defineCustomAgent<State = unknown>(
       };
 
       const flowPromise = (async () => {
+        let result: AgentResult;
+        let finalSnapshotId: string | undefined;
+        // An error the agent function threw outside a turn. Attached, it
+        // propagates as the action's own failure; detached, it lands on the
+        // pending row, since there is no longer a caller to throw to.
+        let fnError: unknown;
+        let fnThrew = false;
         try {
-          const result = await runWithSession(registry, session, () =>
+          result = await runWithSession(registry, session, () =>
             fn(runner, {
               sendChunk,
               abortSignal: abortController.signal,
@@ -1257,18 +1400,27 @@ export function defineCustomAgent<State = unknown>(
           );
           // After the handler resolves, persist any state it mutated after the
           // last turn. Omitting a status defaults to a resumable `completed`
-          // write, which the version guard skips when nothing changed.
-          const finalSnapshotId = await runner.maybeSnapshot();
-          return { result, finalSnapshotId };
+          // write, which the version guard skips when nothing changed. A
+          // detached run has nothing to write here: its finalize records the
+          // cumulative state.
+          finalSnapshotId = await runner.maybeSnapshot();
+        } catch (e) {
+          fnError = e;
+          fnThrew = true;
         } finally {
-          // The turn has settled (the snapshot reached a terminal status), so
-          // stop refreshing its heartbeat.
+          // The run has settled, so stop refreshing the pending row's
+          // heartbeat before the finalize clears it.
           stopHeartbeat();
           if (unsubscribe) unsubscribe();
           session.off('artifactAdded', sendArtifactChunk);
           session.off('artifactUpdated', sendArtifactChunk);
           session.off('customChanged', sendCustomPatch);
+          if (runner.isDetached) {
+            await runner.finalizePendingSnapshot(fnThrew ? fnError : undefined);
+          }
         }
+        if (fnThrew && !runner.isDetached) throw fnError;
+        return { result: result!, finalSnapshotId };
       })();
 
       // We race the background flow execution against the detach signal.
