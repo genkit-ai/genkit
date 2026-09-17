@@ -27,12 +27,7 @@ from genkit.plugin_api import StatusName
 
 
 class _ClientError(GenkitError):
-    """Base class for every error this package raises.
-
-    It does not derive from ``RuntimeError``: the MCP SDK reports a tool result
-    that fails the server's own output schema as a bare ``RuntimeError``, and
-    that failure is reported to the model as a tool error while these are not.
-    """
+    """Base class for every error this package raises."""
 
     _status: ClassVar[StatusName] = 'INTERNAL'
 
@@ -68,3 +63,13 @@ class _ConnectionFailedError(_ClientError):
 
 class _ProtocolError(_ClientError):
     """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
+
+
+class McpToolResultError(_ClientError):
+    """A server's tool result violated the tool's declared output schema.
+
+    The MCP SDK reports this as a bare ``RuntimeError``; the connection
+    translates it into this error at the ``session.call_tool`` site, so a tool
+    action can report it to the model without catching unrelated runtime
+    failures.
+    """
