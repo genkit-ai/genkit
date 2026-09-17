@@ -16,6 +16,7 @@
 
 import {
   GenkitError,
+  StatusNameSchema,
   deepEqual,
   defineAction,
   defineBidiAction,
@@ -56,7 +57,12 @@ import {
   type AgentResult,
   type AgentStreamChunk,
 } from './agent-types.js';
-import { generateStream } from './generate.js';
+import {
+  GenerateResponse,
+  GenerationAbortedError,
+  GenerationResponseError,
+  generateStream,
+} from './generate.js';
 import { diff, type JsonPatch } from './json-patch.js';
 import { MessageData } from './model-types.js';
 import { type ToolRequestPart, type ToolResponsePart } from './parts.js';
@@ -142,9 +148,66 @@ function isHeartbeatExpired(
  * Returning a `finishReason` lets a custom agent explicitly state why the turn
  * ended (e.g. `interrupted`, `length`). When omitted, no per-turn reason is
  * reported.
+ *
+ * Carried on a {@link CommittedTurnError}, it also says a failed turn left
+ * state worth continuing from, which is what makes the turn snapshot and the
+ * session resumable; see {@link SessionRunner.run}.
  */
 export interface TurnResult {
   finishReason?: AgentFinishReason;
+}
+
+/**
+ * Thrown by a turn handler to fail the turn while committing its state as a
+ * resume point.
+ *
+ * A turn handler that throws any other error rolls the turn back: nothing is
+ * persisted and the previous snapshot stays the resume point. Throwing this
+ * instead commits the turn: the session state as the handler left it is
+ * persisted as a `failed` snapshot carrying the error, and that snapshot (or,
+ * client-managed, that state) is what the invocation's failed output reports
+ * as the resume point. The handler is responsible for leaving the session at
+ * a state that can be continued from; a prompt-backed agent commits whenever
+ * the generate call produced a partial response, since that partial ends at
+ * a turn seam.
+ *
+ * `cause` is the error the turn failed with, and is what the output and the
+ * snapshot report. `result` may carry the turn's own finish reason; without
+ * one the runner derives it from how the turn ended.
+ */
+export class CommittedTurnError extends Error {
+  readonly result: TurnResult;
+
+  constructor(cause: unknown, result: TurnResult = {}) {
+    super(getErrorMessage(cause), { cause });
+    this.name = 'CommittedTurnError';
+    this.result = result;
+    // Restore prototype chain for `instanceof` across transpilation targets.
+    Object.setPrototypeOf(this, CommittedTurnError.prototype);
+  }
+}
+
+/** Detects a {@link CommittedTurnError}, by class or by brand across bundles. */
+function isCommittedTurnError(e: unknown): e is CommittedTurnError {
+  return (
+    e instanceof CommittedTurnError ||
+    (e as { name?: unknown } | undefined)?.name === 'CommittedTurnError'
+  );
+}
+
+/**
+ * Reports whether an input carries data of its own: a message, or resume
+ * directives. It filters pure detach signals out of the runner's queue, and it
+ * marks the inputs a turn can start from: one without a payload runs on the
+ * conversation already in the session, which is how a failed turn is
+ * re-attempted, so there has to be a conversation there.
+ */
+function hasInputPayload(input: AgentInput | undefined): boolean {
+  return !!(
+    input?.message ||
+    input?.resume?.restart?.length ||
+    input?.resume?.respond?.length
+  );
 }
 
 /**
@@ -178,12 +241,28 @@ export interface AgentOutput<S = unknown> {
   sessionId?: string;
   artifacts?: Artifact[];
   message?: MessageData;
+  /**
+   * ID of the most recent turn-end snapshot for this invocation. Empty when
+   * no store is configured, or when nothing has been committed yet: a
+   * first-turn failure that rolled back on a fresh session. On a resumed
+   * session whose first turn rolls back it is the resumed snapshot's id. When
+   * `finishReason` is
+   * `detached` it is the pending detach snapshot. When `failed`, it is the
+   * resume point: the failed turn's own snapshot when the turn committed
+   * anything, otherwise the last committed turn's snapshot.
+   */
   snapshotId?: string;
+  /**
+   * Final conversation state (only when client-managed). When `finishReason`
+   * is `failed`, this is the resume point: what the failed turn committed, or
+   * the last successful turn's state when the turn failed before committing
+   * anything.
+   */
   state?: SessionState<S>;
   finishReason?: AgentFinishReason;
   /**
    * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape); `state`/`snapshotId` hold the last-good state.
+   * details (RuntimeError shape); `state`/`snapshotId` hold the resume point.
    */
   error?: {
     status?: string;
@@ -202,13 +281,34 @@ interface AgentErrorDetails {
 }
 
 /**
+ * The error a prompt-backed agent hands the runner for a generation the loop
+ * reported on the response (see `throwOnError`): the classification the loop
+ * would have thrown, so the runner reads the failure's status, text and
+ * details, and tells a caller's stop from a break by the error's identity.
+ */
+function generationError(res: GenerateResponse): GenerationResponseError {
+  const { status, message } = res.error!;
+  const Ctor =
+    res.finishReason === 'aborted'
+      ? GenerationAbortedError
+      : GenerationResponseError;
+  // The loop's statuses are canonical; a status a model wrote itself may not
+  // be, and an error is still owed for it.
+  const known = StatusNameSchema.safeParse(status);
+  return new Ctor(res, message, known.success ? known.data : 'INTERNAL');
+}
+
+/**
  * Normalizes a thrown value into the structured error shape used across the
  * agent (in `AgentOutput.error` and `SessionRunner.lastTurnError`).
  */
 function toErrorDetails(e: any): AgentErrorDetails {
   return {
     status: e?.status || 'INTERNAL',
-    message: e?.message || 'Internal failure',
+    // A GenkitError's own text: the status it prefixes its message with
+    // travels on `status`, and a client matching the recorded message across
+    // runtimes reads the same words a Go or Python agent records.
+    message: e?.originalMessage || e?.message || 'Internal failure',
     details: toErrorDetailsPayload(e?.detail ?? e?.details),
   };
 }
@@ -233,7 +333,6 @@ function toErrorDetailsPayload(detail: unknown): unknown {
     request: _request,
     ...rest
   } = detail as Record<string, any>;
-  if (response === undefined) return detail;
   const inner = response?.error?.details;
   if (inner !== undefined) return inner;
   return Object.keys(rest).length > 0 ? rest : undefined;
@@ -319,15 +418,26 @@ export class SessionRunner<State = unknown> {
    */
   public lastTurnError?: AgentErrorDetails;
   /**
-   * The state the most recently *successful* turn left behind. On a failed
-   * turn this is the state the failed turn started with - the last-good state
-   * returned to the caller (for client-managed agents).
+   * Whether the most recent turn left state worth continuing from. A
+   * successful turn always has; a failed one has when its handler threw a
+   * {@link CommittedTurnError}. Decides whether the turn snapshots and whether
+   * the live state is the resume point. True until a turn fails without
+   * committing.
+   */
+  public lastTurnCommitted: boolean = true;
+  /**
+   * A deep copy of the session state as of the most recent *committed* turn
+   * (or the initial state when no turn has committed yet). On a turn that
+   * failed without committing this is the state that turn started with, which
+   * is the resume point the failed output hands back (client-managed) and the
+   * state a detached run's finalize records.
    */
   public lastGoodState?: SessionState<State>;
   /**
-   * The snapshotId of the most recently *successful* (persisted, `done`) turn.
-   * On a failed turn this is the last-good snapshot the caller resumes from;
-   * `undefined` when no turn has succeeded yet (e.g. a first-turn failure).
+   * The snapshotId of the most recently *committed* turn: the failed turn's
+   * own snapshot when it committed, otherwise the last successful turn's.
+   * `undefined` when no turn has committed yet (e.g. a first-turn failure
+   * that rolled back).
    */
   public lastGoodSnapshotId?: string;
   private lastSnapshot?: SessionSnapshot<State>;
@@ -472,7 +582,18 @@ export class SessionRunner<State = unknown> {
    *
    * The handler may return a {@link TurnResult} carrying an explicit
    * `finishReason` for the just-completed turn. When omitted, no per-turn
-   * reason is reported. Failures always report `failed`.
+   * reason is reported.
+   *
+   * When the handler throws, the runner records the failure, stops looping,
+   * and lets the invocation resolve with `finishReason: 'failed'`. What it
+   * does with the turn's state depends on what was thrown: a
+   * {@link CommittedTurnError} commits the turn, which snapshots the session
+   * as `failed` with the error on the row and makes it the resume point, and
+   * any other error rolls the turn back, leaving the previous snapshot as the
+   * resume point. A prompt-backed agent commits whenever the generate call
+   * produced a partial response, because that partial ends at a turn seam and
+   * is a conversation the caller can continue from; a custom agent commits
+   * when it knows the same of its own state.
    */
   async run(
     fn: (input: AgentInput, ctx: TurnContext) => Promise<TurnResult | void>
@@ -506,12 +627,31 @@ export class SessionRunner<State = unknown> {
         turnIndex: this.turnIndex,
       };
 
+      // The turn's own error, once the failure arm has recorded it. It ends
+      // the loop gracefully; any other error out of the span (a store failing
+      // while the turn was recorded) propagates.
+      let turnError: unknown;
+      let turnThrew = false;
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
-          const turnResult = await fn(input, turnContext);
+          let turnResult: TurnResult | void;
+          try {
+            turnResult = await fn(input, turnContext);
+          } catch (e) {
+            turnThrew = true;
+            turnError = e;
+            const snapshotId = await this.endFailedTurn(e, turnSnapshotId);
+            // Tag the span with the failed turn's snapshot as a success is
+            // tagged with its own, so a trace correlates either with its row.
+            if (snapshotId) {
+              setCustomMetadataAttribute('agent:snapshotId', snapshotId);
+            }
+            throw e;
+          }
           const finishReason = turnResult?.finishReason;
           this.lastTurnFinishReason = finishReason;
           this.lastTurnError = undefined;
+          this.lastTurnCommitted = true;
 
           const snapshotId = await this.maybeSnapshot(
             'completed',
@@ -540,37 +680,68 @@ export class SessionRunner<State = unknown> {
           return { state: this.session.getState() };
         });
         this.turnIndex++;
-      } catch (e: any) {
-        // An aborted turn rejects out of `generate` and lands here. Treat it as
-        // `aborted` rather than `failed`: the abort path already persisted the
-        // `aborted` status (the abort-aware mutator would skip a `failed` write
-        // anyway), so we record the finish reason and skip the failed snapshot
-        // write entirely instead of reporting a spurious error.
-        if (this.abortSignal?.aborted) {
-          this.lastTurnFinishReason = 'aborted';
-          this.lastTurnError = undefined;
-          this.notifyEndTurn(this.lastSnapshot?.snapshotId, 'aborted');
-          break;
-        }
-
-        this.lastTurnFinishReason = 'failed';
-        this.lastTurnError = toErrorDetails(e);
-        const snapshotId = await this.maybeSnapshot(
-          'failed',
-          this.lastTurnError,
-          turnSnapshotId,
-          'failed'
-        );
-        this.notifyEndTurn(snapshotId, 'failed');
-
+      } catch (e) {
+        if (!turnThrew || e !== turnError) throw e;
         // Graceful failure: rather than propagating the exception (which would
-        // discard the action's final return - and with it the last-good state
-        // and all prior successful turns), stop processing further inputs and
-        // let the invocation resolve with `finishReason: 'failed'`. The caller
-        // recovers the last-good state from the returned AgentOutput.
+        // discard the action's final return - and with it the resume point and
+        // all prior committed turns), stop processing further inputs and let
+        // the invocation resolve with `finishReason: 'failed'`. The caller
+        // recovers the resume point from the returned AgentOutput.
         break;
       }
     }
+  }
+
+  /**
+   * Records a turn whose handler threw `e`, writing the turn's snapshot when
+   * it committed, and returns that snapshot's id.
+   *
+   * An aborted turn rejects out of `generate` and lands here too. It is
+   * `aborted` rather than `failed`: the abort path already persisted the
+   * `aborted` status (the abort-aware mutator would skip a `failed` write
+   * anyway), so only the finish reason is recorded and no snapshot is written.
+   */
+  private async endFailedTurn(
+    e: unknown,
+    turnSnapshotId: string | undefined
+  ): Promise<string | undefined> {
+    if (this.abortSignal?.aborted) {
+      this.lastTurnFinishReason = 'aborted';
+      this.lastTurnError = undefined;
+      this.lastTurnCommitted = false;
+      this.notifyEndTurn(this.lastSnapshot?.snapshotId, 'aborted');
+      return undefined;
+    }
+
+    // What the turn threw decides what happens to its state: a
+    // CommittedTurnError commits the turn as a resume point, anything else
+    // rolls it back (see `run`). The error the output and the snapshot
+    // report is the underlying cause either way. The turn's own finish
+    // reason, when the result names one, goes on the turn-end chunk and the
+    // row; the invocation reports how it ended.
+    const committed = isCommittedTurnError(e);
+    const cause = committed ? e.cause : e;
+    const finishReason: AgentFinishReason =
+      (committed && e.result?.finishReason) || 'failed';
+    this.lastTurnFinishReason = finishReason;
+    this.lastTurnError = toErrorDetails(cause);
+    this.lastTurnCommitted = committed;
+
+    let snapshotId: string | undefined;
+    if (committed) {
+      // The failed turn's own snapshot, with the error on the row, is the
+      // newest snapshot and so the resume point the failed output reports.
+      snapshotId = await this.maybeSnapshot(
+        'failed',
+        this.lastTurnError,
+        turnSnapshotId,
+        finishReason
+      );
+      this.lastGoodState = this.session.getState();
+      this.lastGoodSnapshotId = snapshotId ?? this.lastGoodSnapshotId;
+    }
+    this.notifyEndTurn(snapshotId, finishReason);
+    return snapshotId;
   }
 
   /** Runs `fn` under the snapshot lock; see {@link snapLock}. */
@@ -625,10 +796,10 @@ export class SessionRunner<State = unknown> {
         updatedAt: new Date().toISOString(),
         state: currentState as SessionState<State>,
         parentId: this.lastSnapshot?.snapshotId,
-        // Default to a resumable `completed` status. The only caller that omits a
-        // status is the post-invocation write (which fires when the handler
-        // mutates state after the last turn); persisting it as `completed` keeps
-        // it a valid resume target under the "only `completed` is resumable" rule.
+        // Default to a `completed` status. The only caller that omits a status
+        // is the post-invocation write, which fires when the handler mutates
+        // state after the last turn of a run that ended well; the row it
+        // writes is a settled resume point.
         status: status ?? 'completed',
         ...(finishReason && { finishReason }),
         error,
@@ -725,15 +896,19 @@ export class SessionRunner<State = unknown> {
     const snapshotId = this.pendingSnapshotId;
     if (!store || !snapshotId) return;
 
+    // An error the agent function threw ends the run as failed whatever its
+    // turns did; otherwise the last turn's own error and finish reason stand.
     const error =
-      cause !== undefined
-        ? toErrorDetails(cause)
-        : this.lastTurnFinishReason === 'failed'
-          ? this.lastTurnError
-          : undefined;
+      cause !== undefined ? toErrorDetails(cause) : this.lastTurnError;
     const status = error ? 'failed' : 'completed';
-    const finishReason = error ? 'failed' : this.lastTurnFinishReason;
-    const state = this.session.getState();
+    const finishReason =
+      cause !== undefined ? 'failed' : this.lastTurnFinishReason;
+    // The state the row lands with: everything through the last turn that
+    // committed, so a rolled-back turn's mutations do not ride onto a row that
+    // is a resume point.
+    const state = this.lastTurnCommitted
+      ? this.session.getState()
+      : (this.lastGoodState ?? this.session.getState());
     const now = new Date().toISOString();
 
     try {
@@ -964,18 +1139,7 @@ async function resolveSession<State>(
       });
     }
 
-    // Only `completed` snapshots are resumable. A failed/aborted/pending
-    // snapshot is persisted for inspection but is not a valid resume target.
-    if (snapshot.status !== 'completed') {
-      throw new GenkitError({
-        status: 'INVALID_ARGUMENT',
-        message:
-          `Snapshot ${init.snapshotId} is not resumable (status: ` +
-          `${snapshot.status ?? 'unknown'}). Only 'completed' snapshots can ` +
-          `be resumed.`,
-      });
-    }
-
+    assertResumable(snapshot);
     validateCustomState(snapshot.state?.custom);
     return {
       snapshot,
@@ -984,41 +1148,18 @@ async function resolveSession<State>(
   }
 
   if (init?.sessionId) {
-    // Resume the session's latest snapshot. The store returns the latest leaf
-    // regardless of status, but only `completed` snapshots are resumable - so
-    // if the leaf is a non-resumable turn (e.g. a `failed`/`aborted`/`pending`
-    // turn) walk back over its parent chain to the last-good (`completed`)
-    // snapshot. When the session has no resumable snapshot (e.g. a first-turn
-    // failure) seed a fresh session bound to the requested sessionId so
+    // Resume the session's latest snapshot. The store returns the literal
+    // latest leaf whatever its status, and it is validated the way a snapshot
+    // named by id is: a caller wanting to continue past a dead-end tip names
+    // an earlier snapshot explicitly via `snapshotId`. When the session has no
+    // snapshot yet, seed a fresh session bound to the requested sessionId so
     // subsequent turns can find it.
-    let snapshot = await store.getSnapshot({
+    const snapshot = await store.getSnapshot({
       sessionId: init.sessionId,
       context: getContext(),
     });
-    // Walk back over non-resumable leaves to the last-good (`completed`)
-    // snapshot. Guard against a self-referential or cyclic `parentId` chain
-    // (corrupt history) with a visited set so we fail fast with
-    // `FAILED_PRECONDITION` instead of looping forever on store reads.
-    const visited = new Set<string>();
-    while (snapshot && snapshot.status !== 'completed') {
-      if (visited.has(snapshot.snapshotId)) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message:
-            `Session '${init.sessionId}' has a cyclic snapshot parent chain ` +
-            `(snapshot '${snapshot.snapshotId}' was visited twice). Resume by ` +
-            `snapshotId instead.`,
-        });
-      }
-      visited.add(snapshot.snapshotId);
-      snapshot = snapshot.parentId
-        ? await store.getSnapshot({
-            snapshotId: snapshot.parentId,
-            context: getContext(),
-          })
-        : undefined;
-    }
     if (snapshot) {
+      assertResumable(snapshot);
       validateCustomState(snapshot.state?.custom);
       return {
         snapshot,
@@ -1049,6 +1190,31 @@ async function resolveSession<State>(
       messages: [],
     }),
   };
+}
+
+/**
+ * Rejects a snapshot that cannot be continued from. A `pending` row is still
+ * being written by its detached invocation. A `failed` row can be continued
+ * from: the turn that wrote it committed a conversation ending at a turn seam,
+ * and whether the recorded error is worth another attempt is the caller's
+ * judgement, not the framework's.
+ */
+function assertResumable(snapshot: SessionSnapshot<unknown>): void {
+  switch (snapshot.status) {
+    case 'pending':
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message:
+          `Snapshot ${snapshot.snapshotId} is still pending: its detached ` +
+          `invocation is still running; wait for it to finalize or abort it ` +
+          `before resuming.`,
+      });
+    case 'aborted':
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: `Snapshot ${snapshot.snapshotId} was aborted.`,
+      });
+  }
 }
 
 /**
@@ -1087,12 +1253,7 @@ function pipeInputWithDetach<State>(
           }
           // Only forward to the runner if the input carries a payload beyond
           // the detach directive; a detach-only message has no turn to process.
-          const hasPayload = !!(
-            input.message ||
-            input.resume?.restart?.length ||
-            input.resume?.respond?.length
-          );
-          if (hasPayload) {
+          if (hasInputPayload(input)) {
             target.send(input);
           }
         } else {
@@ -1402,8 +1563,14 @@ export function defineCustomAgent<State = unknown>(
           // last turn. Omitting a status defaults to a resumable `completed`
           // write, which the version guard skips when nothing changed. A
           // detached run has nothing to write here: its finalize records the
-          // cumulative state.
-          finalSnapshotId = await runner.maybeSnapshot();
+          // cumulative state. Nor does a run that failed: the resume point is
+          // the last committed snapshot, whether that is the failed turn's own
+          // row or its predecessor's, and a completed row on top of it would
+          // displace it as the session's latest.
+          finalSnapshotId =
+            runner.lastTurnCommitted && !runner.lastTurnError
+              ? await runner.maybeSnapshot()
+              : runner.lastGoodSnapshotId;
         } catch (e) {
           fnError = e;
           fnThrew = true;
@@ -1442,29 +1609,27 @@ export function defineCustomAgent<State = unknown>(
 
       const { result, finalSnapshotId } = outcome;
 
-      // A turn failed: resolve gracefully with `finishReason: 'failed'` and the
-      // last-good state (what the failed turn started with), rather than the
-      // live state which may hold the failed turn's partial mutations.
-      if (runner.lastTurnFinishReason === 'failed' && runner.lastTurnError) {
+      // A turn failed: resolve gracefully with `finishReason: 'failed'` and
+      // the resume point. That is the state through the last committed turn,
+      // which is the failed turn itself when it committed and its predecessor
+      // when it did not, since only a committed turn snapshots and advances
+      // the last-good state. No message and no artifacts: they describe the
+      // result of a completed run, and the live artifacts would carry a
+      // rolled-back turn's. The turn's own finish reason, when its result
+      // named one, is on the turn-end chunk and the row; the invocation
+      // reports how it ended.
+      if (runner.lastTurnError) {
         const lastGood = (runner.lastGoodState ??
           session.getState()) as SessionState<State>;
-        const lastGoodMessages = lastGood.messages;
         return {
           sessionId: session.sessionId,
           finishReason: 'failed' as AgentFinishReason,
           error: runner.lastTurnError,
-
-          ...(result.artifacts?.length && { artifacts: result.artifacts }),
-          ...(lastGoodMessages?.length && {
-            message: lastGoodMessages[lastGoodMessages.length - 1],
-          }),
-          // Server-managed: the last successful turn is already persisted (every
-          // turn is snapshotted), so point at its snapshot. The failed turn's
-          // own snapshot is persisted too but is not resumable - `sessionId`
-          // resume skips it back to this last-good `done` snapshot. Undefined on
-          // a first-turn failure (no successful turn yet; client holds the seed).
+          // Server-managed: the newest snapshot is the resume point. Undefined
+          // when nothing has been committed yet (a first-turn failure that
+          // rolled back on a fresh session).
           ...(config.store && { snapshotId: runner.lastGoodSnapshotId }),
-          // Client-managed: return the last-good state directly.
+          // Client-managed: return the resume point's state directly.
           ...(!config.store && { state: toClientState(lastGood) }),
         };
       }
@@ -1669,8 +1834,21 @@ export function definePromptAgent<
       const historyTag = '_genkit_history';
       const promptTag = 'agentPreamble';
 
+      // An input with no payload of its own runs the turn on the conversation
+      // as it stands, which is how a failed turn is re-attempted: the failed
+      // snapshot holds the messages the turn committed, and the model is
+      // called on them again. There has to be something to continue.
+      const sessionMessages = sess.getMessages();
+      if (!hasInputPayload(input) && sessionMessages.length === 0) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message:
+            'agent input message or resume is required to start a conversation',
+        });
+      }
+
       // Tag every history message so we can identify them after render.
-      const history = (sess.getMessages() || []).map((m) => ({
+      const history = sessionMessages.map((m) => ({
         ...m,
         metadata: { ...m.metadata, [historyTag]: true },
       }));
@@ -1717,22 +1895,60 @@ export function definePromptAgent<
         };
       }
 
-      const result = generateStream(registry, { ...genOpts, abortSignal });
-
-      for await (const chunk of result.stream) {
-        sendChunk({ modelChunk: chunk });
-      }
-
-      const res = await result.response;
+      // Failures come back on the response: the loop's classification of
+      // what broke or what stopped it, over the conversation it completed. A
+      // failure before the request resolved (a render or validation failure)
+      // still throws, and rolls the turn back.
+      const result = generateStream(registry, {
+        ...genOpts,
+        abortSignal,
+        throwOnError: false,
+      });
 
       // Keep everything that is NOT a prompt-template message:
       //   • history messages (clean - history tag was stripped before generate)
       //   • new messages from tool loops (untagged)
       //   • model response
-      if (res.request?.messages) {
-        const msgs = res.request.messages.filter(
-          (m) => !m.metadata?.[promptTag]
+      const turnSessionMessages = (messages: MessageData[]) =>
+        messages.filter((m) => !m.metadata?.[promptTag]);
+
+      for await (const chunk of result.stream) {
+        sendChunk({ modelChunk: chunk });
+      }
+      const res = await result.response;
+      // A failure the loop reported is one the response cannot pass for a
+      // valid one: something broke, the caller stopped the loop, the model
+      // blocked the response or returned none, or the output it completed
+      // does not match the schema. An `error` a model wrote onto a response
+      // that is otherwise valid is not one of those, and the turn keeps the
+      // reply. Nor is an interrupt: `generate` reports a restarted tool that
+      // interrupted again with a FAILED_PRECONDITION, because its caller
+      // asked for a completed generation; the agent's caller did not. The
+      // tip that comes back is the same answerable interrupt a first-run
+      // interrupt leaves, and only `resume` can answer either, so the turn
+      // takes the success path and commits the same way both times.
+      if (res.error && res.finishReason !== 'interrupted' && !res.isValid()) {
+        // The turn commits the conversation the failing step began from,
+        // which ends at a turn seam (see `generate`) and is what the next
+        // attempt sends again. A response the model completed and the loop
+        // rejected (blocked, without a message, output off the schema) keeps
+        // that message for the caller to see, but not as a message to
+        // continue from: the seam is the request's messages. The turn is
+        // committed as a resume point: a CommittedTurnError is what says so
+        // (see SessionRunner.run). The runner reads a failure from the error
+        // it is handed, so the response is handed over as one, built before
+        // the session changes. The turn records `failed`, not the response's
+        // own finish reason: a rejected completion still carries the model's
+        // `stop`.
+        const failure = generationError(res);
+        sess.setMessages(
+          turnSessionMessages(res.request?.messages ?? res.messages)
         );
+        throw new CommittedTurnError(failure);
+      }
+
+      if (res.request?.messages) {
+        const msgs = turnSessionMessages(res.request.messages);
         if (res.message) {
           msgs.push(res.message);
         }
