@@ -627,7 +627,11 @@ def from_thought_step(step: ThoughtStep) -> Part:
     """Convert a thought step to a Genkit reasoning part."""
     summary = step.summary or []
     reasoning = '\n'.join(item.text or '' if isinstance(item, TextContent) else '[Image]' for item in summary)
-    return Part.from_reasoning(reasoning, metadata={THOUGHT_SIGNATURE: step.signature})
+    return Part(
+        reasoning=reasoning,
+        metadata={THOUGHT_SIGNATURE: step.signature},
+        custom={THOUGHT_CUSTOM: step.model_dump(mode='python')},
+    )
 
 
 def from_interaction_content(content: Content) -> Part:

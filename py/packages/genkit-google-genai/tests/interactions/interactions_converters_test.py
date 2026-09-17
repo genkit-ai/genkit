@@ -34,6 +34,7 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_role,
     to_interaction_steps,
     to_interaction_tool,
+    to_thought_step,
     usage_from_interaction,
 )
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
@@ -398,6 +399,19 @@ class TestToInteractionSteps:
         ]
         assert to_interaction_steps(messages) == [thought_dump]
 
+    def test_thought_with_image_replays_the_original_step(self) -> None:
+        """A thought whose summary has an image comes back as that same step."""
+        step = ThoughtStep.model_validate({
+            'type': 'thought',
+            'signature': 'sig-img',
+            'summary': [
+                {'type': 'text', 'text': 'see this'},
+                {'type': 'image', 'uri': 'gs://bucket/thumb.png', 'mime_type': 'image/png'},
+            ],
+        })
+        part = from_thought_step(step)
+        assert to_thought_step(part) == step.model_dump(mode='python')
+
     def test_json_array_function_result_is_boxed(self) -> None:
         messages = [
             Message(
@@ -553,10 +567,11 @@ class TestFromInteractionContent:
             'summary': [{'type': 'text', 'text': 'Thinking...'}],
         })
         result = from_thought_step(step)
-        assert part_dict(result) == {
-            'reasoning': 'Thinking...',
-            'metadata': {'thoughtSignature': 'SIG'},
-        }
+        dumped = part_dict(result)
+        assert dumped['reasoning'] == 'Thinking...'
+        assert dumped['metadata'] == {'thoughtSignature': 'SIG'}
+        assert dumped['custom']['thought']['type'] == 'thought'
+        assert dumped['custom']['thought']['summary'] == [{'type': 'text', 'text': 'Thinking...'}]
 
 
 class TestFromInteractionStep:

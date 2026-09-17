@@ -223,9 +223,12 @@ class ModelRef(Generic[ModelRefConfigT]):
 # Exclusive kinds. camelCase and snake_case are the same kind so a merged
 # dump of one tool call is not two kinds. custom is the vendor hatch — it
 # may ride on another kind, or be the kind when it's the only payload (a
-# signed thought is still one reasoning part). Metadata rides too. Empty
-# or two exclusive kinds is a validation error so a Message never carries
-# an ambiguous part the model would have to guess at.
+# signed thought is still one reasoning part). Metadata rides too. Two
+# exclusive kinds is a validation error so a Message never carries an
+# ambiguous part the model would have to guess at. A wire part with no
+# kind (empty or metadata-only) is dropped when reading a message so a
+# junk {} doesn't fail generate. Constructing Part() with no kind still
+# raises. JSON null is a real data payload, so data: null is a data part.
 PART_KIND_KEYS = frozenset({
     'text',
     'media',
@@ -260,6 +263,8 @@ def present_part_kinds(raw: dict[str, object]) -> list[str]:
     for key in PART_KIND_KEYS:
         if raw.get(key) is not None:
             seen.add(PART_KIND_ALIASES.get(key, key))
+    if 'data' in raw and raw.get('data') is None and not seen and raw.get('custom') is None:
+        seen.add('data')
     return list(seen)
 
 
@@ -314,6 +319,8 @@ class Part(GenkitModel):
     @model_validator(mode='after')
     def _exactly_one_kind_after(self) -> Part:
         kinds = [name for name in PART_KIND_FIELDS if getattr(self, name) is not None]
+        if not kinds and self.custom is None and 'data' in self.model_fields_set and self.data is None:
+            kinds.append('data')
         if len(kinds) > 1:
             raise ValueError(EXACTLY_ONE_KIND)
         if len(kinds) == 1:
@@ -321,6 +328,12 @@ class Part(GenkitModel):
         if self.custom is not None:
             return self
         raise ValueError(EXACTLY_ONE_KIND)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        dumped = super().model_dump(**kwargs)
+        if 'data' in self.model_fields_set and self.data is None:
+            dumped['data'] = None
+        return dumped
 
     @classmethod
     def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Part:
@@ -376,6 +389,36 @@ def as_part(value: object) -> Part:
     if isinstance(value, BaseModel):
         return Part.model_validate(dump_keeping_unknown(value))
     return Part.model_validate(value)
+
+
+def inbound_part_is_empty(value: object) -> bool:
+    """True when a wire part has no kind — empty or metadata-only."""
+    if isinstance(value, Part):
+        kinds = [name for name in PART_KIND_FIELDS if getattr(value, name) is not None]
+        if 'data' in value.model_fields_set and value.data is None:
+            kinds.append('data')
+        return not kinds and value.custom is None
+    if isinstance(value, Mapping):
+        raw = dict(value)
+    elif isinstance(value, PartData):
+        root = value.root
+        if isinstance(root, BaseModel):
+            raw = dump_keeping_unknown(root)
+        elif isinstance(root, Mapping):
+            raw = dict(root)
+        else:
+            raw = {}
+    elif isinstance(value, BaseModel):
+        raw = dump_keeping_unknown(value)
+    else:
+        return False
+    return not present_part_kinds(raw) and raw.get('custom') is None
+
+
+def parts_from_inbound(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [as_part(item) for item in value if not inbound_part_is_empty(item)]
 
 
 def as_message(value: object) -> Message:
@@ -504,9 +547,7 @@ class Message(GenkitModel):
     @field_validator('content', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_part(p) for p in v]
+        return parts_from_inbound(v)
 
     @property
     def text(self) -> str:
@@ -557,7 +598,7 @@ class GenerateActionOptions(GenkitModel):
     """Generate options with messages as list[Message] for type-safe use with ai.generate()."""
 
     model: str | None = None
-    messages: list[Message] = Field(default_factory=list)
+    messages: list[Message]
     docs: list[Document] | None = None
     tools: list[str] | None = None
     resources: list[str] | None = None
@@ -604,9 +645,7 @@ class Document(GenkitModel):
     @field_validator('content', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_part(p) for p in v]
+        return parts_from_inbound(v)
 
     def __init__(
         self,
@@ -689,9 +728,7 @@ class Artifact(GenkitModel):
     @field_validator('parts', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_part(p) for p in v]
+        return parts_from_inbound(v)
 
 
 class EmbedRequest(GenkitModel):
@@ -1001,7 +1038,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
 
 def as_model_request(value: object) -> ModelRequest:
     if isinstance(value, ModelRequest):
-        return ModelRequest.model_validate(dump_keeping_unknown(value))
+        copied = value.model_copy()
+        copied.messages = [as_message(m) for m in copied.messages]
+        return copied
     return ModelRequest.model_validate(value)
 
 
@@ -1239,9 +1278,7 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     @field_validator('content', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_part(p) for p in v]
+        return parts_from_inbound(v)
 
     def __init__(
         self,
@@ -1361,19 +1398,19 @@ class AgentStreamChunk(GenkitModel):
         return as_artifact(v)
 
 
-_VENEEER_NS = {**vars(typing_mod), **globals()}
-Artifact.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-EmbedRequest.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-SessionState.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-SessionSnapshot.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-AgentInit.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-AgentInput.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-AgentOutput.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-AgentResult.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-Candidate.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-ModelResponse.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-ModelResponseChunk.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
-AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEEER_NS)
+_VENEER_NS = {**vars(typing_mod), **globals()}
+Artifact.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+EmbedRequest.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+SessionState.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+SessionSnapshot.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentInit.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentInput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentOutput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentResult.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+Candidate.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+ModelResponse.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+ModelResponseChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 
 
 class MultipartToolResponse(GenkitModel, Generic[OutputT]):

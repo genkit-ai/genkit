@@ -20,7 +20,7 @@ import importlib
 from collections.abc import Callable
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from genkit import Document, Media, Message, Part, ToolRequest, ToolResponse, respond_to_interrupt, restart_tool
 from genkit._ai._agents._client import (
@@ -29,6 +29,8 @@ from genkit._ai._agents._client import (
     to_agent_input,
 )
 from genkit._ai._generate import require_model_response
+from genkit._ai._tools import normalize_pending_content
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     PART_KIND_FIELDS,
     AgentInit,
@@ -38,6 +40,7 @@ from genkit._core._model import (
     AgentStreamChunk,
     Artifact,
     Candidate,
+    EmbedRequest,
     GenerateActionOptions,
     ModelRequest,
     ModelResponse,
@@ -55,11 +58,16 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     Artifact as ArtifactData,
+    Candidate as CandidateData,
     DocumentData,
+    EmbedRequest as EmbedRequestData,
     FinishReason,
+    GenerateActionOptionsData,
     MessageData,
+    ModelResponseChunk as ModelResponseChunkData,
     PartData,
     Resource,
+    Resume as ResumeData,
     TextPart,
 )
 from genkit.middleware import ToolHookParams
@@ -225,6 +233,29 @@ def test_part_from_data_list() -> None:
     """data can be a list."""
     p = Part.from_data([1, 2])
     assert p.data == [1, 2]
+
+
+def test_part_from_data_none_is_a_data_part() -> None:
+    """JSON null is a data payload, same as 0 or []."""
+    p = Part.from_data(None)
+    assert p.data is None
+    assert_inactive(p, active='data')
+
+
+def test_null_data_part_survives_dump_and_reload() -> None:
+    """A null data part is still that part after dump and validate."""
+    p = Part.from_data(None)
+    again = Part.model_validate(p.model_dump())
+    assert again.data is None
+    assert_inactive(again, active='data')
+
+
+def test_part_with_no_kind_still_raises() -> None:
+    """Building a part with no kind still fails."""
+    with pytest.raises(ValidationError, match='exactly one'):
+        Part()
+    with pytest.raises(ValidationError, match='exactly one'):
+        Part.model_validate({})
 
 
 def test_part_from_custom() -> None:
@@ -457,9 +488,28 @@ def test_part_from_text_round_trip() -> None:
     assert_inactive(again, active='text')
 
 
-def test_message_empty_part_raises() -> None:
-    with pytest.raises(ValidationError):
-        Message(role='user', content=[{}])
+def test_message_drops_empty_inbound_parts_and_keeps_the_rest() -> None:
+    """An empty {} in inbound content is dropped; the rest of the message loads."""
+    msg = Message(role='model', content=[{}, {'text': 'hello'}, {}])
+    assert len(msg.content) == 1
+    assert msg.content[0].text == 'hello'
+
+
+def test_message_drops_metadata_only_inbound_part() -> None:
+    """A metadata-only inbound part has no kind, so it is dropped."""
+    msg = Message(role='model', content=[{'metadata': {'src': 'gemini'}}, {'text': 'hello'}])
+    assert len(msg.content) == 1
+    assert msg.content[0].text == 'hello'
+
+
+def test_model_response_with_only_empty_parts_loads() -> None:
+    """A stored reply that is only empty parts still loads; content is empty."""
+    response = ModelResponse.model_validate({
+        'message': {'role': 'model', 'content': [{}]},
+        'finishReason': 'stop',
+    })
+    assert response.message is not None
+    assert response.message.content == []
 
 
 @pytest.mark.parametrize(('base', 'other'), _SECOND_KIND)
@@ -535,7 +585,7 @@ _ARTIFACT_WRAPS: dict[str, Callable[[Artifact], object]] = {
 }
 
 _RESUME_WRAPS: dict[str, Callable[[Resume], object]] = {
-    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='programmableModel', resume=r),
+    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='programmableModel', messages=[], resume=r),
     'AgentInput.resume': lambda r: AgentInput(resume=r),
 }
 
@@ -787,3 +837,53 @@ def test_resource_wire_part_has_no_public_getters() -> None:
     p = Part.model_validate({'resource': {'uri': 'test://x'}})
     for name in _GETTERS:
         assert getattr(p, name) is None
+
+
+def test_response_request_keeps_typed_config() -> None:
+    """A typed plugin config on the request stays that class on the response."""
+
+    class MyCfg(BaseModel):
+        my_knob: str
+
+    req = ModelRequest[MyCfg](
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
+        config=MyCfg(my_knob='x'),
+    )
+    response = ModelResponse(
+        message=Message(role='model', content=[Part.from_text('ok')]),
+        finish_reason=FinishReason.STOP,
+        request=req,
+    )
+    assert response.request is not None
+    assert isinstance(response.request.config, MyCfg)
+    assert response.request.config.my_knob == 'x'
+
+
+def test_generate_options_without_messages_raises() -> None:
+    """A /generate payload with no messages fails before it hits the model."""
+    with pytest.raises(ValidationError, match='messages'):
+        GenerateActionOptions.model_validate({'model': 'programmableModel'})
+
+
+def test_pending_content_reports_the_kind_rule() -> None:
+    """A bad pending part names the kind rule, not just 'must be a part'."""
+    with pytest.raises(GenkitError, match='exactly one') as ei:
+        normalize_pending_content([{}], tool_name='screenshot')
+    assert 'pendingContent[0]' in ei.value.original_message
+
+
+def test_veneer_has_every_generated_field() -> None:
+    """Each hand-written type still accepts every field the generated twin has."""
+    twins = (
+        (GenerateActionOptions, GenerateActionOptionsData),
+        (Message, MessageData),
+        (Document, DocumentData),
+        (Artifact, ArtifactData),
+        (Candidate, CandidateData),
+        (ModelResponseChunk, ModelResponseChunkData),
+        (Resume, ResumeData),
+        (EmbedRequest, EmbedRequestData),
+    )
+    for veneer, wire in twins:
+        missing = set(wire.model_fields) - set(veneer.model_fields)
+        assert not missing, f'{veneer.__name__} is missing {sorted(missing)}'

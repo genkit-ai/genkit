@@ -104,21 +104,24 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
         )
     out: list[dict[str, Any]] = []
     for i, item in enumerate(pending_content):
-        part = coerce_part(item)
-        if part is None and isinstance(item, dict):
+        if isinstance(item, Part):
+            part = item
+        else:
             try:
-                part = Part.model_validate(item)
-            except Exception as e:
+                part = as_part(item)
+            except ValidationError as e:
+                detail = e.errors()[0]['msg'] if e.errors() else f'must be a part, got {type(item).__name__}'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Tool {tool_name!r} pendingContent[{i}]: {detail}',
+                    cause=e,
+                ) from e
+            except (ValueError, TypeError) as e:
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
                     cause=e,
                 ) from e
-        if part is None:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
-            )
         dumped = dump_part(part, tool_name=tool_name, what=f'pendingContent[{i}]')
         if not wire_part_is_live(dumped):
             raise live_payload_error(tool_name=tool_name, where=f'pendingContent[{i}]')
