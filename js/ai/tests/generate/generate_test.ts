@@ -26,6 +26,7 @@ import { beforeEach, describe, it } from 'node:test';
 import {
   generate,
   generateStream,
+  maybeRegisterDynamicTools,
   normalizeMiddleware,
   toGenerateActionOptions,
   toGenerateRequest,
@@ -1087,6 +1088,61 @@ describe('normalizeMiddleware', () => {
         name: 'GenkitError',
         status: 'INVALID_ARGUMENT',
       }
+    );
+  });
+});
+
+describe('maybeRegisterDynamicTools', () => {
+  function countRegistrations(registry: Registry) {
+    let calls = 0;
+    const orig = registry.registerAction.bind(registry);
+    (registry as any).registerAction = (...args: any[]) => {
+      calls++;
+      return (orig as any)(...args);
+    };
+    return () => calls;
+  }
+
+  it('registers a genuinely dynamic (never-registered) tool', async () => {
+    const registry = new Registry();
+    const getCalls = countRegistrations(registry);
+    const dynamic = tool({ name: 'dyn', description: 'd' });
+
+    maybeRegisterDynamicTools(registry, { tools: [dynamic] } as any);
+
+    assert.strictEqual(getCalls(), 1);
+    assert.strictEqual(await registry.lookupAction('/tool/dyn'), dynamic);
+  });
+
+  // A v2 plugin init() may return tool() actions, which bypass defineTool()
+  // and stay flagged dynamic while already registered. Re-registering them
+  // on every generate only overwrites the same entry and logs
+  // "already registered" errors. See genkit-ai/genkit#6381.
+  it('does not re-register a tool already registered in the same registry', async () => {
+    const registry = new Registry();
+    const pluginTool = tool({ name: 'plug', description: 'd' });
+    registry.registerAction('tool', pluginTool);
+
+    const getCalls = countRegistrations(registry);
+    maybeRegisterDynamicTools(registry, { tools: [pluginTool] } as any);
+
+    assert.strictEqual(getCalls(), 0);
+    assert.strictEqual(await registry.lookupAction('/tool/plug'), pluginTool);
+  });
+
+  it('still registers the tool into a different registry', async () => {
+    const registryA = new Registry();
+    const registryB = new Registry();
+    const pluginTool = tool({ name: 'plug', description: 'd' });
+    registryA.registerAction('tool', pluginTool);
+
+    const getCalls = countRegistrations(registryB);
+    maybeRegisterDynamicTools(registryB, { tools: [pluginTool] } as any);
+
+    assert.strictEqual(getCalls(), 1);
+    assert.strictEqual(
+      await registryB.lookupAction('/tool/plug'),
+      pluginTool
     );
   });
 });
