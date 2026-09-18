@@ -18,9 +18,7 @@
 """Tests for the OpenAI compatible plugin."""
 
 import asyncio
-import base64
 import queue
-import struct
 import threading
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -276,11 +274,11 @@ def _embedder_client(error: Exception) -> MagicMock:
     return client
 
 
-def _embedding_client() -> MagicMock:
+def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
     """Create a stub client whose embeddings call returns one vector."""
     client = MagicMock()
     item = MagicMock()
-    item.embedding = [0.1, 0.2]
+    item.embedding = [0.1, 0.2] if embedding is None else embedding
     result = MagicMock()
     result.data = [item]
     client.embeddings.create = AsyncMock(return_value=result)
@@ -316,28 +314,27 @@ async def test_embedder_maps_status_errors_for_every_option_shape(options: dict[
 
 
 @pytest.mark.asyncio
-async def test_embedder_decodes_base64_encoding_format() -> None:
-    """encodingFormat=base64 returns usable float vectors, not raw strings.
-
-    Regression for https://github.com/genkit-ai/genkit/issues/6317: the OpenAI
-    SDK leaves base64 payloads as strings, which Embedding rejects.
-    """
+async def test_embedder_requesting_base64_omits_the_parameter() -> None:
+    """encodingFormat=base64 is not forwarded, so the SDK decodes the vector itself."""
     values = [0.1, -0.25, 0.5]
-    encoded = base64.b64encode(struct.pack(f'<{len(values)}f', *values)).decode('ascii')
-    client = MagicMock()
-    item = MagicMock()
-    item.embedding = encoded
-    result = MagicMock()
-    result.data = [item]
-    client.embeddings.create = AsyncMock(return_value=result)
+    client = _embedding_client(embedding=values)
 
     response = await _run_embedder(client, options={'encodingFormat': 'base64'})
 
-    assert client.embeddings.create.await_args.kwargs['encoding_format'] == 'base64'
-    assert len(response.embeddings) == 1
-    assert len(response.embeddings[0].embedding) == len(values)
-    for got, want in zip(response.embeddings[0].embedding, values, strict=True):
-        assert got == pytest.approx(want)
+    client.embeddings.create.assert_awaited_once_with(model='text-embedding-3-small', input=['hello'])
+    assert [e.embedding for e in response.embeddings] == [values]
+
+
+@pytest.mark.asyncio
+async def test_embedder_forwards_float_encoding_format() -> None:
+    """encodingFormat=float is a genuinely different request, so it is passed through."""
+    client = _embedding_client()
+
+    await _run_embedder(client, options={'encodingFormat': 'float'})
+
+    client.embeddings.create.assert_awaited_once_with(
+        model='text-embedding-3-small', input=['hello'], encoding_format='float'
+    )
 
 
 @pytest.mark.asyncio

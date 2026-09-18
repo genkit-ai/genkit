@@ -49,7 +49,7 @@ from genkit_openai.models import (
     OpenAITTSModel,
 )
 from genkit_openai.models.model_info import KnownGpt, get_default_openai_model_info
-from genkit_openai.models.utils import coerce_embedding_vector, reraise_openai_error
+from genkit_openai.models.utils import reraise_openai_error
 from genkit_openai.typing import OpenAIConfig
 
 
@@ -465,7 +465,7 @@ class OpenAI(Plugin):
 
             # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
             dimensions: int | None = None
-            encoding_format: Literal['base64', 'float'] | None = None
+            encoding_format: Literal['float'] | None = None
             if request.options:
                 dim_val = request.options.get('dimensions')
                 if dim_val is not None:
@@ -476,9 +476,10 @@ class OpenAI(Plugin):
                             message=f'dimensions must be an int, got {dim_val!r}',
                         )
                     dimensions = dim_val
-                enc_val = request.options.get('encodingFormat')
-                if enc_val in ('float', 'base64'):
-                    encoding_format = cast(Literal['base64', 'float'], enc_val)
+                # 'base64' is deliberately not forwarded: the SDK sends base64 either
+                # way and only decodes the response when it was not asked explicitly.
+                if request.options.get('encodingFormat') == 'float':
+                    encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
             try:
@@ -509,9 +510,8 @@ class OpenAI(Plugin):
             except APIStatusError as e:
                 reraise_openai_error(e)
 
-            # Convert OpenAI response to Genkit format. With
-            # encoding_format='base64' the API returns strings; Genkit needs floats.
-            embeddings = [Embedding(embedding=coerce_embedding_vector(item.embedding)) for item in response.data]
+            # Convert OpenAI response to Genkit format
+            embeddings = [Embedding(embedding=item.embedding) for item in response.data]
             return EmbedResponse(embeddings=embeddings)
 
         return embedder(

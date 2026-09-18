@@ -18,10 +18,8 @@
 """Utility functions for OpenAI compatible models."""
 
 import base64
-import binascii
 import json
 import re
-import struct
 from collections.abc import Callable
 from typing import Any, NoReturn
 
@@ -81,38 +79,6 @@ def strip_markdown_fences(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text
-
-
-def coerce_embedding_vector(value: list[float] | str) -> list[float]:
-    """Normalize an OpenAI embedding value to a float vector.
-
-    When ``encoding_format='base64'`` is set, the Embeddings API returns each
-    vector as a base64 string of little-endian float32 values instead of a
-    float list. Genkit's ``Embedding`` model requires ``list[float]``, so decode
-    that wire format before constructing the response.
-    """
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            # validate= is 3.11+; keep the call compatible with requires-python >=3.10.
-            raw = base64.b64decode(value)
-        except (binascii.Error, ValueError) as e:
-            raise GenkitError(
-                status='INTERNAL',
-                message='OpenAI returned an invalid base64 embedding',
-                cause=e,
-            ) from e
-        if len(raw) % 4 != 0:
-            raise GenkitError(
-                status='INTERNAL',
-                message='OpenAI base64 embedding length is not a multiple of 4',
-            )
-        return list(struct.unpack(f'<{len(raw) // 4}f', raw))
-    raise GenkitError(
-        status='INTERNAL',
-        message=f'Unexpected OpenAI embedding type: {type(value).__name__}',
-    )
 
 
 def _find_text(request: ModelRequest) -> str | None:
