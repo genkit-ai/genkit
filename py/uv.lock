@@ -32,6 +32,7 @@ members = [
     "genkit-flask",
     "genkit-google-cloud",
     "genkit-google-genai",
+    "genkit-mcp",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
@@ -1881,6 +1882,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "genkit-mcp"
+version = "0.11.0"
+source = { editable = "packages/genkit-mcp" }
+dependencies = [
+    { name = "genkit" },
+    { name = "mcp" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "structlog", specifier = ">=25.2.0" },
+]
+
+[[package]]
 name = "genkit-middleware"
 version = "0.11.0"
 source = { editable = "packages/genkit-middleware" }
@@ -1987,6 +2005,7 @@ dependencies = [
     { name = "genkit-flask" },
     { name = "genkit-google-cloud" },
     { name = "genkit-google-genai" },
+    { name = "genkit-mcp" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
@@ -2000,7 +2019,6 @@ dev = [
     { name = "ipython", version = "8.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jupyter" },
-    { name = "mcp" },
     { name = "nox" },
     { name = "nox-uv" },
     { name = "pip" },
@@ -2054,6 +2072,7 @@ requires-dist = [
     { name = "genkit-flask", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
@@ -2067,7 +2086,6 @@ dev = [
     { name = "ipython", marker = "python_full_version < '3.11'", specifier = "~=8.22" },
     { name = "ipython", marker = "python_full_version >= '3.11'", specifier = "~=9.0.2" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "mcp", specifier = ">=1.25.0" },
     { name = "nox", specifier = ">=2025.2.9" },
     { name = "nox-uv", specifier = ">=0.2.2" },
     { name = "pip", specifier = ">=25.0.1" },
