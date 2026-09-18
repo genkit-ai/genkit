@@ -150,10 +150,7 @@ func (c *GenkitMCPClient) readMCPResource(ctx context.Context, uri string) (ai.R
 
 	// Create ReadResource request
 	readReq := mcp.ReadResourceRequest{
-		Params: struct {
-			URI       string                 `json:"uri"`
-			Arguments map[string]interface{} `json:"arguments,omitempty"`
-		}{
+		Params: mcp.ReadResourceParams{
 			URI:       uri,
 			Arguments: nil,
 		},
@@ -204,9 +201,7 @@ func (c *GenkitMCPClient) fetchResourcesPage(ctx context.Context, cursor mcp.Cur
 	// Build the list request - include cursor if we have one for pagination
 	listReq := mcp.ListResourcesRequest{}
 	listReq.PaginatedRequest = mcp.PaginatedRequest{
-		Params: struct {
-			Cursor mcp.Cursor `json:"cursor,omitempty"`
-		}{
+		Params: mcp.PaginatedParams{
 			Cursor: cursor,
 		},
 	}
@@ -249,9 +244,7 @@ func (c *GenkitMCPClient) getResourceTemplates(ctx context.Context) ([]mcp.Resou
 func (c *GenkitMCPClient) fetchResourceTemplatesPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.ResourceTemplate, mcp.Cursor, error) {
 	listReq := mcp.ListResourceTemplatesRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
-			Params: struct {
-				Cursor mcp.Cursor `json:"cursor,omitempty"`
-			}{
+			Params: mcp.PaginatedParams{
 				Cursor: cursor,
 			},
 		},

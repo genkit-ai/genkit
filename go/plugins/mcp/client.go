@@ -166,6 +166,14 @@ func (c *GenkitMCPClient) createTransport(options MCPClientOptions) (transport.I
 
 	if options.StreamableHTTP != nil {
 		var streamableHTTPOptions []transport.StreamableHTTPCOption
+		if options.StreamableHTTP.HTTPClient != nil {
+			// Shallow-copy the caller's client before handing it to the transport.
+			// WithHTTPTimeout mutates the Timeout field of the installed client, so
+			// passing the caller's client directly would mutate (and race on) a
+			// client that may be shared elsewhere, e.g. http.DefaultClient.
+			clientCopy := *options.StreamableHTTP.HTTPClient
+			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPBasicClient(&clientCopy))
+		}
 		if options.StreamableHTTP.Headers != nil {
 			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPHeaders(options.StreamableHTTP.Headers))
 		}
