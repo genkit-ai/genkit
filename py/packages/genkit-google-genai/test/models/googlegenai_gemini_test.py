@@ -19,7 +19,7 @@
 
 import base64
 import sys
-from typing import Any
+from typing import Annotated, Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if sys.version_info < (3, 11):
@@ -985,15 +985,21 @@ def test_gemini_model__convert_schema_property_raises_exception(
 
 
 def test_gemini_model__convert_schema_property_keeps_keywords(gemini_model_instance: GeminiModel) -> None:
-    """anyOf, type lists, format, title, default, bounds and propertyOrdering survive conversion."""
+    """anyOf, type lists, format, title, default, bounds and propertyOrdering survive conversion.
+
+    A type list without null is not nullable, and an optional untyped property
+    is left out.
+    """
     schema: dict[str, object] = {
         'type': 'object',
         'title': 'Thing',
         'additionalProperties': False,
         'propertyOrdering': ['count', 'label', 'kind', 'ratio', 'tags'],
+        'required': ['count'],
         'properties': {
             'count': {'type': 'integer', 'title': 'Count', 'default': 1, 'minimum': 0, 'maximum': 10},
             'label': {'type': ['string', 'null'], 'format': 'date-time'},
+            'pick': {'type': ['string', 'integer']},
             'kind': {'anyOf': [{'type': 'string'}, {'type': 'integer'}], 'description': 'string or int'},
             'ratio': {'anyOf': [{'type': 'number'}, {'type': 'null'}], 'title': 'Ratio'},
             'tags': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 3},
@@ -1005,11 +1011,13 @@ def test_gemini_model__convert_schema_property_keeps_keywords(gemini_model_insta
         type=genai_types.Type.OBJECT,
         title='Thing',
         property_ordering=['count', 'label', 'kind', 'ratio', 'tags'],
+        required=['count'],
         properties={
             'count': genai_types.Schema(
                 type=genai_types.Type.INTEGER, title='Count', default=1, minimum=0.0, maximum=10.0
             ),
             'label': genai_types.Schema(type=genai_types.Type.STRING, format='date-time', nullable=True),
+            'pick': genai_types.Schema(type=genai_types.Type.STRING),
             'kind': genai_types.Schema(
                 any_of=[
                     genai_types.Schema(type=genai_types.Type.STRING),
@@ -1060,6 +1068,95 @@ def test_gemini_model__convert_schema_property_rejects_unsupported_type(
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'is not supported' in exc_info.value.original_message
+
+
+def test_gemini_model__convert_schema_property_discriminated_union(gemini_model_instance: GeminiModel) -> None:
+    """A pydantic discriminated union (oneOf of $refs with const tags) becomes any_of of enum-tagged objects."""
+
+    class Cat(BaseModel):
+        kind: Literal['cat']
+        meows: int
+
+    class Dog(BaseModel):
+        kind: Literal['dog']
+        barks: bool
+
+    class Pets(BaseModel):
+        pet: Annotated[Cat | Dog, Field(discriminator='kind')]
+
+    assert gemini_model_instance._convert_schema_property(to_json_schema(Pets)) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        title='Pets',
+        required=['pet'],
+        properties={
+            'pet': genai_types.Schema(
+                title='Pet',
+                any_of=[
+                    genai_types.Schema(
+                        type=genai_types.Type.OBJECT,
+                        title='Cat',
+                        required=['kind', 'meows'],
+                        properties={
+                            'kind': genai_types.Schema(type=genai_types.Type.STRING, title='Kind', enum=['cat']),
+                            'meows': genai_types.Schema(type=genai_types.Type.INTEGER, title='Meows'),
+                        },
+                    ),
+                    genai_types.Schema(
+                        type=genai_types.Type.OBJECT,
+                        title='Dog',
+                        required=['kind', 'barks'],
+                        properties={
+                            'kind': genai_types.Schema(type=genai_types.Type.STRING, title='Kind', enum=['dog']),
+                            'barks': genai_types.Schema(type=genai_types.Type.BOOLEAN, title='Barks'),
+                        },
+                    ),
+                ],
+            ),
+        },
+    )
+
+
+def test_gemini_model__convert_schema_property_non_string_const_keeps_type(gemini_model_instance: GeminiModel) -> None:
+    """A const the Gemini enum cannot hold leaves the property typed but unconstrained."""
+    assert gemini_model_instance._convert_schema_property({'type': 'integer', 'const': 1}) == genai_types.Schema(
+        type=genai_types.Type.INTEGER
+    )
+
+
+def test_gemini_model__convert_schema_property_rejects_required_untyped_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A required property with no type cannot be left out, so it raises naming the property."""
+
+    class Payload(BaseModel):
+        data: Any
+        note: Any = None
+
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(Payload))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'data' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema',
+    [
+        {'allOf': [{'type': 'string'}]},
+        {'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}},
+        {'type': 'array', 'items': {'not': {'type': 'null'}}},
+    ],
+)
+def test_gemini_model__convert_schema_property_rejects_untyped_constraint(
+    input_schema: dict[str, object],
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A node that constrains without a type raises instead of dropping out of its parent."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(input_schema)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'no type' in exc_info.value.original_message
 
 
 @pytest.mark.asyncio
@@ -1292,6 +1389,17 @@ async def test_gemini_model__array_format_is_json_mode(gemini_model_instance: Ge
     assert cfg is not None
     assert cfg.response_mime_type == 'application/json'
     assert cfg.response_json_schema == schema
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__content_type_alone_turns_on_json_mode(gemini_model_instance: GeminiModel) -> None:
+    """A request carrying only the application/json content type still reaches JSON mode."""
+    request = _output_request(content_type='application/json')
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
 
 
 @pytest.mark.asyncio

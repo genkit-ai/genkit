@@ -183,7 +183,10 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
 async def test_googleai_legacy_response_schema_threads_to_gemini_model(
     mock_client_ctor: MagicMock, legacy_response_schema: bool
 ) -> None:
-    """The plugin option reaches every GeminiModel GoogleAI constructs."""
+    """The plugin option reaches every GeminiModel GoogleAI constructs.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
     plugin = GoogleAI(api_key='test-key', legacy_response_schema=legacy_response_schema)
 
     assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is legacy_response_schema
@@ -195,7 +198,10 @@ async def test_googleai_legacy_response_schema_threads_to_gemini_model(
 async def test_vertexai_legacy_response_schema_threads_to_gemini_model(
     mock_client_ctor: MagicMock, legacy_response_schema: bool
 ) -> None:
-    """The plugin option reaches every GeminiModel VertexAI constructs."""
+    """The plugin option reaches every GeminiModel VertexAI constructs.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
     plugin = VertexAI(project='test-project', legacy_response_schema=legacy_response_schema)
 
     assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is legacy_response_schema

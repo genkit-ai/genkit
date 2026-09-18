@@ -1221,14 +1221,33 @@ class GeminiModel:
         ('propertyOrdering', 'property_ordering', _to_string_list),
     )
 
+    # JSON Schema keywords that annotate a node without constraining it.
+    _SCHEMA_ANNOTATION_KEYS = frozenset([
+        'title',
+        'description',
+        'default',
+        'examples',
+        'deprecated',
+        'readOnly',
+        'writeOnly',
+        '$comment',
+        '$schema',
+        '$id',
+        '$defs',
+    ])
+
     def _convert_schema_property(
         self, input_schema: dict[str, object] | None, defs: dict[str, object] | None = None
     ) -> genai_types.Schema | None:
         """Convert a JSON Schema dict into a Gemini ``Schema``.
 
-        Resolves local ``$ref``, folds a ``null`` branch of ``anyOf`` or of a
-        ``type`` list into ``nullable``, maps the ``enum`` type to STRING,
-        and returns None for a node with no ``type``, ``anyOf`` or ``$ref``.
+        Resolves local ``$ref``, maps ``anyOf`` and ``oneOf`` to ``any_of``,
+        folds a ``null`` branch of either or of a ``type`` list into
+        ``nullable``, maps the ``enum`` type to STRING and a string ``const``
+        to a one-value ``enum``. A node that only annotates (``title``,
+        ``description``, ``default``) converts to None and is left out of its
+        parent; it is rejected when its parent requires it, as is a node that
+        constrains without a ``type``.
 
         Args:
             input_schema: A JSON Schema dict.
@@ -1264,11 +1283,18 @@ class GeminiModel:
 
                 return schema
 
-        any_of = input_schema.get('anyOf')
-        if isinstance(any_of, list):
-            return self._convert_any_of(input_schema, cast(list[object], any_of), defs)
+        for keyword in ('anyOf', 'oneOf'):
+            branches = input_schema.get(keyword)
+            if isinstance(branches, list):
+                return self._convert_union(input_schema, cast(list[object], branches), defs)
 
         if 'type' not in input_schema:
+            unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
+            if unsupported:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{self._version}: schema with {unsupported[0]} but no type cannot be converted',
+                )
             return None
 
         schema = genai_types.Schema()
@@ -1293,7 +1319,10 @@ class GeminiModel:
         schema_type = genai_types.Type(raw_type)
         schema.type = schema_type
 
-        if 'enum' in input_schema:
+        const = input_schema.get('const')
+        if schema_type == genai_types.Type.STRING and isinstance(const, str):
+            schema.enum = [const]
+        elif 'enum' in input_schema:
             schema.enum = cast(list[str], input_schema['enum'])
 
         if schema_type == genai_types.Type.ARRAY:
@@ -1308,16 +1337,21 @@ class GeminiModel:
                 properties = cast(dict[str, dict[str, object]], properties_value)
                 for key in properties:
                     nested_schema = self._convert_schema_property(properties[key], defs)
-                    if nested_schema:
+                    if nested_schema is not None:
                         schema.properties[key] = nested_schema
+                    elif key in (schema.required or ()):
+                        raise GenkitError(
+                            status='INVALID_ARGUMENT',
+                            message=f'{self._version}: required property {key} has no type and cannot be converted',
+                        )
 
         return schema
 
-    def _convert_any_of(
-        self, input_schema: dict[str, object], any_of: list[object], defs: dict[str, object] | None
+    def _convert_union(
+        self, input_schema: dict[str, object], union: list[object], defs: dict[str, object] | None
     ) -> genai_types.Schema | None:
-        """Convert an ``anyOf`` node; a ``null`` branch becomes ``nullable``."""
-        branches = [cast(dict[str, object], b) for b in any_of if isinstance(b, dict)]
+        """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``."""
+        branches = [cast(dict[str, object], b) for b in union if isinstance(b, dict)]
         typed = [b for b in branches if b.get('type') != 'null']
         converted = [s for b in typed if (s := self._convert_schema_property(b, defs)) is not None]
         if not converted:
