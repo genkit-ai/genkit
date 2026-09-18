@@ -15,6 +15,7 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -109,6 +110,16 @@ func DefineFormats(r api.Registry, formatters ...Formatter) {
 	for _, f := range formatters {
 		r.RegisterValue("/format/"+f.Name(), f)
 	}
+}
+
+// FormatPlugin is a plugin that ships output formats. The formats it returns
+// are registered during [genkit.Init], as [DefineFormats] would, so they
+// resolve by name from [WithOutputFormat] and from the output block of a
+// prompt file without the application defining them.
+type FormatPlugin interface {
+	// Formats returns the formats to register. The context is the one
+	// passed to [genkit.Init], as for [MiddlewarePlugin].
+	Formats(ctx context.Context) []Formatter
 }
 
 // resolveFormat returns a [Formatter], either a default one or one from the registry.
