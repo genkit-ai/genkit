@@ -30,12 +30,10 @@ from genkit_openai.models.image import (
 )
 
 from genkit import (
-    MediaPart,
     Message,
     ModelRequest,
     Part,
     Role,
-    TextPart,
 )
 
 
@@ -46,7 +44,7 @@ class TestExtractPromptText:
         """Verify text extraction from a simple single-message request."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a sunset'))]),
+                Message(role=Role.USER, content=[Part.from_text('a sunset')]),
             ],
         )
         got = _extract_prompt_text(request)
@@ -76,7 +74,7 @@ class TestToImageGenerateParams:
         """Verify required params are set with correct defaults."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+                Message(role=Role.USER, content=[Part.from_text('a cat')]),
             ],
         )
         got = _to_image_generate_params('dall-e-3', request)
@@ -88,7 +86,7 @@ class TestToImageGenerateParams:
         """Verify GPT Image 1 requests omit the unsupported response format."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+                Message(role=Role.USER, content=[Part.from_text('a cat')]),
             ],
             config={'response_format': 'url'},
         )
@@ -102,7 +100,7 @@ class TestToImageGenerateParams:
         """Verify GPT Image variants use the API's base64-only response shape."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+                Message(role=Role.USER, content=[Part.from_text('a cat')]),
             ],
             config={'response_format': 'url'},
         )
@@ -115,7 +113,7 @@ class TestToImageGenerateParams:
         """Verify the version override is also classified as a GPT Image model."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+                Message(role=Role.USER, content=[Part.from_text('a cat')]),
             ],
             config={'version': 'gpt-image-1-mini'},
         )
@@ -129,7 +127,7 @@ class TestToImageGenerateParams:
         """Verify GPT Image-specific options are forwarded unchanged."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
+                Message(role=Role.USER, content=[Part.from_text('a cat')]),
             ],
             config={
                 'background': 'transparent',
@@ -154,7 +152,7 @@ class TestToImageGenerateParams:
         """Verify image-specific config options pass through."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a dog'))]),
+                Message(role=Role.USER, content=[Part.from_text('a dog')]),
             ],
             config={'size': '1024x1024', 'quality': 'hd', 'n': 2},
         )
@@ -167,7 +165,7 @@ class TestToImageGenerateParams:
         """Verify standard GenAI keys are stripped from params."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
+                Message(role=Role.USER, content=[Part.from_text('test')]),
             ],
             config={'temperature': 0.5, 'top_k': 40, 'top_p': 0.9},
         )
@@ -180,7 +178,7 @@ class TestToImageGenerateParams:
         """Verify model version override via config."""
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
+                Message(role=Role.USER, content=[Part.from_text('test')]),
             ],
             config={'version': 'dall-e-3-custom'},
         )
@@ -211,8 +209,8 @@ class TestToModelResponse:
         assert got.message is not None
         assert len(got.message.content) == 1
 
-        part = got.message.content[0].root
-        assert isinstance(part, MediaPart)
+        part = got.message.content[0]
+        assert part.media is not None
         assert str(part.media.url) == 'https://example.com/image.png'
 
     def test_b64_response(self) -> None:
@@ -225,8 +223,8 @@ class TestToModelResponse:
 
         got = _to_generate_response(mock_result)
         assert got.message is not None
-        part = got.message.content[0].root
-        assert isinstance(part, MediaPart)
+        part = got.message.content[0]
+        assert part.media is not None
         assert str(part.media.url) == 'data:image/png;base64,aGVsbG8='
 
     def test_multiple_images(self) -> None:
@@ -295,7 +293,7 @@ class TestOpenAIImageModel:
         model = OpenAIImageModel('dall-e-3', mock_client)
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='a mountain'))]),
+                Message(role=Role.USER, content=[Part.from_text('a mountain')]),
             ],
         )
 

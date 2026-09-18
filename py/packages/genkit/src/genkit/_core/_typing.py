@@ -190,7 +190,7 @@ class Artifact(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str | None = None
-    parts: list[Part] = Field(...)
+    parts: list[PartData] = Field(...)
     metadata: Metadata | None = None
 
 
@@ -251,7 +251,7 @@ class DocumentData(GenkitModel):
     """Model for documentdata data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    content: list[DocumentPart] = Field(...)
+    content: list[PartData] = Field(...)
     metadata: Metadata | None = None
 
 
@@ -458,7 +458,7 @@ class GenerateResponseChunk(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Role | None = None
     index: float | None = None
-    content: list[Part] = Field(...)
+    content: list[PartData] = Field(...)
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
 
@@ -516,7 +516,7 @@ class MessageData(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Role | str = Field(...)
-    content: list[Part] = Field(...)
+    content: list[PartData] = Field(...)
     metadata: Metadata | None = None
 
 
@@ -545,7 +545,7 @@ class ModelResponseChunk(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Any | None = Field(default=None)
     index: float | None = None
-    content: list[Part] = Field(...)
+    content: list[PartData] = Field(...)
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
 
@@ -555,7 +555,7 @@ class MultipartToolResponse(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     output: Any | None = Field(default=None)
-    content: list[Part] | None = None
+    content: list[PartData] | None = None
     metadata: Metadata | None = None
 
 
@@ -1052,16 +1052,12 @@ class Annotation(GenkitModel):
 Spans = dict[str, SpanData]  # type alias for spans (typed string map)
 
 
-class DocumentPart(RootModel[TextPart | MediaPart]):
-    """Root model for DocumentPart union (Part(root=X), DocumentPart(root=X))."""
-
-
-class Part(
+class PartData(
     RootModel[
         TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart | ResourcePart
     ]
 ):
-    """Root model for Part union (Part(root=X), DocumentPart(root=X))."""
+    """A single piece of content in a message or document."""
 
 
 TraceEvent = SpanStartEvent | SpanEndEvent

@@ -54,7 +54,6 @@ from genkit import (
     Constrained,
     FinishReason,
     GenkitError,
-    MediaPart,
     Message,
     ModelInfo,
     ModelRequest,
@@ -62,7 +61,6 @@ from genkit import (
     Part,
     Role,
     Supports,
-    TextPart,
     ToolDefinition,
 )
 from genkit._core._model import OutputConfig
@@ -84,7 +82,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text=request_text)),
+                    Part.from_text(request_text),
                 ],
             ),
         ]
@@ -117,7 +115,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
     ])
     assert isinstance(response, ModelResponse)
     assert response.message is not None
-    assert response.message.content[0].root.text == response_text
+    assert response.message.content[0].text == response_text
 
 
 @pytest.mark.asyncio
@@ -132,7 +130,7 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text=request_text)),
+                    Part.from_text(request_text),
                 ],
             ),
         ]
@@ -176,7 +174,7 @@ async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFi
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='hi'))],
+                content=[Part.from_text('hi')],
             ),
         ]
     )
@@ -222,7 +220,7 @@ async def test_generate_stream_without_finish_reason(mocker: MockerFixture) -> N
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='hi'))],
+                content=[Part.from_text('hi')],
             ),
         ]
     )
@@ -258,7 +256,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text=request_text)),
+                    Part.from_text(request_text),
                 ],
             ),
         ],
@@ -293,13 +291,13 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
     assert response.message is not None
 
     content = response.message.content[0]
-    assert isinstance(content.root, MediaPart)
+    assert content.media is not None
 
-    assert content.root.media.content_type == response_mimetype
+    assert content.media.content_type == response_mimetype
 
     # Verify the data URL contains the correct base64-encoded content
     # Data URLs have format: data:<mimetype>;base64,<data>
-    data_url = content.root.media.url
+    data_url = content.media.url
     assert data_url.startswith(f'data:{response_mimetype};base64,')
     encoded_data = data_url.split(',', 1)[1]
     assert base64.b64decode(encoded_data) == response_byte_string
@@ -392,13 +390,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text=request_text)),
+                    Part.from_text(request_text),
                 ],
             ),
             Message(
                 role=Role.SYSTEM,
                 content=[
-                    Part(root=TextPart(text=system_instruction)),
+                    Part.from_text(system_instruction),
                 ],
             ),
         ]
@@ -425,7 +423,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     ])
     assert isinstance(response, ModelResponse)
     assert response.message is not None
-    assert response.message.content[0].root.text == response_text
+    assert response.message.content[0].text == response_text
 
 
 # Unit tests
@@ -696,7 +694,7 @@ def test_gemini_model__get_tools(
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text='test text')),
+                    Part.from_text('test text'),
                 ],
             ),
         ],
@@ -1020,7 +1018,7 @@ async def test_gemini_model__retrieve_cached_content(
             Message(
                 role=Role.USER,
                 content=[
-                    Part(root=TextPart(text='request text')),
+                    Part.from_text('request text'),
                 ],
             ),
         ]
@@ -1077,7 +1075,7 @@ async def test_gemini_model__code_execution_translates_to_tool(
 ) -> None:
     """A typed ``code_execution`` flag becomes a tool and is not leaked to the SDK."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=GeminiConfigSchema.model_validate({'code_execution': True}),
     )
 
@@ -1106,7 +1104,7 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
 ) -> None:
     """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=GeminiConfigSchema.model_validate({'temperature': 0.5, 'fooBar': 1}),
     )
 
@@ -1120,7 +1118,7 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
 
 def _json_output_request() -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -1183,14 +1181,14 @@ async def test_gemini_model__build_messages_maps_tool_role_to_user(
     """Messages with Role.TOOL are mapped to 'user' in Gemini request Content."""
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='What is the weather in Seattle?'))]),
+            Message(role=Role.USER, content=[Part.from_text('What is the weather in Seattle?')]),
             Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text='I will check.'))],
+                content=[Part.from_text('I will check.')],
             ),
             Message(
                 role=Role.TOOL,
-                content=[Part(root=TextPart(text='Sunny, 72°F in Seattle'))],
+                content=[Part.from_text('Sunny, 72°F in Seattle')],
             ),
         ],
     )
@@ -1216,7 +1214,7 @@ async def test_streaming_generate_classifies_error_on_first_chunk(
 ) -> None:
     """The HTTP call is the first iteration, not the await that created the generator."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
     )
 
     async def failing_stream() -> Any:  # noqa: ANN401
@@ -1238,7 +1236,7 @@ async def test_streaming_generate_classifies_error_on_first_chunk(
 async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixture) -> None:
     """A 503 after the first chunk is still UNAVAILABLE so retry can wait it out."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
     )
     first = genai.types.GenerateContentResponse(
         candidates=[genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='Hello')]))]
@@ -1262,7 +1260,7 @@ async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixt
 async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> None:
     """A provider 503 must stay retryable, not collapse to INTERNAL."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
     )
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content.side_effect = APIError(503, {'error': {'message': 'overloaded'}})

@@ -9,10 +9,10 @@ import pytest
 from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
-from genkit import Document, Genkit
+from genkit import Document, Genkit, Part
 from genkit._core._action import ActionRunContext
 from genkit._core._model import FinishReason, Message, ModelConfig, ModelRequest, ModelResponse
-from genkit._core._typing import Part, Role, TextPart
+from genkit._core._typing import Role
 
 
 class ConformingCfg(BaseModel):
@@ -35,7 +35,7 @@ class PluginOnlyCfg(ModelConfig):
     duration_seconds: int | None = None
 
 
-OK = ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='ok'))]))
+OK = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def ai_and_seen() -> tuple[Genkit, dict]:
         seen['config'] = request.config
         seen['request'] = request
         if request.output_format == 'json':
-            return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{}'))]))
+            return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{}')]))
         return OK
 
     async def strict(request: ModelRequest[StrictCfg], ctx: ActionRunContext) -> ModelResponse:

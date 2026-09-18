@@ -56,24 +56,16 @@ from genkit._ai._tools import (
 )
 from genkit._core._action import Action, ActionRunContext, StreamResponse
 from genkit._core._error import ErrorResponseMetadata, GenkitError, PublicError, RuntimeErrorReason
-from genkit._core._model import Document
+from genkit._core._model import Document, Part
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
-    CustomPart,
-    DocumentPart,
     Media,
-    MediaPart,
     Metadata,
     MiddlewareRef,
-    Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolChoice,
     ToolRequest,
-    ToolRequestPart,
     ToolResponse,
-    ToolResponsePart,
 )
 
 # Import embedder-related types from the embedder namespace
@@ -134,30 +126,23 @@ __all__ = [
     'background_model',
     # Content types
     'Constrained',
-    'CustomPart',
     'Embedding',
     'Metadata',
-    'ReasoningPart',
     'FinishReason',
     'ModelUsage',
     'Media',
-    'MediaPart',
     'Message',
     'MultipartToolResponse',
     'Part',
     'Role',
     'Stage',
     'Supports',
-    'TextPart',
     'ToolChoice',
     'ToolDefinition',
     'ToolRequest',
-    'ToolRequestPart',
     'ToolResponse',
-    'ToolResponsePart',
     # Domain types
     'Document',
-    'DocumentPart',
     # Plugin interface
     'Plugin',
     # Middleware references (wire form for use= parameter)

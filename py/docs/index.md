@@ -45,15 +45,7 @@
 
 ::: genkit.Part
 
-::: genkit.TextPart
-
-::: genkit.MediaPart
-
 ::: genkit.Media
-
-::: genkit.CustomPart
-
-::: genkit.ReasoningPart
 
 ::: genkit.Role
 
@@ -61,19 +53,13 @@
 
 ::: genkit.ToolRequest
 
-::: genkit.ToolRequestPart
-
 ::: genkit.ToolResponse
-
-::: genkit.ToolResponsePart
 
 ::: genkit.ToolDefinition
 
 ::: genkit.ToolChoice
 
 ::: genkit.Document
-
-::: genkit.DocumentPart
 
 ::: genkit.EmbedderRef
 

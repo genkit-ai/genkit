@@ -1271,6 +1271,9 @@ importers:
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

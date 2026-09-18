@@ -30,12 +30,9 @@ from pytest_mock import MockerFixture
 
 from genkit import (
     Document,
-    DocumentPart,
     EmbedRequest,
     EmbedResponse,
-    Media,
-    MediaPart,
-    TextPart,
+    Part,
 )
 
 
@@ -97,8 +94,8 @@ async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
 
     doc = Document(
         content=[
-            DocumentPart(root=TextPart(text=text)),
-            DocumentPart(root=MediaPart(media=Media(url=data_url, content_type='image/png'))),
+            Part.from_text(text),
+            Part.from_media(data_url, content_type='image/png'),
         ]
     )
     request = EmbedRequest(input=[doc])

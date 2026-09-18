@@ -20,13 +20,19 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from genkit._core._model import Message, ModelRequest, ModelResponse, ModelResponseChunk
-from genkit._core._typing import FinishReason, Part, Role, TextPart
+from genkit._core._model import (
+    Message,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+)
+from genkit._core._typing import FinishReason, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
@@ -174,10 +180,7 @@ class SurfaceIdReplay:
 def part_text(*, part: Part) -> str | None:
     # Empty text is still a text part. Treating it as missing would flush an
     # open fence and drop the card.
-    root = part.root
-    if isinstance(root, TextPart):
-        return root.text
-    return None
+    return part.text
 
 
 def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
@@ -186,11 +189,11 @@ def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
         if seg.envelopes:
             out.append(a2ui_part(seg.envelopes))
         elif seg.prose:
-            out.append(Part(TextPart(text=seg.prose)))
+            out.append(Part.from_text(seg.prose))
     return out
 
 
-def rewrite_parts(*, parts: list[Part], parser: StreamParser, flush_nontext: bool) -> list[Part]:
+def rewrite_parts(*, parts: Sequence[Part], parser: StreamParser, flush_nontext: bool) -> list[Part]:
     out: list[Part] = []
     for part in parts:
         text = part_text(part=part)
@@ -257,10 +260,10 @@ def inject_instructions(*, request: ModelRequest, catalog: A2uiCatalog) -> Model
     for i, message in enumerate(messages):
         if message.role != Role.SYSTEM:
             continue
-        extra = Part(TextPart(text='\n\n' + text))
+        extra = Part.from_text('\n\n' + text)
         messages[i] = message.model_copy(update={'content': [*message.content, extra]})
         return request.model_copy(update={'messages': messages})
-    system = Message(role=Role.SYSTEM, content=[Part(TextPart(text=text))])
+    system = Message(role=Role.SYSTEM, content=[Part.from_text(text)])
     return request.model_copy(update={'messages': [system, *messages]})
 
 
@@ -279,13 +282,13 @@ def sanitize_inbound(*, request: ModelRequest) -> ModelRequest:
             rewritten = True
             text = summarize_envelopes(envelopes=envelopes_from_parts([part]))
             if text:
-                content.append(Part(TextPart(text=text)))
+                content.append(Part.from_text(text))
         if not rewritten:
             messages.append(message)
             continue
         changed = True
         if not content:
-            content.append(Part(TextPart(text='[UI]')))
+            content.append(Part.from_text('[UI]'))
         messages.append(message.model_copy(update={'content': content}))
     if not changed:
         return request

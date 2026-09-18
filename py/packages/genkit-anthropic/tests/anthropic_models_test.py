@@ -29,22 +29,16 @@ from pydantic import ValidationError
 
 from genkit import (
     Constrained,
-    CustomPart,
     FinishReason,
-    Media,
-    MediaPart,
     Message,
     Metadata,
     ModelInfo,
     ModelRequest,
     ModelResponseChunk,
     Part,
-    ReasoningPart,
     Role,
     Supports,
-    TextPart,
     ToolDefinition,
-    ToolRequestPart,
 )
 from genkit._core._model import OutputConfig
 from genkit.plugin_api import ModelConfig
@@ -56,7 +50,7 @@ def _create_sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='Hello, how are you?'))],
+                content=[Part.from_text('Hello, how are you?')],
             )
         ],
         config=ModelConfig(),
@@ -94,9 +88,7 @@ async def test_generate_basic() -> None:
     assert response.message.content is not None
     assert len(response.message.content) == 1
     part = response.message.content[0]
-    actual_part = part.root if isinstance(part, Part) else part
-    assert isinstance(actual_part, TextPart)
-    assert actual_part.text == "Hello! I'm doing well."
+    assert part.text == "Hello! I'm doing well."
     assert response.usage is not None
     assert response.usage.input_tokens == 10
     assert response.usage.output_tokens == 15
@@ -128,12 +120,10 @@ async def test_generate_with_tools() -> None:
     assert response.message.content is not None
     assert len(response.message.content) == 1
     part = response.message.content[0]
-    actual_part = part.root if isinstance(part, Part) else part
-    assert isinstance(actual_part, ToolRequestPart)
-    assert actual_part.tool_request is not None
-    assert actual_part.tool_request.name == 'get_weather'
-    assert actual_part.tool_request.ref == 'tool_123'
-    assert actual_part.tool_request.input == {'location': 'Paris'}
+    assert part.tool_request is not None
+    assert part.tool_request.name == 'get_weather'
+    assert part.tool_request.ref == 'tool_123'
+    assert part.tool_request.input == {'location': 'Paris'}
 
 
 @pytest.mark.asyncio
@@ -148,7 +138,7 @@ async def test_generate_defaults_empty_tool_input_schema() -> None:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='Hello'))],
+                content=[Part.from_text('Hello')],
             )
         ],
         config=ModelConfig(),
@@ -196,7 +186,7 @@ async def test_generate_with_config() -> None:
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Test')])],
         config=ModelConfig(
             temperature=0.0,
             max_output_tokens=100,
@@ -222,8 +212,8 @@ def test_extract_system() -> None:
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='You are helpful.'))]),
-        Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('You are helpful.')]),
+        Message(role=Role.USER, content=[Part.from_text('Hello')]),
     ]
 
     system = model._extract_system(messages)
@@ -236,8 +226,8 @@ def test_to_anthropic_messages() -> None:
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
     messages = [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
-        Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there'))]),
+        Message(role=Role.USER, content=[Part.from_text('Hello')]),
+        Message(role=Role.MODEL, content=[Part.from_text('Hi there')]),
     ]
 
     anthropic_messages = model._to_anthropic_messages(messages)
@@ -315,16 +305,13 @@ async def test_streaming_generation() -> None:
 
     assert len(collected_chunks) == 3
     chunk0_part = collected_chunks[0].content[0]
-    chunk0_actual = chunk0_part.root if isinstance(chunk0_part, Part) else chunk0_part
-    assert chunk0_actual.text == 'Hello'
+    assert Part.model_validate(chunk0_part).text == 'Hello'
 
     chunk1_part = collected_chunks[1].content[0]
-    chunk1_actual = chunk1_part.root if isinstance(chunk1_part, Part) else chunk1_part
-    assert chunk1_actual.text == ' world'
+    assert Part.model_validate(chunk1_part).text == ' world'
 
     chunk2_part = collected_chunks[2].content[0]
-    chunk2_actual = chunk2_part.root if isinstance(chunk2_part, Part) else chunk2_part
-    assert chunk2_actual.text == '!'
+    assert Part.model_validate(chunk2_part).text == '!'
 
     assert response.usage is not None
     assert response.usage.input_tokens == 10
@@ -335,8 +322,8 @@ async def test_streaming_generation() -> None:
     assert len(response.message.content) == 1
     final_part = response.message.content[0]
     assert isinstance(final_part, Part)
-    assert isinstance(final_part.root, TextPart)
-    assert final_part.root.text == 'Hello world!'
+    assert final_part.text is not None
+    assert final_part.text == 'Hello world!'
 
 
 @pytest.mark.asyncio
@@ -386,12 +373,12 @@ async def test_streaming_tool_request() -> None:
     # Should have 2 chunks: one text, one tool request.
     assert len(collected_chunks) == 2
 
-    text_part = collected_chunks[0].content[0].root
-    assert isinstance(text_part, TextPart)
+    text_part = collected_chunks[0].content[0]
+    assert text_part.text is not None
     assert text_part.text == 'Let me check.'
 
-    tool_part = collected_chunks[1].content[0].root
-    assert isinstance(tool_part, ToolRequestPart)
+    tool_part = collected_chunks[1].content[0]
+    assert tool_part.tool_request is not None
     assert tool_part.tool_request.name == 'get_weather'
     assert tool_part.tool_request.ref == 'tool_abc'
     assert tool_part.tool_request.input == {'location': 'Paris'}
@@ -442,42 +429,42 @@ class TestMaybeStripFences:
     def test_strips_fences_for_json_output(self) -> None:
         """Strips markdown fences when JSON output is requested."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json', json_schema={'type': 'object'}),
         )
-        parts = [Part(root=TextPart(text='```json\n{"a": 1}\n```'))]
+        parts = [Part.from_text('```json\n{"a": 1}\n```')]
         result = maybe_strip_fences(request, parts)
-        assert result[0].root.text == '{"a": 1}'
+        assert result[0].text == '{"a": 1}'
 
     def test_no_op_for_text_output(self) -> None:
         """Does not modify responses when output format is not json."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='text'),
         )
         fenced = '```json\n{"a": 1}\n```'
-        parts = [Part(root=TextPart(text=fenced))]
+        parts = [Part.from_text(fenced)]
         result = maybe_strip_fences(request, parts)
-        assert result[0].root.text == fenced
+        assert result[0].text == fenced
 
     def test_no_op_for_no_output(self) -> None:
         """Does not modify responses when no output config is set."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         )
         fenced = '```json\n{"a": 1}\n```'
-        parts = [Part(root=TextPart(text=fenced))]
+        parts = [Part.from_text(fenced)]
         result = maybe_strip_fences(request, parts)
-        assert result[0].root.text == fenced
+        assert result[0].text == fenced
 
     def test_no_op_when_no_fences(self) -> None:
         """Does not modify clean JSON responses."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json', json_schema={'type': 'object'}),
         )
         text = '{"name": "John"}'
-        parts = [Part(root=TextPart(text=text))]
+        parts = [Part.from_text(text)]
         result = maybe_strip_fences(request, parts)
         assert result is parts
 
@@ -491,8 +478,8 @@ def test_cache_control_on_text_block() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='Cached context', metadata=Metadata({'cache_control': {'type': 'ephemeral'}}))),
-                Part(root=TextPart(text='Question about the context')),
+                Part.from_text('Cached context', metadata=Metadata({'cache_control': {'type': 'ephemeral'}})),
+                Part.from_text('Question about the context'),
             ],
         ),
     ]
@@ -521,7 +508,7 @@ def test_cache_control_not_applied_without_metadata() -> None:
     messages = [
         Message(
             role=Role.USER,
-            content=[Part(root=TextPart(text='No cache'))],
+            content=[Part.from_text('No cache')],
         ),
     ]
 
@@ -548,7 +535,7 @@ async def test_cache_token_tracking_in_usage() -> None:
 
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Test')])],
     )
 
     response = await model.generate(request)
@@ -577,7 +564,7 @@ async def test_no_cache_tokens_when_caching_not_used() -> None:
 
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Test')])],
     )
 
     response = await model.generate(request)
@@ -595,8 +582,8 @@ def test_pdf_base64_becomes_document_block() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(root=MediaPart(media=Media(url=pdf_data, content_type='application/pdf'))),
-                Part(root=TextPart(text='Summarize this PDF')),
+                Part.from_media(pdf_data, content_type='application/pdf'),
+                Part.from_text('Summarize this PDF'),
             ],
         ),
     ]
@@ -622,14 +609,7 @@ def test_pdf_url_becomes_document_block() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(
-                    root=MediaPart(
-                        media=Media(
-                            url='https://example.com/doc.pdf',
-                            content_type='application/pdf',
-                        )
-                    )
-                ),
+                Part.from_media('https://example.com/doc.pdf', content_type='application/pdf'),
             ],
         ),
     ]
@@ -651,7 +631,7 @@ def test_image_still_works() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(root=MediaPart(media=Media(url='https://example.com/cat.jpg', content_type='image/jpeg'))),
+                Part.from_media('https://example.com/cat.jpg', content_type='image/jpeg'),
             ],
         ),
     ]
@@ -673,11 +653,10 @@ def test_pdf_with_cache_control() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(
-                    root=MediaPart(
-                        media=Media(url=pdf_data, content_type='application/pdf'),
-                        metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
-                    )
+                Part.from_media(
+                    pdf_data,
+                    content_type='application/pdf',
+                    metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
                 ),
             ],
         ),
@@ -697,7 +676,7 @@ def test_structured_output_uses_native_output_config(model_name: str) -> None:
     model = AnthropicModel(model_name=model_name, client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -718,7 +697,7 @@ def test_structured_output_uses_native_output_config_for_empty_schema() -> None:
     model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate JSON')])],
         output=OutputConfig(format='json', json_schema={}, constrained=True),
     )
 
@@ -733,7 +712,7 @@ def test_structured_output_falls_back_to_system_prompt() -> None:
     model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate JSON')])],
         output=OutputConfig(format='json', constrained=True),
     )
 
@@ -751,7 +730,7 @@ def test_structured_output_falls_back_when_unconstrained(output_constrained: boo
     model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -775,7 +754,7 @@ def test_structured_output_falls_back_for_unsupported_models() -> None:
     model = AnthropicModel(model_name='claude-unknown-model', client=mock_client)
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -799,7 +778,7 @@ def test_structured_output_falls_back_when_model_disallows_constraints() -> None
     model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NONE))
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -820,7 +799,7 @@ def test_structured_output_with_no_tools_capability() -> None:
     model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NO_TOOLS))
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -883,7 +862,7 @@ def _mock_vertex_client_for_generate() -> MagicMock:
 
 def _text_request(config: Any) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         config=config,
     )
 
@@ -1322,7 +1301,7 @@ def test_structured_output_merges_existing_output_config() -> None:
     config: Any = AnthropicConfig.model_validate({'output_config': {'effort': 'high', 'task_budget': {'total': 20000}}})
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
@@ -1522,13 +1501,13 @@ async def test_generate_with_thinking_block() -> None:
 
     assert response.message is not None
     assert len(response.message.content) == 2
-    reasoning_part = response.message.content[0].root
-    assert isinstance(reasoning_part, ReasoningPart)
+    reasoning_part = response.message.content[0]
+    assert reasoning_part.reasoning is not None
     assert reasoning_part.reasoning == 'Let me reason.'
     assert reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
 
-    text_part = response.message.content[1].root
-    assert isinstance(text_part, TextPart)
+    text_part = response.message.content[1]
+    assert text_part.text is not None
     assert text_part.text == 'Answer'
 
 
@@ -1548,8 +1527,8 @@ async def test_generate_thinking_block_without_signature_omits_metadata() -> Non
     response = await model.generate(sample_request)
 
     assert response.message is not None
-    reasoning_part = response.message.content[0].root
-    assert isinstance(reasoning_part, ReasoningPart)
+    reasoning_part = response.message.content[0]
+    assert reasoning_part.reasoning is not None
     assert reasoning_part.reasoning == 'No signature.'
     assert reasoning_part.metadata is None
 
@@ -1570,8 +1549,8 @@ async def test_generate_with_redacted_thinking_block() -> None:
     response = await model.generate(sample_request)
 
     assert response.message is not None
-    custom_part = response.message.content[0].root
-    assert isinstance(custom_part, CustomPart)
+    custom_part = response.message.content[0]
+    assert custom_part.custom is not None
     assert custom_part.custom == {'redactedThinking': 'opaque-blob'}
 
 
@@ -1606,21 +1585,21 @@ async def test_streaming_thinking_deltas() -> None:
 
     assert len(collected_chunks) == 3
 
-    first_part = collected_chunks[0].content[0].root
-    assert isinstance(first_part, ReasoningPart)
+    first_part = collected_chunks[0].content[0]
+    assert first_part.reasoning is not None
     assert first_part.reasoning == 'Think'
 
-    second_part = collected_chunks[1].content[0].root
-    assert isinstance(second_part, ReasoningPart)
+    second_part = collected_chunks[1].content[0]
+    assert second_part.reasoning is not None
     assert second_part.reasoning == 'ing'
 
-    third_part = collected_chunks[2].content[0].root
-    assert isinstance(third_part, TextPart)
+    third_part = collected_chunks[2].content[0]
+    assert third_part.text is not None
     assert third_part.text == 'Answer'
 
     assert response.message is not None
-    final_reasoning_part = response.message.content[0].root
-    assert isinstance(final_reasoning_part, ReasoningPart)
+    final_reasoning_part = response.message.content[0]
+    assert final_reasoning_part.reasoning is not None
     assert final_reasoning_part.reasoning == 'Thinking'
     assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
 
@@ -1657,17 +1636,17 @@ async def test_streaming_redacted_thinking_block() -> None:
 
     assert len(collected_chunks) == 2
 
-    first_part = collected_chunks[0].content[0].root
-    assert isinstance(first_part, CustomPart)
+    first_part = collected_chunks[0].content[0]
+    assert first_part.custom is not None
     assert first_part.custom == {'redactedThinking': 'opaque-blob'}
 
-    second_part = collected_chunks[1].content[0].root
-    assert isinstance(second_part, TextPart)
+    second_part = collected_chunks[1].content[0]
+    assert second_part.text is not None
     assert second_part.text == 'Answer'
 
     assert response.message is not None
-    final_first_part = response.message.content[0].root
-    assert isinstance(final_first_part, CustomPart)
+    final_first_part = response.message.content[0]
+    assert final_first_part.custom is not None
     assert final_first_part.custom == {'redactedThinking': 'opaque-blob'}
 
 
@@ -1719,16 +1698,16 @@ async def test_streaming_thinking_then_tool_use_interleave() -> None:
     # Two reasoning chunks, then one tool request chunk.
     assert len(collected_chunks) == 3
 
-    first_part = collected_chunks[0].content[0].root
-    assert isinstance(first_part, ReasoningPart)
+    first_part = collected_chunks[0].content[0]
+    assert first_part.reasoning is not None
     assert first_part.reasoning == 'Need'
 
-    second_part = collected_chunks[1].content[0].root
-    assert isinstance(second_part, ReasoningPart)
+    second_part = collected_chunks[1].content[0]
+    assert second_part.reasoning is not None
     assert second_part.reasoning == ' a tool'
 
-    tool_part = collected_chunks[2].content[0].root
-    assert isinstance(tool_part, ToolRequestPart)
+    tool_part = collected_chunks[2].content[0]
+    assert tool_part.tool_request is not None
     assert tool_part.tool_request.name == 'get_weather'
     assert tool_part.tool_request.ref == 'tool_abc'
     assert tool_part.tool_request.input == {'location': 'Paris'}
@@ -1736,12 +1715,12 @@ async def test_streaming_thinking_then_tool_use_interleave() -> None:
     # The final message keeps both blocks, with the signature on the reasoning part.
     assert response.message is not None
     assert len(response.message.content) == 2
-    final_reasoning_part = response.message.content[0].root
-    assert isinstance(final_reasoning_part, ReasoningPart)
+    final_reasoning_part = response.message.content[0]
+    assert final_reasoning_part.reasoning is not None
     assert final_reasoning_part.reasoning == 'Need a tool'
     assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
-    final_tool_part = response.message.content[1].root
-    assert isinstance(final_tool_part, ToolRequestPart)
+    final_tool_part = response.message.content[1]
+    assert final_tool_part.tool_request is not None
     assert final_tool_part.tool_request.name == 'get_weather'
 
 
@@ -1753,7 +1732,7 @@ def test_reasoning_part_encodes_as_thinking_block() -> None:
     messages = [
         Message(
             role=Role.MODEL,
-            content=[Part(root=ReasoningPart(reasoning='step', metadata={'thoughtSignature': 'sig-abc'}))],
+            content=[Part.from_reasoning('step', metadata={'thoughtSignature': 'sig-abc'})],
         ),
     ]
 
@@ -1775,7 +1754,7 @@ def test_reasoning_part_accepts_go_style_signature_alias(signature: str | bytes)
     messages = [
         Message(
             role=Role.MODEL,
-            content=[Part(root=ReasoningPart(reasoning='step', metadata={'signature': signature}))],
+            content=[Part.from_reasoning('step', metadata={'signature': signature})],
         ),
     ]
 
@@ -1793,7 +1772,7 @@ def test_reasoning_part_without_signature_raises() -> None:
     messages = [
         Message(
             role=Role.MODEL,
-            content=[Part(root=ReasoningPart(reasoning='step'))],
+            content=[Part.from_reasoning('step')],
         ),
     ]
 
@@ -1809,7 +1788,7 @@ def test_empty_reasoning_part_is_skipped() -> None:
     messages = [
         Message(
             role=Role.MODEL,
-            content=[Part(root=ReasoningPart(reasoning='', metadata={'thoughtSignature': 'sig-abc'}))],
+            content=[Part.from_reasoning('', metadata={'thoughtSignature': 'sig-abc'})],
         ),
     ]
 
@@ -1825,7 +1804,7 @@ def test_redacted_thinking_part_round_trips() -> None:
     messages = [
         Message(
             role=Role.MODEL,
-            content=[Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}))],
+            content=[Part.from_custom({'redactedThinking': 'opaque-blob'})],
         ),
     ]
 
@@ -1846,14 +1825,9 @@ def test_thinking_blocks_do_not_get_cache_control() -> None:
         Message(
             role=Role.MODEL,
             content=[
-                Part(
-                    root=ReasoningPart(
-                        reasoning='step',
-                        metadata={'thoughtSignature': 'sig-abc', **cache_meta},
-                    )
-                ),
-                Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}, metadata=cache_meta)),
-                Part(root=TextPart(text='Answer', metadata=cache_meta)),
+                Part.from_reasoning('step', metadata={'thoughtSignature': 'sig-abc', **cache_meta}),
+                Part.from_custom({'redactedThinking': 'opaque-blob'}, metadata=cache_meta),
+                Part.from_text('Answer', metadata=cache_meta),
             ],
         ),
     ]

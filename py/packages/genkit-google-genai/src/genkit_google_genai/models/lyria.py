@@ -117,8 +117,8 @@ def _extract_text(messages: list[Any]) -> str:
         return ''
     for message in messages:
         for part in message.content:
-            if hasattr(part.root, 'text') and part.root.text:
-                return str(part.root.text)
+            if part.text is not None and part.text:
+                return str(part.text)
     return ''
 
 

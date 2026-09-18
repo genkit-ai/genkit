@@ -24,10 +24,9 @@ from typing import Any, cast
 
 import pytest
 
-from genkit import ActionRunContext, Genkit
+from genkit import ActionRunContext, Genkit, Part
 from genkit._ai._resource import ResourceInput
 from genkit._core._action import ActionKind
-from genkit._core._typing import Part, TextPart
 
 
 @pytest.mark.asyncio
@@ -36,7 +35,7 @@ async def test_define_resource_veneer() -> None:
     ai = Genkit(plugins=[])
 
     async def my_resource_fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, list[Part]]:
-        return {'content': [Part(root=TextPart(text=f'Content for {input.uri}'))]}
+        return {'content': [Part.from_text(f'Content for {input.uri}')]}
 
     act = ai.define_resource(fn=my_resource_fn, uri='http://example.com/foo')
 

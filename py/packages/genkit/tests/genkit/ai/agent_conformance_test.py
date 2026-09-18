@@ -39,6 +39,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
+from genkit import Part
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnContext, TurnResult
@@ -46,20 +47,21 @@ from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
-from genkit._core._model import ModelResponse, ModelResponseChunk
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentResult,
     Artifact,
-    GenkitRuntimeError,
-    MessageData,
-    Part,
-    Role,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
     SessionSnapshot as SessionSnapshotSchema,
-    TextPart,
+)
+from genkit._core._typing import (
+    AgentFinishReason,
+    GenkitRuntimeError,
+    Role,
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import Agent
@@ -381,8 +383,8 @@ def assert_has_id(*, actual: Any, want: bool, path: str) -> None:  # noqa: ANN40
 # ---------------------------------------------------------------------------
 
 
-def _model_text(*, text: str) -> MessageData:
-    return MessageData(role=Role.MODEL, content=[Part(root=TextPart(text=text))])
+def _model_text(*, text: str) -> Message:
+    return Message(role=Role.MODEL, content=[Part.from_text(text)])
 
 
 class InterruptQuery(BaseModel):
@@ -484,9 +486,9 @@ async def _blocking_turn(sr: SessionRunner, ctx: ActionRunContext, _inp: AgentIn
 
 
 async def _artifacts_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
-    await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v1'))])])
-    await sr.add_artifacts([Artifact(name='doc1', parts=[Part(root=TextPart(text='v2'))])])
-    await sr.add_artifacts([Artifact(name='doc2', parts=[Part(root=TextPart(text='other'))])])
+    await sr.add_artifacts([Artifact(name='doc1', parts=[Part.from_text('v1')])])
+    await sr.add_artifacts([Artifact(name='doc1', parts=[Part.from_text('v2')])])
+    await sr.add_artifacts([Artifact(name='doc2', parts=[Part.from_text('other')])])
     await sr.add_messages([_model_text(text='done')])
 
 
@@ -508,7 +510,7 @@ async def _multi_custom_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: Ag
 async def _artifacts_store_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
     existing = await sr.get_artifacts()
     count = len(existing) + 1
-    await sr.add_artifacts([Artifact(name=f'doc{count}', parts=[Part(root=TextPart(text=f'content{count}'))])])
+    await sr.add_artifacts([Artifact(name=f'doc{count}', parts=[Part.from_text(f'content{count}')])])
     await sr.add_messages([_model_text(text='done')])
 
 

@@ -16,28 +16,22 @@
 
 """Tests for Genkit document."""
 
-from typing import cast
-
-from genkit import Document
+from genkit import Document, Part
 from genkit._core._typing import (
-    DocumentPart,
     Media,
-    MediaPart,
-    TextPart,
 )
 
 
 def test_makes_deep_copy() -> None:
     """Test that Document makes a deep copy of its content and metadata."""
-    content = [DocumentPart(root=TextPart(text='some text'))]
+    content = [Part.from_text('some text')]
     metadata = {'foo': 'bar'}
     doc = Document(content=content, metadata=metadata)
 
-    text_part = cast(TextPart, content[0].root)
-    text_part.text = 'other text'
+    content[0].text = 'other text'
     metadata['foo'] = 'faz'
 
-    assert doc.content[0].root.text == 'some text'
+    assert doc.content[0].text == 'some text'
     assert doc.metadata is not None
     assert doc.metadata['foo'] == 'bar'
 
@@ -86,7 +80,7 @@ def test_from_data_media_document() -> None:
 
 def test_concatenates_text() -> None:
     """Test that text concatenates multiple text parts."""
-    content = [DocumentPart(root=TextPart(text='hello')), DocumentPart(root=TextPart(text='world'))]
+    content = [Part.from_text('hello'), Part.from_text('world')]
     doc = Document(content=content)
 
     assert doc.text == 'helloworld'
@@ -95,8 +89,8 @@ def test_concatenates_text() -> None:
 def test_multiple_media_document() -> None:
     """Test that media returns all media parts."""
     content = [
-        DocumentPart(root=MediaPart(media=Media(url='data:one'))),
-        DocumentPart(root=MediaPart(media=Media(url='data:two'))),
+        Part.from_media('data:one'),
+        Part.from_media('data:two'),
     ]
     doc = Document(content=content)
 
@@ -132,3 +126,16 @@ def test_data_type_with_media() -> None:
     doc = Document.from_media(url='gs://somebucket/someimage.png', content_type='image/png')
 
     assert doc.data_type == 'image/png'
+
+
+def test_document_accepts_part_factories() -> None:
+    """Document content accepts Part.from_text / Part.from_media."""
+    doc = Document(
+        content=[
+            Part.from_text('Intro section'),
+            Part.from_media('https://example.com/figure1.png', content_type='image/png'),
+        ]
+    )
+
+    assert doc.text == 'Intro section'
+    assert doc.media == [Media(url='https://example.com/figure1.png', content_type='image/png')]

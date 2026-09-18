@@ -20,6 +20,7 @@ import asyncio
 import os
 import queue
 import threading
+from collections.abc import AsyncIterator
 from typing import cast, get_args, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -50,7 +51,7 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfig, VeoModel
 
-from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role
 from genkit.model import Operation
 from genkit.plugin_api import Action, to_json_schema
 
@@ -704,7 +705,8 @@ async def test_list_actions_advertises_veo_as_background(mock_list_models: Magic
         assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
 
 
-def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> None:
+@pytest.mark.asyncio
+async def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> None:
     """Discovery buckets on the ``veo-`` prefix, not a ``veo`` substring."""
 
     def _model(name: str) -> MagicMock:
@@ -714,20 +716,41 @@ def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> Non
         item.description = ''
         return item
 
+    async def model_pager() -> AsyncIterator[MagicMock]:
+        for model in [
+            _model('publishers/google/models/gemini-2.5-flash'),
+            _model('publishers/google/models/veo-3.0-generate-001'),
+            _model('publishers/google/models/braveo-lab'),
+            _model('publishers/google/models/imagegeneration@006'),
+            _model('publishers/google/models/virtual-try-on-001'),
+            _model('publishers/google/models/imagetext@001'),
+        ]:
+            yield model
+
     client = MagicMock()
-    client.models.list.return_value = [
-        _model('publishers/google/models/gemini-2.5-flash'),
-        _model('publishers/google/models/veo-3.0-generate-001'),
-        _model('publishers/google/models/braveo-lab'),
-        _model('publishers/google/models/imagegeneration@006'),
-        _model('publishers/google/models/virtual-try-on-001'),
-        _model('publishers/google/models/imagetext@001'),
-    ]
-    catalog = _list_genai_models(client, is_vertex=True)
+    client.aio.models.list = AsyncMock(return_value=model_pager())
+    catalog = await _list_genai_models(client, is_vertex=True)
     assert catalog.veo == ['veo-3.0-generate-001']
     assert catalog.imagen == []
     assert 'imagetext@001' not in catalog.gemini
     assert 'braveo-lab' not in catalog.gemini
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_async_does_not_block_event_loop() -> None:
+    """Model discovery uses the SDK's asynchronous client surface."""
+
+    async def empty_models() -> AsyncIterator[MagicMock]:
+        if False:
+            yield MagicMock()
+
+    client = MagicMock()
+    client.aio.models.list = AsyncMock(return_value=empty_models())
+
+    result = await _list_genai_models(client, is_vertex=False)
+
+    client.aio.models.list.assert_awaited_once_with()
+    assert result.gemini == []
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
@@ -742,7 +765,7 @@ async def test_veo_start_stamps_background_action_key(mock_list_models: MagicMoc
     assert start is not None
     assert check is not None
 
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='a clip'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('a clip')])])
     with patch.object(VeoModel, 'start', new=AsyncMock(return_value=Operation(id='ops/1'))):
         started = await start.run(request)
     assert started.response.action == '/background-model/vertexai/veo-3.0-generate-001'

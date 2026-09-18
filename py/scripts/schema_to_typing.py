@@ -41,9 +41,13 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 # - suffix: emit as {name}{suffix}, omit listed fields (hand-written subclass adds them back)
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
+    'Part': {'output_name': 'PartData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
     # RuntimeError would shadow Python's builtin exception.
     'RuntimeError': {'output_name': 'GenkitRuntimeError'},
+    # Documents take the same Part as messages. The schema names a
+    # text|media subset; we do not emit a second type for that.
+    'DocumentPart': {'output_name': 'PartData'},
 }
 
 
@@ -61,8 +65,8 @@ def _output_name(name: str) -> str:
 
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
 PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
-# anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
-ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
+# anyOf/oneOf defs emitted as RootModel (have .root) so PartData(root=TextPart(...)) works
+ROOT_MODEL_UNIONS = frozenset({'Part', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -390,8 +394,8 @@ def generate(schema_path: Path, _out: Path) -> str:
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)
-    # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
-    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
+    # PartData is the wire union. Callers construct Part, next to Message.
+    ROOT_MODEL_UNIONS = frozenset({'Part'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
@@ -404,10 +408,13 @@ def generate(schema_path: Path, _out: Path) -> str:
                 continue
             class_name = _output_name(name)
             union_str = ' | '.join(_output_name(r) for r in refs)
-            if name in ROOT_MODEL_UNIONS:
+            if name == 'DocumentPart':
+                emitted.add(name)
+                break
+            elif name in ROOT_MODEL_UNIONS:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
-                    f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
+                    '    """A single piece of content in a message or document."""',
                     '',
                 ])
             else:

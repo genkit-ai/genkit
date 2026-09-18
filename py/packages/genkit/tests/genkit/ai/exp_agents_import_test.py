@@ -28,16 +28,11 @@ import pytest
 from genkit import Genkit as StableGenkit
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionRunContext
-from genkit._core._model import Message, ModelResponse
+from genkit._core._model import AgentInput, AgentResult, Message, ModelResponse, Part
 from genkit._core._typing import (
     AgentFinishReason,
-    AgentInput,
-    AgentResult,
     FinishReason,
-    MessageData,
-    Part,
     Role,
-    TextPart,
 )
 from genkit.exp import (
     FileSessionStore,
@@ -96,7 +91,7 @@ async def test_exp_genkit_define_agent_one_turn() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
 
@@ -114,7 +109,7 @@ async def test_exp_genkit_define_prompt_agent_one_turn() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='from-prompt'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('from-prompt')]),
         )
     )
 
@@ -132,11 +127,8 @@ async def test_exp_genkit_define_custom_agent_one_turn() -> None:
         async def handle_turn(inp: AgentInput, __: TurnContext) -> TurnResult | None:
             text = ''
             if inp.message and inp.message.content:
-                root = inp.message.content[0].root
-                text = getattr(root, 'text', '') or ''
-            await session_runner.add_messages([
-                MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))])
-            ])
+                text = inp.message.content[0].text or ''
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text(f'Echo: {text}')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -165,7 +157,7 @@ async def test_exp_genkit_still_generates() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='gen'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('gen')]),
         )
     )
 

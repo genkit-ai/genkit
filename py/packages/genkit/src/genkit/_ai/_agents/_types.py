@@ -23,10 +23,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from genkit._core._error import GenkitRuntimeError
+from genkit._core._model import AgentStreamChunk, SessionState
 from genkit._core._typing import (
     AgentFinishReason,
-    AgentStreamChunk,
-    SessionState,
 )
 
 StateManagement = Literal['server', 'client']

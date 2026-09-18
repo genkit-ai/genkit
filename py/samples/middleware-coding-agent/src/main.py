@@ -21,7 +21,7 @@ from pathlib import Path
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Filesystem, Middleware, Skills, ToolApproval
 
-from genkit import Genkit, Message, Part, Role, TextPart, restart_tool
+from genkit import Genkit, Message, Part, Role, restart_tool
 
 here = Path(__file__).resolve().parent.parent
 workspace = here / 'workspace'
@@ -46,14 +46,10 @@ async def main() -> None:
         Message(
             role=Role.SYSTEM,
             content=[
-                Part(
-                    root=TextPart(
-                        text=(
-                            f'You are a coding agent. Working directory is {workspace}. '
-                            'Use plain filenames relative to that root. '
-                            'Read a file before you edit it. Start by listing the workspace.'
-                        )
-                    )
+                Part.from_text(
+                    f'You are a coding agent. Working directory is {workspace}. '
+                    'Use plain filenames relative to that root. '
+                    'Read a file before you edit it. Start by listing the workspace.'
                 )
             ],
         ),
@@ -87,7 +83,10 @@ async def main() -> None:
             # Each interrupt is a write. Approve restarts that tool.
             approved = []
             for interrupt in response.interrupts:
-                print(f'{interrupt.tool_request.name}: {interrupt.tool_request.input}')
+                req = interrupt.tool_request
+                if req is None:
+                    continue
+                print(f'{req.name}: {req.input}')
                 if input('Approve? (y/N): ').strip().lower() in ('y', 'yes'):
                     approved.append(restart_tool(interrupt=interrupt, resumed_metadata={'tool_approved': True}))
             if not approved:

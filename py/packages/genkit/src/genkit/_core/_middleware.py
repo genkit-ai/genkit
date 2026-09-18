@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
 
 from genkit._core._action import Action
 from genkit._core._logger import get_logger
@@ -35,9 +35,11 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
     MultipartToolResponse,
+    Part,
+    as_part,
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
-from genkit._core._typing import MiddlewareDesc, ToolRequestPart
+from genkit._core._typing import MiddlewareDesc
 
 logger = get_logger(__name__)
 
@@ -120,8 +122,18 @@ class ToolHookParams(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
-    tool_request_part: ToolRequestPart
+    tool_request_part: Part
     tool: Action
+
+    @field_validator('tool_request_part', mode='before')
+    @classmethod
+    def _wrap_tool_request_part(cls, v: object) -> object:
+        if v is None:
+            return v
+        part = as_part(v)
+        if part.tool_request is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        return part
 
 
 @dataclass

@@ -27,14 +27,10 @@ from pydantic import BaseModel, Field
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
-    Media,
-    MediaPart,
     ModelInfo,
-    Part,
     Role,
-    TextPart,
 )
-from genkit.model import Message, ModelRequest, ModelResponse, ModelResponseChunk
+from genkit.model import Message, ModelRequest, ModelResponse, ModelResponseChunk, Part
 
 from ._aio import Genkit
 
@@ -118,7 +114,7 @@ class EchoModel:
         messages = request.messages.root if hasattr(request.messages, 'root') else request.messages  # pyright: ignore[reportAttributeAccessIssue]
         for m in messages:  # ty: ignore[not-iterable]
             merged_txt += f' {m.role}: ' + ','.join(
-                json.dumps(p.root.text) if p.root.text is not None else '""' for p in m.content
+                json.dumps(p.text) if p.text is not None else '""' for p in m.content
             )
         echo_resp = f'[ECHO]{merged_txt}'
 
@@ -151,11 +147,9 @@ class EchoModel:
 
         if self.stream_countdown:
             for i, countdown in enumerate(['3', '2', '1']):
-                ctx.send_chunk(
-                    ModelResponseChunk(role=Role.MODEL, index=i, content=[Part(root=TextPart(text=countdown))])
-                )
+                ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=i, content=[Part.from_text(countdown)]))
 
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=echo_resp))]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(echo_resp)]))
 
 
 def define_echo_model(
@@ -293,8 +287,8 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
         response = await ai.generate(
             model=model,
             prompt=[
-                Part(root=MediaPart(media=Media(url=test_image))),
-                Part(root=TextPart(text='what math operation is this? plus, minus, multiply or divide?')),
+                Part.from_media(test_image),
+                Part.from_text('what math operation is this? plus, minus, multiply or divide?'),
             ],
         )
         got = response.text.strip().lower()

@@ -57,7 +57,7 @@ Test Coverage
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, Message, ModelRequest, ModelResponse, ModelResponseChunk
+from genkit import ActionRunContext, Genkit, Message, ModelRequest, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._testing import (
     EchoModel,
     GablorkenInput,
@@ -71,9 +71,7 @@ from genkit._ai._testing import (
     test_models as run_model_tests,
 )
 from genkit._core._typing import (
-    Part,
     Role,
-    TextPart,
 )
 from genkit.plugin_api import ModelConfig
 
@@ -111,7 +109,7 @@ class TestEchoModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='Hello world'))],
+                    content=[Part.from_text('Hello world')],
                 ),
             ],
         )
@@ -120,7 +118,7 @@ class TestEchoModel:
         response = await echo.model_fn(request, ctx)
 
         assert response.message is not None
-        text = response.message.content[0].root.text
+        text = response.message.content[0].text
         assert isinstance(text, str)
         assert '[ECHO]' in text
         assert 'user:' in text
@@ -136,7 +134,7 @@ class TestEchoModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
             config=ModelConfig(temperature=0.5),
@@ -145,7 +143,7 @@ class TestEchoModel:
         response = await echo.model_fn(request, ctx)
 
         assert response.message is not None
-        text = response.message.content[0].root.text
+        text = response.message.content[0].text
         assert isinstance(text, str)
         assert 'temperature' in text
 
@@ -159,7 +157,7 @@ class TestEchoModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -169,9 +167,9 @@ class TestEchoModel:
 
         # Should have streamed 3, 2, 1
         assert len(ctx.chunks) == 3
-        assert ctx.chunks[0].content[0].root.text == '3'
-        assert ctx.chunks[1].content[0].root.text == '2'
-        assert ctx.chunks[2].content[0].root.text == '1'
+        assert ctx.chunks[0].content[0].text == '3'
+        assert ctx.chunks[1].content[0].text == '2'
+        assert ctx.chunks[2].content[0].text == '1'
 
     @pytest.mark.asyncio
     async def test_echo_model_stores_request(self) -> None:
@@ -183,7 +181,7 @@ class TestEchoModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -191,7 +189,7 @@ class TestEchoModel:
         await echo.model_fn(request, ctx)
 
         assert echo.last_request is not None
-        assert echo.last_request.messages[0].content[0].root.text == 'test'
+        assert echo.last_request.messages[0].content[0].text == 'test'
 
     @pytest.mark.asyncio
     async def test_define_echo_model(self, ai: Genkit) -> None:
@@ -215,7 +213,7 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Response 1'))],
+                    content=[Part.from_text('Response 1')],
                 ),
             ),
         ]
@@ -225,7 +223,7 @@ class TestProgrammableModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -233,7 +231,7 @@ class TestProgrammableModel:
         response = await pm.model_fn(request, ctx)
 
         assert response.message is not None
-        assert response.message.content[0].root.text == 'Response 1'
+        assert response.message.content[0].text == 'Response 1'
         assert pm.request_count == 1
 
     @pytest.mark.asyncio
@@ -244,13 +242,13 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Response 1'))],
+                    content=[Part.from_text('Response 1')],
                 ),
             ),
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Response 2'))],
+                    content=[Part.from_text('Response 2')],
                 ),
             ),
         ]
@@ -260,7 +258,7 @@ class TestProgrammableModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -270,8 +268,8 @@ class TestProgrammableModel:
 
         assert response1.message is not None
         assert response2.message is not None
-        assert response1.message.content[0].root.text == 'Response 1'
-        assert response2.message.content[0].root.text == 'Response 2'
+        assert response1.message.content[0].text == 'Response 1'
+        assert response2.message.content[0].text == 'Response 2'
         assert pm.request_count == 2
 
     @pytest.mark.asyncio
@@ -282,14 +280,14 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Final'))],
+                    content=[Part.from_text('Final')],
                 ),
             ),
         ]
         pm.chunks = [
             [
-                ModelResponseChunk(content=[Part(root=TextPart(text='Chunk 1'))]),
-                ModelResponseChunk(content=[Part(root=TextPart(text='Chunk 2'))]),
+                ModelResponseChunk(content=[Part.from_text('Chunk 1')]),
+                ModelResponseChunk(content=[Part.from_text('Chunk 2')]),
             ],
         ]
         ctx = MockActionRunContext()
@@ -298,7 +296,7 @@ class TestProgrammableModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -307,8 +305,8 @@ class TestProgrammableModel:
         await pm.model_fn(request, ctx)
 
         assert len(ctx.chunks) == 2
-        assert ctx.chunks[0].content[0].root.text == 'Chunk 1'
-        assert ctx.chunks[1].content[0].root.text == 'Chunk 2'
+        assert ctx.chunks[0].content[0].text == 'Chunk 1'
+        assert ctx.chunks[1].content[0].text == 'Chunk 2'
 
     @pytest.mark.asyncio
     async def test_programmable_model_reset(self) -> None:
@@ -318,7 +316,7 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Response'))],
+                    content=[Part.from_text('Response')],
                 ),
             ),
         ]
@@ -328,7 +326,7 @@ class TestProgrammableModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -352,7 +350,7 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Response'))],
+                    content=[Part.from_text('Response')],
                 ),
             ),
         ]
@@ -362,7 +360,7 @@ class TestProgrammableModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='original'))],
+                    content=[Part.from_text('original')],
                 ),
             ],
         )
@@ -370,14 +368,13 @@ class TestProgrammableModel:
         await pm.model_fn(request, ctx)
 
         # Modify original request
-        original_part = request.messages[0].content[0].root
-        assert isinstance(original_part, TextPart)
+        original_part = request.messages[0].content[0]
+        assert original_part.text is not None
         original_part.text = 'modified'
 
         # last_request should still have original value (deep copy)
         assert pm.last_request is not None
-        stored_part = pm.last_request.messages[0].content[0].root
-        assert isinstance(stored_part, TextPart)
+        stored_part = pm.last_request.messages[0].content[0]
         assert stored_part.text == 'original'
 
     @pytest.mark.asyncio
@@ -388,7 +385,7 @@ class TestProgrammableModel:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Programmed response'))],
+                    content=[Part.from_text('Programmed response')],
                 ),
             ),
         ]
@@ -417,7 +414,7 @@ class TestStaticResponseModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -425,7 +422,7 @@ class TestStaticResponseModel:
         response = await static.model_fn(request, ctx)
 
         assert response.message is not None
-        assert response.message.content[0].root.text == 'Static response'
+        assert response.message.content[0].text == 'Static response'
 
     @pytest.mark.asyncio
     async def test_static_model_request_count(self) -> None:
@@ -442,7 +439,7 @@ class TestStaticResponseModel:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='test'))],
+                    content=[Part.from_text('test')],
                 ),
             ],
         )
@@ -515,48 +512,48 @@ class TestTestModels:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Hi'))],
+                    content=[Part.from_text('Hi')],
                 ),
             ),
             # For multimodal test (will skip since no media support)
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='plus'))],
+                    content=[Part.from_text('plus')],
                 ),
             ),
             # For history test
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Nice to meet you'))],
+                    content=[Part.from_text('Nice to meet you')],
                 ),
             ),
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Your name is Glorb'))],
+                    content=[Part.from_text('Your name is Glorb')],
                 ),
             ),
             # For system prompt test
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Bye'))],
+                    content=[Part.from_text('Bye')],
                 ),
             ),
             # For structured output test
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='{"name": "Jack", "occupation": "Lumberjack"}'))],
+                    content=[Part.from_text('{"name": "Jack", "occupation": "Lumberjack"}')],
                 ),
             ),
             # For tool calling test (will skip since no tools support)
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='9.407'))],
+                    content=[Part.from_text('9.407')],
                 ),
             ),
         ]
@@ -584,7 +581,7 @@ class TestTestModels:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Hi'))],
+                    content=[Part.from_text('Hi')],
                 ),
             ),
         ] * 10  # Enough responses for all tests
@@ -612,7 +609,7 @@ class TestTestModels:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Hi'))],
+                    content=[Part.from_text('Hi')],
                 ),
             ),
         ] * 10
@@ -622,7 +619,7 @@ class TestTestModels:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Hello'))],
+                    content=[Part.from_text('Hello')],
                 ),
             ),
         ] * 10
@@ -645,7 +642,7 @@ class TestTestModels:
             ModelResponse(
                 message=Message(
                     role=Role.MODEL,
-                    content=[Part(root=TextPart(text='Goodbye'))],  # Should be "Hi"
+                    content=[Part.from_text('Goodbye')],  # Should be "Hi"
                 ),
             ),
         ] * 10

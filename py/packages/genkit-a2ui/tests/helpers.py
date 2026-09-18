@@ -10,9 +10,9 @@ from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
-from genkit._core._typing import DataPart, FinishReason, Part, Role, TextPart
+from genkit._core._typing import FinishReason, Role
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
 A2UI_FENCE = '```a2ui'
@@ -71,11 +71,11 @@ def no_root_fence(*, catalog_id: str = BASIC_CATALOG_ID) -> str:
 
 
 def a2ui_data_part(envelopes: list[dict[str, Any]]) -> Part:
-    return Part(DataPart(data={'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE}))
+    return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
 def text_part(text: str) -> Part:
-    return Part(TextPart(text=text))
+    return Part.from_text(text)
 
 
 def model_ok(text: str = 'ok') -> ModelResponse:
@@ -91,27 +91,19 @@ def setup() -> tuple[Genkit, ProgrammableModel]:
     return ai, pm
 
 
-def roots(content: list[Part]) -> list[object]:
-    return [part.root for part in content]
-
-
-def a2ui_parts(content: list[Part]) -> list[DataPart]:
-    out: list[DataPart] = []
-    for root in roots(content):
-        if not isinstance(root, DataPart):
+def a2ui_parts(content: list[Part]) -> list[Part]:
+    out: list[Part] = []
+    for part in content:
+        if part.data is None:
             continue
-        metadata = root.metadata or {}
+        metadata = part.metadata or {}
         if metadata.get('mimeType') == A2UI_MIME_TYPE:
-            out.append(root)
+            out.append(part)
     return out
 
 
 def joined_text(content: list[Part]) -> str:
-    bits: list[str] = []
-    for root in roots(content):
-        if isinstance(root, TextPart) and root.text:
-            bits.append(root.text)
-    return ''.join(bits)
+    return ''.join(part.text for part in content if part.text)
 
 
 def envelopes(content: list[Part]) -> list[dict[str, Any]]:

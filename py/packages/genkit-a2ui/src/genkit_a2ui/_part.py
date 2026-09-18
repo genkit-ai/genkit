@@ -18,43 +18,45 @@
 
 from __future__ import annotations
 
-from genkit._core._typing import DataPart, Part
+from collections.abc import Sequence
+
+from genkit._core._model import Part
 
 from ._types import A2UI_MIME_TYPE, Envelope
 
 
 def a2ui_part(envelopes: list[Envelope]) -> Part:
-    return Part(DataPart(data={'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE}))
+    return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
 def has_a2ui_mime(*, part: Part) -> bool:
-    root = part.root
-    if not isinstance(root, DataPart):
+    if part.data is None:
         return False
-    metadata = root.metadata or {}
+    metadata = part.metadata or {}
     return metadata.get('mimeType') == A2UI_MIME_TYPE
 
 
 def is_a2ui_part(part: Part) -> bool:
     if not has_a2ui_mime(part=part):
         return False
-    data = part.root.data
+    data = part.data
     return isinstance(data, dict) and 'envelopes' in data
 
 
-def envelopes_from_parts(parts: list[Part] | None) -> list[Envelope]:
+def envelopes_from_parts(parts: Sequence[Part] | None) -> list[Envelope]:
     if not parts:
         return []
     out: list[Envelope] = []
     for part in parts:
         if not is_a2ui_part(part):
             continue
-        data = part.root.data
-        assert isinstance(data, dict)
-        raw = data.get('envelopes')
-        if not isinstance(raw, list):
+        data = part.data
+        if not isinstance(data, dict):
             continue
-        for item in raw:
+        raw_envelopes = data.get('envelopes')
+        if not isinstance(raw_envelopes, list):
+            continue
+        for item in raw_envelopes:
             if isinstance(item, dict):
                 out.append(item)
     return out

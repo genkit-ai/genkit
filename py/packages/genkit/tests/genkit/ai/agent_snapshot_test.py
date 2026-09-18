@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
@@ -27,16 +28,10 @@ from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
+from genkit._core._model import AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._registry import Registry
 from genkit._core._typing import (
-    AgentInput,
-    AgentResult,
-    MessageData,
-    Part,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
-    TextPart,
 )
 from genkit.exp.agent import AgentFinishReason
 
@@ -46,11 +41,7 @@ def input_text(inp: AgentInput) -> str:
     message = inp.message
     if message is None:
         return ''
-    return ''.join(
-        root.text
-        for part in (message.content or [])
-        if isinstance((root := getattr(part, 'root', part)), TextPart) and root.text
-    )
+    return ''.join(part.text for part in (message.content or []) if part.text)
 
 
 @pytest.mark.asyncio
@@ -132,7 +123,7 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
 
     async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='hi'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('hi')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -204,7 +195,7 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
             text = input_text(inp)
             if 'fail' in text.lower():
                 raise GenkitError(status='INTERNAL', message='boom')
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('ok')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -240,7 +231,7 @@ async def test_chat_resumes_from_blocked_snapshot() -> None:
             text = input_text(inp)
             if 'bomb' in text.lower():
                 return TurnResult(finish_reason=AgentFinishReason.BLOCKED)
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('ok')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -288,7 +279,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)  # keep the turn pending long enough to abort it
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('ok')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -337,7 +328,7 @@ async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('ok')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)

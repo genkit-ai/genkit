@@ -28,14 +28,15 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionRunContext
+from genkit._core._model import AgentInput, AgentResult, Message, SessionState
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import Attr, metadata_key
-from genkit._core._typing import AgentInput, AgentResult, MessageData, Part, SessionState, TextPart
 from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
@@ -80,7 +81,7 @@ def _counter_agent(
                 return {'count': (custom or {}).get('count', 0) + 1}
 
             await session_runner.update_custom(bump)
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='done'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('done')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)

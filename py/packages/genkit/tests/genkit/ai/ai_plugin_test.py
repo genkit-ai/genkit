@@ -22,7 +22,7 @@
 
 import pytest
 
-from genkit import Genkit, Message, ModelResponse, Part, Plugin, Role, TextPart
+from genkit import Genkit, Message, ModelResponse, Part, Plugin, Role
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
@@ -50,7 +50,7 @@ class AsyncResolveOnlyPlugin(Plugin):
 
         async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='OK: lazy'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('OK: lazy')]),
                 finish_reason=FinishReason.STOP,
             )
 
@@ -89,7 +89,7 @@ class AsyncInitPlugin(Plugin):
 
         async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='OK: resolve'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('OK: resolve')]),
                 finish_reason=FinishReason.STOP,
             )
 

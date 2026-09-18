@@ -34,8 +34,6 @@ from openai.types.audio import Transcription, Translation
 
 from genkit import (
     GenkitError,
-    Media,
-    MediaPart,
     Message,
     ModelInfo,
     ModelRequest,
@@ -43,7 +41,6 @@ from genkit import (
     Part,
     Role,
     Supports,
-    TextPart,
 )
 from genkit.model import FinishReason
 from genkit.plugin_api import ActionRunContext
@@ -204,16 +201,7 @@ def _to_tts_response(
     return ModelResponse(
         message=Message(
             role=Role.MODEL,
-            content=[
-                Part(
-                    root=MediaPart(
-                        media=Media(
-                            content_type=media_type,
-                            url=f'data:{media_type};base64,{b64_data}',
-                        )
-                    )
-                )
-            ],
+            content=[Part.from_media(f'data:{media_type};base64,{b64_data}', content_type=media_type)],
         ),
         finish_reason=FinishReason.STOP,
     )
@@ -296,7 +284,7 @@ def _to_stt_response(result: Transcription | Translation | str) -> ModelResponse
     return ModelResponse(
         message=Message(
             role=Role.MODEL,
-            content=[Part(root=TextPart(text=text))],
+            content=[Part.from_text(text)],
         ),
         finish_reason=FinishReason.STOP,
     )

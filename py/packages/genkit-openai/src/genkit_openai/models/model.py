@@ -35,9 +35,7 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolDefinition,
 )
 from genkit.plugin_api import ActionRunContext, ModelConfig
@@ -388,10 +386,10 @@ class OpenAIModel:
         cleaned_parts: list[Part] = []
         changed = False
         for part in response.message.content:
-            if isinstance(part.root, TextPart) and part.root.text:
-                cleaned_text = strip_markdown_fences(part.root.text)
-                if cleaned_text != part.root.text:
-                    cleaned_parts.append(Part(root=TextPart(text=cleaned_text)))
+            if part.text is not None and part.text:
+                cleaned_text = strip_markdown_fences(part.text)
+                if cleaned_text != part.text:
+                    cleaned_parts.append(Part.from_text(cleaned_text))
                     changed = True
                 else:
                     cleaned_parts.append(part)
@@ -576,7 +574,7 @@ class OpenAIModel:
 
             # Reasoning content (DeepSeek R1 / reasoner models).
             if reasoning_text := MessageAdapter(delta).reasoning_content:
-                reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
+                reasoning_part = Part.from_reasoning(reasoning_text)
                 reasoning_parts.append(reasoning_part)
                 parts.append(reasoning_part)
 

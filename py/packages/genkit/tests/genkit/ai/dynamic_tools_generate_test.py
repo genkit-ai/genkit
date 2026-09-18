@@ -19,7 +19,7 @@
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools, resolve_tool
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import Action, ActionKind
@@ -28,11 +28,8 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
-    Part,
     Role,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,7 +39,7 @@ from genkit._core._typing import (
 
 def _text_response(text: str) -> ModelResponse:
     return ModelResponse(
-        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]),
+        message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
         finish_reason=FinishReason.STOP,
     )
 
@@ -51,7 +48,7 @@ def _tool_call_response(tool_name: str, input: dict) -> ModelResponse:
     return ModelResponse(
         message=Message(
             role=Role.MODEL,
-            content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name=tool_name, input=input, ref=tool_name)))],
+            content=[Part(tool_request=ToolRequest(name=tool_name, input=input, ref=tool_name))],
         ),
         finish_reason=FinishReason.STOP,
     )

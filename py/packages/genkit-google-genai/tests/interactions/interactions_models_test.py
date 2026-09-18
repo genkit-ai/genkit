@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,15 +37,24 @@ from genkit_google_genai.models.interactions_lyria import LyriaConfig, create_ly
 from genkit_google_genai.models.interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
-from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role
 from genkit.model import Operation
+
+
+async def _empty_model_pager() -> AsyncIterator[Any]:
+    for model in ():
+        yield model
+
+
+def _set_empty_async_model_list(mock_client: MagicMock) -> None:
+    mock_client.aio.models.list = AsyncMock(side_effect=_empty_model_pager)
 
 
 def test_split_system_instruction_folds_system_turns() -> None:
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(TextPart(text='Be helpful'))]),
-        Message(role=Role.USER, content=[Part(TextPart(text='Hi'))]),
-        Message(role=Role.SYSTEM, content=[Part(TextPart(text='Be terse'))]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('Be helpful')]),
+        Message(role=Role.USER, content=[Part.from_text('Hi')]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('Be terse')]),
     ]
     instruction, turns = split_system_instruction(messages)
     assert instruction == 'Be helpful\n\nBe terse'
@@ -52,7 +62,7 @@ def test_split_system_instruction_folds_system_turns() -> None:
 
 
 def test_split_system_instruction_without_system_turns() -> None:
-    messages = [Message(role=Role.USER, content=[Part(TextPart(text='Hi'))])]
+    messages = [Message(role=Role.USER, content=[Part.from_text('Hi')])]
     instruction, turns = split_system_instruction(messages)
     assert instruction is None
     assert turns == messages
@@ -143,8 +153,8 @@ async def test_deep_research_start_sends_background_request() -> None:
     )
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(TextPart(text='sys'))]),
-            Message(role=Role.USER, content=[Part(TextPart(text='research this'))]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('sys')]),
+            Message(role=Role.USER, content=[Part.from_text('research this')]),
         ],
         config={
             'thinking_summaries': 'auto',
@@ -237,7 +247,7 @@ async def test_deep_research_check_reads_secrets_not_ticket() -> None:
     assert updated.done is True
     assert updated.output is not None
     assert updated.output.message is not None
-    assert updated.output.message.content[0].root.text == 'done'
+    assert updated.output.message.content[0].text == 'done'
     assert isinstance(updated.output, type(updated.output))
     assert updated.output.message.role == 'model'
 
@@ -320,7 +330,7 @@ async def test_deep_research_passes_previous_interaction_id() -> None:
         client_options=ClientOptions(),
     )
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='follow up'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('follow up')])],
         config={'previous_interaction_id': 'v1_prior'},
     )
     with patcher:
@@ -344,7 +354,7 @@ async def test_deep_research_rejects_config_api_key() -> None:
         with pytest.raises(GenkitError, match='context.secrets') as exc_info:
             await action.start(
                 ModelRequest(
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])],
+                    messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
                     config={'api_key': 'request-key'},
                 )
             )
@@ -365,7 +375,7 @@ async def test_deep_research_start_uses_context_secrets() -> None:
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
     )
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('q')])])
     with patcher:
         operation = await action.start_action.run(request, context={'secrets': {'api_key': 'tenant-key'}})
 
@@ -392,7 +402,7 @@ async def test_antigravity_passes_previous_interaction_id() -> None:
     with patcher:
         await action.run(
             ModelRequest[AntigravityConfig](
-                messages=[Message(role=Role.USER, content=[Part(TextPart(text='continue'))])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('continue')])],
                 config=AntigravityConfig(previous_interaction_id='v1_prior'),
             )
         )
@@ -453,8 +463,8 @@ async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
     )
     request = ModelRequest[AntigravityConfig](
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(TextPart(text='sys'))]),
-            Message(role=Role.USER, content=[Part(TextPart(text='build'))]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('sys')]),
+            Message(role=Role.USER, content=[Part.from_text('build')]),
         ],
         config=AntigravityConfig(response_modalities=['text', 'image']),
     )
@@ -473,7 +483,7 @@ async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
         {'type': 'user_input', 'content': [{'type': 'text', 'text': 'build'}]},
     ]
     assert response.response.message is not None
-    assert response.response.message.content[0].root.text == 'hello'
+    assert response.response.message.content[0].text == 'hello'
 
 
 @pytest.mark.asyncio
@@ -494,7 +504,7 @@ async def test_antigravity_keeps_custom_environment() -> None:
     with patcher:
         await action.run(
             ModelRequest(
-                messages=[Message(role=Role.USER, content=[Part(TextPart(text='build'))])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('build')])],
                 config=AntigravityConfig(environment={'type': 'custom', 'name': 'custom-env'}),
             )
         )
@@ -505,7 +515,7 @@ async def test_antigravity_keeps_custom_environment() -> None:
 def test_bare_model_request_accepts_lyria_config_instance() -> None:
     """Bare ModelRequest(config=LyriaConfig(...)) should not reject the plugin schema."""
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='riff'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('riff')])],
         config=LyriaConfig(response_modalities=['audio']),
     )
     assert isinstance(request.config, LyriaConfig)
@@ -533,7 +543,7 @@ async def test_lyria_defaults_audio_and_text_modalities() -> None:
         client_options=ClientOptions(),
     )
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='jazz riff'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('jazz riff')])],
     )
     with patcher:
         response = await action.run(request)
@@ -562,7 +572,7 @@ async def test_lyria_passes_through_unknown_config_fields() -> None:
     with patcher:
         await action.run(
             ModelRequest(
-                messages=[Message(role=Role.USER, content=[Part(TextPart(text='riff'))])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('riff')])],
                 config={'temperature': 0.4},
             )
         )
@@ -632,7 +642,7 @@ async def test_deep_research_background_action_sets_action() -> None:
     )
     with patcher:
         operation = await bg.start(
-            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])]),
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('q')])]),
         )
 
     assert isinstance(operation, Operation)
@@ -648,7 +658,7 @@ async def test_deep_research_background_action_sets_action() -> None:
 @pytest.mark.asyncio
 async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -663,7 +673,7 @@ async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
 @pytest.mark.asyncio
 async def test_googleai_plugin_registers_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -684,7 +694,7 @@ async def test_googleai_plugin_registers_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_googleai_resolve_routes_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -722,7 +732,7 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_googleai_list_actions_includes_interactions_models() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
@@ -737,7 +747,7 @@ async def test_googleai_list_actions_includes_interactions_models() -> None:
 @pytest.mark.asyncio
 async def test_vertex_keeps_interactions_families_fail_closed() -> None:
     mock_client = MagicMock()
-    mock_client.models.list.return_value = iter([])
+    _set_empty_async_model_list(mock_client)
 
     with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
         plugin = VertexAI(project='p', location='us-central1')
@@ -761,7 +771,7 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
         client_options=ClientOptions(),
     )
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
         config={
             'file_search': {'file_search_store_names': ['stores/one']},
             'mcp_servers': [{'name': 'docs', 'url': 'https://mcp.example', 'allowed_tools': ['search']}],
@@ -785,7 +795,7 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
 def test_response_format_from_request_keeps_caller_schema() -> None:
     schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
         output={'format': 'json', 'schema': schema},
     )
     assert response_format_from_request(request) == {
@@ -823,7 +833,7 @@ async def test_lyria_system_only_is_enough() -> None:
         client_options=ClientOptions(),
     )
     with patcher:
-        await action.run(ModelRequest(messages=[Message(role=Role.SYSTEM, content=[Part(TextPart(text='play jazz'))])]))
+        await action.run(ModelRequest(messages=[Message(role=Role.SYSTEM, content=[Part.from_text('play jazz')])]))
 
     assert create_calls[0]['system_instruction'] == 'play jazz'
     assert create_calls[0]['input'] == []
@@ -866,8 +876,8 @@ async def test_lyria_keeps_system_instruction_and_user_input() -> None:
         await action.run(
             ModelRequest(
                 messages=[
-                    Message(role=Role.SYSTEM, content=[Part(TextPart(text='cinematic'))]),
-                    Message(role=Role.USER, content=[Part(TextPart(text='short sting'))]),
+                    Message(role=Role.SYSTEM, content=[Part.from_text('cinematic')]),
+                    Message(role=Role.USER, content=[Part.from_text('short sting')]),
                 ]
             )
         )
@@ -893,7 +903,7 @@ async def test_antigravity_rejects_config_api_key() -> None:
         with pytest.raises(GenkitError, match='context.secrets'):
             await action.run(
                 ModelRequest(
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+                    messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                     config={'api_key': 'nope'},
                 )
             )
@@ -915,7 +925,7 @@ async def test_lyria_rejects_config_api_key() -> None:
         with pytest.raises(GenkitError, match='context.secrets'):
             await action.run(
                 ModelRequest(
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='riff'))])],
+                    messages=[Message(role=Role.USER, content=[Part.from_text('riff')])],
                     config={'api_key': 'nope'},
                 )
             )
@@ -941,7 +951,7 @@ async def test_antigravity_generate_uses_context_secrets() -> None:
     )
     with patcher:
         await action.run(
-            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='plan'))])]),
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('plan')])]),
             context={'secrets': {'api_key': 'tenant-key'}},
         )
 
@@ -964,7 +974,7 @@ async def test_lyria_generate_uses_context_secrets() -> None:
     )
     with patcher:
         await action.run(
-            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='sting'))])]),
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('sting')])]),
             context={'secrets': {'api_key': 'tenant-key'}},
         )
 
@@ -984,7 +994,7 @@ async def test_lyria_002_hits_interactions_wire() -> None:
         client_options=ClientOptions(),
     )
     with patcher:
-        await action.run(ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='sting'))])]))
+        await action.run(ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('sting')])]))
 
     assert create_calls[0]['model'] == 'lyria-002'
 
@@ -1077,7 +1087,7 @@ async def test_ai_generate_operation_deep_research_uses_context_secrets(
     assert not cancelled.metadata
     assert updated.output is not None
     assert updated.output.message is not None
-    assert updated.output.message.content[0].root.text == 'report'
+    assert updated.output.message.content[0].text == 'report'
 
 
 @patch('genkit_google_genai.google.genai.client.Client')

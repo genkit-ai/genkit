@@ -19,6 +19,7 @@ import asyncio
 import pytest
 
 import genkit._ai._agents._runtime as runtime_mod
+from genkit import Part
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
@@ -30,22 +31,22 @@ from genkit._ai._tools import ToolRunContext
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, Message, ModelResponse
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInput,
     AgentResult,
     AgentStreamChunk,
     FinishReason,
-    MessageData,
+    GenerateActionOptions,
+    Message,
+    ModelResponse,
     ModelResponseChunk,
-    Part,
-    Role,
     SessionState,
+)
+from genkit._core._typing import (
+    AgentFinishReason,
+    Role,
     SnapshotStatus,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
 )
 from genkit.exp import Genkit
 
@@ -86,7 +87,7 @@ _NO_ABORT = asyncio.Event()
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
     assert agent_input_has_payload(
-        AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))]), detach=True),
+        AgentInput(message=Message(role=Role.USER, content=[Part.from_text('x')]), detach=True),
     )
     assert not agent_input_has_payload(AgentInput(detach=True))
 
@@ -111,7 +112,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     in_queue = CloseableQueue()
     await in_queue.put(
         AgentInput(
-            message=MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))]),
+            message=Message(role=Role.USER, content=[Part.from_text('appended message')]),
             detach=True,
         )
     )
@@ -128,11 +129,11 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
     assert len(seen_inputs) == 1
     assert seen_inputs[0].message is not None
-    assert seen_inputs[0].message.content[0].root.text == 'appended message'
+    assert seen_inputs[0].message.content[0].text == 'appended message'
 
     msgs = await session.get_messages()
     assert len(msgs) == 1
-    assert msgs[0].content[0].root.text == 'appended message'
+    assert msgs[0].content[0].text == 'appended message'
 
     snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
     assert snap is not None
@@ -154,9 +155,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             ctx.send_chunk(
-                AgentStreamChunk(
-                    model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='working'))])
-                )
+                AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('working')]))
             )
             await release.wait()
 
@@ -164,7 +163,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('slow')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -222,7 +221,7 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('slow')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -271,7 +270,7 @@ async def test_detach_without_store_raises() -> None:
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('x')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -300,7 +299,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('long')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -345,7 +344,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
         ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='slowWork', input={}, ref='r1')))],
+                content=[Part(tool_request=ToolRequest(name='slowWork', input={}, ref='r1'))],
             ),
         )
     )
@@ -355,7 +354,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
-                messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
                 tools=['slowWork'],
             ),
             abort_signal=abort_signal,
@@ -394,7 +393,7 @@ async def test_detach_swallowed_turn_error_finalizes_failed() -> None:
     in_queue = CloseableQueue()
     await in_queue.put(
         AgentInput(
-            message=MessageData(role=Role.USER, content=[Part(TextPart(text='fail'))]),
+            message=Message(role=Role.USER, content=[Part.from_text('fail')]),
             detach=True,
         )
     )

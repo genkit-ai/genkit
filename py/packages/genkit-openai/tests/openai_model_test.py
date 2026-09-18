@@ -39,11 +39,8 @@ from genkit import (
     ModelResponse,
     ModelResponseChunk,
     Part,
-    ReasoningPart,
     Role,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
 )
 from genkit._core._model import OutputConfig
 from genkit._core._typing import GenerationUsage, Operation
@@ -54,7 +51,7 @@ def test_unknown_chat_id_json_mode_uses_json_object() -> None:
     """An unlisted chat id that asked for JSON gets json_object, not a KeyError."""
     model = OpenAIModel(model='my-custom-ft', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
     assert model._get_response_format(request) == {'type': 'json_object'}
@@ -64,7 +61,7 @@ def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     """A schema-less JSON request to gpt-6-astra sends json_object, as the catalog advertises."""
     model = OpenAIModel(model='gpt-6-astra', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
     assert model._get_response_format(request) == {'type': 'json_object'}
@@ -112,7 +109,7 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
     """Genkit-only keys stay off create(); declared OpenAI fields and extras go out."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OpenAIConfig.model_validate({
             'temperature': 0.5,
             'max_output_tokens': 128,
@@ -153,7 +150,7 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
     """Reasoning models reject the deprecated max_tokens request field."""
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
     )
 
@@ -168,7 +165,7 @@ async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
     """Legacy OpenAI-compatible models continue to receive max_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OpenAIConfig(max_tokens=32),
     )
 
@@ -183,7 +180,7 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
     """An explicit modern token limit wins when both fields are configured."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
     )
 
@@ -198,7 +195,7 @@ async def test_get_openai_config_model_field_overrides_version() -> None:
     """OpenAIConfig.model is the create() model id; it wins over version."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OpenAIConfig(version='gpt-4o-2024-08-06', model='gpt-4.1'),
     )
     body = await model._get_openai_request_config(request)
@@ -230,7 +227,7 @@ async def test__generate(sample_request: ModelRequest) -> None:
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     assert response.message.role == Role.MODEL
-    assert response.message.content[0].root.text == 'Hello, user!'
+    assert response.message.content[0].text == 'Hello, user!'
 
 
 @pytest.mark.asyncio
@@ -295,7 +292,7 @@ async def test__generate_stream(sample_request: ModelRequest) -> None:
     collected_chunks = []
 
     def callback(chunk: ModelResponseChunk) -> None:
-        collected_chunks.append(chunk.content[0].root.text)
+        collected_chunks.append(chunk.content[0].text)
 
     await model._generate_stream(sample_request, callback)
 
@@ -492,7 +489,7 @@ async def test__generate_reports_extra_token_counts() -> None:
     mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     response = await model._generate(request)
 
     assert response.usage is not None
@@ -569,7 +566,7 @@ async def test__generate_stream_reports_usage(sample_request: ModelRequest) -> N
     collected_chunks = []
 
     def callback(chunk: ModelResponseChunk) -> None:
-        collected_chunks.append(chunk.content[0].root.text)
+        collected_chunks.append(chunk.content[0].text)
 
     response = await model._generate_stream(sample_request, callback)
 
@@ -608,7 +605,7 @@ async def test__generate_stream_tool_calls_only(sample_request: ModelRequest) ->
 
     assert response.message is not None
     assert response.text == ''
-    tool_requests = [p.root.tool_request for p in response.message.content if p.root.tool_request]
+    tool_requests = [p.tool_request for p in response.message.content if p.tool_request]
     assert len(tool_requests) == 1
     assert tool_requests[0].name == 'tool_fn'
 
@@ -721,7 +718,7 @@ async def test__generate_refusal_wins_over_a_clean_stop(sample_request: ModelReq
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'Not the rest.'
     assert response.message is not None
-    assert response.message.content[0].root.text == 'Some of it.'
+    assert response.message.content[0].text == 'Some of it.'
 
 
 @pytest.mark.asyncio
@@ -830,7 +827,7 @@ async def test__generate_stream_reports_the_failure_message_on_a_choice(sample_r
     assert response.finish_reason == FinishReason.OTHER
     assert response.finish_message == 'upstream timed out'
     assert response.message is not None
-    assert response.message.content[0].root.text == 'Partial '
+    assert response.message.content[0].text == 'Partial '
 
 
 @pytest.mark.asyncio
@@ -906,7 +903,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     ctx_mock = MagicMock(spec=ActionRunContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=stream)
 
-    mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='mocked'))]))
+    mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('mocked')]))
 
     model = OpenAIModel(model='gpt-4', client=MagicMock())
     # monkey-patch real methods with mocks; sidestep the static signatures.
@@ -934,7 +931,7 @@ async def test_generate_classifies_bad_config_type() -> None:
         pass
 
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=OtherConfig(),
     )
 
@@ -1008,9 +1005,25 @@ def _delta_chunk(make_chunk: Callable[..., ChatCompletionChunk], **delta: Any) -
     return make_chunk(choice={'delta': delta})
 
 
-def _roots(chunk: ModelResponseChunk) -> list[Any]:
-    """The part roots of a streamed chunk."""
-    return [part.root for part in chunk.content]
+def _kind(part: Part) -> str:
+    if part.reasoning is not None:
+        return 'ReasoningPart'
+    if part.text is not None:
+        return 'TextPart'
+    if part.tool_request is not None:
+        return 'ToolRequestPart'
+    if part.tool_response is not None:
+        return 'ToolResponsePart'
+    if part.media is not None:
+        return 'MediaPart'
+    if part.data is not None:
+        return 'DataPart'
+    return 'Unknown'
+
+
+def _kinds(chunk: ModelResponseChunk) -> list[str]:
+    """The kind names of a streamed chunk."""
+    return [_kind(part) for part in chunk.content]
 
 
 @pytest.mark.asyncio
@@ -1041,22 +1054,20 @@ async def test__generate_stream_emits_reasoning_text_and_tool_call_from_one_chun
     response = await model._generate_stream(sample_request, collected.append)
 
     assert len(collected) == 1
-    streamed = _roots(collected[0])
+    streamed = collected[0].content
     assert len(streamed) == 3
-    assert isinstance(streamed[0], ReasoningPart)
     assert streamed[0].reasoning == 'Need the weather.'
-    assert isinstance(streamed[1], TextPart)
     assert streamed[1].text == 'Checking.'
-    assert isinstance(streamed[2], ToolRequestPart)
+    assert streamed[2].tool_request is not None
     assert streamed[2].tool_request.name == 'get_weather'
     assert streamed[2].tool_request.ref == 'call_1'
 
     assert response.message is not None
-    final = [part.root for part in response.message.content]
+    final = response.message.content
     assert len(final) == 3
-    assert isinstance(final[0], ReasoningPart)
-    assert isinstance(final[1], TextPart)
-    assert isinstance(final[2], ToolRequestPart)
+    assert final[0].reasoning == 'Need the weather.'
+    assert final[1].text == 'Checking.'
+    assert final[2].tool_request is not None
     assert final[2].tool_request.input == {'city': 'NYC'}
 
 
@@ -1077,15 +1088,15 @@ async def test__generate_stream_keeps_reasoning_interleaved_with_content(
 
     response = await model._generate_stream(sample_request, collected.append)
 
-    assert [[type(root).__name__ for root in _roots(chunk)] for chunk in collected] == [
+    assert [_kinds(chunk) for chunk in collected] == [
         ['ReasoningPart'],
         ['ReasoningPart', 'TextPart'],
         ['TextPart'],
     ]
     assert response.message is not None
-    final = [part.root for part in response.message.content]
-    assert [root.reasoning for root in final if isinstance(root, ReasoningPart)] == ['Think', ' harder.']
-    assert [root.text for root in final if isinstance(root, TextPart)] == ['The', ' answer.']
+    final = response.message.content
+    assert [p.reasoning for p in final if p.reasoning is not None] == ['Think', ' harder.']
+    assert [p.text for p in final if p.text is not None] == ['The', ' answer.']
 
 
 @pytest.mark.asyncio
@@ -1110,18 +1121,18 @@ async def test__generate_stream_keeps_text_riding_with_tool_call_arguments(
 
     response = await model._generate_stream(sample_request, collected.append)
 
-    streamed = [root for chunk in collected for root in _roots(chunk)]
-    assert [root.text for root in streamed if isinstance(root, TextPart)] == ['Calling', ' the tool.']
-    fragments = [root for root in streamed if isinstance(root, ToolRequestPart)]
+    streamed = [part for chunk in collected for part in chunk.content]
+    assert [p.text for p in streamed if p.text is not None] == ['Calling', ' the tool.']
+    fragments = [p.tool_request for p in streamed if p.tool_request is not None]
     assert len(fragments) == 3
-    assert all(root.tool_request.name == 'tool_fn' for root in fragments)
-    assert all(root.tool_request.ref == 'tool123' for root in fragments)
-    assert json.loads(''.join(str(root.tool_request.input) for root in fragments)) == {'a': 1}
+    assert all(r.name == 'tool_fn' for r in fragments)
+    assert all(r.ref == 'tool123' for r in fragments)
+    assert json.loads(''.join(str(r.input) for r in fragments)) == {'a': 1}
 
     assert response.message is not None
-    final = [part.root for part in response.message.content]
-    assert [root.text for root in final if isinstance(root, TextPart)] == ['Calling', ' the tool.']
-    requests = [root.tool_request for root in final if isinstance(root, ToolRequestPart)]
+    final = response.message.content
+    assert [p.text for p in final if p.text is not None] == ['Calling', ' the tool.']
+    requests = [p.tool_request for p in final if p.tool_request is not None]
     assert len(requests) == 1
     assert requests[0].input == {'a': 1}
 
@@ -1153,12 +1164,12 @@ async def test__generate_stream_tolerates_a_null_arguments_fragment(
 
     response = await model._generate_stream(sample_request, collected.append)
 
-    fragments = [root for chunk in collected for root in _roots(chunk) if isinstance(root, ToolRequestPart)]
-    assert [root.tool_request.input for root in fragments] == ['{"a": ', '', '1}']
-    assert all(root.tool_request.name == 'tool_fn' for root in fragments)
+    fragments = [p.tool_request for chunk in collected for p in chunk.content if p.tool_request is not None]
+    assert [r.input for r in fragments] == ['{"a": ', '', '1}']
+    assert all(r.name == 'tool_fn' for r in fragments)
 
     assert response.message is not None
-    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    requests = [p.tool_request for p in response.message.content if p.tool_request is not None]
     assert len(requests) == 1
     assert requests[0].input == {'a': 1}
 
@@ -1183,11 +1194,11 @@ async def test__generate_stream_parses_a_zero_argument_tool_call(
 
     response = await model._generate_stream(sample_request, collected.append)
 
-    fragments = [root for chunk in collected for root in _roots(chunk) if isinstance(root, ToolRequestPart)]
-    assert [root.tool_request.input for root in fragments] == ['']
+    fragments = [p.tool_request for chunk in collected for p in chunk.content if p.tool_request is not None]
+    assert [r.input for r in fragments] == ['']
 
     assert response.message is not None
-    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    requests = [p.tool_request for p in response.message.content if p.tool_request is not None]
     assert len(requests) == 1
     assert requests[0].name == 'ping'
     assert requests[0].input == {}
@@ -1214,7 +1225,7 @@ async def test__generate_parses_a_zero_argument_tool_call(
     response = await model._generate(sample_request)
 
     assert response.message is not None
-    requests = [part.root.tool_request for part in response.message.content if isinstance(part.root, ToolRequestPart)]
+    requests = [p.tool_request for p in response.message.content if p.tool_request is not None]
     assert len(requests) == 1
     assert requests[0].name == 'ping'
     assert requests[0].input == {}
@@ -1243,7 +1254,7 @@ async def test__generate_stream_final_message_orders_parts_like_to_genkit(
 
     response = await model._generate_stream(sample_request, collected.append)
 
-    assert [[type(root).__name__ for root in _roots(chunk)] for chunk in collected] == [
+    assert [_kinds(chunk) for chunk in collected] == [
         ['TextPart'],
         ['ReasoningPart'],
         ['ToolRequestPart'],
@@ -1251,11 +1262,11 @@ async def test__generate_stream_final_message_orders_parts_like_to_genkit(
     ]
 
     assert response.message is not None
-    final = [part.root for part in response.message.content]
-    assert [type(root).__name__ for root in final] == ['ReasoningPart', 'TextPart', 'TextPart', 'ToolRequestPart']
+    final = response.message.content
+    assert [_kind(p) for p in final] == ['ReasoningPart', 'TextPart', 'TextPart', 'ToolRequestPart']
     assert final[0].reasoning == 'Need a tool.'
-    assert [root.text for root in final if isinstance(root, TextPart)] == ['Sure,', ' one moment.']
-    assert isinstance(final[3], ToolRequestPart)
+    assert [p.text for p in final if p.text is not None] == ['Sure,', ' one moment.']
+    assert final[3].tool_request is not None
     assert final[3].tool_request.input == {}
 
 
@@ -1276,7 +1287,7 @@ async def test__generate_stream_skips_a_delta_with_nothing_to_report(
     response = await model._generate_stream(sample_request, collected.append)
 
     assert len(collected) == 1
-    assert collected[0].content[0].root.text == 'Hi'
+    assert collected[0].content[0].text == 'Hi'
     assert response.message is not None
     assert len(response.message.content) == 1
 
@@ -1352,7 +1363,7 @@ class TestSchemaInjectionInConfig:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a character'))]),
+                Message(role=Role.USER, content=[Part.from_text('Generate a character')]),
             ],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
@@ -1372,7 +1383,7 @@ class TestSchemaInjectionInConfig:
         model = OpenAIModel(model='gpt-4o', client=MagicMock())
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a character'))]),
+                Message(role=Role.USER, content=[Part.from_text('Generate a character')]),
             ],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
@@ -1389,7 +1400,7 @@ class TestSchemaInjectionInConfig:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
+                Message(role=Role.USER, content=[Part.from_text('Hello')]),
             ],
             output=OutputConfig(format='json'),
         )
@@ -1405,8 +1416,8 @@ class TestSchemaInjectionInConfig:
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
             messages=[
-                Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='You are helpful'))]),
-                Message(role=Role.USER, content=[Part(root=TextPart(text='Generate'))]),
+                Message(role=Role.SYSTEM, content=[Part.from_text('You are helpful')]),
+                Message(role=Role.USER, content=[Part.from_text('Generate')]),
             ],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
@@ -1464,48 +1475,46 @@ class TestCleanJsonResponse:
         """Strips markdown fences from DeepSeek JSON response."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         response = ModelResponse(
             request=request,
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text='```json\n{"name": "John", "level": 5}\n```'))],
+                content=[Part.from_text('```json\n{"name": "John", "level": 5}\n```')],
             ),
         )
         cleaned = model._clean_json_response(response, request)
         assert cleaned.message is not None
-        assert cleaned.message.content[0].root.text == '{"name": "John", "level": 5}'
+        assert cleaned.message.content[0].text == '{"name": "John", "level": 5}'
 
     def test_keeps_tool_parts_beside_cleaned_text(self) -> None:
         """Strips fences from the text part and carries a tool request part through unchanged."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json'),
         )
-        tool_part = Part(
-            root=ToolRequestPart(tool_request=ToolRequest(ref='call_1', name='get_weather', input={'city': 'NYC'}))
-        )
+        tool_part = Part(tool_request=ToolRequest(ref='call_1', name='get_weather', input={'city': 'NYC'}))
         response = ModelResponse(
             request=request,
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text='```json\n{"city": "NYC"}\n```')), tool_part],
+                content=[Part.from_text('```json\n{"city": "NYC"}\n```'), tool_part],
             ),
         )
         cleaned = model._clean_json_response(response, request)
         assert cleaned.message is not None
-        assert [type(part.root).__name__ for part in cleaned.message.content] == ['TextPart', 'ToolRequestPart']
-        assert cleaned.message.content[0].root.text == '{"city": "NYC"}'
+        assert cleaned.message.content[0].text == '{"city": "NYC"}'
         assert cleaned.message.content[1] is tool_part
+        assert cleaned.message.content[1].tool_request is not None
 
     def test_no_op_for_gpt_model(self) -> None:
         """Does not modify responses from non-DeepSeek models."""
         model = OpenAIModel(model='gpt-4o', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         fenced_text = '```json\n{"name": "John", "level": 5}\n```'
@@ -1513,55 +1522,55 @@ class TestCleanJsonResponse:
             request=request,
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text=fenced_text))],
+                content=[Part.from_text(fenced_text)],
             ),
         )
         result = model._clean_json_response(response, request)
         assert result.message is not None
-        assert result.message.content[0].root.text == fenced_text
+        assert result.message.content[0].text == fenced_text
 
     def test_no_op_for_text_output(self) -> None:
         """Does not modify responses when output format is not json."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='text'),
         )
         text = '```json\n{"a": 1}\n```'
         response = ModelResponse(
             request=request,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
         )
         result = model._clean_json_response(response, request)
         assert result.message is not None
-        assert result.message.content[0].root.text == text
+        assert result.message.content[0].text == text
 
     def test_no_op_for_no_output(self) -> None:
         """Does not modify responses when no output config is set."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         )
         text = '```json\n{"a": 1}\n```'
         response = ModelResponse(
             request=request,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
         )
         result = model._clean_json_response(response, request)
         assert result.message is not None
-        assert result.message.content[0].root.text == text
+        assert result.message.content[0].text == text
 
     def test_no_op_when_no_fences(self) -> None:
         """Does not modify clean JSON responses."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json', json_schema=_SAMPLE_SCHEMA),
         )
         text = '{"name": "John", "level": 5}'
         response = ModelResponse(
             request=request,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text=text))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
         )
         result = model._clean_json_response(response, request)
         # Should return the exact same object (no copy).
@@ -1571,12 +1580,12 @@ class TestCleanJsonResponse:
         """Only the message changes; the rest of the response comes through untouched."""
         model = OpenAIModel(model='deepseek-chat', client=MagicMock())
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
             output=OutputConfig(format='json'),
         )
         response = ModelResponse(
             request=request,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='```json\n{"a": 1}\n```'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('```json\n{"a": 1}\n```')]),
             finish_reason=FinishReason.LENGTH,
             finish_message='cut off',
             latency_ms=12.5,
@@ -1587,7 +1596,7 @@ class TestCleanJsonResponse:
         )
         cleaned = model._clean_json_response(response, request)
         assert cleaned.message is not None
-        assert cleaned.message.content[0].root.text == '{"a": 1}'
+        assert cleaned.message.content[0].text == '{"a": 1}'
         assert cleaned.model_dump(exclude={'message'}) == response.model_dump(exclude={'message'})
 
 
@@ -1678,7 +1687,7 @@ class TestResponseMetadata:
         collected = []
 
         def callback(chunk: ModelResponseChunk) -> None:
-            collected.append(chunk.content[0].root.text)
+            collected.append(chunk.content[0].text)
 
         response = await model._generate_stream(sample_request, callback)
 
@@ -1696,7 +1705,7 @@ class TestResponseMetadata:
     async def test_cleaned_json_response_keeps_metadata(self, make_completion: Callable[..., ChatCompletion]) -> None:
         """Stripping markdown fences does not drop the metadata."""
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('Generate')])],
             output=OutputConfig(format='json'),
         )
         completion = make_completion(
@@ -1707,7 +1716,7 @@ class TestResponseMetadata:
         response = await model._generate(request)
 
         assert response.message is not None
-        assert response.message.content[0].root.text == '{"name": "John", "level": 5}'
+        assert response.message.content[0].text == '{"name": "John", "level": 5}'
         assert response.raw is not None
         assert response.raw['systemFingerprint'] == 'fp_deepseek'
         assert response.custom == response.raw

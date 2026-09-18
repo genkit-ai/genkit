@@ -121,11 +121,11 @@ def test_client_overrides_from_config_reads_object() -> None:
 def test_steps_with_folded_system_instruction_prepends_system() -> None:
     from genkit_google_genai.models.interactions_utils import steps_with_folded_system_instruction
 
-    from genkit import Message, Part, Role, TextPart
+    from genkit import Message, Part, Role
 
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(TextPart(text='Be helpful.'))]),
-        Message(role=Role.USER, content=[Part(TextPart(text='Hello!'))]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('Be helpful.')]),
+        Message(role=Role.USER, content=[Part.from_text('Hello!')]),
     ]
     steps = steps_with_folded_system_instruction(messages)
     assert len(steps) == 2

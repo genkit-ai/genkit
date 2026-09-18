@@ -37,8 +37,8 @@ from genkit._ai._tools import Tool
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT
-from genkit._core._typing import MiddlewareRef, Part
+from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
+from genkit._core._typing import MiddlewareRef
 
 
 class Genkit(StableGenkit):

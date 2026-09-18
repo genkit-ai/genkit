@@ -43,7 +43,7 @@ from genkit._ai._agents._session_stores._util import (
     subscribe,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._typing import SessionSnapshot
+from genkit._core._model import SessionSnapshot
 
 
 class FileSessionStore(SessionStoreLock, SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):

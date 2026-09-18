@@ -37,7 +37,6 @@ from genkit import (
     ModelRequest,
     Part,
     Role,
-    TextPart,
     ToolDefinition,
 )
 
@@ -444,7 +443,7 @@ def _create_sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='Hello, how are you?'))],
+                content=[Part.from_text('Hello, how are you?')],
             )
         ],
         config=AnthropicConfig(),

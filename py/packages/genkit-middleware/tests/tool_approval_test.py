@@ -19,9 +19,9 @@
 import pytest
 from genkit_middleware import ToolApproval
 
+from genkit import Part
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._registry import Registry
-from genkit._core._typing import ToolRequest, ToolRequestPart
 from genkit.middleware import GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
 
 
@@ -44,8 +44,7 @@ async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> Non
         return MultipartToolResponse(output='sunny')
 
     tool = _make_tool('get_weather')
-    tool_request = ToolRequest(name='get_weather', input={})
-    tool_request_part = ToolRequestPart(tool_request=tool_request)
+    tool_request_part = Part.from_tool_request(name='get_weather', input={})
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     result = await approval.wrap_tool(params, ctx, next_fn)
@@ -61,8 +60,7 @@ async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) ->
         return MultipartToolResponse(output=None)
 
     tool = _make_tool('delete_database')
-    tool_request = ToolRequest(name='delete_database', input={})
-    tool_request_part = ToolRequestPart(tool_request=tool_request)
+    tool_request_part = Part.from_tool_request(name='delete_database', input={})
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt) as exc_info:
@@ -79,10 +77,8 @@ async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContex
         return MultipartToolResponse(output='approved')
 
     tool = _make_tool('some_tool')
-    tool_request = ToolRequest(name='some_tool', input={})
-    tool_request_part = ToolRequestPart(
-        tool_request=tool_request,
-        metadata={'resumed': {'tool_approved': True}},
+    tool_request_part = Part.from_tool_request(
+        name='some_tool', input={}, metadata={'resumed': {'tool_approved': True}}
     )
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
@@ -99,8 +95,7 @@ async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) 
         return MultipartToolResponse(output=None)
 
     tool = _make_tool('any_tool')
-    tool_request = ToolRequest(name='any_tool', input={})
-    tool_request_part = ToolRequestPart(tool_request=tool_request)
+    tool_request_part = Part.from_tool_request(name='any_tool', input={})
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt):
@@ -116,10 +111,8 @@ async def test_tool_approval_resumed_with_snake_case_approval(ctx: GenerateMiddl
         return MultipartToolResponse(output='approved')
 
     tool = _make_tool('some_tool')
-    tool_request = ToolRequest(name='some_tool', input={})
-    tool_request_part = ToolRequestPart(
-        tool_request=tool_request,
-        metadata={'resumed': {'tool_approved': True}},
+    tool_request_part = Part.from_tool_request(
+        name='some_tool', input={}, metadata={'resumed': {'tool_approved': True}}
     )
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
