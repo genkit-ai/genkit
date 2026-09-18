@@ -294,11 +294,11 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 			Value int `json:"value"`
 		}
 		for _, opts := range [][]GenerateOption{
-			{WithOutputFormat("decision"), WithOutputType(out{})},
-			{WithOutputType(out{}), WithOutputFormat("decision")},
+			{WithOutputFormat("custom"), WithOutputType(out{})},
+			{WithOutputType(out{}), WithOutputFormat("custom")},
 		} {
 			g := applyGen(opts...)
-			if g.OutputFormat != "decision" {
+			if g.OutputFormat != "custom" {
 				t.Errorf("OutputFormat = %q, want the format kept in either order", g.OutputFormat)
 			}
 			if g.OutputSchema == nil {

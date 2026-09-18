@@ -306,9 +306,6 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 				d.Register(r)
 			}
 		}
-		if fp, ok := plugin.(ai.FormatPlugin); ok {
-			ai.DefineFormats(r, fp.Formats(ctx)...)
-		}
 		logger.Debug(ctx, "initialized plugin",
 			"plugin", plugin.Name(),
 			"actions", len(actions),
