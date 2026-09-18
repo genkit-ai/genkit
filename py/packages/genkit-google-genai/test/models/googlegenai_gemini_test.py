@@ -36,6 +36,7 @@ from genkit_google_genai.models.gemini import (
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
     GoogleAIGeminiVersion,
+    SpeechConfigSchema,
     VertexAIGeminiVersion,
     _to_finish_reason,
     get_model_config_schema,
@@ -1100,6 +1101,151 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
     assert cfg.temperature == 0.5
     assert cfg.http_options is not None
     assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
+
+
+# ---------------------------------------------------------------------------
+# TTS speech config
+#
+# ``speechConfig`` is the only nested config object a TTS caller has to fill
+# in, and the SDK's own ``SpeechConfig`` forbids unknown keys. These tests pin
+# that every field the SDK accepts survives the schema and that the advertised
+# schema names the same three keys, so a dropped field cannot go unnoticed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tts_model_instance() -> GeminiModel:
+    """Common initialization of a TTS GeminiModel."""
+    return GeminiModel(version='gemini-2.5-flash-preview-tts', client=MagicMock(spec=genai.Client))
+
+
+def test_speech_config_schema_advertises_the_sdk_fields() -> None:
+    """The advertised speech config is the SDK's three fields, under their aliases."""
+    assert list(SpeechConfigSchema.model_json_schema()['properties']) == [
+        'voiceConfig',
+        'multiSpeakerVoiceConfig',
+        'languageCode',
+    ]
+
+    advertised = to_json_schema(GeminiTtsConfigSchema)['properties']['speechConfig']
+    assert list(advertised['properties']) == ['voiceConfig', 'multiSpeakerVoiceConfig', 'languageCode']
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_single_voice_reaches_sdk(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A single prebuilt voice survives the schema and lands on the SDK config."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Algenib'}}}
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    speech = cfg.speech_config
+    assert isinstance(speech, genai_types.SpeechConfig)
+    assert speech.voice_config is not None
+    assert speech.voice_config.prebuilt_voice_config is not None
+    assert speech.voice_config.prebuilt_voice_config.voice_name == 'Algenib'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_multi_speaker_reaches_sdk(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """MultiSpeakerVoiceConfig and languageCode reach the SDK instead of being dropped."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {
+                'languageCode': 'en-US',
+                'multiSpeakerVoiceConfig': {
+                    'speakerVoiceConfigs': [
+                        {'speaker': 'Ann', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+                        {'speaker': 'Bob', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Puck'}}},
+                    ]
+                },
+            }
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    speech = cfg.speech_config
+    assert isinstance(speech, genai_types.SpeechConfig)
+    assert speech.language_code == 'en-US'
+    multi = speech.multi_speaker_voice_config
+    assert multi is not None
+    assert multi.speaker_voice_configs is not None
+    assert [s.speaker for s in multi.speaker_voice_configs] == ['Ann', 'Bob']
+    first_voice = multi.speaker_voice_configs[0].voice_config
+    assert first_voice is not None
+    assert first_voice.prebuilt_voice_config is not None
+    assert first_voice.prebuilt_voice_config.voice_name == 'Kore'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_accepts_snake_case_keys(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """The nested speech schemas populate by field name as well as by alias."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speech_config': {'language_code': 'de-DE', 'voice_config': {'prebuilt_voice_config': {}}}
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    speech = cfg.speech_config
+    assert isinstance(speech, genai_types.SpeechConfig)
+    assert speech.language_code == 'de-DE'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__untyped_voice_config_field_reaches_sdk(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A nested field the SDK knows but the schema does not still reaches the SDK."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {'voiceConfig': {'replicatedVoiceConfig': {'mimeType': 'audio/wav'}}}
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    speech = cfg.speech_config
+    assert isinstance(speech, genai_types.SpeechConfig)
+    assert speech.voice_config is not None
+    assert speech.voice_config.replicated_voice_config is not None
+    assert speech.voice_config.replicated_voice_config.mime_type == 'audio/wav'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__unknown_speech_config_key_is_invalid_argument(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A nested extra reaches the strict SDK type and is refused, not dropped."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'fooBar': 1}}),
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'invalid config field speech_config' in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
