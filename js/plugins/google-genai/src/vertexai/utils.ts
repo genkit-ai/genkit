@@ -252,11 +252,14 @@ async function getMultiRegionalDerivedOptions(
   projectId: string,
   options?: VertexPluginOptions
 ): Promise<MultiRegionalClientOptions> {
-  const location = options?.location || process.env.GCLOUD_LOCATION;
+  const location =
+    options?.location ||
+    process.env.GOOGLE_CLOUD_LOCATION ||
+    process.env.GCLOUD_LOCATION;
 
   if (!location) {
     throw new Error(
-      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
+      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GOOGLE_CLOUD_LOCATION' or 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
     );
   }
   if (!isMultiRegionalLocation(location)) {
@@ -287,10 +290,13 @@ async function getRegionalDerivedOptions(
   options?: VertexPluginOptions
 ): Promise<RegionalClientOptions> {
   const location =
-    options?.location || process.env.GCLOUD_LOCATION || 'us-central1';
+    options?.location ||
+    process.env.GOOGLE_CLOUD_LOCATION ||
+    process.env.GCLOUD_LOCATION ||
+    'us-central1';
   if (!location) {
     throw new Error(
-      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
+      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GOOGLE_CLOUD_LOCATION' or 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
     );
   }
 
