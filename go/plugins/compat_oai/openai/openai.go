@@ -80,6 +80,16 @@ var (
 		ToolChoice: true,
 		Output:     []string{"text", "json"},
 	}
+	// For models whose Chat Completions endpoint rejects function tools.
+	multimodalNoTools = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       false,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  false,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
 )
 
 // supportedModels curates capabilities for well-known OpenAI models. It is not
@@ -97,8 +107,14 @@ var (
 // Catalog: https://developers.openai.com/api/docs/models
 // Retirements: https://developers.openai.com/api/docs/deprecations
 var supportedModels = map[string]ai.ModelOptions{
-	// GPT-5.6, the current frontier family. No dated snapshots yet; the
-	// bare gpt-5.6 alias routes to sol and resolves dynamically.
+	"gpt-6-astra": {
+		Label:    "OpenAI GPT-6 Astra",
+		Supports: &multimodalNoTools,
+		Versions: []string{"gpt-6-astra"},
+	},
+
+	// GPT-5.6 family. No dated snapshots yet; the bare gpt-5.6 alias routes
+	// to sol and resolves dynamically.
 	"gpt-5.6-sol": {
 		Label:    "OpenAI GPT-5.6 Sol",
 		Supports: &multimodal,
