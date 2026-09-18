@@ -124,6 +124,39 @@ ai.defineFlow('combine tools and builtins', async () => {
   return text;
 });
 
+// A tool that fails, and a generate call that reports the failure on the
+// response instead of throwing: `res.error` says what broke, and
+// `res.messages` is the conversation up to the last finished tool round, so
+// it can be sent again once the service is back.
+const flakyLookup = ai.defineTool(
+  {
+    name: 'flakyLookup',
+    description: 'Looks up the local time in a city; the service is down.',
+    inputSchema: z.object({ city: z.string() }),
+    outputSchema: z.string(),
+  },
+  async () => {
+    throw new Error('time service unavailable');
+  }
+);
+
+ai.defineFlow('tool-failure-on-response', async () => {
+  const res = await ai.generate({
+    model: googleAI.model('gemini-3-flash-preview'),
+    prompt: 'What time is it in Tokyo? Use the flakyLookup tool.',
+    tools: [flakyLookup],
+    throwOnError: false,
+  });
+  if (res.error) {
+    return {
+      finishReason: res.finishReason,
+      error: res.error,
+      keptMessages: res.messages.map((m) => m.role),
+    };
+  }
+  return { text: res.text };
+});
+
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
     model: googleAI.model('gemini-3.5-flash'),

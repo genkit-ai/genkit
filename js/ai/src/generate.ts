@@ -23,6 +23,7 @@ import {
   sentinelNoopStreamingCallback,
   type Action,
   type ActionContext,
+  type HttpErrorWireFormat,
   type StreamingCallback,
   type z,
 } from '@genkit-ai/core';
@@ -36,7 +37,9 @@ import {
   resolveInstructions,
 } from './formats/index.js';
 import {
+  errorToThrow,
   generateHelper,
+  partialResponseOf,
   shouldInjectFormatInstructions,
 } from './generate/action.js';
 import { GenerateResponseChunk } from './generate/chunk.js';
@@ -188,6 +191,15 @@ export interface GenerateOptions<
   context?: ActionContext;
   /** Abort signal for the generate request. */
   abortSignal?: AbortSignal;
+  /**
+   * Whether a failed generation throws (the default) or resolves with a
+   * response that reports it. With `false`, a failure once the request has
+   * resolved returns a {@link GenerateResponse} carrying `error` and the
+   * conversation the loop completed, ending at a turn seam (see
+   * {@link generate}); a failure before that (an unknown model or tool,
+   * invalid options) still throws, since there is nothing to return.
+   */
+  throwOnError?: boolean;
   /** Custom step name for this generate call to display in trace views. Defaults to "generate". */
   stepName?: string;
   /**
@@ -279,7 +291,24 @@ export async function toGenerateRequest(
   return out;
 }
 
-/** An error that includes the partial {@link GenerateResponse} that triggered it. */
+/**
+ * An error that includes the partial {@link GenerateResponse} that triggered
+ * it, on `detail.response`.
+ *
+ * A caller catches one when the model returned a blocked response or none, or
+ * when the loop refused to run past `maxTurns`, as it always has. The loop
+ * also builds one for every other failure once the request has resolved,
+ * wrapping the cause (available as `cause`) with the conversation the loop
+ * completed on `detail.response`; `generate` hands that response back when
+ * asked to return failures, and otherwise throws the cause itself, so the
+ * wrapper reaches the `generate` action's own callers (the reflection API)
+ * rather than application code. See {@link generate} for the contract.
+ *
+ * Only the failure's classification travels on the wire: {@link toJSON}
+ * carries the status, the message, and the response's finish reason, never
+ * the response itself, so an HTTP error body does not repeat the request's
+ * messages.
+ */
 export class GenerationResponseError extends GenkitError {
   detail: {
     response: GenerateResponse;
@@ -290,15 +319,83 @@ export class GenerationResponseError extends GenkitError {
     response: GenerateResponse<any>,
     message: string,
     status?: GenkitError['status'],
-    detail?: Record<string, any>
+    detail?: Record<string, any>,
+    options?: {
+      /** The underlying error, exposed as the standard `Error.cause`. */
+      cause?: unknown;
+      /** Overrides the message sent to a client; see {@link GenkitError.publicMessage}. */
+      publicMessage?: string;
+    }
   ) {
+    const cause = options?.cause;
     super({
       status: status || 'FAILED_PRECONDITION',
       message,
+      cause,
+      publicMessage: options?.publicMessage,
+      ...(cause instanceof GenkitError && {
+        source: cause.source,
+        responseMetadata: cause.responseMetadata,
+      }),
     });
-    this.detail = { response, ...detail };
+    const inherited = cause instanceof GenkitError ? cause.detail : undefined;
+    this.detail = {
+      ...(inherited &&
+      typeof inherited === 'object' &&
+      !Array.isArray(inherited)
+        ? inherited
+        : {}),
+      ...detail,
+      response,
+    };
+  }
+
+  /**
+   * The wire form: the status, the message, and the response's finish reason
+   * and finish message, with the same text a client is allowed to see (see
+   * {@link GenkitError.publicMessage}). Neither the response nor a request
+   * rides along.
+   */
+  toJSON(): HttpErrorWireFormat {
+    const { response, request: _request, ...details } = this.detail;
+    const finishMessage = this.publicMessage ?? response?.finishMessage;
+    return {
+      details: {
+        ...details,
+        finishReason: response?.finishReason,
+        ...(finishMessage && { finishMessage }),
+      },
+      status: this.status,
+      message: this.publicMessage ?? this.originalMessage,
+    };
   }
 }
+
+/**
+ * Built by the generate loop when it stopped because the caller stopped it
+ * rather than because something broke. The partial response on
+ * `detail.response` reports `finishReason` `aborted`. A caller catches one
+ * for the `maxTurns` limit, which `generate` has always thrown as a
+ * {@link GenerationResponseError} with status `ABORTED` and now throws as
+ * this subclass; every other stop reaches a caller as the cancellation or
+ * timeout error itself, or, with `throwOnError: false`, as a response that
+ * reports `aborted`.
+ *
+ * The rule reads the request's `abortSignal` and the error's identity, never
+ * a status: the loop stopped on the caller's behalf when the signal had fired
+ * by the time a failure was classified, when the model call rejected with an
+ * `AbortError` or `TimeoutError` (what the platform raises for a cancelled or
+ * timed-out call, whether or not the loop's own signal fired), or when the
+ * loop reached the `maxTurns` limit. A provider answering with a
+ * `GenkitError` of status `ABORTED` or `DEADLINE_EXCEEDED` is a failure, not
+ * a stop.
+ *
+ * `status` is `ABORTED` for the turn limit, `CANCELLED` or
+ * `DEADLINE_EXCEEDED` for a bare cancellation or timeout, and, when the
+ * signal fired while the model reported a `GenkitError`, that error's own
+ * status. A tool that failed after the signal fired reports `CANCELLED`.
+ */
+export class GenerationAbortedError extends GenerationResponseError {}
 
 async function toolsToActionRefs(
   registry: Registry,
@@ -484,6 +581,39 @@ export async function normalizeMiddleware(
  *
  * See `GenerateOptions` for detailed information about available options.
  *
+ * A failed generation throws by default: a tool's own error, the model's own
+ * error, the validation error for structured output that does not match the
+ * schema, a {@link GenerationBlockedError} for a blocked response, a
+ * {@link GenerationResponseError} for a response without a message or for
+ * the `maxTurns` limit, and a middleware hook's own error.
+ *
+ * With `throwOnError: false`, a failure once the request has resolved
+ * resolves instead with a {@link GenerateResponse} that reports it. The
+ * response's `error` is the failure classified (a status, a message, and the
+ * error's own structured details) and its `finishMessage` the same text. It
+ * reports `finishReason` `failed` when something broke (a model call, a
+ * tool, a hook) and `aborted` when the caller stopped the loop: the
+ * `abortSignal` fired, the model call was cancelled or timed out, or
+ * `maxTurns` was reached. Such a response has no `message`, and its
+ * `messages` end at a turn seam: the messages the failing turn started from,
+ * which are the caller's own or a run of completed [model with tool requests,
+ * tool with every response] rounds, and nothing from the failing turn, since
+ * a conversation ending in a tool request nothing answered is one no provider
+ * accepts. A failed tool discards the whole round it opened and is reported
+ * as INTERNAL under `tool "<name>" failed`; text streamed before a failure
+ * still reached `onChunk`. Three failures keep the model's own message and
+ * finish reason beside `error`: a blocked response, a response without a
+ * message, and a response the model completed but post-processing rejected
+ * (structured output that does not match the schema). A resume whose
+ * restarted tool interrupted again keeps `finishReason` `interrupted` under
+ * its FAILED_PRECONDITION error and is answered with `resume` rather than
+ * sent again.
+ *
+ * Errors raised before the request resolves (an unknown model, tool, or
+ * resource, invalid options, or a `generate` middleware hook that fails
+ * before running the first turn) throw in both modes: there is no response
+ * to return.
+ *
  * @param options The options for this generation request.
  * @returns The generated response based on the provided parameters.
  */
@@ -526,14 +656,26 @@ export async function generate<
   const resolvedMiddleware = await resolveMiddleware(registry, middlewareRefs);
   maybeRegisterDynamicMiddlewareTools(registry, resolvedMiddleware);
 
-  const response = await runWithContext(resolvedOptions.context, () =>
-    generateHelper(registry, {
-      rawRequest: params,
-      middleware: resolvedMiddleware,
-      abortSignal: resolvedOptions.abortSignal,
-      streamingCallback,
-    })
-  );
+  let response: GenerateResponseData;
+  try {
+    response = await runWithContext(resolvedOptions.context, () =>
+      generateHelper(registry, {
+        rawRequest: params,
+        middleware: resolvedMiddleware,
+        abortSignal: resolvedOptions.abortSignal,
+        streamingCallback,
+      })
+    );
+  } catch (e) {
+    // The loop wraps a failure with the conversation it completed. A caller
+    // that asked for failures on the response gets that response; any other
+    // gets the error the failure threw on its own.
+    if (resolvedOptions.throwOnError === false) {
+      const partial = partialResponseOf(e, registry);
+      if (partial) return partial as GenerateResponse<z.infer<O>>;
+    }
+    throw errorToThrow(e);
+  }
   const request = await toGenerateRequest(registry, {
     ...resolvedOptions,
     tools,

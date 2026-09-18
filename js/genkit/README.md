@@ -102,6 +102,22 @@ const { text } = await ai.generate({
 });
 ```
 
+A failed generation throws by default: a tool's own error, the model's, or a `GenerationResponseError` when the response was blocked or the `maxTurns` limit was reached. Pass `throwOnError: false` to get the failure on the response instead, with the conversation the loop completed up to the last finished tool round:
+
+```ts
+const res = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'What should I wear in Tokyo today?',
+  tools: [getWeather],
+  throwOnError: false,
+});
+if (res.error) {
+  // res.error.status says what broke; res.finishReason is 'failed', or
+  // 'aborted' when you stopped the call. res.messages can be sent again.
+  console.log(res.error.status, res.error.message);
+}
+```
+
 ### Interrupts (Human-in-the-Loop)
 
 > **Beta feature:** Interrupts require importing from `genkit/beta` instead of `genkit`:
@@ -405,11 +421,11 @@ The Developer UI lets you visually test flows, inspect traces, and experiment wi
 
 Genkit supports a growing ecosystem of plugins for model providers, vector stores, and more:
 
-| Category | Plugins |
-|---|---|
-| **Models** | `@genkit-ai/google-genai`, `@genkit-ai/vertexai`, `@genkit-ai/compat-oai`, `genkitx-anthropic`, `genkitx-ollama` |
-| **Deployment** | `@genkit-ai/express`, `@genkit-ai/fetch`, `@genkit-ai/firebase`, `@genkit-ai/cloud-run` |
-| **Monitoring** | `@genkit-ai/google-cloud` |
+| Category       | Plugins                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Models**     | `@genkit-ai/google-genai`, `@genkit-ai/vertexai`, `@genkit-ai/compat-oai`, `genkitx-anthropic`, `genkitx-ollama` |
+| **Deployment** | `@genkit-ai/express`, `@genkit-ai/fetch`, `@genkit-ai/firebase`, `@genkit-ai/cloud-run`                          |
+| **Monitoring** | `@genkit-ai/google-cloud`                                                                                        |
 
 Browse all plugins: [npmjs.com/search?q=keywords:genkit-plugin](https://www.npmjs.com/search?q=keywords:genkit-plugin)
 
