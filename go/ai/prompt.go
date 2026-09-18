@@ -495,6 +495,12 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 	if err != nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "invalid output schema for prompt %q: %w", p.Name(), err)
 	}
+	// A schema with no format means JSON, as a prompt file's does, so the
+	// rendered request says so rather than leaving it to the generate loop.
+	outputFormat := p.OutputFormat
+	if outputFormat == "" && outputSchema != nil {
+		outputFormat = OutputFormatJSON
+	}
 
 	useRefs, err := configsToRefs(p.Use)
 	if err != nil {
@@ -525,7 +531,7 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		Tools:              tools,
 		Use:                useRefs,
 		Output: &GenerateActionOutputConfig{
-			Format:       p.OutputFormat,
+			Format:       outputFormat,
 			JsonSchema:   outputSchema,
 			Instructions: p.OutputInstructions,
 			Constrained:  !p.CustomConstrained,

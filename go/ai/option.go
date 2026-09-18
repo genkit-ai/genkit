@@ -644,7 +644,7 @@ func WithPromptPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) Pr
 // outputOptions are options for the output of a prompt or generate request.
 type outputOptions struct {
 	OutputSchema       map[string]any // JSON schema of the output.
-	OutputFormat       string         // Format of the output. If OutputSchema is set, this is set to OutputFormatJSON.
+	OutputFormat       string         // Format of the output. Empty resolves at generate time: JSON when OutputSchema is set, text otherwise.
 	OutputInstructions *string        // Instructions to add to conform the output to a schema. If nil, default instructions will be added. If empty string, no instructions will be added.
 	CustomConstrained  bool           // Whether generation should use custom constrained output instead of native model constrained output.
 }
@@ -701,29 +701,24 @@ func (o *outputOptions) applyTool(tOpts *toolOptions) {
 	}
 }
 
-// WithOutputType sets the output format to JSON and the schema derived from the given value.
+// WithOutputType sets the output schema, inferred from the given value. The
+// format is left as set by [WithOutputFormat], in either order, and defaults
+// to JSON when none is set.
 func WithOutputType(output any) OutputOption {
-	return &outputOptions{
-		OutputSchema: core.InferSchemaMap(output),
-		OutputFormat: OutputFormatJSON,
-	}
+	return &outputOptions{OutputSchema: core.InferSchemaMap(output)}
 }
 
-// WithOutputSchema manually provides a schema map for the output.
+// WithOutputSchema manually provides a schema map for the output. The format
+// is left as set by [WithOutputFormat] and defaults to JSON.
 func WithOutputSchema(schema map[string]any) OutputSchemaOption {
-	return &outputOptions{
-		OutputSchema: schema,
-		OutputFormat: OutputFormatJSON,
-	}
+	return &outputOptions{OutputSchema: schema}
 }
 
 // WithOutputSchemaName sets the schema name that will be resolved at execution time.
 // Register the schema with [github.com/firebase/genkit/go/genkit.DefineSchema].
+// The format is left as set by [WithOutputFormat] and defaults to JSON.
 func WithOutputSchemaName(name string) OutputSchemaOption {
-	return &outputOptions{
-		OutputSchema: core.SchemaRef(name),
-		OutputFormat: OutputFormatJSON,
-	}
+	return &outputOptions{OutputSchema: core.SchemaRef(name)}
 }
 
 // WithOutputFormat sets the format of the output.
