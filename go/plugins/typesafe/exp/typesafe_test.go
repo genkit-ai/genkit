@@ -467,3 +467,32 @@ func TestInitRequiresAKey(t *testing.T) {
 	}()
 	(&TypeSafe{}).Init(t.Context())
 }
+
+func TestAnswersProjectedOntoDeclaredFields(t *testing.T) {
+	// A field the API or a gateway adds to an answer must not reach the
+	// message: the answer schemas are closed, so it would fail validation on
+	// every call. The untouched answers stay on Custom.
+	resp := &response{Answers: map[string]map[string]any{
+		"department":  {"type": kindChoice, "choice": "billing", "probabilities": map[string]any{"billing": 1.0}, "confidence": 1.0, "explanation": "new"},
+		"is_urgent":   {"type": kindNoul, "noul": 0.9, "reasoning": "new"},
+		"frustration": {"type": kindScore, "score": 1.0, "legend": map[string]any{"0": "Calm"}, "probabilities": map[string]any{"0": 1.0}, "confidence": 1.0, "rank": 3},
+	}}
+	text, err := answersText(resp, triageQuestions, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]map[string]any
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"department":  {"choice", "confidence", "probabilities"},
+		"is_urgent":   {"noul"},
+		"frustration": {"confidence", "legend", "probabilities", "score"},
+	}
+	for id, fields := range want {
+		if keys := slices.Sorted(maps.Keys(got[id])); !slices.Equal(keys, fields) {
+			t.Errorf("%s fields = %v, want %v", id, keys, fields)
+		}
+	}
+}

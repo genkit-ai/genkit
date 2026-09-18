@@ -67,7 +67,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -319,10 +318,21 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 	}, nil
 }
 
+// answerFields lists the fields of a wire answer per question type, which
+// are the fields the answer types declare. The answer schemas are closed,
+// so a field the API or a gateway adds later is dropped here rather than
+// failing every call at validation; the untouched answer is still on
+// [ai.ModelResponse.Custom].
+var answerFields = map[string][]string{
+	kindChoice: {"choice", "probabilities", "confidence"},
+	kindScore:  {"score", "probabilities", "confidence", "legend"},
+	kindNoul:   {"noul"},
+}
+
 // answersText renders the answers as the message text: for the enum
 // format the chosen option itself, otherwise a JSON object keyed by
-// question ID whose values are the answers without their type
-// discriminator, which is the shape the output type declares.
+// question ID whose values are the answers projected onto the fields the
+// output type declares.
 func answersText(resp *response, questions map[string]question, enum bool) (string, error) {
 	answers := make(map[string]map[string]any, len(questions))
 	for _, id := range questionIDs(questions) {
@@ -330,9 +340,14 @@ func answersText(resp *response, questions map[string]question, enum bool) (stri
 		if !ok {
 			return "", status.Errorf(status.ErrInternal, "typesafe: no answer for question %q", id)
 		}
-		answer = maps.Clone(answer)
-		delete(answer, "type")
-		answers[id] = answer
+		fields := answerFields[questions[id].Type]
+		projected := make(map[string]any, len(fields))
+		for _, field := range fields {
+			if v, ok := answer[field]; ok {
+				projected[field] = v
+			}
+		}
+		answers[id] = projected
 	}
 	if enum {
 		choice, _ := answers[enumQuestionID]["choice"].(string)
