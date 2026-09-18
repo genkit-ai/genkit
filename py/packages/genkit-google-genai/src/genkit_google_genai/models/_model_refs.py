@@ -32,6 +32,7 @@ from genkit import GenkitError, ModelInfo
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelRef, model_ref
 from genkit_google_genai.models._routing import classify_family, strip_ref_prefixes
+from genkit_google_genai.models.embedder import EmbeddingConfigSchema
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
@@ -107,7 +108,7 @@ def family_embedder_ref(
     *,
     namespace: str,
     plugin_class: str,
-    config: dict[str, object] | None,
+    config: EmbeddingConfigSchema | dict[str, object] | None,
     version: str | None,
 ) -> EmbedderRef:
     """Strip, gate, and build an EmbedderRef for ai.embed().
