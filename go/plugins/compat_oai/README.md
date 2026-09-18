@@ -6,6 +6,7 @@ This directory contains a package for building plugins that are compatible with 
 
 The `compat_oai` package provides a base implementation (`OpenAICompatible`) that handles:
 - Model and embedder registration
+- Image generation through the OpenAI-compatible Images API
 - Message handling
 - Tool support
 - Configuration management
