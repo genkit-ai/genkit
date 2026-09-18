@@ -379,6 +379,11 @@ def test_as_part_unwraps_part_data() -> None:
     assert part.text == 'hi'
 
 
+def test_as_part_keeps_an_existing_part() -> None:
+    part = Part.from_text('hi')
+    assert as_part(part) is part
+
+
 def test_as_artifact_unwraps_artifact_data() -> None:
     data = ArtifactData.model_validate({'parts': [{'text': 'hi'}]})
     art = as_artifact(data)
@@ -630,7 +635,7 @@ def test_wrapper_rejects_a_two_kind_part_already_on_resume(
     wrap: Callable[[Resume], object],
 ) -> None:
     """Resume respond/restart already holding two kinds does not reach the model."""
-    with pytest.raises(ValidationError, match='exactly one'):
+    with pytest.raises(ValidationError, match='resume_respond needs a tool response'):
         wrap(_two_kind_on_resume())
 
 

@@ -318,6 +318,9 @@ class Part(GenkitModel):
 
     @model_validator(mode='after')
     def _exactly_one_kind_after(self) -> Part:
+        # Construct already checked the incoming dict. This one catches
+        # part.media = ... on an existing text part, and treats data=null
+        # as a real payload so a tool that returned null still has a kind.
         kinds = [name for name in PART_KIND_FIELDS if getattr(self, name) is not None]
         if not kinds and self.custom is None and 'data' in self.model_fields_set and self.data is None:
             kinds.append('data')
@@ -331,6 +334,8 @@ class Part(GenkitModel):
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         dumped = super().model_dump(**kwargs)
+        # Default dump drops nulls. Keep data: null so replay still sees a
+        # data part instead of an empty one.
         if 'data' in self.model_fields_set and self.data is None:
             dumped['data'] = None
         return dumped
@@ -383,7 +388,7 @@ class Part(GenkitModel):
 
 def as_part(value: object) -> Part:
     if isinstance(value, Part):
-        return Part.model_validate(dump_keeping_unknown(value))
+        return value
     if isinstance(value, PartData):
         return Part.model_validate(value.root)
     if isinstance(value, BaseModel):
@@ -401,6 +406,8 @@ def inbound_part_is_empty(value: object) -> bool:
     if isinstance(value, Mapping):
         raw = dict(value)
     elif isinstance(value, PartData):
+        # The generated twin dumps as {root: ...}, which looks like no kind
+        # and would get dropped from the message.
         root = value.root
         if isinstance(root, BaseModel):
             raw = dump_keeping_unknown(root)
