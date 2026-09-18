@@ -27,7 +27,6 @@ from genkit_amazon_bedrock.transport import BedrockTransport
 from pydantic import ValidationError
 
 from genkit import Document, ModelRequest, ModelResponse
-from genkit._core._typing import MediaPart
 from genkit.embedder import EmbedRequest
 from genkit.plugin_api import ActionKind, GenkitError
 
@@ -410,8 +409,8 @@ async def test_image_config_survives_the_action_boundary() -> None:
 
     assert json.loads(transport.calls[0]['body'])['aspect_ratio'] == '16:9'
     assert response.message is not None
-    part = response.message.content[0].root
-    assert isinstance(part, MediaPart)
+    part = response.message.content[0]
+    assert part.media is not None
     assert part.media.url == 'data:image/png;base64,modern-image'
 
 

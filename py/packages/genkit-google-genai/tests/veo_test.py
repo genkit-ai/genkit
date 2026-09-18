@@ -41,7 +41,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._typing import TextPart
 from genkit.model import Operation
 
 
@@ -67,7 +66,7 @@ def _media(output: object) -> list:
 
 def _text_request(*, config: object | None = None) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat walking'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat walking')])],
         config=config,  # type: ignore[arg-type]
     )
 

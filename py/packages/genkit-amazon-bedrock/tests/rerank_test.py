@@ -35,7 +35,6 @@ from genkit_amazon_bedrock.rerank import (
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit import Document, Part
-from genkit._core._typing import DocumentData, TextPart
 from genkit.plugin_api import GenkitError
 
 COHERE_RERANK = 'cohere.rerank-v3-5:0'
@@ -68,9 +67,9 @@ class ForbiddenTransport:
         raise AssertionError(f'no InvokeModel call expected, got {kwargs}')
 
 
-def text_doc(*texts: str, metadata: dict[str, Any] | None = None) -> DocumentData:
-    return DocumentData(
-        content=[Part(root=TextPart(text=text)) for text in texts],
+def text_doc(*texts: str, metadata: dict[str, Any] | None = None) -> Document:
+    return Document(
+        content=[Part.from_text(text) for text in texts],
         metadata=metadata,
     )
 
@@ -83,8 +82,7 @@ def scored(*results: tuple[int, float]) -> dict[str, Any]:
 def ranked_texts(response: RerankerResponse) -> list[str]:
     """The text of each ranked document, in ranked order."""
     return [
-        '\n'.join(part.root.text for part in document.content if isinstance(part.root, TextPart))
-        for document in response.documents
+        '\n'.join(part.text for part in document.content if part.text is not None) for document in response.documents
     ]
 
 
@@ -95,8 +93,8 @@ def scores(response: RerankerResponse) -> list[float]:
 async def rerank(
     model_id: str,
     transport: Any,  # noqa: ANN401
-    query: DocumentData,
-    documents: list[DocumentData],
+    query: Document,
+    documents: list[Document],
     options: Any = None,  # noqa: ANN401
 ) -> RerankerResponse:
     reranker = BedrockReranker(model_id=model_id, transport=transport)

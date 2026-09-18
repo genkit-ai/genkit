@@ -41,7 +41,6 @@ from genkit import (
     Role,
     ToolDefinition,
 )
-from genkit._core._typing import ReasoningPart, TextPart
 
 _SERVICE_MODEL = botocore.session.get_session().get_service_model('bedrock-runtime')
 CONVERSE_INPUT_SHAPES = {
@@ -69,7 +68,7 @@ def test_undocumented_tool_passes_validation() -> None:
     # A tool declared without a docstring reaches the plugin with description
     # '', which the NonEmptyString floor on toolSpec.description rejects.
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         tools=[ToolDefinition(name='noop', description='', input_schema={'type': 'object', 'properties': {}})],
     )
     kwargs = assert_valid_converse_request(request)
@@ -79,8 +78,8 @@ def test_undocumented_tool_passes_validation() -> None:
 def test_blank_system_prompt_passes_validation() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=''))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('')]),
+            Message(role=Role.USER, content=[Part.from_text('hi')]),
         ]
     )
     assert_valid_converse_request(request)
@@ -91,9 +90,9 @@ def test_empty_assistant_text_passes_validation() -> None:
     # replaying it must stay valid (ContentBlock.text has no floor).
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text=''))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='again'))]),
+            Message(role=Role.USER, content=[Part.from_text('hi')]),
+            Message(role=Role.MODEL, content=[Part.from_text('')]),
+            Message(role=Role.USER, content=[Part.from_text('again')]),
         ]
     )
     assert_valid_converse_request(request)
@@ -102,7 +101,7 @@ def test_empty_assistant_text_passes_validation() -> None:
 def test_tool_round_trip_passes_validation() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='weather?'))]),
+            Message(role=Role.USER, content=[Part.from_text('weather?')]),
             Message(
                 role=Role.MODEL,
                 content=[
@@ -132,13 +131,13 @@ def test_tool_round_trip_passes_validation() -> None:
 def test_media_and_cache_points_pass_validation() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='rules')), cache_point_part()]),
+            Message(role=Role.SYSTEM, content=[Part.from_text('rules'), cache_point_part()]),
             Message(
                 role=Role.USER,
                 content=[
                     Part.model_validate({'media': {'url': f'data:image/png;base64,{PNG_B64}'}}),
                     Part.model_validate({'media': {'url': f'data:application/pdf;base64,{PNG_B64}'}}),
-                    Part(root=TextPart(text='what is this?')),
+                    Part.from_text('what is this?'),
                     cache_point_part(),
                 ],
             ),
@@ -150,20 +149,17 @@ def test_media_and_cache_points_pass_validation() -> None:
 def test_reasoning_replay_passes_validation() -> None:
     request = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='think'))]),
+            Message(role=Role.USER, content=[Part.from_text('think')]),
             Message(
                 role=Role.MODEL,
                 content=[
-                    Part(
-                        root=ReasoningPart(
-                            reasoning='step one',
-                            metadata={'bedrockReasoningSignature': 'sig-abc', 'signature': 'sig-abc'},
-                        )
+                    Part.from_reasoning(
+                        'step one', metadata={'bedrockReasoningSignature': 'sig-abc', 'signature': 'sig-abc'}
                     ),
-                    Part(root=TextPart(text='done')),
+                    Part.from_text('done'),
                 ],
             ),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='continue'))]),
+            Message(role=Role.USER, content=[Part.from_text('continue')]),
         ]
     )
     assert_valid_converse_request(request)
@@ -172,7 +168,7 @@ def test_reasoning_replay_passes_validation() -> None:
 @pytest.mark.parametrize('model_id', ['anthropic.claude-sonnet-4-5-20250929-v1:0', 'amazon.nova-lite-v1:0'])
 def test_inference_config_passes_validation(model_id: str) -> None:
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=BedrockConfig(temperature=0.0, top_p=0.9, max_output_tokens=256, stop_sequences=['STOP']),
     )
     assert_valid_request(build_converse_request(model_id, request))

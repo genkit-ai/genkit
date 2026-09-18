@@ -33,7 +33,7 @@ from genkit._core._model import (
     Part,
     as_part,
 )
-from genkit._core._typing import FinishReason, PartData, Role, TextPart
+from genkit._core._typing import FinishReason, PartData, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
@@ -181,11 +181,7 @@ class SurfaceIdReplay:
 def part_text(*, part: Part | PartData) -> str | None:
     # Empty text is still a text part. Treating it as missing would flush an
     # open fence and drop the card.
-    p = as_part(part)
-    root = p.root
-    if isinstance(root, TextPart):
-        return root.text
-    return None
+    return as_part(part).text
 
 
 def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
@@ -194,7 +190,7 @@ def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
         if seg.envelopes:
             out.append(a2ui_part(seg.envelopes))
         elif seg.prose:
-            out.append(Part(TextPart(text=seg.prose)))
+            out.append(Part.from_text(seg.prose))
     return out
 
 
@@ -266,10 +262,10 @@ def inject_instructions(*, request: ModelRequest, catalog: A2uiCatalog) -> Model
     for i, message in enumerate(messages):
         if message.role != Role.SYSTEM:
             continue
-        extra = Part(TextPart(text='\n\n' + text))
+        extra = Part.from_text('\n\n' + text)
         messages[i] = message.model_copy(update={'content': [*message.content, extra]})
         return request.model_copy(update={'messages': messages})
-    system = Message(role=Role.SYSTEM, content=[Part(TextPart(text=text))])
+    system = Message(role=Role.SYSTEM, content=[Part.from_text(text)])
     return request.model_copy(update={'messages': [system, *messages]})
 
 
@@ -288,13 +284,13 @@ def sanitize_inbound(*, request: ModelRequest) -> ModelRequest:
             rewritten = True
             text = summarize_envelopes(envelopes=envelopes_from_parts([part]))
             if text:
-                content.append(Part(TextPart(text=text)))
+                content.append(Part.from_text(text))
         if not rewritten:
             messages.append(message)
             continue
         changed = True
         if not content:
-            content.append(Part(TextPart(text='[UI]')))
+            content.append(Part.from_text('[UI]'))
         messages.append(message.model_copy(update={'content': content}))
     if not changed:
         return request

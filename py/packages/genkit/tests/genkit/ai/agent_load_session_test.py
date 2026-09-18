@@ -26,10 +26,8 @@ import pytest
 from genkit._ai._agents._runtime import AgentInitError, load_session
 from genkit._ai._agents._session import SessionStore
 from genkit._core._error import GenkitError
+from genkit._core._model import AgentInit, SessionSnapshot, SessionState
 from genkit._core._typing import (
-    AgentInit,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
 )
 

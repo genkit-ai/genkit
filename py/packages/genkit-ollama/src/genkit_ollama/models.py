@@ -94,7 +94,6 @@ from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import (
     GenkitError,
-    Media,
     Message,
     ModelRequest,
     ModelResponse,
@@ -103,13 +102,6 @@ from genkit import (
     Part,
     Role,
     ToolRequest,
-)
-from genkit._core._typing import (
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
 )
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, ModelConfig, get_cached_client, wrap_http_error
@@ -243,7 +235,7 @@ class OllamaModel:
         Returns:
             The generated response.
         """
-        content = [Part(root=TextPart(text='Failed to get response from Ollama API'))]
+        content = [Part.from_text('Failed to get response from Ollama API')]
 
         logger.debug(
             'Ollama generate request',
@@ -534,38 +526,32 @@ class OllamaModel:
         # the answer text. Covers both streaming deltas and the final message.
         thinking = getattr(chat_response_message, 'thinking', None)
         if thinking:
-            content.append(Part(root=ReasoningPart(reasoning=thinking)))
+            content.append(Part.from_reasoning(thinking))
         elif thinking_enabled and text:
             # Fallback for models that inline <think>…</think> in content instead
             # of populating the dedicated field. Gated on an explicit think request
             # so ordinary text containing these tags is never hijacked.
             reasoning, text = _parse_thinking(text)
             if reasoning:
-                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+                content.append(Part.from_reasoning(reasoning))
         if text:
-            content.append(Part(root=TextPart(text=text)))
+            content.append(Part.from_text(text))
         if chat_response_message.images:
             for image in chat_response_message.images:
                 content.append(
-                    Part(
-                        root=MediaPart(
-                            media=Media(
-                                content_type=mimetypes.guess_type(str(image.value), strict=False)[0]
-                                or 'application/octet-stream',
-                                url=str(image.value),
-                            )
-                        )
+                    Part.from_media(
+                        str(image.value),
+                        content_type=mimetypes.guess_type(str(image.value), strict=False)[0]
+                        or 'application/octet-stream',
                     )
                 )
         if chat_response_message.tool_calls:
             for tool_call in chat_response_message.tool_calls:
                 content.append(
                     Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(
-                                name=tool_call.function.name,
-                                input=tool_call.function.arguments,
-                            )
+                        tool_request=ToolRequest(
+                            name=tool_call.function.name,
+                            input=tool_call.function.arguments,
                         )
                     )
                 )
@@ -598,13 +584,13 @@ class OllamaModel:
         text = generate_response.response or ''
         thinking = getattr(generate_response, 'thinking', None)
         if thinking:
-            content.append(Part(root=ReasoningPart(reasoning=thinking)))
+            content.append(Part.from_reasoning(thinking))
         elif thinking_enabled and text:
             reasoning, text = _parse_thinking(text)
             if reasoning:
-                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+                content.append(Part.from_reasoning(reasoning))
         if text:
-            content.append(Part(root=TextPart(text=text)))
+            content.append(Part.from_text(text))
         return content
 
     @staticmethod
@@ -753,8 +739,8 @@ class OllamaModel:
         prompt = ''
         for message in request.messages:
             for text_part in message.content:
-                if isinstance(text_part.root, TextPart):
-                    prompt += text_part.root.text
+                if text_part.text is not None:
+                    prompt += text_part.text
                 else:
                     logger.error('Non-text messages are not supported')
         return prompt
@@ -787,12 +773,12 @@ class OllamaModel:
                 images=[],
             )
             for text_part in message.content:
-                if isinstance(text_part.root, TextPart):
-                    item.content = (item.content or '') + text_part.root.text
-                elif isinstance(text_part.root, ToolResponsePart):
-                    item.content = (item.content or '') + str(text_part.root.tool_response.output)
-                elif isinstance(text_part.root, MediaPart):
-                    image_value = await cls._resolve_image(text_part.root.media.url)
+                if text_part.text is not None:
+                    item.content = (item.content or '') + text_part.text
+                elif text_part.tool_response is not None:
+                    item.content = (item.content or '') + str(text_part.tool_response.output)
+                elif text_part.media is not None:
+                    image_value = await cls._resolve_image(text_part.media.url)
                     item['images'].append(ollama_api.Image(value=image_value))
             messages.append(item)
         return messages

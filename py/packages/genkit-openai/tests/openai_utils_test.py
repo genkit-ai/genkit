@@ -38,20 +38,12 @@ from pydantic import BaseModel
 
 from genkit import (
     GenkitError,
-    Media,
     Message,
     ModelRequest,
     Part,
     Role,
     ToolRequest,
     ToolResponse,
-)
-from genkit._core._typing import (
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
 )
 
 
@@ -175,7 +167,7 @@ class TestExtractConfigDict:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='hello'))],
+                    content=[Part.from_text('hello')],
                 )
             ],
             config=config,
@@ -217,7 +209,7 @@ class TestFindText:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='hello'))],
+                    content=[Part.from_text('hello')],
                 )
             ]
         )
@@ -234,7 +226,7 @@ class TestFindText:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=MediaPart(media=Media(url='data:audio/mpeg;base64,AAAA')))],
+                    content=[Part.from_media('data:audio/mpeg;base64,AAAA')],
                 )
             ]
         )
@@ -247,8 +239,8 @@ class TestFindText:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='first')),
-                        Part(root=TextPart(text='second')),
+                        Part.from_text('first'),
+                        Part.from_text('second'),
                     ],
                 )
             ]
@@ -265,7 +257,7 @@ class TestExtractText:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='hello'))],
+                    content=[Part.from_text('hello')],
                 )
             ]
         )
@@ -283,7 +275,7 @@ class TestExtractText:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=MediaPart(media=Media(url='data:audio/mpeg;base64,AAAA')))],
+                    content=[Part.from_media('data:audio/mpeg;base64,AAAA')],
                 )
             ]
         )
@@ -300,16 +292,7 @@ class TestExtractMedia:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url='data:audio/mpeg;base64,AAAA',
-                                    content_type='audio/mpeg',
-                                )
-                            )
-                        )
-                    ],
+                    content=[Part.from_media('data:audio/mpeg;base64,AAAA', content_type='audio/mpeg')],
                 )
             ]
         )
@@ -323,15 +306,7 @@ class TestExtractMedia:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url='data:audio/wav;base64,AAAA',
-                                )
-                            )
-                        )
-                    ],
+                    content=[Part.from_media('data:audio/wav;base64,AAAA')],
                 )
             ]
         )
@@ -351,7 +326,7 @@ class TestExtractMedia:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=TextPart(text='just text'))],
+                    content=[Part.from_text('just text')],
                 )
             ]
         )
@@ -365,15 +340,8 @@ class TestExtractMedia:
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='instructions')),
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url='data:image/png;base64,iVBOR',
-                                    content_type='image/png',
-                                )
-                            )
-                        ),
+                        Part.from_text('instructions'),
+                        Part.from_media('data:image/png;base64,iVBOR', content_type='image/png'),
                     ],
                 )
             ]
@@ -387,7 +355,7 @@ class TestExtractMedia:
             messages=[
                 Message(
                     role=Role.USER,
-                    content=[Part(root=MediaPart(media=Media(url='data:text/plain,hello')))],
+                    content=[Part.from_media('data:text/plain,hello')],
                 )
             ]
         )
@@ -472,8 +440,8 @@ class TestMessageConverterReasoningContent:
         })
         msg = MessageConverter.to_genkit(adapter)
         assert len(msg.content) == 1
-        assert isinstance(msg.content[0].root, ReasoningPart)
-        assert msg.content[0].root.reasoning == 'Let me think about this step by step...'
+        assert msg.content[0].reasoning is not None
+        assert msg.content[0].reasoning == 'Let me think about this step by step...'
 
     def test_reasoning_and_text_content(self) -> None:
         """Convert message with both reasoning_content and content."""
@@ -485,10 +453,10 @@ class TestMessageConverterReasoningContent:
         msg = MessageConverter.to_genkit(adapter)
         # Reasoning comes first, then text (matching JS order).
         assert len(msg.content) == 2
-        assert isinstance(msg.content[0].root, ReasoningPart)
-        assert msg.content[0].root.reasoning == 'Let me think...'
-        assert isinstance(msg.content[1].root, TextPart)
-        assert msg.content[1].root.text == 'The answer is 42.'
+        assert msg.content[0].reasoning is not None
+        assert msg.content[0].reasoning == 'Let me think...'
+        assert msg.content[1].text is not None
+        assert msg.content[1].text == 'The answer is 42.'
 
     def test_text_content_without_reasoning(self) -> None:
         """Convert a regular message without reasoning_content."""
@@ -498,8 +466,8 @@ class TestMessageConverterReasoningContent:
         })
         msg = MessageConverter.to_genkit(adapter)
         assert len(msg.content) == 1
-        assert isinstance(msg.content[0].root, TextPart)
-        assert msg.content[0].root.text == 'Hello!'
+        assert msg.content[0].text is not None
+        assert msg.content[0].text == 'Hello!'
 
     def test_empty_reasoning_content_is_ignored(self) -> None:
         """Ignore reasoning_content when it is an empty string."""
@@ -511,7 +479,7 @@ class TestMessageConverterReasoningContent:
         msg = MessageConverter.to_genkit(adapter)
         # Empty reasoning is falsy, so only text part is created.
         assert len(msg.content) == 1
-        assert isinstance(msg.content[0].root, TextPart)
+        assert msg.content[0].text is not None
 
     def test_raises_when_no_content_at_all(self) -> None:
         """Raise ValueError when all content fields are None/empty."""
@@ -542,7 +510,7 @@ class TestMessageConverterReasoningContent:
         # Should produce tool request parts, not reasoning.
         assert len(msg.content) == 1
 
-        assert isinstance(msg.content[0].root, ToolRequestPart)
+        assert msg.content[0].tool_request is not None
 
     def test_role_defaults_to_model(self) -> None:
         """Default role should be MODEL when not provided."""
@@ -561,7 +529,7 @@ class TestMessageConverterToOpenAI:
         """Text-only messages should produce a plain string content field."""
         message = Message(
             role=Role.USER,
-            content=[Part(root=TextPart(text='Hello world'))],
+            content=[Part.from_text('Hello world')],
         )
         result = MessageConverter.to_openai(message)
         assert len(result) == 1
@@ -572,8 +540,8 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='Hello ')),
-                Part(root=TextPart(text='world')),
+                Part.from_text('Hello '),
+                Part.from_text('world'),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -585,7 +553,7 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.USER,
             content=[
-                Part(root=MediaPart(media=Media(url='https://example.com/cat.jpg', content_type='image/jpeg'))),
+                Part.from_media('https://example.com/cat.jpg', content_type='image/jpeg'),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -608,8 +576,8 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='Describe this image')),
-                Part(root=MediaPart(media=Media(url='https://example.com/cat.jpg', content_type='image/jpeg'))),
+                Part.from_text('Describe this image'),
+                Part.from_media('https://example.com/cat.jpg', content_type='image/jpeg'),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -629,12 +597,10 @@ class TestMessageConverterToOpenAI:
             role=Role.MODEL,
             content=[
                 Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(
-                            ref='call_1',
-                            name='get_weather',
-                            input={'location': 'NYC'},
-                        )
+                    tool_request=ToolRequest(
+                        ref='call_1',
+                        name='get_weather',
+                        input={'location': 'NYC'},
                     )
                 )
             ],
@@ -653,12 +619,10 @@ class TestMessageConverterToOpenAI:
             role=Role.TOOL,
             content=[
                 Part(
-                    root=ToolResponsePart(
-                        tool_response=ToolResponse(
-                            ref='call_1',
-                            name='get_weather',
-                            output='Sunny, 72F',
-                        )
+                    tool_response=ToolResponse(
+                        ref='call_1',
+                        name='get_weather',
+                        output='Sunny, 72F',
                     )
                 )
             ],
@@ -673,7 +637,7 @@ class TestMessageConverterToOpenAI:
         """Role.MODEL should map to 'assistant' in OpenAI format."""
         message = Message(
             role=Role.MODEL,
-            content=[Part(root=TextPart(text='Hi there'))],
+            content=[Part.from_text('Hi there')],
         )
         result = MessageConverter.to_openai(message)
         assert result[0]['role'] == 'assistant'
@@ -684,8 +648,8 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='What is this?')),
-                Part(root=MediaPart(media=Media(url=data_uri))),
+                Part.from_text('What is this?'),
+                Part.from_media(data_uri),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -704,8 +668,8 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.MODEL,
             content=[
-                Part(root=ReasoningPart(reasoning='Let me think step by step...')),
-                Part(root=TextPart(text='The answer is 42.')),
+                Part.from_reasoning('Let me think step by step...'),
+                Part.from_text('The answer is 42.'),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -721,7 +685,7 @@ class TestMessageConverterToOpenAI:
         message = Message(
             role=Role.MODEL,
             content=[
-                Part(root=ReasoningPart(reasoning='Let me think about this...')),
+                Part.from_reasoning('Let me think about this...'),
             ],
         )
         result = MessageConverter.to_openai(message)
@@ -737,9 +701,9 @@ class TestMessageConverterToOpenAI:
         assistant_msg = Message(
             role=Role.MODEL,
             content=[
-                Part(root=ReasoningPart(reasoning='Step 1: analyze the question...')),
-                Part(root=ReasoningPart(reasoning='Step 2: formulate answer...')),
-                Part(root=TextPart(text='Paris is the capital of France.')),
+                Part.from_reasoning('Step 1: analyze the question...'),
+                Part.from_reasoning('Step 2: formulate answer...'),
+                Part.from_text('Paris is the capital of France.'),
             ],
         )
         result = MessageConverter.to_openai(assistant_msg)

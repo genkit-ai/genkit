@@ -21,17 +21,18 @@ import copy
 import inspect
 import json
 import re
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
+from genkit._ai._tools import restart_tool
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
@@ -40,30 +41,28 @@ from genkit._core._error import (
     StatusName,
 )
 from genkit._core._logger import get_logger
-from genkit._core._model import Message, Part, as_part
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentStreamChunk,
     Artifact,
+    Message,
+    Part,
+    Resume,
+    SessionSnapshot as SessionSnapshotVeneer,
+    SessionState as SessionStateVeneer,
+    as_message,
+    as_part,
+    as_session_state,
+    resume_options_to_resume,
+)
+from genkit._core._typing import (
+    AgentFinishReason,
     GenkitRuntimeError,
     Media,
-    MediaPart,
-    MessageData,
-    PartData,
-    ReasoningPart,
-    Resume,
     Role,
-    SessionSnapshot as SessionSnapshotSchema,
-    SessionState as SessionStateSchema,
     SnapshotStatus,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
 )
 
 logger = get_logger(__name__)
@@ -78,18 +77,25 @@ OutputT = TypeVar('OutputT')
 StateT_co = TypeVar('StateT_co', bound=BaseModel, covariant=True)
 
 
-class SessionState(SessionStateSchema, Generic[StateT]):
+class SessionState(SessionStateVeneer, Generic[StateT]):
     """Session state generic over custom state."""
 
     custom: StateT | None = None
 
 
-class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
+class SessionSnapshot(SessionSnapshotVeneer, Generic[StateT]):
     """Session snapshot generic over custom state."""
 
     # Narrows the wire model's plain SessionState to the typed one so snap.state.custom
     # reads as the declared model; the runtime shape is identical (same JSON fields).
     state: SessionState[StateT] | None = None  # pyrefly: ignore[bad-override]
+
+    @field_validator('state', mode='before')
+    @classmethod
+    def _wrap_state(cls, v: object) -> object:
+        if v is None:
+            return v
+        return SessionState.model_validate(as_session_state(v).model_dump(mode='json', by_alias=True))
 
 
 # ===========================================================================
@@ -131,7 +137,7 @@ class AgentTransport(Protocol, Generic[StateT_co]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotSchema | None:
+    ) -> SessionSnapshotVeneer | None:
         """Retrieves a session snapshot from the server store."""
         ...
 
@@ -152,7 +158,7 @@ class AgentChunk(Generic[StateT]):
     text: str | None = None
     reasoning: str | None = None
     accumulated_text: str = ''  # this turn's text so far, including this chunk
-    tool_requests: list[ToolRequestPart] = field(default_factory=list)
+    tool_requests: list[Part] = field(default_factory=list)
     data: Any | None = None  # structured output part, if the chunk carries one
     media: Media | None = None
     artifact: Artifact | None = None
@@ -173,14 +179,12 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self.ref = ref
         self.input = input_data
 
-    def respond(self, output: OutputT) -> ToolResponsePart:
-        """Wire-shaped tool response for batching into ``chat.resume(respond=[...])``."""
-        return ToolResponsePart(
-            tool_response=ToolResponse(
-                name=self.name,
-                ref=self.ref,
-                output=output,
-            )
+    def respond(self, output: OutputT) -> Part:
+        """Tool-response Part for batching into ``chat.resume(respond=[...])``."""
+        return Part.from_tool_response(
+            name=self.name,
+            ref=self.ref,
+            output=output,
         )
 
     def restart(
@@ -188,16 +192,12 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         *,
         resumed_metadata: dict[str, Any] | None = None,
         replace_input: Any | None = None,  # noqa: ANN401
-    ) -> ToolRequestPart:
-        """Wire-shaped restart request for batching into ``chat.resume(restart=[...])``."""
-        from genkit._ai._tools import restart_tool
-
-        part = ToolRequestPart(
-            tool_request=ToolRequest(
-                name=self.name,
-                ref=self.ref,
-                input=self.input,
-            )
+    ) -> Part:
+        """Restart tool-request Part for batching into ``chat.resume(restart=[...])``."""
+        part = Part.from_tool_request(
+            name=self.name,
+            ref=self.ref,
+            input=self.input,
         )
         if resumed_metadata is not None or replace_input is not None:
             return restart_tool(
@@ -213,7 +213,7 @@ class AgentResponse(Generic[StateT]):
     """Completed turn result — client-side wrapper around AgentOutput with rich accessors."""
 
     raw: AgentOutput
-    messages: list[MessageData]
+    messages: list[Message]
     state: StateT | None = None
 
     @property
@@ -262,12 +262,12 @@ class AgentResponse(Generic[StateT]):
         return self.raw.artifacts or []
 
     @property
-    def message(self) -> MessageData | None:
-        """The response message (raw)."""
+    def message(self) -> Message | None:
+        """The response message."""
         return self.raw.message
 
     @property
-    def tool_requests(self) -> list[ToolRequestPart]:
+    def tool_requests(self) -> list[Part]:
         """Tool requests in the response message."""
         return tool_requests_of(self.raw.message.content) if self.raw.message else []
 
@@ -381,7 +381,7 @@ def error_from_exception(e: Exception) -> GenkitError:
 def to_agent_error(
     e: Exception,
     *,
-    messages: list[MessageData],
+    messages: list[Message],
     state: Any,  # noqa: ANN401
     snapshot_id: str | None,
 ) -> AgentError:
@@ -412,18 +412,23 @@ def to_agent_error(
     )
 
 
-def agent_interrupts_from_message(message: MessageData | None) -> list[AgentInterrupt[Any, Any]]:
+def agent_interrupts_from_message(message: Message | None) -> list[AgentInterrupt[Any, Any]]:
     if message is None:
         return []
-    msg = message if isinstance(message, Message) else Message(message)
-    return [
-        AgentInterrupt(
-            name=part.tool_request.name,
-            ref=part.tool_request.ref,
-            input_data=part.tool_request.input,
+    msg = as_message(message)
+    interrupts: list[AgentInterrupt[Any, Any]] = []
+    for part in msg.interrupts:
+        req = part.tool_request
+        if req is None:
+            continue
+        interrupts.append(
+            AgentInterrupt(
+                name=req.name,
+                ref=req.ref,
+                input_data=req.input,
+            )
         )
-        for part in msg.interrupts
-    ]
+    return interrupts
 
 
 class AgentTurn(Generic[StateT]):
@@ -523,7 +528,7 @@ class AgentAPI(Protocol, Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-        messages: list[MessageData] | None = None,
+        messages: list[Message] | None = None,
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
@@ -562,7 +567,7 @@ class AgentAPI(Protocol, Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotSchema | None:
+    ) -> SessionSnapshotVeneer | None:
         """Reads a stored snapshot without starting a session.
 
         Pass exactly one of ``snapshot_id`` or ``session_id``. A session
@@ -611,7 +616,7 @@ class AgentClient(Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-        messages: list[MessageData] | None = None,
+        messages: list[Message] | None = None,
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
@@ -668,7 +673,7 @@ class AgentClient(Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotSchema | None:
+    ) -> SessionSnapshotVeneer | None:
         """Reads a stored snapshot without starting a session.
 
         Pass exactly one of ``snapshot_id`` or ``session_id``. A session
@@ -698,15 +703,15 @@ def to_agent_input(input: str | AgentInput) -> AgentInput:  # noqa: A002
     (e.g. flagging detach) never mutate an AgentInput the caller might reuse.
     """
     if isinstance(input, str):
-        return AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text=input))]))
-    return input.model_copy()
+        return AgentInput(message=Message(role='user', content=[Part.from_text(input)]))
+    return AgentInput(message=input.message, resume=input.resume, detach=input.detach)
 
 
 def init_from(
     *,
     snapshot_id: str | None,
     session_id: str | None,
-    messages: list[MessageData] | None,
+    messages: list[Message] | None,
     artifacts: list[Artifact] | None,
     state: Any,  # noqa: ANN401
 ) -> AgentInit | None:
@@ -750,7 +755,7 @@ class StreamedMessageAccumulator:
 
     def __init__(self) -> None:
         # Named separately from messages() so the accessor can finalize then return.
-        self.built_messages: list[MessageData] = []
+        self.built_messages: list[Message] = []
         self.role: Role | str | None = None
         self.index: float | None = None
         self.parts: list[Part] = []
@@ -775,23 +780,22 @@ class StreamedMessageAccumulator:
         merged: list[Part] = []
         text_buf: list[str] = []
         for p in self.parts:
-            root = p.root
-            if isinstance(root, TextPart) and root.text is not None:
-                text_buf.append(root.text)
+            if p.text is not None:
+                text_buf.append(p.text)
                 continue
             if text_buf:
-                merged.append(Part(root=TextPart(text=''.join(text_buf))))
+                merged.append(Part.from_text(''.join(text_buf)))
                 text_buf = []
             merged.append(p)
         if text_buf:
-            merged.append(Part(root=TextPart(text=''.join(text_buf))))
+            merged.append(Part.from_text(''.join(text_buf)))
         if merged:
-            self.built_messages.append(MessageData(role=self.role, content=cast(list[PartData], merged)))
+            self.built_messages.append(Message(role=self.role, content=merged))
         self.role = None
         self.index = None
         self.parts = []
 
-    def messages(self) -> list[MessageData]:
+    def messages(self) -> list[Message]:
         """The reconstructed messages, finalizing any in-progress message first."""
         self.flush()
         return self.built_messages
@@ -923,7 +927,8 @@ class TurnDriver(Generic[StateT]):
             self.accumulate_chunk(chunk)
         custom = self.commit_custom_patch(chunk.custom_patch) if chunk.custom_patch else None
 
-        content = chunk.model_chunk.content if chunk.model_chunk else None
+        raw = chunk.model_chunk.content if chunk.model_chunk else None
+        content = [as_part(p) for p in raw] if raw else None
         text = text_of(content)
         self.accumulated_text += text
 
@@ -937,7 +942,11 @@ class TurnDriver(Generic[StateT]):
             tool_requests=tool_requests_of(content),
             data=first_data_of(content),
             media=first_media_of(content),
-            artifact=chunk.artifact,
+            artifact=(
+                chunk.artifact
+                if chunk.artifact is None or isinstance(chunk.artifact, Artifact)
+                else Artifact.model_validate(chunk.artifact)
+            ),
             custom=custom,
             raw=chunk,
         )
@@ -1002,7 +1011,7 @@ class AgentChat(Generic[StateT]):
         # snapshot completes or the chat is reloaded onto a completed ancestor).
         self._resume_snapshot_id: str | None = None
         self._session_id: str | None = None
-        self._messages: list[MessageData] = []
+        self._messages: list[Message] = []
         self._artifacts: list[Artifact] = []
         # Held as the wire-shaped blob (plain JSON); reads validate it into the
         # declared state model on the way out via _coerce_custom.
@@ -1061,7 +1070,7 @@ class AgentChat(Generic[StateT]):
         return self._session_id
 
     @property
-    def messages(self) -> list[MessageData]:
+    def messages(self) -> list[Message]:
         """Running view of the conversation, built the same way in both modes.
 
         A turn's messages are stitched from its chunk stream — the only channel
@@ -1148,8 +1157,8 @@ class AgentChat(Generic[StateT]):
     async def resume(
         self,
         *,
-        respond: list[ToolResponsePart] | None = None,
-        restart: list[ToolRequestPart] | None = None,
+        respond: list[Part] | None = None,
+        restart: list[Part] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AgentResponse[StateT]:
         """Continues a conversation from an interrupt and returns the response.
@@ -1157,13 +1166,14 @@ class AgentChat(Generic[StateT]):
         Sugar for :meth:`send` with a resume payload. For streaming, use
         :meth:`resume_stream`.
         """
-        return await self.send(AgentInput(resume=Resume(respond=respond, restart=restart, metadata=metadata)))
+        wire = resume_options_to_resume(resume_respond=respond, resume_restart=restart, resume_metadata=metadata)
+        return await self.send(AgentInput(resume=wire or Resume(metadata=metadata)))
 
     def resume_stream(
         self,
         *,
-        respond: list[ToolResponsePart] | None = None,
-        restart: list[ToolRequestPart] | None = None,
+        respond: list[Part] | None = None,
+        restart: list[Part] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AgentTurn[StateT]:
         """Continues a conversation from an interrupt and returns an in-flight turn.
@@ -1174,9 +1184,10 @@ class AgentChat(Generic[StateT]):
         ``resume_metadata`` a plain ``generate`` call takes). Sugar for
         :meth:`send_stream` with a resume payload.
         """
-        return self.send_stream(AgentInput(resume=Resume(respond=respond, restart=restart, metadata=metadata)))
+        wire = resume_options_to_resume(resume_respond=respond, resume_restart=restart, resume_metadata=metadata)
+        return self.send_stream(AgentInput(resume=wire or Resume(metadata=metadata)))
 
-    async def get_snapshot(self) -> SessionSnapshotSchema | None:
+    async def get_snapshot(self) -> SessionSnapshotVeneer | None:
         """Reads the current snapshot from the server store, if store-backed."""
         if not self._snapshot_id:
             return None
@@ -1250,13 +1261,13 @@ class AgentChat(Generic[StateT]):
     # Internal (transport / runtime wiring)
     # ------------------------------------------------------------------
 
-    def _load_from_snapshot(self, snapshot: SessionSnapshotSchema) -> None:
+    def _load_from_snapshot(self, snapshot: SessionSnapshotVeneer) -> None:
         self._snapshot_id = snapshot.snapshot_id
         self._resume_snapshot_id = snapshot.snapshot_id
         if snapshot.state is not None:
             self._set_state(snapshot.state)
 
-    def _set_state(self, state: SessionStateSchema) -> None:
+    def _set_state(self, state: SessionStateVeneer) -> None:
         snapshot = state.model_copy(deep=True)
         self._session_id = snapshot.session_id
         self._messages = list(snapshot.messages or [])
@@ -1449,10 +1460,10 @@ class DetachedTask(Generic[StateT]):
         self._transport = transport
         self._state_schema = state_schema
 
-    def _parse_snapshot(self, raw: SessionSnapshotSchema | None) -> SessionSnapshot[StateT] | None:
+    def _parse_snapshot(self, raw: SessionSnapshotVeneer | None) -> SessionSnapshot[StateT] | None:
         if raw is None:
             return None
-        snap = SessionSnapshot[StateT].model_validate(raw.model_dump(by_alias=True))
+        snap = SessionSnapshot[StateT].model_validate_json(raw.model_dump_json(by_alias=True))
         if snap.state is not None and snap.state.custom is not None and self._state_schema is not None:
             try:
                 snap.state.custom = self._state_schema.model_validate(snap.state.custom)
@@ -1507,39 +1518,32 @@ class DetachedTask(Generic[StateT]):
 # ===========================================================================
 
 
-def part_roots(content: Sequence[PartData] | None) -> Iterator[object]:
-    """Yields the inner root of each content part, normalizing dicts to Part."""
-    for part in content or []:
-        yield as_part(part).root
-
-
-def text_of(content: Sequence[PartData] | None) -> str:
+def text_of(content: Sequence[Part] | None) -> str:
     """All text parts concatenated."""
-    return ''.join(r.text for r in part_roots(content) if isinstance(r, TextPart) and r.text)
+    return ''.join(p.text for p in content or [] if p.text)
 
 
-def reasoning_of(content: Sequence[PartData] | None) -> str:
+def reasoning_of(content: Sequence[Part] | None) -> str:
     """All reasoning parts concatenated."""
-    return ''.join(r.reasoning for r in part_roots(content) if isinstance(r, ReasoningPart) and r.reasoning)
+    return ''.join(p.reasoning for p in content or [] if p.reasoning)
 
 
-def first_media_of(content: Sequence[PartData] | None) -> Media | None:
+def first_media_of(content: Sequence[Part] | None) -> Media | None:
     """The first media part, if any."""
-    for r in part_roots(content):
-        if isinstance(r, MediaPart):
-            return r.media
+    for p in content or []:
+        if p.media is not None:
+            return p.media
     return None
 
 
-def first_data_of(content: Sequence[PartData] | None) -> Any:  # noqa: ANN401
+def first_data_of(content: Sequence[Part] | None) -> Any:  # noqa: ANN401
     """The first structured-data part value, if any."""
-    for r in part_roots(content):
-        data = getattr(r, 'data', None)
-        if data is not None:
-            return data
+    for p in content or []:
+        if p.data is not None:
+            return p.data
     return None
 
 
-def tool_requests_of(content: Sequence[PartData] | None) -> list[ToolRequestPart]:
+def tool_requests_of(content: Sequence[Part] | None) -> list[Part]:
     """All tool-request parts."""
-    return [r for r in part_roots(content) if isinstance(r, ToolRequestPart)]
+    return [p for p in content or [] if p.tool_request is not None]

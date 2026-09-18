@@ -458,7 +458,7 @@ class OpenAI(Plugin):
             texts = []
             for doc in request.input:
                 doc_text = ''.join(  # type: ignore[arg-type]
-                    part.root.text for part in doc.content if hasattr(part.root, 'text') and part.root.text
+                    part.text for part in doc.content if part.text is not None and part.text
                 )
                 texts.append(doc_text)
 

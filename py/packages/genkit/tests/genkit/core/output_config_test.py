@@ -19,8 +19,9 @@
 import pytest
 from pydantic import ValidationError
 
+from genkit._core._model import OutputConfig, as_output_config
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import OutputConfig
+from genkit._core._typing import OutputConfig as OutputConfigData
 
 _SAMPLE = {'type': 'object', 'properties': {'name': {'type': 'string'}}}
 
@@ -53,3 +54,19 @@ def test_advertised_schema_uses_wire_key() -> None:
 def test_rejects_old_python_name() -> None:
     with pytest.raises(ValidationError, match='schema_'):
         OutputConfig.model_validate({'schema_': _SAMPLE})
+
+
+def test_output_config_is_not_output_config_data() -> None:
+    cfg = OutputConfig(json_schema=_SAMPLE)
+    assert type(cfg) is OutputConfig
+    assert isinstance(cfg, OutputConfigData) is False
+    assert cfg.model_dump() == {'schema': _SAMPLE}
+
+
+def test_as_output_config_unwraps_output_config_data() -> None:
+    data = OutputConfigData(json_schema=_SAMPLE)
+    cfg = as_output_config(data)
+    assert type(cfg) is OutputConfig
+    assert isinstance(cfg, OutputConfigData) is False
+    assert cfg.json_schema == _SAMPLE
+    assert cfg.model_dump() == {'schema': _SAMPLE}

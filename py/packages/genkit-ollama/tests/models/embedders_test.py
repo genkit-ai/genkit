@@ -29,7 +29,6 @@ from genkit import (
     EmbedResponse,
     Part,
 )
-from genkit._core._typing import TextPart
 
 
 class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
@@ -73,11 +72,11 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
             input=[
                 Document(
                     content=[
-                        Part(root=TextPart(text='doc1_part1')),
-                        Part(root=TextPart(text='doc1_part2')),
+                        Part.from_text('doc1_part1'),
+                        Part.from_text('doc1_part2'),
                     ]
                 ),
-                Document(content=[Part(root=TextPart(text='doc2_part1'))]),
+                Document(content=[Part.from_text('doc2_part1')]),
             ]
         )
         expected_ollama_embeddings = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
@@ -115,7 +114,7 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
 
     async def test_embed_api_raises_exception(self) -> None:
         """Test embed method handles exception from client.embed."""
-        request = EmbedRequest(input=[Document(content=[Part(root=TextPart(text='error text'))])])
+        request = EmbedRequest(input=[Document(content=[Part.from_text('error text')])])
         self.mock_ollama_client_instance.embed.side_effect = Exception('Ollama Embed API Error')
 
         with self.assertRaisesRegex(Exception, 'Ollama Embed API Error'):
@@ -127,8 +126,8 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
         """Test embed when client returns fewer embeddings than input texts (edge case)."""
         request = EmbedRequest(
             input=[
-                Document(content=[Part(root=TextPart(text='text1'))]),
-                Document(content=[Part(root=TextPart(text='text2'))]),
+                Document(content=[Part.from_text('text1')]),
+                Document(content=[Part.from_text('text2')]),
             ]
         )
         # Simulate Ollama returning only one embedding for two inputs

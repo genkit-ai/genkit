@@ -50,14 +50,13 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
-from genkit._core._model import ModelRef
+from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._trace._log_exporter import enable_log_export
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
-    AgentInput,
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
     ReflectionConfigureParams,

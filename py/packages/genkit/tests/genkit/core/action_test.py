@@ -25,7 +25,6 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError
 from genkit._core._model import OutputConfig
-from genkit._core._typing import TextPart
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -385,7 +384,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
     # generate may hand the action a bare request that still has a dict config.
     request = ModelRequest(
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'api_key': 'k'},
     )
     assert request.config == {'api_key': 'k'}
@@ -411,7 +410,7 @@ async def test_action_rejects_foreign_config_class() -> None:
 
     action = Action(name='gemini', kind=ActionKind.MODEL, fn=model_fn)
     request = ModelRequest[OpenAICfg](
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config=OpenAICfg(temperature=0.5),
     )
 
@@ -434,7 +433,7 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
     request = ModelRequest[dict](
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'temperature': 0.5},
         output=OutputConfig(format='json', constrained=True),
     )

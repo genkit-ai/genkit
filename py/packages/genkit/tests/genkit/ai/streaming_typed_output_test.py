@@ -22,7 +22,7 @@ from pydantic.alias_generators import to_camel
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionRunContext
-from genkit._core._typing import Role, TextPart
+from genkit._core._typing import Role
 
 OutputT = TypeVar('OutputT', bound=BaseModel)
 
@@ -74,7 +74,7 @@ def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelRespon
     """Build a chunk whose accumulated text is exactly ``text``."""
     return ModelResponseChunk(
         role='model',
-        content=[Part(TextPart(text=text))],
+        content=[Part.from_text(text)],
         schema_type=schema_type,
     )
 
@@ -121,7 +121,7 @@ class TestChunkPartialOutput:
     def test_constructs_chunk_parser_result(self) -> None:
         wrapper: ModelResponseChunk[Recipe] = ModelResponseChunk(
             role='model',
-            content=[Part(TextPart(text='ignored'))],
+            content=[Part.from_text('ignored')],
             chunk_parser=lambda _c: {'title': 'Parsed', 'steps': ['a']},
             schema_type=Recipe,
         )
@@ -420,14 +420,14 @@ async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
     final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake", "steps": ["mi'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='x", "bake"]}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"title": "Chocolate C')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('ake", "steps": ["mi')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('x", "bake"]}')]),
         ]
     ]
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(final_text)]),
         )
     ]
 
@@ -457,9 +457,9 @@ async def test_generate_stream_without_schema_chunks_unchanged() -> None:
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 
-    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"a": 1}'))])]]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"a": 1}')])]]
     pm.responses = [
-        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"a": 1}'))])),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{"a": 1}')])),
     ]
 
     stream_result = ai.generate_stream(prompt='hi')
@@ -480,12 +480,12 @@ async def test_generate_stream_camel_case_alias_fills_fields() -> None:
     final_text = '{"firstName": "Ada", "lastName": "Lovelace"}'
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"firstName": "Ada"'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text=', "lastName": "Lovelace"}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"firstName": "Ada"')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(', "lastName": "Lovelace"}')]),
         ]
     ]
     pm.responses = [
-        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))])),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(final_text)])),
     ]
 
     stream_result = ai.generate_stream(prompt='hi', output_schema=UserProfile)
@@ -513,12 +513,12 @@ async def test_generate_stream_dict_schema_chunks_stay_dicts() -> None:
     schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake"}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"title": "Chocolate C')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('ake"}')]),
         ]
     ]
     pm.responses = [
-        ModelResponse(message=Message(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate Cake"}'))])),
+        ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{"title": "Chocolate Cake"}')])),
     ]
 
     stream_result = ai.generate_stream(prompt='hi', output_schema=schema)
@@ -543,14 +543,14 @@ async def test_define_prompt_stream_yields_typed_chunks() -> None:
     final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
     pm.chunks = [
         [
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='{"title": "Chocolate C'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='ake", "steps": ["mi'))]),
-            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='x", "bake"]}'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"title": "Chocolate C')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('ake", "steps": ["mi')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('x", "bake"]}')]),
         ]
     ]
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text=final_text))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(final_text)]),
         )
     ]
 

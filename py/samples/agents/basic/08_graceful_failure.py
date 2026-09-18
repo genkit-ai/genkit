@@ -29,7 +29,6 @@ from __future__ import annotations
 from genkit_google_genai import GoogleAI
 
 from genkit import ActionRunContext, GenkitError, Message, Part
-from genkit._core._typing import TextPart
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentError,
@@ -51,13 +50,12 @@ async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
         text = ''
         if inp.message:
             for part in inp.message.content or []:
-                root = getattr(part, 'root', part)
-                if isinstance(root, TextPart) and root.text:
-                    text += root.text
+                if part.text:
+                    text += part.text
         if 'fail' in text.lower():
             raise GenkitError(status='INTERNAL', message='Simulated turn failure')
         msgs = await sess.get_messages()
-        await sess.set_messages(msgs + [Message(role='model', content=[Part(TextPart(text='OK'))])])
+        await sess.set_messages(msgs + [Message(role='model', content=[Part.from_text('OK')])])
         return TurnResult(finish_reason=AgentFinishReason.STOP)
 
     await sess.run(handle_turn)

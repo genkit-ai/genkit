@@ -54,7 +54,7 @@ def page(chat) -> str:
     """The landing.md the agent is maintaining in this timeline."""
     for art in chat.artifacts:
         if art.name == 'landing.md':
-            return ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in art.parts).strip()
+            return ''.join((p.text or '') for p in art.parts).strip()
     return ''
 
 

@@ -32,7 +32,7 @@ from genkit._ai._tools import define_tool
 from genkit._core._action import Action
 from genkit._core._model import GenerateActionOptions, ModelResponse
 from genkit._core._registry import Registry
-from genkit._core._typing import Role, TextPart
+from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 
 _SKILLS_MARKER = 'skills-instructions'
@@ -127,14 +127,14 @@ class Skills(BaseMiddleware[SkillsConfig]):
                 break
 
         marker_meta: dict[str, Any] = {_SKILLS_MARKER: True}
-        new_part = Part(root=TextPart(text=prompt_text, metadata=marker_meta))
+        new_part = Part.from_text(prompt_text, metadata=marker_meta)
 
         if system_idx is not None:
             msg = messages[system_idx]
             new_content = []
             replaced = False
             for part in msg.content:
-                meta = part.root.metadata if isinstance(part.root, TextPart) else None
+                meta = part.metadata if part.text is not None else None
                 if isinstance(meta, dict) and meta.get(_SKILLS_MARKER):
                     new_content.append(new_part)
                     replaced = True

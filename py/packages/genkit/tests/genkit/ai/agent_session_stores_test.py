@@ -24,12 +24,9 @@ from genkit import Part
 from genkit._ai._agents._session_stores._util import apply_save
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._core._error import GenkitError
+from genkit._core._model import Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
-    MessageData,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
-    TextPart,
 )
 from genkit.exp.agent import (
     FileSessionStore,
@@ -53,7 +50,7 @@ def make_snapshot(
         status=status,
         state=SessionState(
             session_id=session_id,
-            messages=[MessageData(role='user', content=[Part(root=TextPart(text=text))])],
+            messages=[Message(role='user', content=[Part.from_text(text)])],
             custom={},
         ),
     )
@@ -66,7 +63,7 @@ def first_text(snap: SessionSnapshot) -> str | None:
     assert messages is not None
     content = messages[0].content
     assert content is not None
-    return getattr(content[0].root, 'text', None)
+    return content[0].text
 
 
 # --- Core lifecycle: save, get-by-id, get-by-session leaf, retain history ---

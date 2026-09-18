@@ -28,7 +28,7 @@ from genkit._core._model import (  # noqa: E402
     ModelResponseChunk as ModelResponseChunkModel,
     Part,
 )
-from genkit._core._typing import FinishReason, Role, TextPart  # noqa: E402
+from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 
 
@@ -42,10 +42,10 @@ def build_agent(name: str) -> Any:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
         )
     )
-    pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))])]]
+    pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]]
     return agent
 
 

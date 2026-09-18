@@ -42,8 +42,7 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-# DocumentData has no public re-export yet; the embedder protocol is built on it.
-from genkit._core._typing import DocumentData, MediaPart, TextPart
+from genkit._core._model import Document, as_document
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -197,7 +196,7 @@ def get_embedder_info(model_id: str) -> EmbedderInfo:
     )
 
 
-def document_text(document: DocumentData) -> str:
+def document_text(document: Document) -> str:
     """Joins a document's text parts.
 
     Whitespace-only parts are skipped, surviving parts are joined untrimmed,
@@ -210,11 +209,12 @@ def document_text(document: DocumentData) -> str:
     Returns:
         The joined text, or an empty string when there is none.
     """
-    texts = [part.root.text for part in document.content if isinstance(part.root, TextPart) and part.root.text.strip()]
+    doc = as_document(document)
+    texts = [part.text for part in doc.content if part.text is not None and part.text.strip()]
     return '\n'.join(texts).strip()
 
 
-def image_from_document(document: DocumentData) -> tuple[str, str]:
+def image_from_document(document: Document) -> tuple[str, str]:
     """Returns the MIME type and raw base64 of the first image media part.
 
     Deliberately not ``converters._decode_media_payload``: Converse wants raw
@@ -230,11 +230,11 @@ def image_from_document(document: DocumentData) -> tuple[str, str]:
     Raises:
         GenkitError: INVALID_ARGUMENT when an image part holds a remote URL.
     """
-    for part in document.content:
-        if not isinstance(part.root, MediaPart):
+    for part in as_document(document).content:
+        if part.media is None:
             continue
-        data_url = part.root.media.url
-        mime = (part.root.media.content_type or '').split(';', 1)[0].strip().lower()
+        data_url = part.media.url
+        mime = (part.media.content_type or '').split(';', 1)[0].strip().lower()
         # Fall back to the MIME type inside the data URL when contentType is absent.
         if not mime and data_url.startswith('data:'):
             header, found, _ = data_url.partition(',')
@@ -316,14 +316,14 @@ def _require_vector(vector: list[float]) -> list[float]:
     return vector
 
 
-def _require_text(document: DocumentData, index: int) -> str:
+def _require_text(document: Document, index: int) -> str:
     text = document_text(document)
     if not text:
         raise GenkitError(message=f'bedrock embed: document {index} has no text content', status='INVALID_ARGUMENT')
     return text
 
 
-def _require_cohere_text(document: DocumentData, index: int) -> str:
+def _require_cohere_text(document: Document, index: int) -> str:
     text = document_text(document)
     if not text:
         raise GenkitError(
@@ -418,7 +418,7 @@ class BedrockEmbedder:
         )
         return EmbedResponse(embeddings=[Embedding(embedding=vector) for vector in vectors])
 
-    async def _embed_titan_text(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_titan_text(self, documents: list[Document]) -> list[list[float]]:
         # Every document is validated before the first call goes out, so a bad
         # batch costs nothing.
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
@@ -427,7 +427,7 @@ class BedrockEmbedder:
     async def _titan_text_vector(self, text: str) -> list[float]:
         return _require_vector(_single_embedding(await self._invoke({'inputText': text})))
 
-    async def _embed_titan_multimodal(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_titan_multimodal(self, documents: list[Document]) -> list[list[float]]:
         bodies: list[dict[str, Any]] = []
         for index, document in enumerate(documents):
             text = document_text(document)
@@ -470,7 +470,7 @@ class BedrockEmbedder:
             raise GenkitError(message=f'bedrock embed: titan multimodal: {message}', status='INTERNAL')
         return _require_vector(_single_embedding(payload))
 
-    async def _embed_cohere(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_cohere(self, documents: list[Document]) -> list[list[float]]:
         # Any media part is ignored: these models take text only.
         texts = [_require_cohere_text(document, index) for index, document in enumerate(documents)]
         # The one family with a batch API, so chunks replace the per-document
@@ -496,7 +496,7 @@ class BedrockEmbedder:
             )
         return batch
 
-    async def _embed_nova(self, documents: list[DocumentData]) -> list[list[float]]:
+    async def _embed_nova(self, documents: list[Document]) -> list[list[float]]:
         texts = [_require_text(document, index) for index, document in enumerate(documents)]
         return await self._run_bounded([(index, self._nova_vector(text)) for index, text in enumerate(texts)])
 

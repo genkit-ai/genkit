@@ -26,7 +26,7 @@ from opentelemetry import trace as trace_api
 from pydantic import BaseModel
 
 # Internal imports from sibling modules
-from genkit._ai._agents._client import AgentClient, part_roots
+from genkit._ai._agents._client import AgentClient
 from genkit._ai._agents._preamble import (
     apply_preamble_tags,
     tag_history_for_render,
@@ -71,12 +71,18 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, BidiActio
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import (
+    AgentInit,
+    AgentInput,
+    AgentOutput,
+    AgentResult,
+    AgentStreamChunk,
+    Message,
     ModelConfigDict,
     ModelRef,
     ModelRefConfigT,
     Part,
-    as_resume_respond,
-    as_resume_restart,
+    Resume,
+    SessionSnapshot,
 )
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
@@ -84,17 +90,9 @@ from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
     AgentFinishReason,
-    AgentInit,
-    AgentInput,
-    AgentOutput,
-    AgentResult,
-    AgentStreamChunk,
     GetSnapshotRequest,
-    MessageData,
     MiddlewareRef,
-    Resume,
     Role,
-    SessionSnapshot,
     SnapshotStatus,
     ToolRequest,
 )
@@ -419,8 +417,8 @@ def define_prompt_agent(
             resume_metadata = None
             if inp.resume is not None:
                 validate_resume_against_history(inp.resume, history)
-                resume_respond = [as_resume_respond(p) for p in inp.resume.respond] if inp.resume.respond else None
-                resume_restart = [as_resume_restart(p) for p in inp.resume.restart] if inp.resume.restart else None
+                resume_respond = inp.resume.respond or None
+                resume_restart = inp.resume.restart or None
                 resume_metadata = inp.resume.metadata or None
 
             executable = await lookup_prompt(registry, name)
@@ -466,7 +464,7 @@ def tool_input_key(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-def validate_resume_against_history(resume: Resume, history: list[MessageData]) -> None:
+def validate_resume_against_history(resume: Resume, history: list[Message]) -> None:
     """Reject a resume that doesn't line up with the tool requests in history.
 
     A resumed turn answers tool requests the model actually made, so every
@@ -487,8 +485,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
     for msg in reversed(history):
         if msg.role != Role.MODEL:
             continue
-        for root in part_roots(msg.content):
-            tr = getattr(root, 'tool_request', None)
+        for part in msg.content:
+            tr = part.tool_request
             if isinstance(tr, ToolRequest):
                 tool_requests.append(tr)
 
@@ -500,6 +498,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
 
     for restart_part in resume.restart or []:
         tr = restart_part.tool_request
+        if tr is None:
+            continue
         match = find(tr.name, tr.ref)
         if match is None:
             raise GenkitError(
@@ -521,6 +521,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
 
     for respond_part in resume.respond or []:
         resp = respond_part.tool_response
+        if resp is None:
+            continue
         if find(resp.name, resp.ref) is None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

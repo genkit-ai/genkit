@@ -36,7 +36,7 @@ from genkit._core._model import (
     ModelResponseChunk,
     MultipartToolResponse,
     Part,
-    as_wrap_tool_part,
+    as_part,
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
 from genkit._core._typing import MiddlewareDesc
@@ -127,8 +127,13 @@ class ToolHookParams(BaseModel):
 
     @field_validator('tool_request_part', mode='before')
     @classmethod
-    def _require_tool_request(cls, value: object) -> Part:
-        return as_wrap_tool_part(value)
+    def _wrap_tool_request_part(cls, v: object) -> object:
+        if v is None:
+            return v
+        part = as_part(v)
+        if part.tool_request is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        return part
 
 
 @dataclass

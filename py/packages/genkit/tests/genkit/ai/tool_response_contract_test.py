@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from genkit import (
     FinishReason,
     Genkit,
-    Media,
     Message,
     ModelResponse,
     MultipartToolResponse,
@@ -23,12 +22,6 @@ from genkit import (
 )
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import (
-    MediaPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
-)
 
 
 class ShotOut(BaseModel):
@@ -42,11 +35,11 @@ WIRE_CAPTION = {'text': 'lab camera'}
 
 
 def _png() -> Part:
-    return Part(root=MediaPart(media=Media(content_type='image/png', url='data:image/png;base64,abc')))
+    return Part.from_media('data:image/png;base64,abc', content_type='image/png')
 
 
 def _caption() -> Part:
-    return Part(root=TextPart(text='lab camera'))
+    return Part.from_text('lab camera')
 
 
 def _model_calls_tool(*, name: str, ref: str, tool_input: object | None = None) -> ModelResponse:
@@ -55,11 +48,7 @@ def _model_calls_tool(*, name: str, ref: str, tool_input: object | None = None) 
         message=Message(
             role=Role.MODEL,
             content=[
-                Part(
-                    root=ToolRequestPart(
-                        tool_request=ToolRequest(name=name, input=tool_input if tool_input is not None else {}, ref=ref)
-                    )
-                )
+                Part(tool_request=ToolRequest(name=name, input=tool_input if tool_input is not None else {}, ref=ref))
             ],
         ),
     )
@@ -68,14 +57,13 @@ def _model_calls_tool(*, name: str, ref: str, tool_input: object | None = None) 
 def _ok() -> ModelResponse:
     return ModelResponse(
         finish_reason=FinishReason.STOP,
-        message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='ok'))]),
+        message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
     )
 
 
 def _tool_response(generated: ModelResponse) -> tuple[ToolResponse, object | None]:
     tool_msg = next(message for message in generated.messages if message.role == Role.TOOL)
-    part = tool_msg.content[0].root
-    assert isinstance(part, ToolResponsePart)
+    part = tool_msg.content[0]
     assert part.tool_response is not None
     return part.tool_response, part.metadata
 

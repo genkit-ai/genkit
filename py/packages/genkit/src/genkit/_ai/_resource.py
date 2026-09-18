@@ -137,9 +137,6 @@ def dynamic_resource(opts: ResourceOptions, fn: ResourceFn) -> Action:
             content_list = parts.content if isinstance(parts, ResourceOutput) else parts.get('content', [])
 
             for p in content_list:
-                if isinstance(p, Part):
-                    p = p.root
-
                 if hasattr(p, 'metadata'):
                     if p.metadata is None:
                         # Different Part types have different metadata types (Metadata or dict)

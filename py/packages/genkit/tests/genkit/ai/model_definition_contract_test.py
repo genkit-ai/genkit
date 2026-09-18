@@ -14,7 +14,7 @@ from genkit import Genkit, Part
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
-from genkit._core._typing import Role, TextPart
+from genkit._core._typing import Role
 
 
 class Cfg(BaseModel):
@@ -23,7 +23,7 @@ class Cfg(BaseModel):
     temperature: float | None = None
 
 
-OK = ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='ok'))]))
+OK = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
 
 @pytest.fixture

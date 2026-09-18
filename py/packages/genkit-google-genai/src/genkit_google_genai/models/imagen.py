@@ -35,7 +35,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import (
     GenkitError,
-    Media,
     Message,
     ModelInfo,
     ModelRequest,
@@ -44,7 +43,6 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit._core._typing import MediaPart, TextPart
 from genkit.plugin_api import ActionRunContext, tracer, wrap_http_error
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
@@ -180,8 +178,8 @@ class ImagenModel:
         prompt = []
         for message in request.messages:
             for part in message.content:
-                if isinstance(part.root, TextPart):
-                    prompt.append(part.root.text)
+                if part.text is not None:
+                    prompt.append(part.text)
                 else:
                     raise GenkitError(status='INVALID_ARGUMENT', message='Non-text messages are not supported')
         return ' '.join(prompt)
@@ -258,13 +256,8 @@ class ImagenModel:
                 if image.image and image.image.image_bytes:
                     b64_data = base64.b64encode(image.image.image_bytes).decode('utf-8')
                     content.append(
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url=f'data:{image.image.mime_type};base64,{b64_data}',
-                                    content_type=image.image.mime_type,
-                                )
-                            )
+                        Part.from_media(
+                            f'data:{image.image.mime_type};base64,{b64_data}', content_type=image.image.mime_type
                         )
                     )
 

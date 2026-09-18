@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._action import ActionKind
-from genkit._core._model import WRAP_TOOL_KIND
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
 
@@ -56,10 +55,10 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
         if isinstance(resumed, dict) and (resumed.get('toolApproved') or resumed.get('tool_approved')):
             return await next_fn(params, ctx)
 
-        tool_request = params.tool_request_part.tool_request
-        if tool_request is None:
-            raise ValueError(WRAP_TOOL_KIND)
-        tool_input = tool_request.input
+        tool_req = params.tool_request_part.tool_request
+        if tool_req is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        tool_input = tool_req.input
         with run_in_new_span(
             SpanMetadata(name=tool_name, type='action', subtype=ActionKind.TOOL, input=tool_input),
         ) as span:

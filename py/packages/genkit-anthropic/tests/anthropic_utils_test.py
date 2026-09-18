@@ -37,11 +37,10 @@ from genkit_anthropic.utils import (
 )
 
 from genkit import (
-    Media,
     Metadata,
     ModelUsage,
+    Part,
 )
-from genkit._core._typing import MediaPart, TextPart
 
 # ---------------------------------------------------------------------------
 # get_cache_control tests
@@ -53,34 +52,35 @@ class TestGetCacheControl:
 
     def test_returns_none_for_no_metadata(self) -> None:
         """Returns None when part has no metadata."""
-        part = TextPart(text='hello')
+        part = Part.from_text('hello')
         assert get_cache_control(part) is None
 
     def test_returns_none_for_none_metadata(self) -> None:
         """Returns None when metadata is explicitly None."""
-        part = TextPart(text='hello', metadata=None)
+        part = Part.from_text('hello', metadata=None)
         assert get_cache_control(part) is None
 
     def test_returns_cache_control_with_metadata_rootmodel(self) -> None:
         """Extracts cache_control when metadata is a Metadata RootModel."""
-        part = TextPart(text='hello', metadata=Metadata({'cache_control': {'type': 'ephemeral'}}))
+        part = Part.from_text('hello', metadata=Metadata({'cache_control': {'type': 'ephemeral'}}))
         result = get_cache_control(part)
         assert result == {'type': 'ephemeral'}
 
     def test_returns_none_when_no_cache_control_key(self) -> None:
         """Returns None when metadata has no cache_control key."""
-        part = TextPart(text='hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
         assert get_cache_control(part) is None
 
     def test_returns_none_for_non_dict_cache_control(self) -> None:
         """Returns None when cache_control is not a dict."""
-        part = TextPart(text='hello', metadata=Metadata({'cache_control': 'invalid'}))
+        part = Part.from_text('hello', metadata=Metadata({'cache_control': 'invalid'}))
         assert get_cache_control(part) is None
 
     def test_works_with_media_part(self) -> None:
-        """Works with MediaPart as well as TextPart."""
-        part = MediaPart(
-            media=Media(url='https://example.com/img.png', content_type='image/png'),
+        """Works with a media part as well as a text part."""
+        part = Part.from_media(
+            url='https://example.com/img.png',
+            content_type='image/png',
             metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
         )
         result = get_cache_control(part)
@@ -106,37 +106,37 @@ class TestGetThinkingSignature:
 
     def test_returns_none_for_no_metadata(self) -> None:
         """Returns None when part has no metadata."""
-        part = TextPart(text='hello')
+        part = Part.from_text('hello')
         assert get_thinking_signature(part) is None
 
     def test_returns_none_when_metadata_key_absent(self) -> None:
         """Returns None when metadata has no signature keys."""
-        part = TextPart(text='hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
         assert get_thinking_signature(part) is None
 
     def test_reads_thought_signature(self) -> None:
         """Reads JS-style thoughtSignature metadata."""
-        part = TextPart(text='hello', metadata=Metadata({'thoughtSignature': 'sig-js'}))
+        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js'}))
         assert get_thinking_signature(part) == 'sig-js'
 
     def test_falls_back_to_signature(self) -> None:
         """Reads Go-style signature metadata when thoughtSignature is absent."""
-        part = TextPart(text='hello', metadata=Metadata({'signature': 'sig-go'}))
+        part = Part.from_text('hello', metadata=Metadata({'signature': 'sig-go'}))
         assert get_thinking_signature(part) == 'sig-go'
 
     def test_prefers_thought_signature(self) -> None:
         """Prefers JS-style metadata when both aliases are present."""
-        part = TextPart(text='hello', metadata=Metadata({'thoughtSignature': 'sig-js', 'signature': 'sig-go'}))
+        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js', 'signature': 'sig-go'}))
         assert get_thinking_signature(part) == 'sig-js'
 
     def test_decodes_bytes_signature(self) -> None:
         """Decodes Go-style raw byte signatures."""
-        part = TextPart(text='hello', metadata=Metadata({'signature': b'sig-go'}))
+        part = Part.from_text('hello', metadata=Metadata({'signature': b'sig-go'}))
         assert get_thinking_signature(part) == 'sig-go'
 
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
-        part = TextPart(text='hello', metadata=Metadata({'signature': 123}))
+        part = Part.from_text('hello', metadata=Metadata({'signature': 123}))
         assert get_thinking_signature(part) is None
 
 
@@ -150,7 +150,7 @@ class TestGetRedactedThinkingData:
 
     def test_returns_none_for_no_custom(self) -> None:
         """Returns None when part has no custom field."""
-        part = TextPart(text='hello')
+        part = Part.from_text('hello')
         assert get_redacted_thinking_data(part) is None
 
     def test_extracts_redacted_thinking(self) -> None:
@@ -259,35 +259,27 @@ class TestToAnthropicMedia:
     def test_routes_pdf_to_document(self) -> None:
         """Routes PDF media to document block."""
         pdf_data = base64.b64encode(b'%PDF-fake').decode()
-        part = MediaPart(
-            media=Media(url=f'data:application/pdf;base64,{pdf_data}', content_type=PDF_MIME_TYPE),
-        )
+        part = Part.from_media(url=f'data:application/pdf;base64,{pdf_data}', content_type=PDF_MIME_TYPE)
         result = to_anthropic_media(part)
         assert result['type'] == 'document'
 
     def test_routes_text_to_document(self) -> None:
         """Routes plain text media to document block."""
         text_data = base64.b64encode(b'Hello').decode()
-        part = MediaPart(
-            media=Media(url=f'data:text/plain;base64,{text_data}', content_type=TEXT_MIME_TYPE),
-        )
+        part = Part.from_media(url=f'data:text/plain;base64,{text_data}', content_type=TEXT_MIME_TYPE)
         result = to_anthropic_media(part)
         assert result['type'] == 'document'
 
     def test_routes_image_to_image(self) -> None:
         """Routes image media to image block."""
-        part = MediaPart(
-            media=Media(url='https://example.com/photo.jpg', content_type='image/jpeg'),
-        )
+        part = Part.from_media(url='https://example.com/photo.jpg', content_type='image/jpeg')
         result = to_anthropic_media(part)
         assert result['type'] == 'image'
 
     def test_infers_pdf_from_data_uri(self) -> None:
         """Infers PDF type from data URI when content_type is empty."""
         pdf_data = base64.b64encode(b'%PDF-fake').decode()
-        part = MediaPart(
-            media=Media(url=f'data:application/pdf;base64,{pdf_data}'),
-        )
+        part = Part.from_media(url=f'data:application/pdf;base64,{pdf_data}')
         result = to_anthropic_media(part)
         assert result['type'] == 'document'
 

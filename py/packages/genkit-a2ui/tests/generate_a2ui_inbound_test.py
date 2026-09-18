@@ -38,7 +38,7 @@ from helpers import (
 )
 
 from genkit import Message, Part
-from genkit._core._typing import DataPart, Role
+from genkit._core._typing import Role
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_generate_a2ui_drops_bare_a2ui_mime_part() -> None:
                 role=Role.USER,
                 content=[
                     text_part('hi'),
-                    Part(DataPart(data={'garbage': True}, metadata={'mimeType': A2UI_MIME_TYPE})),
+                    Part.from_data({'garbage': True}, metadata={'mimeType': A2UI_MIME_TYPE}),
                 ],
             )
         ],

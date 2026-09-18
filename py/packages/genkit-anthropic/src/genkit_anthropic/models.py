@@ -45,14 +45,6 @@ from genkit import (
     Role,
     ToolRequest,
 )
-from genkit._core._typing import (
-    CustomPart,
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
-)
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
@@ -539,7 +531,7 @@ class AnthropicModel:
                             ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
-                                content=[Part(root=CustomPart(custom={'redactedThinking': block.data}))],  # pyright: ignore[reportAttributeAccessIssue]
+                                content=[Part.from_custom({'redactedThinking': block.data})],  # pyright: ignore[reportAttributeAccessIssue]
                             )
                         )
 
@@ -550,7 +542,7 @@ class AnthropicModel:
                             ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
-                                content=[Part(root=TextPart(text=str(delta.text)))],  # pyright: ignore[reportAttributeAccessIssue]
+                                content=[Part.from_text(str(delta.text))],  # pyright: ignore[reportAttributeAccessIssue]
                             )
                         )
                     elif getattr(delta, 'type', None) == 'thinking_delta' and hasattr(delta, 'thinking'):
@@ -558,7 +550,7 @@ class AnthropicModel:
                             ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
-                                content=[Part(root=ReasoningPart(reasoning=str(delta.thinking)))],  # pyright: ignore[reportAttributeAccessIssue]
+                                content=[Part.from_reasoning(str(delta.thinking))],  # pyright: ignore[reportAttributeAccessIssue]
                             )
                         )
                     # signature_delta is intentionally not streamed. The signature
@@ -584,12 +576,10 @@ class AnthropicModel:
                                 index=0,
                                 content=[
                                     Part(
-                                        root=ToolRequestPart(
-                                            tool_request=ToolRequest(
-                                                ref=tool_info['id'],
-                                                name=tool_info['name'],
-                                                input=tool_input,
-                                            )
+                                        tool_request=ToolRequest(
+                                            ref=tool_info['id'],
+                                            name=tool_info['name'],
+                                            input=tool_input,
                                         )
                                     )
                                 ],
@@ -604,9 +594,8 @@ class AnthropicModel:
             if msg.role == Role.SYSTEM:
                 texts = []
                 for part in msg.content:
-                    actual_part = part.root if isinstance(part, Part) else part
-                    if isinstance(actual_part, TextPart):
-                        texts.append(actual_part.text)
+                    if part.text is not None:
+                        texts.append(part.text)
                 return ''.join(texts) if texts else None
         return None
 
@@ -624,32 +613,30 @@ class AnthropicModel:
             role = 'assistant' if msg.role == Role.MODEL else 'user'
             content: list[dict[str, Any]] = []
             for part in msg.content:
-                actual_part = part.root if isinstance(part, Part) else part
-                block = self._to_anthropic_block(actual_part)
+                block = self._to_anthropic_block(part)
                 if block is not None:
                     # Apply cache_control from part metadata if present; the API
                     # rejects it on thinking blocks.
-                    cache_meta = get_cache_control(actual_part)
+                    cache_meta = get_cache_control(part)
                     if cache_meta and block['type'] not in ('thinking', 'redacted_thinking'):
                         block['cache_control'] = cache_meta
                     content.append(block)
             result.append({'role': role, 'content': content})
         return result
 
-    def _to_anthropic_block(self, part: Any) -> dict[str, Any] | None:  # noqa: ANN401
+    def _to_anthropic_block(self, part: Part) -> dict[str, Any] | None:
         """Convert a single Genkit content part to an Anthropic content block.
 
-        Handles reasoning parts, redacted thinking custom parts, TextPart,
-        MediaPart (images + PDFs), ToolRequestPart, and ToolResponsePart.
+        Handles reasoning, redacted thinking, text, media (images + PDFs),
+        tool requests, and tool responses.
 
         Args:
-            part: The actual (unwrapped) content part.
+            part: A message content part.
 
         Returns:
             An Anthropic content block dict, or None if unrecognized.
         """
-        # Attribute check (not isinstance): JSON-parsed reasoning parts deserialize as DataPart.
-        reasoning = getattr(part, 'reasoning', None)
+        reasoning = part.reasoning
         if reasoning:
             signature = get_thinking_signature(part)
             if not signature:
@@ -664,18 +651,18 @@ class AnthropicModel:
         if redacted_thinking is not None:
             return {'type': 'redacted_thinking', 'data': redacted_thinking}
 
-        if isinstance(part, TextPart):
+        if part.text is not None:
             return {'type': 'text', 'text': part.text}
-        if isinstance(part, MediaPart):
+        if part.media is not None:
             return to_anthropic_media(part)
-        if isinstance(part, ToolRequestPart):
+        if part.tool_request is not None:
             return {
                 'type': 'tool_use',
                 'id': part.tool_request.ref,
                 'name': part.tool_request.name,
                 'input': part.tool_request.input,
             }
-        if isinstance(part, ToolResponsePart):
+        if part.tool_response is not None:
             return {
                 'type': 'tool_result',
                 'tool_use_id': part.tool_response.ref,
@@ -688,29 +675,22 @@ class AnthropicModel:
         parts = []
         for block in content_blocks:
             if block.type == 'text':
-                parts.append(Part(root=TextPart(text=block.text)))
+                parts.append(Part.from_text(block.text))
             elif block.type == 'tool_use':
                 parts.append(
                     Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(
-                                ref=block.id,
-                                name=block.name,
-                                input=block.input,
-                            )
+                        tool_request=ToolRequest(
+                            ref=block.id,
+                            name=block.name,
+                            input=block.input,
                         )
                     )
                 )
             elif block.type == 'thinking':
                 signature = getattr(block, 'signature', None)
                 parts.append(
-                    Part(
-                        root=ReasoningPart(
-                            reasoning=block.thinking,
-                            metadata={'thoughtSignature': signature} if signature else None,
-                        )
-                    )
+                    Part.from_reasoning(block.thinking, metadata={'thoughtSignature': signature} if signature else None)
                 )
             elif block.type == 'redacted_thinking':
-                parts.append(Part(root=CustomPart(custom={'redactedThinking': block.data})))
+                parts.append(Part.from_custom({'redactedThinking': block.data}))
         return parts

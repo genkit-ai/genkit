@@ -54,19 +54,10 @@ from urllib.parse import urlparse
 from google import genai
 
 from genkit import (
-    Media,
     Metadata,
     Part,
     ToolRequest,
     ToolResponse,
-)
-from genkit._core._typing import (
-    CustomPart,
-    MediaPart,
-    ReasoningPart,
-    TextPart,
-    ToolRequestPart,
-    ToolResponsePart,
 )
 from genkit.plugin_api import get_cached_client
 
@@ -158,28 +149,28 @@ class PartConverter:
         Returns:
             A `genai.types.Part` object representing the converted content.
         """
-        if isinstance(part.root, TextPart):
-            return genai.types.Part(text=part.root.text or ' ')
-        if isinstance(part.root, ToolRequestPart):
+        if part.text is not None:
+            return genai.types.Part(text=part.text or ' ')
+        if part.tool_request is not None:
             # Round-trip the call id when we have one so the model can correlate
             # tool responses to the original request.
             return genai.types.Part(
                 function_call=genai.types.FunctionCall(
                     # Gemini throws on '/' in tool name
-                    name=part.root.tool_request.name.replace('/', '__'),
-                    args=part.root.tool_request.input,
-                    id=part.root.tool_request.ref,
+                    name=part.tool_request.name.replace('/', '__'),
+                    args=part.tool_request.input,
+                    id=part.tool_request.ref,
                 ),
-                thought_signature=cls._extract_thought_signature(part.root.metadata),
+                thought_signature=cls._extract_thought_signature(part.metadata),
             )
-        if isinstance(part.root, ReasoningPart):
+        if part.reasoning is not None:
             return genai.types.Part(
                 thought=True,
-                text=part.root.reasoning,
-                thought_signature=cls._extract_thought_signature(part.root.metadata),
+                text=part.reasoning,
+                thought_signature=cls._extract_thought_signature(part.metadata),
             )
-        if isinstance(part.root, ToolResponsePart):
-            tool_response = part.root.tool_response
+        if part.tool_response is not None:
+            tool_response = part.tool_response
             tool_output = tool_response.output
 
             # Media next to structured output lives on FunctionResponse.parts
@@ -238,12 +229,12 @@ class PartConverter:
                     parts=fn_media or None,
                 )
             )
-        if isinstance(part.root, MediaPart):
-            url = part.root.media.url
+        if part.media is not None:
+            url = part.media.url
             if url.startswith(cls.DATA):
                 # Extract mime type and data from data:mime_type;base64,data
                 metadata, data_str = url.split(',', 1)
-                mime_type = part.root.media.content_type or metadata.split(':', 1)[1].split(';', 1)[0]
+                mime_type = part.media.content_type or metadata.split(':', 1)[1].split(';', 1)[0]
                 data = base64.b64decode(data_str)
 
                 return genai.types.Part(
@@ -260,7 +251,7 @@ class PartConverter:
                 if cls._is_gemini_native_url(url):
                     return genai.types.Part(
                         file_data=genai.types.FileData(
-                            mime_type=part.root.media.content_type,
+                            mime_type=part.media.content_type,
                             file_uri=url,
                         )
                     )
@@ -270,7 +261,7 @@ class PartConverter:
                 # The Gemini API cannot fetch arbitrary HTTP URLs via file_uri,
                 # so we must download the content and send it as inline_data.
                 data, mime_type = await cls._download_image(url)
-                mime_type = mime_type or part.root.media.content_type or 'image/jpeg'
+                mime_type = mime_type or part.media.content_type or 'image/jpeg'
                 return genai.types.Part(
                     inline_data=genai.types.Blob(
                         mime_type=mime_type,
@@ -282,11 +273,11 @@ class PartConverter:
             # passed through as file_data — the Gemini API can resolve these.
             return genai.types.Part(
                 file_data=genai.types.FileData(
-                    mime_type=part.root.media.content_type,
+                    mime_type=part.media.content_type,
                     file_uri=url,
                 )
             )
-        if isinstance(part.root, CustomPart):
+        if part.custom is not None:
             return cls._to_gemini_custom(part)
         # Default fallback for unknown part types
         return genai.types.Part()
@@ -300,21 +291,21 @@ class PartConverter:
         corresponding Gemini Part representations.
 
         Args:
-            part: The Genkit Part object with a CustomPart root to convert.
+            part: The Genkit Part with a custom payload to convert.
 
         Returns:
             A `genai.types.Part` object representing the converted custom content.
         """
-        if part.root.custom and cls.EXECUTABLE_CODE in part.root.custom:
-            custom_data = cast(dict, part.root.custom)
+        if part.custom and cls.EXECUTABLE_CODE in part.custom:
+            custom_data = cast(dict, part.custom)
             return genai.types.Part(
                 executable_code=genai.types.ExecutableCode(
                     code=custom_data[cls.EXECUTABLE_CODE][cls.CODE],
                     language=custom_data[cls.EXECUTABLE_CODE][cls.LANGUAGE],
                 )
             )
-        if part.root.custom and cls.CODE_EXECUTION_RESULT in part.root.custom:
-            custom_data = cast(dict, part.root.custom)
+        if part.custom and cls.CODE_EXECUTION_RESULT in part.custom:
+            custom_data = cast(dict, part.custom)
             return genai.types.Part(
                 code_execution_result=genai.types.CodeExecutionResult(
                     outcome=custom_data[cls.CODE_EXECUTION_RESULT][cls.OUTCOME],
@@ -338,28 +329,21 @@ class PartConverter:
             A Genkit `Part` object representing the converted content.
         """
         if part.thought:
-            return Part(
-                root=ReasoningPart(
-                    reasoning=part.text or '',
-                    metadata=cls._encode_thought_signature(part.thought_signature),
-                )
-            )
+            return Part.from_reasoning(part.text or '', metadata=cls._encode_thought_signature(part.thought_signature))
         if part.text is not None:
-            return Part(root=TextPart(text=part.text))
+            return Part.from_text(part.text)
         if part.function_call:
             # Tool refs come only from the model's call id. A synthetic part
             # index isn't unique across turns, so resume can't tell repeated
             # calls to the same tool apart.
             return Part(
-                root=ToolRequestPart(
-                    tool_request=ToolRequest(
-                        ref=getattr(part.function_call, 'id', None),
-                        # restore slashes
-                        name=(part.function_call.name or '').replace('__', '/'),
-                        input=part.function_call.args if part.function_call.args is not None else {},
-                    ),
-                    metadata=cls._encode_thought_signature(part.thought_signature),
-                )
+                tool_request=ToolRequest(
+                    ref=getattr(part.function_call, 'id', None),
+                    # restore slashes
+                    name=(part.function_call.name or '').replace('__', '/'),
+                    input=part.function_call.args if part.function_call.args is not None else {},
+                ),
+                metadata=cls._encode_thought_signature(part.thought_signature),
             )
         if part.function_response:
             # If the model echoes back the ``{name, content}`` envelope we
@@ -375,50 +359,35 @@ class PartConverter:
                 if media is not None:
                     content.append(media)
             return Part(
-                root=ToolResponsePart(
-                    tool_response=ToolResponse(
-                        ref=getattr(part.function_response, 'id', None),
-                        # restore slashes
-                        name=(part.function_response.name or '').replace('__', '/'),
-                        output=output,
-                        content=content or None,
-                    )
+                tool_response=ToolResponse(
+                    ref=getattr(part.function_response, 'id', None),
+                    # restore slashes
+                    name=(part.function_response.name or '').replace('__', '/'),
+                    output=output,
+                    content=content or None,
                 )
             )
         if part.inline_data and part.inline_data.data:
             b64_data = base64.b64encode(part.inline_data.data).decode('utf-8')
-            return Part(
-                root=MediaPart(
-                    media=Media(
-                        url=f'data:{part.inline_data.mime_type};base64,{b64_data}',
-                        content_type=part.inline_data.mime_type,
-                    )
-                )
+            return Part.from_media(
+                f'data:{part.inline_data.mime_type};base64,{b64_data}', content_type=part.inline_data.mime_type
             )
         if part.executable_code:
-            return Part(
-                root=CustomPart(
-                    custom={
-                        cls.EXECUTABLE_CODE: {
-                            cls.LANGUAGE: part.executable_code.language,
-                            cls.CODE: part.executable_code.code,
-                        }
-                    }
-                )
-            )
+            return Part.from_custom({
+                cls.EXECUTABLE_CODE: {
+                    cls.LANGUAGE: part.executable_code.language,
+                    cls.CODE: part.executable_code.code,
+                }
+            })
         if part.code_execution_result:
-            return Part(
-                root=CustomPart(
-                    custom={
-                        cls.CODE_EXECUTION_RESULT: {
-                            cls.OUTCOME: part.code_execution_result.outcome,
-                            cls.OUTPUT: part.code_execution_result.output,
-                        }
-                    }
-                )
-            )
+            return Part.from_custom({
+                cls.CODE_EXECUTION_RESULT: {
+                    cls.OUTCOME: part.code_execution_result.outcome,
+                    cls.OUTPUT: part.code_execution_result.output,
+                }
+            })
 
-        return Part(root=TextPart(text=''))
+        return Part.from_text('')
 
     @classmethod
     def _extract_thought_signature(cls, metadata: Metadata | None) -> bytes | None:

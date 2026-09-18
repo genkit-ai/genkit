@@ -30,7 +30,7 @@ import asyncio
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ToolRunContext
+from genkit import ActionRunContext, FinishReason, GenkitError, ToolRunContext
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentFinishReason,
@@ -76,7 +76,7 @@ async def long_task_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
 
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         history = await sess.get_messages()
-        messages = [Message(m) for m in history] if history else None
+        messages = history or None
         res = await ai.generate(
             model=GoogleAI.gemini_model('gemini-flash-latest'),
             system='When asked for a long task, call slowWork.',
@@ -127,7 +127,7 @@ async def main() -> None:
     # Access the agent's completed output message off the terminal snapshot
     assert last_snap.state.messages is not None
     latest_message = last_snap.state.messages[-1]
-    print('Completed background task output:', latest_message.content[0].root.text)
+    print('Completed background task output:', latest_message.content[0].text)
 
     # To resume the conversation later, load the chat by snapshot_id
     loaded_chat = await agent.load_chat(snapshot_id=task.snapshot_id)

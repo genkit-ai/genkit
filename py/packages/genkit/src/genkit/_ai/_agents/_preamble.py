@@ -28,8 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from genkit._core._model import Message
-from genkit._core._typing import MessageData
+from genkit._core._model import Message, as_message
 
 # Render-time markers: HISTORY_TAG flags a message as prior conversation,
 # PREAMBLE_KEY flags it as prompt-template output that persistence should strip.
@@ -37,17 +36,17 @@ HISTORY_TAG = '_genkit_history'
 PREAMBLE_KEY = '_genkit_agent_preamble'
 
 
-def coerce_message(msg: MessageData) -> Message:
-    return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
+def coerce_message(msg: object) -> Message:
+    return as_message(msg)
 
 
-def message_with_metadata(*, msg: MessageData, metadata: dict[str, object]) -> Message:
+def message_with_metadata(*, msg: Message, metadata: dict[str, object]) -> Message:
     base = coerce_message(msg)
     merged = {**(base.metadata or {}), **metadata}
     return base.model_copy(update={'metadata': merged})
 
 
-def message_without_metadata_key(*, msg: MessageData, key: str) -> Message:
+def message_without_metadata_key(*, msg: Message, key: str) -> Message:
     base = coerce_message(msg)
     if not base.metadata or key not in base.metadata:
         return base
@@ -55,12 +54,12 @@ def message_without_metadata_key(*, msg: MessageData, key: str) -> Message:
     return base.model_copy(update={'metadata': remaining or None})
 
 
-def tag_history_for_render(messages: list[MessageData]) -> list[Message]:
+def tag_history_for_render(messages: Sequence[Message]) -> list[Message]:
     """Mark session messages so prompt render can tell them apart from template output."""
     return [message_with_metadata(msg=m, metadata={HISTORY_TAG: True}) for m in messages]
 
 
-def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
+def apply_preamble_tags(messages: Sequence[Message]) -> list[Message]:
     """After render: tag prompt-template messages and strip the internal history marker."""
     tagged: list[Message] = []
     for msg in messages:

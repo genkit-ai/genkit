@@ -104,7 +104,7 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT, Part
+from genkit._core._model import Document, EmbedRequest, ModelConfigDict, ModelRef, ModelRefConfigT, Part
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -114,7 +114,6 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
-    EmbedRequest,
     EvalRequest,
     EvalResponse,
     MiddlewareRef,
@@ -1425,7 +1424,7 @@ class Genkit:
         response = (
             await embed_action.run(
                 EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
+                    input=documents,
                     options=final_options,
                 )
             )

@@ -21,13 +21,10 @@ from genkit._ai._agents._runtime import AgentRuntime
 from genkit._ai._agents._session import Session
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._channel import CloseableQueue
+from genkit._core._model import AgentStreamChunk, ModelResponseChunk, SessionState
 from genkit._core._typing import (
-    AgentStreamChunk,
     JsonPatchOp,
     JsonPatchOperation,
-    ModelResponseChunk,
-    SessionState,
-    TextPart,
 )
 
 
@@ -198,7 +195,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         emit_chunk=out_queue.put_nowait,
     )
 
-    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='hi'))])))
+    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('hi')])))
     assert out_queue.empty()
 
 
@@ -216,7 +213,7 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
             chunk.model_copy(
                 update={
                     'model_chunk': ModelResponseChunk(
-                        content=[Part(root=TextPart(text='[redacted]'))],
+                        content=[Part.from_text('[redacted]')],
                     )
                 }
             )
@@ -226,7 +223,7 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
         emit_chunk=out_queue.put_nowait,
     )
 
-    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='secret'))])))
+    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('secret')])))
     chunk = out_queue.get_nowait()
     assert chunk.model_chunk is not None
-    assert chunk.model_chunk.content[0].root.text == '[redacted]'
+    assert chunk.model_chunk.content[0].text == '[redacted]'

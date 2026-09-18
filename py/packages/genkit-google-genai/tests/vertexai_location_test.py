@@ -35,7 +35,6 @@ from google.genai import types as genai_types
 from google.genai.types import HttpOptions
 
 from genkit import GenkitError, Message, ModelRequest, Part, Role
-from genkit._core._typing import TextPart
 
 US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
@@ -45,7 +44,7 @@ def _text_request(config: GeminiConfigSchema | dict[str, Any] | None = None) -> 
     if isinstance(config, dict):
         config = GeminiConfigSchema.model_validate(config)
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=config,
     )
 
@@ -851,7 +850,7 @@ class TestGenerateUsesResolvedClient:
         temp_client.aio.models.generate_content.assert_awaited_once()
         _plugin_client(model).aio.models.generate_content.assert_not_called()
         assert result.message is not None
-        assert result.message.content[0].root.text == 'ok'
+        assert result.message.content[0].text == 'ok'
 
     @pytest.mark.asyncio
     async def test_streaming_generate_calls_temp_client(self) -> None:
@@ -954,7 +953,7 @@ class TestLocationConfigThroughPipeline:
         """Same for a typed GeminiConfigSchema config."""
         model = _vertex_model()
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             config=GeminiConfigSchema(location='us', temperature=0.1),
         )
         cfg = await model._genkit_to_googleai_cfg(request=request)

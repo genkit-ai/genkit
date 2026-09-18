@@ -39,7 +39,7 @@ from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue, define_dynamic_action_provider
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
-from genkit._core._typing import Role, TextPart, ToolChoice, ToolRequest, ToolRequestPart
+from genkit._core._typing import Role, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
 
@@ -55,7 +55,7 @@ class _PreMiddleware(BaseMiddleware):
         return await next_fn(
             ModelHookParams(
                 request=ModelRequest(
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))])],
+                    messages=[Message(role=Role.USER, content=[Part.from_text(f'PRE {txt}')])],
                 ),
             ),
             ctx,
@@ -74,7 +74,7 @@ class _PostMiddleware(BaseMiddleware):
         txt = text_from_message(resp.message)
         return ModelResponse(
             finish_reason=resp.finish_reason,
-            message=Message(role=Role.USER, content=[Part(TextPart(text=f'{txt} POST'))]),
+            message=Message(role=Role.USER, content=[Part.from_text(f'{txt} POST')]),
         )
 
 
@@ -179,7 +179,7 @@ async def test_prompt_with_kitchensink() -> None:
     my_prompt = ai.define_prompt(
         system='pirate',
         prompt='hi',
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='history'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('history')])],
         tools=['testTool'],
         tool_choice=ToolChoice.REQUIRED,
         max_turns=5,
@@ -406,8 +406,8 @@ async def test_prompt_with_messages_list() -> None:
     ai, *_ = setup_test()
 
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='You are helpful'))]),
-        Message(role=Role.USER, content=[Part(root=TextPart(text='Hi there'))]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('You are helpful')]),
+        Message(role=Role.USER, content=[Part.from_text('Hi there')]),
     ]
 
     my_prompt = ai.define_prompt(
@@ -427,8 +427,8 @@ async def test_messages_with_explicit_override() -> None:
     ai, *_ = setup_test()
 
     override_messages = [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='First message'))]),
-        Message(role=Role.MODEL, content=[Part(root=TextPart(text='First response'))]),
+        Message(role=Role.USER, content=[Part.from_text('First message')]),
+        Message(role=Role.MODEL, content=[Part.from_text('First response')]),
     ]
 
     my_prompt = ai.define_prompt(
@@ -505,8 +505,8 @@ async def test_system_and_prompt_together() -> None:
     my_prompt = ai.define_prompt(
         system='System instruction',
         messages=[
-            Message(role=Role.USER, content=[Part(root=TextPart(text='History user'))]),
-            Message(role=Role.MODEL, content=[Part(root=TextPart(text='History model'))]),
+            Message(role=Role.USER, content=[Part.from_text('History user')]),
+            Message(role=Role.MODEL, content=[Part.from_text('History model')]),
         ],
         prompt='Final prompt',
     )
@@ -576,7 +576,7 @@ async def test_opts_can_override_model() -> None:
     """Test that opts.model can override the prompt's default model."""
     ai, _, pm = setup_test()
 
-    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='pm response'))]))]
+    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('pm response')]))]
 
     my_prompt = ai.define_prompt(
         model='echoModel',
@@ -601,8 +601,8 @@ async def test_opts_can_append_messages() -> None:
     )
 
     history_messages = [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='Previous question'))]),
-        Message(role=Role.MODEL, content=[Part(root=TextPart(text='Previous answer'))]),
+        Message(role=Role.USER, content=[Part.from_text('Previous question')]),
+        Message(role=Role.MODEL, content=[Part.from_text('Previous answer')]),
     ]
 
     # Append conversation history via kwargs
@@ -1034,7 +1034,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
     pm.responses = [
         ModelResponse(
             finish_reason='stop',
-            message=Message(role='model', content=[Part(root=TextPart(text='{"foo": 1}'))]),
+            message=Message(role='model', content=[Part.from_text('{"foo": 1}')]),
         )
     ]
 
@@ -1043,7 +1043,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
 
     def output_parts(resp: Any) -> list[Any]:
         msg = resp.request.messages[0]
-        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+        return [p for p in msg.content if (p.metadata or {}).get('purpose') == 'output']
 
     p_true = ai.define_prompt(
         name='p_true',
@@ -1060,7 +1060,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
     resp_true = await p_true()
     injected_true = output_parts(resp_true)
     assert len(injected_true) == 1
-    assert 'Output should be in JSON format and conform to the following schema' in (injected_true[0].root.text or '')
+    assert 'Output should be in JSON format and conform to the following schema' in (injected_true[0].text or '')
 
     p_custom = ai.define_prompt(
         name='p_custom',
@@ -1076,7 +1076,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
     resp_custom = await p_custom()
     injected_custom = output_parts(resp_custom)
     assert len(injected_custom) == 1
-    assert (injected_custom[0].root.text or '') == 'Only use single quotes in JSON keys if you dare'
+    assert (injected_custom[0].text or '') == 'Only use single quotes in JSON keys if you dare'
 
 
 @pytest.mark.asyncio
@@ -1086,13 +1086,13 @@ async def test_load_prompt_with_output_instructions() -> None:
     pm.responses = [
         ModelResponse(
             finish_reason='stop',
-            message=Message(role='model', content=[Part(root=TextPart(text='{"foo": 1}'))]),
+            message=Message(role='model', content=[Part.from_text('{"foo": 1}')]),
         )
     ]
 
     def output_parts(resp: Any) -> list[Any]:
         msg = resp.request.messages[0]
-        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+        return [p for p in msg.content if (p.metadata or {}).get('purpose') == 'output']
 
     with tempfile.TemporaryDirectory() as tmpdir:
         prompt_dir = Path(tmpdir) / 'prompts'
@@ -1114,12 +1114,12 @@ async def test_load_prompt_with_output_instructions() -> None:
         resp = await loaded(model='programmableModel')
         injected = output_parts(resp)
         assert len(injected) == 1
-        assert 'Output should be in JSON format' in (injected[0].root.text or '')
+        assert 'Output should be in JSON format' in (injected[0].text or '')
 
 
 def test_resume_options_to_resume_carries_metadata() -> None:
     """The flat ``resume_metadata`` kwarg is threaded onto ``Resume.metadata`` (not dropped)."""
-    restart = ToolRequestPart(tool_request=ToolRequest(name='t', ref='r1', input={}))
+    restart = Part.from_tool_request(name='t', ref='r1', input={})
     resume = resume_options_to_resume(resume_restart=restart, resume_metadata={'approved_by': 'test'})
     assert resume is not None
     assert resume.metadata == {'approved_by': 'test'}

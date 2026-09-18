@@ -29,7 +29,6 @@ from genkit_amazon_bedrock.converters import (
 from genkit_amazon_bedrock.stream import consume_converse_stream
 
 from genkit import FinishReason, Message, ModelRequest, Part, Role, ToolDefinition
-from genkit._core._typing import TextPart
 from genkit.plugin_api import ActionRunContext, GenkitError
 
 pytestmark = pytest.mark.asyncio
@@ -42,7 +41,7 @@ async def events(*items: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
 def text_request(text: str = 'hello', **kwargs: Any) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=text))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text(text)])],
         **kwargs,
     )
 
@@ -101,14 +100,14 @@ async def test_text_deltas_stream_and_accumulate() -> None:
         ctx,
     )
 
-    assert [chunk.content[0].root.text for chunk in chunks] == ['hel', 'lo']
+    assert [chunk.content[0].text for chunk in chunks] == ['hel', 'lo']
     assert all(chunk.role == Role.MODEL for chunk in chunks)
     assert response.message is not None
-    assert [part.root.text for part in response.message.content] == ['hello']
+    assert [part.text for part in response.message.content] == ['hello']
     assert response.finish_reason == FinishReason.STOP
     assert response.usage is not None
     assert response.usage.total_tokens == 5
-    assert response.request is request
+    assert response.request == request
 
 
 async def test_missing_message_stop_finishes_as_stop() -> None:
@@ -138,7 +137,7 @@ async def test_absent_block_index_defaults_to_zero() -> None:
     )
 
     assert response.message is not None
-    assert [part.root.text for part in response.message.content] == ['ab']
+    assert [part.text for part in response.message.content] == ['ab']
 
 
 async def test_blocks_assemble_in_index_order() -> None:
@@ -152,7 +151,7 @@ async def test_blocks_assemble_in_index_order() -> None:
     )
 
     assert response.message is not None
-    assert [part.root.text for part in response.message.content] == ['first', 'second']
+    assert [part.text for part in response.message.content] == ['first', 'second']
 
 
 async def test_empty_stream_returns_empty_text_placeholder() -> None:
@@ -160,7 +159,7 @@ async def test_empty_stream_returns_empty_text_placeholder() -> None:
 
     assert response.message is not None
     assert len(response.message.content) == 1
-    assert response.message.content[0].root.text == ''
+    assert response.message.content[0].text == ''
 
 
 async def test_unknown_events_and_deltas_are_ignored() -> None:
@@ -178,9 +177,9 @@ async def test_unknown_events_and_deltas_are_ignored() -> None:
         ctx,
     )
 
-    assert [chunk.content[0].root.text for chunk in chunks] == ['ok']
+    assert [chunk.content[0].text for chunk in chunks] == ['ok']
     assert response.message is not None
-    assert [part.root.text for part in response.message.content] == ['ok']
+    assert [part.text for part in response.message.content] == ['ok']
 
 
 async def test_tool_use_fragments_emit_one_chunk_on_block_stop() -> None:
@@ -211,14 +210,14 @@ async def test_tool_use_fragments_emit_one_chunk_on_block_stop() -> None:
     )
 
     assert len(chunks) == 1
-    streamed = chunks[0].content[0].root.tool_request
+    streamed = chunks[0].content[0].tool_request
     assert streamed.name == 'get_weather'
     assert streamed.ref == 'call_1'
     # Coerced against the declared schema, like the sync path.
     assert streamed.input == {'location': 'NYC', 'count': 42}
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
-    final = response.message.content[0].root.tool_request
+    final = response.message.content[0].tool_request
     assert final is not None
     assert final.input == {'location': 'NYC', 'count': 42}
 
@@ -242,8 +241,8 @@ async def test_tool_block_without_input_matches_the_sync_path() -> None:
 
     assert stream_response.message is not None
     assert sync_response.message is not None
-    streamed = stream_response.message.content[0].root.tool_request
-    synced = sync_response.message.content[0].root.tool_request
+    streamed = stream_response.message.content[0].tool_request
+    synced = sync_response.message.content[0].tool_request
     assert streamed is not None and synced is not None
     assert streamed.input == synced.input == {}
 
@@ -279,7 +278,7 @@ async def test_content_block_stop_for_unknown_index_is_a_noop() -> None:
 
     assert chunks == []
     assert response.message is not None
-    assert response.message.content[0].root.text == ''
+    assert response.message.content[0].text == ''
 
 
 async def test_reasoning_text_streams_and_signature_accumulates() -> None:
@@ -298,16 +297,16 @@ async def test_reasoning_text_streams_and_signature_accumulates() -> None:
     )
 
     # Signature deltas are accumulated only; they carry no user-visible text.
-    assert [chunk.content[0].root.reasoning for chunk in chunks[:2]] == ['think', 'ing']
+    assert [chunk.content[0].reasoning for chunk in chunks[:2]] == ['think', 'ing']
     assert len(chunks) == 3
-    assert chunks[2].content[0].root.text == 'answer'
+    assert chunks[2].content[0].text == 'answer'
 
     assert response.message is not None
     reasoning_part, text_part = response.message.content
-    assert reasoning_part.root.reasoning == 'thinking'
-    assert reasoning_part.root.metadata is not None
-    assert reasoning_part.root.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig-abc'
-    assert text_part.root.text == 'answer'
+    assert reasoning_part.reasoning == 'thinking'
+    assert reasoning_part.metadata is not None
+    assert reasoning_part.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig-abc'
+    assert text_part.text == 'answer'
 
 
 async def test_redacted_reasoning_accumulates_as_base64_without_chunks() -> None:
@@ -325,7 +324,7 @@ async def test_redacted_reasoning_accumulates_as_base64_without_chunks() -> None
 
     assert chunks == []
     assert response.message is not None
-    part = response.message.content[0].root
+    part = response.message.content[0]
     assert part.reasoning == ''
     assert part.metadata is not None
     assert base64.b64decode(part.metadata[REDACTED_CONTENT_METADATA_KEY]) == b'\x00\x01\x02'

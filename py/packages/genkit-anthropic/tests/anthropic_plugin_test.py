@@ -39,7 +39,6 @@ from genkit import (
     Role,
     ToolDefinition,
 )
-from genkit._core._typing import TextPart
 
 
 def test_anthropic_name() -> None:
@@ -444,7 +443,7 @@ def _create_sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='Hello, how are you?'))],
+                content=[Part.from_text('Hello, how are you?')],
             )
         ],
         config=AnthropicConfig(),

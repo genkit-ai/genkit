@@ -19,21 +19,20 @@
 from collections.abc import Sequence
 
 from genkit._core._model import Part, as_part
-from genkit._core._typing import DataPart, PartData
+from genkit._core._typing import PartData
 
 from ._types import A2UI_MIME_TYPE, Envelope
 
 
 def a2ui_part(envelopes: list[Envelope]) -> Part:
-    return Part(DataPart(data={'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE}))
+    return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
 def has_a2ui_mime(*, part: Part | PartData) -> bool:
     p = as_part(part)
-    root = p.root
-    if not isinstance(root, DataPart):
+    if p.data is None:
         return False
-    metadata = root.metadata or {}
+    metadata = p.metadata or {}
     return metadata.get('mimeType') == A2UI_MIME_TYPE
 
 

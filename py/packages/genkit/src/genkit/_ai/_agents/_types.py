@@ -22,11 +22,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from genkit._core._model import AgentStreamChunk, SessionState
 from genkit._core._typing import (
     AgentFinishReason,
-    AgentStreamChunk,
     GenkitRuntimeError,
-    SessionState,
 )
 
 StateManagement = Literal['server', 'client']

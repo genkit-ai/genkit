@@ -28,8 +28,8 @@ from genkit_middleware._artifacts import (
 
 from genkit import ModelResponse, Part
 from genkit._ai._agents._session import Session, run_with_session
-from genkit._core._model import GenerateActionOptions
-from genkit._core._typing import Artifact, Role, SessionState, TextPart
+from genkit._core._model import Artifact, GenerateActionOptions, SessionState
+from genkit._core._typing import Role
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
 
 
@@ -41,16 +41,15 @@ def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookPa
     )
 
 
-def _listing_parts(messages) -> list[TextPart]:
-    parts: list[TextPart] = []
+def _listing_parts(messages) -> list[Part]:
+    parts: list[Part] = []
     for msg in messages:
         if msg.role != Role.SYSTEM:
             continue
         for part in msg.content:
-            root = part.root
-            if isinstance(root, TextPart) and isinstance(root.metadata, dict):
-                if root.metadata.get(ARTIFACTS_LISTING_MARKER):
-                    parts.append(root)
+            if part.text is not None and isinstance(part.metadata, dict):
+                if part.metadata.get(ARTIFACTS_LISTING_MARKER):
+                    parts.append(part)
     return parts
 
 
@@ -61,7 +60,7 @@ def test_build_artifact_listing_empty() -> None:
 
 
 def test_extract_artifact_text() -> None:
-    art = Artifact(name='a.txt', parts=[Part(TextPart(text='line1')), Part(TextPart(text='line2'))])
+    art = Artifact(name='a.txt', parts=[Part.from_text('line1'), Part.from_text('line2')])
     assert extract_artifact_text(art) == 'line1\nline2'
 
 
@@ -80,7 +79,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         arts = await session.get_artifacts()
         assert len(arts) == 1
         assert arts[0].name == 'poem.txt'
-        assert arts[0].parts[0].root.text == 'roses are red'
+        assert arts[0].parts[0].text == 'roses are red'
 
     await run_with_session(session=session, coro=check())
 
@@ -89,7 +88,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
 async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
-    await session.add_artifacts([Artifact(name='notes.txt', parts=[Part(TextPart(text='hello'))])])
+    await session.add_artifacts([Artifact(name='notes.txt', parts=[Part.from_text('hello')])])
 
     async def check() -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
@@ -123,7 +122,7 @@ async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> N
 async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(
-        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part(TextPart(text='abc'))])]),
+        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part.from_text('abc')])]),
     )
 
     captured: list[GenerateActionOptions] = []
@@ -141,13 +140,11 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         listing_parts = [
             p
             for p in system_msgs[0].content
-            if isinstance(p.root, TextPart)
-            and isinstance(p.root.metadata, dict)
-            and p.root.metadata.get(ARTIFACTS_LISTING_MARKER)
+            if p.text is not None and isinstance(p.metadata, dict) and p.metadata.get(ARTIFACTS_LISTING_MARKER)
         ]
         assert len(listing_parts) == 1
-        assert 'poem.txt' in (listing_parts[0].root.text or '')
-        assert '(3 chars)' in (listing_parts[0].root.text or '')
+        assert 'poem.txt' in (listing_parts[0].text or '')
+        assert '(3 chars)' in (listing_parts[0].text or '')
 
     await run_with_session(session=session, coro=check())
 
@@ -167,7 +164,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
 
     async def check() -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
-        await session.add_artifacts([Artifact(name='b.txt', parts=[Part(TextPart(text='x'))])])
+        await session.add_artifacts([Artifact(name='b.txt', parts=[Part.from_text('x')])])
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(seen) == 2
@@ -183,7 +180,7 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
     session = Session(
-        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part(TextPart(text='hi'))])]),
+        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part.from_text('hi')])]),
     )
 
     captured_request: list[GenerateActionOptions] = []
@@ -196,7 +193,10 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(_listing_parts(envelope.messages)) == 0
-        assert len(_listing_parts(captured_request[0].messages)) == 1
-        assert 'a.txt' in _listing_parts(captured_request[0].messages)[0].text
+        listing_parts = _listing_parts(captured_request[0].messages)
+        assert len(listing_parts) == 1
+        listing = listing_parts[0].text
+        assert listing is not None
+        assert 'a.txt' in listing
 
     await run_with_session(session=session, coro=check())

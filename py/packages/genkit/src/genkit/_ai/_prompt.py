@@ -72,20 +72,15 @@ from genkit._core._model import (
     Message,
     OutputConfig,
     Part,
-    as_resume_respond,
-    as_resume_restart,
+    resume_options_to_resume,
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
-    Resume,
     Role,
-    TextPart,
     ToolChoice,
-    ToolRequestPart,
-    ToolResponsePart,
 )
 
 ModelStreamingCallback = StreamingCallback
@@ -106,38 +101,6 @@ class OutputOptions(TypedDict, total=False):
     schema: type | dict[str, Any] | str | None
     json_schema: dict[str, Any] | None
     constrained: bool | None
-
-
-def _normalize_resume_respond_parts(
-    value: Part | list[Part] | None,
-) -> list[ToolResponsePart] | None:
-    if value is None:
-        return None
-    items = value if isinstance(value, list) else [value]
-    return [cast(ToolResponsePart, as_resume_respond(p).root) for p in items]
-
-
-def _normalize_resume_restart_parts(
-    value: Part | list[Part] | None,
-) -> list[ToolRequestPart] | None:
-    if value is None:
-        return None
-    items = value if isinstance(value, list) else [value]
-    return [cast(ToolRequestPart, as_resume_restart(p).root) for p in items]
-
-
-def resume_options_to_resume(
-    *,
-    resume_respond: Part | list[Part] | None = None,
-    resume_restart: Part | list[Part] | None = None,
-    resume_metadata: dict[str, Any] | None = None,
-) -> Resume | None:
-    """Build wire Resume from flat keyword options (``generate`` / prompts)."""
-    respond = _normalize_resume_respond_parts(resume_respond)
-    restart = _normalize_resume_restart_parts(resume_restart)
-    if respond is None and restart is None and resume_metadata is None:
-        return None
-    return Resume(respond=respond, restart=restart, metadata=resume_metadata)
 
 
 class PromptGenerateOptions(TypedDict, total=False):
@@ -748,7 +711,6 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         constrained=options.output.constrained if options.output else None,
     )
     return ModelRequest(
-        # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
         messages=options.messages,  # type: ignore[arg-type]
         config=options.config if options.config is not None else {},  # type: ignore[arg-type]
         docs=options.docs if options.docs else None,  # type: ignore[arg-type]
@@ -766,7 +728,7 @@ def _normalize_prompt_arg(
         return []
     if isinstance(prompt, str):
         # Part is a RootModel, so we pass content via 'root' parameter
-        return [Part(root=TextPart(text=prompt))]
+        return [Part.from_text(prompt)]
     elif isinstance(prompt, list):
         return prompt
     elif isinstance(prompt, Part):  # pyright: ignore[reportUnnecessaryIsInstance]

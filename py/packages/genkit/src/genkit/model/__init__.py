@@ -24,6 +24,8 @@ from genkit._ai._model import (
 )
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
+    Candidate,
+    Document,
     GenerateActionOptions,
     Message,
     ModelRef,
@@ -35,7 +37,6 @@ from genkit._core._model import (
     get_basic_usage_stats,
 )
 from genkit._core._typing import (
-    Candidate,
     Constrained,
     Error,
     FinishReason,
@@ -81,6 +82,7 @@ __all__ = [
     # Config
     'ModelConfigDict',
     # Message
+    'Document',
     'Message',
     'Part',
     # Usage

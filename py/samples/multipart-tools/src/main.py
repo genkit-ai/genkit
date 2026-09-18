@@ -18,17 +18,14 @@
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, Media, MultipartToolResponse, response
-from genkit._core._typing import MediaPart
+from genkit import Genkit, MultipartToolResponse, Part, response
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 # 1x1 PNG so the tool message has real media without a camera.
-_PNG = MediaPart(
-    media=Media(
-        content_type='image/png',
-        url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-    )
+_PNG = Part.from_media(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    content_type='image/png',
 )
 
 

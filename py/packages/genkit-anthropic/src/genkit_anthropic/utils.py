@@ -30,7 +30,6 @@ from typing import Any
 import structlog
 
 from genkit import ModelRequest, ModelUsage, Part
-from genkit._core._typing import MediaPart, TextPart
 
 logger = structlog.get_logger(__name__)
 
@@ -96,10 +95,10 @@ def maybe_strip_fences(request: ModelRequest, parts: list[Part]) -> list[Part]:
     cleaned: list[Part] = []
     changed = False
     for part in parts:
-        if isinstance(part.root, TextPart) and part.root.text:
-            cleaned_text = strip_markdown_fences(part.root.text)
-            if cleaned_text != part.root.text:
-                cleaned.append(Part(root=TextPart(text=cleaned_text)))
+        if part.text is not None and part.text:
+            cleaned_text = strip_markdown_fences(part.text)
+            if cleaned_text != part.text:
+                cleaned.append(Part.from_text(cleaned_text))
                 changed = True
             else:
                 cleaned.append(part)
@@ -108,7 +107,7 @@ def maybe_strip_fences(request: ModelRequest, parts: list[Part]) -> list[Part]:
     return cleaned if changed else parts
 
 
-def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
+def get_cache_control(part: Part) -> dict[str, str] | None:
     """Extract cache_control metadata from a content part.
 
     Genkit parts can carry arbitrary metadata. If a part has
@@ -117,15 +116,15 @@ def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
 
     Supported format::
 
-        Part(root=TextPart(text='...', metadata={'cache_control': {'type': 'ephemeral'}}))
+        Part.from_text('...', metadata={'cache_control': {'type': 'ephemeral'}})
 
     Args:
-        part: The actual (unwrapped) content part (e.g. TextPart, MediaPart).
+        part: A message content part.
 
     Returns:
         Cache control dict (e.g. ``{'type': 'ephemeral'}``) or None.
     """
-    metadata = getattr(part, 'metadata', None)
+    metadata = part.metadata
     if not isinstance(metadata, dict):
         return None
 
@@ -135,22 +134,22 @@ def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
     return None
 
 
-def get_redacted_thinking_data(part: Any) -> str | None:  # noqa: ANN401
+def get_redacted_thinking_data(part: Part) -> str | None:
     """Extract redacted thinking data from a part's custom field."""
-    custom = getattr(part, 'custom', None)
+    custom = part.custom
     if not isinstance(custom, dict):
         return None
     redacted = custom.get('redactedThinking')
     return redacted if isinstance(redacted, str) else None
 
 
-def get_thinking_signature(part: Any) -> str | None:  # noqa: ANN401
+def get_thinking_signature(part: Part) -> str | None:
     """Extract the Anthropic thinking signature from a part's metadata.
 
     Reads ``metadata.thoughtSignature`` (JS naming), falling back to
     ``metadata.signature`` (Go naming) as an input alias.
     """
-    metadata = getattr(part, 'metadata', None)
+    metadata = part.metadata
     if not isinstance(metadata, dict):
         return None
 
@@ -230,20 +229,23 @@ def to_anthropic_image(url: str, content_type: str) -> dict[str, Any]:
     return {'type': 'image', 'source': {'type': 'url', 'url': url}}
 
 
-def to_anthropic_media(media_part: MediaPart) -> dict[str, Any]:
-    """Convert a MediaPart to the appropriate Anthropic format.
+def to_anthropic_media(media_part: Part) -> dict[str, Any]:
+    """Convert a media part to the appropriate Anthropic format.
 
     Routes to ``document`` block for PDF/plain-text MIME types,
     and ``image`` block for image MIME types.
 
     Args:
-        media_part: The Genkit MediaPart to convert.
+        media_part: A part with media.
 
     Returns:
         Anthropic content block dict (document or image).
     """
-    url = media_part.media.url
-    content_type = media_part.media.content_type or ''
+    media = media_part.media
+    if media is None:
+        raise ValueError('expected a media part')
+    url = media.url
+    content_type = media.content_type or ''
 
     # Infer MIME type from data URI if not explicitly set.
     if not content_type and url.startswith('data:'):
