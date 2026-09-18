@@ -39,6 +39,7 @@ from genkit_google_genai.google import (
     VERTEXAI_PLUGIN_NAME,
     GenaiModels,
     _list_genai_models,
+    _new_gemini,
     googleai_name,
     vertexai_name,
 )
@@ -173,6 +174,36 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
     other_loop_client = q.get_nowait()
 
     assert other_loop_client is not first
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+async def test_googleai_legacy_response_schema_threads_to_gemini_model(
+    mock_client_ctor: MagicMock, legacy_response_schema: bool
+) -> None:
+    """The plugin option reaches every GeminiModel GoogleAI constructs.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
+    plugin = GoogleAI(api_key='test-key', legacy_response_schema=legacy_response_schema)
+
+    assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is legacy_response_schema
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+async def test_vertexai_legacy_response_schema_threads_to_gemini_model(
+    mock_client_ctor: MagicMock, legacy_response_schema: bool
+) -> None:
+    """The plugin option reaches every GeminiModel VertexAI constructs.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
+    plugin = VertexAI(project='test-project', legacy_response_schema=legacy_response_schema)
+
+    assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is legacy_response_schema
 
 
 def test_genai_models_container() -> None:
