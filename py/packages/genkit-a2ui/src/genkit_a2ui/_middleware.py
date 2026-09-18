@@ -31,9 +31,8 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
     Part,
-    as_part,
 )
-from genkit._core._typing import FinishReason, PartData, Role
+from genkit._core._typing import FinishReason, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
@@ -178,10 +177,10 @@ class SurfaceIdReplay:
         return self.next()
 
 
-def part_text(*, part: Part | PartData) -> str | None:
+def part_text(*, part: Part) -> str | None:
     # Empty text is still a text part. Treating it as missing would flush an
     # open fence and drop the card.
-    return as_part(part).text
+    return part.text
 
 
 def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
@@ -194,10 +193,9 @@ def parts_from_segments(*, segments: list[Segment]) -> list[Part]:
     return out
 
 
-def rewrite_parts(*, parts: Sequence[Part | PartData], parser: StreamParser, flush_nontext: bool) -> list[Part]:
+def rewrite_parts(*, parts: Sequence[Part], parser: StreamParser, flush_nontext: bool) -> list[Part]:
     out: list[Part] = []
-    for raw_part in parts:
-        part = as_part(raw_part)
+    for part in parts:
         text = part_text(part=part)
         if text is not None:
             segments = parser.push(text=text)

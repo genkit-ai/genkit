@@ -16,10 +16,11 @@
 
 """A2UI data-part helpers."""
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 
-from genkit._core._model import Part, as_part
-from genkit._core._typing import PartData
+from genkit._core._model import Part
 
 from ._types import A2UI_MIME_TYPE, Envelope
 
@@ -28,28 +29,25 @@ def a2ui_part(envelopes: list[Envelope]) -> Part:
     return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
-def has_a2ui_mime(*, part: Part | PartData) -> bool:
-    p = as_part(part)
-    if p.data is None:
+def has_a2ui_mime(*, part: Part) -> bool:
+    if part.data is None:
         return False
-    metadata = p.metadata or {}
+    metadata = part.metadata or {}
     return metadata.get('mimeType') == A2UI_MIME_TYPE
 
 
-def is_a2ui_part(part: Part | PartData) -> bool:
+def is_a2ui_part(part: Part) -> bool:
     if not has_a2ui_mime(part=part):
         return False
-    p = as_part(part)
-    data = p.data
+    data = part.data
     return isinstance(data, dict) and 'envelopes' in data
 
 
-def envelopes_from_parts(parts: Sequence[Part | PartData] | None) -> list[Envelope]:
+def envelopes_from_parts(parts: Sequence[Part] | None) -> list[Envelope]:
     if not parts:
         return []
     out: list[Envelope] = []
-    for raw in parts:
-        part = as_part(raw)
+    for part in parts:
         if not is_a2ui_part(part):
             continue
         data = part.data
