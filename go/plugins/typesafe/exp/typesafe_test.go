@@ -22,6 +22,8 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -469,5 +471,66 @@ func TestAnswersProjectedOntoDeclaredFields(t *testing.T) {
 		if keys := slices.Sorted(maps.Keys(got[id])); !slices.Equal(keys, fields) {
 			t.Errorf("%s fields = %v, want %v", id, keys, fields)
 		}
+	}
+}
+
+func TestPromptFile(t *testing.T) {
+	// A prompt file names the decision type as a registered schema and
+	// renders the state as JSON. The registered schema keeps the question
+	// keywords through the registry, and no output format needs naming.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "triage.prompt"), []byte(`---
+model: typesafe/jev-1.13.0
+config:
+  stateJSON: true
+input:
+  schema: ticketInput
+output:
+  schema: triage
+---
+{{role "system"}}
+The state is a support ticket.
+
+{{role "user"}}
+{
+  "ticket": {{json ticket}}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	type ticketInput struct {
+		Ticket string `json:"ticket"`
+	}
+	fake := &fakeJev{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	g := genkit.Init(t.Context(),
+		genkit.WithPlugins(&TypeSafe{APIKey: "test-key", BaseURL: srv.URL}),
+		genkit.WithPromptDir(dir))
+	genkit.DefineSchemasFor(g, ticketInput{}, triage{})
+
+	prompt := genkit.LookupPrompt(g, "triage")
+	if prompt == nil {
+		t.Fatal("triage.prompt was not loaded")
+	}
+	resp, err := prompt.Execute(t.Context(), ai.WithInput(ticketInput{Ticket: "charged twice"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out triage
+	if err := resp.Output(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Department.Choice != "billing" || out.Frustration.Score != 1.3 {
+		t.Errorf("out = %+v", out)
+	}
+	_, body := fake.last(t)
+	if !reflect.DeepEqual(body["state"], map[string]any{"ticket": "charged twice"}) {
+		t.Errorf("state = %v, want the rendered JSON as an object", body["state"])
+	}
+	questions, _ := body["questions"].(map[string]any)
+	department, _ := questions["department"].(map[string]any)
+	if got, _ := department["instructions"].(string); !strings.HasPrefix(got, "The state is a support ticket.") {
+		t.Errorf("instructions = %q, want the system message in front", got)
 	}
 }
