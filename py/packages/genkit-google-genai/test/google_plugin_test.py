@@ -34,10 +34,6 @@ from genkit_google_genai.models.gemini import (
     GeminiConfigSchema,
     GeminiModel,
 )
-from genkit_google_genai.models.imagen import (
-    DEFAULT_IMAGE_SUPPORT,
-    SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
-)
 from google import genai
 from google.auth.credentials import Credentials
 from google.genai.types import HttpOptions
@@ -712,53 +708,42 @@ async def test_vertexai_resolve_action_embedder(
     'genkit_google_genai.models.gemini.google_model_info',
     new_callable=MagicMock,
 )
-@patch(
-    'genkit_google_genai.models.imagen.vertexai_image_model_info',
-    new_callable=MagicMock,
-)
 @pytest.mark.parametrize(
-    'model_name, expected_model_name, key, image',
+    'model_name, expected_model_name, key',
     [
         (
             'gemini-pro-deluxe-max',
             'vertexai/gemini-pro-deluxe-max',
             'gemini-pro-deluxe-max',
-            False,
         ),
         (
             'vertexai/gemini-pro-deluxe-max',
             'vertexai/gemini-pro-deluxe-max',
             'gemini-pro-deluxe-max',
-            False,
         ),
-        # A bare "image" prefix is not Imagen; only imagen- ids route there.
+        # A bare "image" substring still resolves as a Gemini text model.
         (
             'vertexai/image-gemini-pro-deluxe-max',
             'vertexai/image-gemini-pro-deluxe-max',
             'image-gemini-pro-deluxe-max',
-            False,
         ),
         (
             'image-gemini-pro-deluxe-max',
             'vertexai/image-gemini-pro-deluxe-max',
             'image-gemini-pro-deluxe-max',
-            False,
         ),
         (
             'gemini-pro-deluxe-max-image',
             'vertexai/gemini-pro-deluxe-max-image',
             'gemini-pro-deluxe-max-image',
-            False,
         ),
     ],
 )
 def test_vertexai__resolve_model(
     mock_google_model_info: MagicMock,
-    mock_vertexai_image_model_info: MagicMock,
     model_name: str,
     expected_model_name: str,
     key: str,
-    image: bool,
     vertexai_plugin_instance: VertexAI,
 ) -> None:
     """Tests for VertexAI._resolve_model method."""
@@ -770,21 +755,12 @@ def test_vertexai__resolve_model(
         supports=DEFAULT_SUPPORTS_MODEL,
     )
 
-    mock_vertexai_image_model_info.return_value = ModelInfo(
-        label=f'Vertex AI - {model_name}',
-        supports=DEFAULT_IMAGE_SUPPORT,
-    )
-
     action = plugin._resolve_model(name=expected_model_name)
 
     assert action is not None
     assert action.kind == ActionKind.MODEL
     assert action.name == expected_model_name
-
-    if image:
-        assert key in IMAGE_SUPPORTED_MODELS
-    else:
-        assert key in SUPPORTED_MODELS
+    assert key in SUPPORTED_MODELS
 
 
 @pytest.mark.parametrize(
@@ -821,19 +797,6 @@ def test_vertexai__resolve_embedder(
 @pytest.mark.asyncio
 async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None:
     """Unit test for list actions."""
-
-    @dataclass
-    class MockModel:
-        name: str
-        description: str = ''
-
-    [
-        MockModel(name='publishers/google/models/gemini-1.5-flash'),
-        MockModel(name='publishers/google/models/gemini-embedding-001'),
-        MockModel(name='publishers/google/models/imagen-3.0-generate-001'),
-        MockModel(name='publishers/google/models/veo-2.0-generate-001'),
-    ]
-
     mock_client = MagicMock()
     # Create sophisticated mocks that have supported_actions
     m1 = MagicMock()
@@ -848,7 +811,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
 
     m3 = MagicMock()
     m3.name = 'publishers/google/models/imagen-3.0-generate-001'
-    m3.supported_actions = ['predict']  # Imagen uses predict
+    m3.supported_actions = ['predict']
     m3.description = 'Imagen'
 
     m4 = MagicMock()
@@ -869,10 +832,8 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     action2 = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
     assert action2 is not None
 
-    # Verify Imagen
-    action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
-    assert action3 is not None
-    assert action3.action_type == ActionKind.MODEL
+    # Imagen has no generate path here, so it is never advertised.
+    assert not any(a.name == vertexai_name('imagen-3.0-generate-001') for a in result)
 
     # Verify Veo
     action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
@@ -912,9 +873,9 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
 
     # Gemini text model discovered despite supported_actions=None.
     assert vertexai_name('gemini-2.5-pro') in names
-    # Imagen and Veo discovered.
-    assert vertexai_name('imagen-3.0-generate-002') in names
+    # Veo discovered; Imagen is not advertised.
     assert vertexai_name('veo-2.0-generate-001') in names
+    assert vertexai_name('imagen-3.0-generate-002') not in names
 
     # gemini-embedding-001 is registered as an embedder, not a gemini model.
     embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
@@ -950,19 +911,6 @@ async def test_googleai_resolve_check_operation(googleai_plugin_instance: Google
 @pytest.mark.asyncio
 async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) -> None:
     """Unit test for list known models."""
-
-    @dataclass
-    class MockModel:
-        name: str
-        description: str = ''
-
-    [
-        MockModel(name='publishers/google/models/gemini-1.5-flash'),
-        MockModel(name='publishers/google/models/gemini-embedding-001'),
-        MockModel(name='publishers/google/models/imagen-3.0-generate-001'),
-        MockModel(name='publishers/google/models/veo-2.0-generate-001'),
-    ]
-
     mock_client = MagicMock()
     # Create sophisticated mocks that have supported_actions
     m1 = MagicMock()
@@ -994,9 +942,8 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
     action1 = next(a for a in result if a.name == vertexai_name('gemini-1.5-flash'))
     assert action1 is not None
 
-    # Verify Imagen
-    action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
-    assert action3 is not None
+    # Imagen has no generate path here, so it is not a known MODEL.
+    assert not any(a.name == vertexai_name('imagen-3.0-generate-001') for a in result)
 
     # Veo is background-only, so it is not a known generate MODEL.
     assert not any(a.name == vertexai_name('veo-2.0-generate-001') for a in result)

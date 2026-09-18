@@ -28,10 +28,6 @@ from genkit_google_genai.models.gemini import (
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.imagen import (
-    is_imagen_model_name,
-    is_unsupported_image_model_name,
-)
 from genkit_google_genai.models.lyria import is_lyria_model
 from genkit_google_genai.models.veo import is_veo_model
 
@@ -49,8 +45,8 @@ STRIP_PREFIXES = (
 )
 
 # Families with no MODEL generate path on this plugin. Constructor
-# refusal is a different table — TTS, native image, Gemma, and Imagen
-# still resolve as MODEL.
+# refusal is a different table — TTS, native image, and Gemma still
+# resolve as MODEL.
 UNROUTABLE_FAMILIES = frozenset({
     'embedder',
     'unsupported',
@@ -74,6 +70,17 @@ def strip_ref_prefixes(name: str) -> str:
     return local
 
 
+def is_unsupported_image_model_name(name: str) -> bool:
+    """True for image ids with no generate path here.
+
+    Matches the ``imagen-``, ``imagegeneration@``, ``imagetext@`` and
+    ``virtual-try-on-`` prefixes on the last path segment. Gemini native
+    image (``gemini-…-image``) is a different family and routes normally.
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith(('imagen-', 'imagegeneration@', 'imagetext@', 'virtual-try-on-'))
+
+
 def classify_family(name: str) -> str:
     """Bucket a model id by the last path segment.
 
@@ -93,8 +100,6 @@ def classify_family(name: str) -> str:
         return 'deep-research'
     if leaf.startswith('antigravity-'):
         return 'antigravity'
-    if is_imagen_model_name(leaf):
-        return 'imagen'
     if is_tts_model(leaf):
         return 'tts'
     if is_image_model(leaf):

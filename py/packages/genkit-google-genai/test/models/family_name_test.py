@@ -17,39 +17,19 @@
 """Family name checks for Google model routing."""
 
 import pytest
-from genkit_google_genai.models._routing import classify_family, is_unroutable_model_id
+from genkit_google_genai.models._routing import (
+    classify_family,
+    is_unroutable_model_id,
+    is_unsupported_image_model_name,
+)
 from genkit_google_genai.models.gemini import (
     is_gemini_model,
     is_gemma_model,
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.imagen import (
-    is_imagen_model_name,
-    is_unsupported_image_model_name,
-)
 from genkit_google_genai.models.lyria import is_lyria_model
 from genkit_google_genai.models.veo import is_veo_model
-
-
-@pytest.mark.parametrize(
-    ('name', 'expected'),
-    [
-        ('imagen-3.0-generate-002', True),
-        ('IMAGEN-3.0-generate-002', True),
-        ('googleai/imagen-3.0-generate-002', True),
-        ('vertexai/imagen-3.0-generate-002', True),
-        ('models/imagen-3.0-generate-002', True),
-        ('gemini-2.5-flash-image', False),
-        ('gemini-2.5-flash-image-preview', False),
-        ('imagegeneration@006', False),
-        ('virtual-try-on-001', False),
-        ('veo-3.0-generate-001', False),
-    ],
-)
-def test_is_imagen_model_name(name: str, expected: bool) -> None:
-    """Imagen is the ``imagen-`` prefix only, on both plugins."""
-    assert is_imagen_model_name(name) is expected
 
 
 @pytest.mark.parametrize(
@@ -62,13 +42,18 @@ def test_is_imagen_model_name(name: str, expected: bool) -> None:
         ('vertexai/imagetext@001', True),
         ('virtual-try-on-001', True),
         ('vertexai/virtual-try-on-001', True),
-        ('imagen-3.0-generate-002', False),
+        ('imagen-3.0-generate-002', True),
+        ('IMAGEN-4.0-generate-001', True),
+        ('googleai/imagen-4.0-generate-001', True),
+        ('models/imagen-4.0-ultra-generate-001', True),
         ('gemini-2.5-flash-image', False),
+        ('gemini-2.5-flash-image-preview', False),
         ('gemini-2.5-flash', False),
+        ('veo-3.0-generate-001', False),
     ],
 )
 def test_is_unsupported_image_model_name(name: str, expected: bool) -> None:
-    """Retired / unimplemented image ids fail closed instead of routing to Gemini."""
+    """Image ids with no generate path fail closed instead of routing to Gemini."""
     assert is_unsupported_image_model_name(name) is expected
 
 
@@ -174,6 +159,8 @@ def test_is_lyria_model(name: str, expected: bool) -> None:
         'imagegeneration@006',
         'imagetext@001',
         'virtual-try-on-001',
+        'imagen-3.0-generate-002',
+        'vertexai/imagen-4.0-generate-001',
         'veo-3.0-generate-001',
         'googleai/lyria-002',
         'models/deep-research-pro-preview',
@@ -199,6 +186,7 @@ def test_unroutable_ids_fail_closed(name: str) -> None:
         ('publishers/google/models/antigravity-preview-05-2026', 'antigravity'),
         ('lyria-002', 'lyria'),
         ('imagetext@001', 'unsupported'),
+        ('imagen-4.0-generate-001', 'unsupported'),
     ],
 )
 def test_classify_family_uses_leaf_name(name: str, family: str) -> None:
@@ -211,7 +199,7 @@ def test_classify_family_uses_leaf_name(name: str, family: str) -> None:
     [
         'gemini-2.5-flash',
         'GEMINI-2.5-FLASH-PREVIEW-TTS',
-        'imagen-3.0-generate-002',
+        'gemini-2.5-flash-image',
         'gemma-3-12b-it',
     ],
 )

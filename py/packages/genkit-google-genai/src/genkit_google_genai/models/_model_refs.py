@@ -17,7 +17,7 @@
 """Shared machinery for the typed family ref constructors.
 
 Each plugin class exposes one constructor per config family
-(``gemini_model``, ``imagen_model``, ...). The return type is the contract:
+(``gemini_model``, ``gemini_image_model``, ...). The return type is the contract:
 ``ModelRef[GeminiConfigSchema]`` tells generate-time code exactly which
 config is legal, so a constructor must refuse ids whose runtime action
 would validate a different schema — otherwise the ref lies and the wrong
@@ -41,7 +41,6 @@ FAMILY_METHOD: dict[str, str] = {
     'tts': 'gemini_tts_model',
     'image': 'gemini_image_model',
     'gemma': 'gemma_model',
-    'imagen': 'imagen_model',
     'veo': 'veo_model',
     'embedder': 'embedding',
 }
@@ -65,7 +64,10 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
             else f"'{local}' has no ref constructor in this plugin."
         )
     elif actual == 'unsupported':
-        hint = f"'{local}' is not a supported model."
+        if local.lower().startswith('imagen-'):
+            hint = f"'{local}' is not a supported model; for image generation use {plugin_class}.gemini_image_model()."
+        else:
+            hint = f"'{local}' is not a supported model."
     elif actual in FAMILY_METHOD:
         hint = f"'{local}' is not a {family} model; use {plugin_class}.{FAMILY_METHOD[actual]}()."
     else:
