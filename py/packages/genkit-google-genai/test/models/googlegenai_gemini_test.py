@@ -63,6 +63,7 @@ from genkit import (
     Supports,
     ToolDefinition,
 )
+from genkit._core._model import OutputConfig
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)
@@ -544,6 +545,21 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
                     tool_choice=False,
                     system_role=True,
                     constrained=Constrained.ALL,
+                    output=['media'],
+                ),
+            ),
+        ),
+        (
+            'gemini-2.5-flash-preview-tts',
+            ModelInfo(
+                label='Google AI - Gemini TTS',
+                supports=Supports(
+                    multiturn=False,
+                    media=False,
+                    tools=False,
+                    tool_choice=False,
+                    system_role=False,
+                    constrained=Constrained.NONE,
                     output=['media'],
                 ),
             ),
@@ -1098,6 +1114,41 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
     assert cfg.temperature == 0.5
     assert cfg.http_options is not None
     assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
+
+
+def _json_output_request() -> ModelRequest:
+    return ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        output=OutputConfig(
+            format='json',
+            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+            constrained=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__json_output_sets_constrained_config() -> None:
+    """A standard Gemini model receives response_mime_type and response_schema for JSON output."""
+    model = GeminiModel(version='gemini-2.5-flash', client=MagicMock(spec=genai.Client))
+
+    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_schema is not None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
+    """A TTS model receives neither response_mime_type nor response_schema for JSON output."""
+    model = GeminiModel(version='gemini-2.5-flash-preview-tts', client=MagicMock(spec=genai.Client))
+
+    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+
+    assert cfg is not None
+    assert cfg.response_mime_type is None
+    assert cfg.response_schema is None
 
 
 @pytest.mark.parametrize(

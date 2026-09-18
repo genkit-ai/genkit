@@ -27,6 +27,8 @@ from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import (
+    FinishReason,
+    GenkitError,
     Message,
     ModelRequest,
     ModelResponse,
@@ -42,6 +44,7 @@ from genkit_openai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    extract_response_metadata,
     reraise_openai_error,
     strip_markdown_fences,
 )
@@ -54,7 +57,22 @@ logger = structlog.get_logger(__name__)
 _GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences'})
 
 
-def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
+def _uses_max_completion_tokens(model: str | None) -> bool:
+    """Whether a model requires the reasoning-model token-limit parameter."""
+    if not model:
+        return False
+    model_id = model.rsplit('/', 1)[-1].lower()
+    # Fine-tuned OpenAI model ids are prefixed with ``ft:`` and custom
+    # deployment names may put the base model after an arbitrary prefix.
+    if model_id.startswith('ft:'):
+        parts = model_id.split(':')
+        if len(parts) > 1:
+            model_id = parts[1]
+    reasoning_prefixes = ('o1', 'o3', 'o4', 'gpt-5', 'gpt-6')
+    return model_id.startswith(reasoning_prefixes) or any(f'-{prefix}' in model_id for prefix in reasoning_prefixes)
+
+
+def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> dict[str, Any]:
     """Kwargs for chat.completions.create().
 
     Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
@@ -62,6 +80,8 @@ def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
     caller when ``OpenAIConfig.model`` is unset. Everything else, including
     extras, goes out under the Python field name. ``max_output_tokens`` is
     not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
+    For reasoning models, ``max_tokens`` is emitted as ``max_completion_tokens``
+    because the OpenAI API rejects the deprecated field.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
@@ -69,6 +89,15 @@ def _openai_create_kwargs(*, config: OpenAIConfig) -> dict[str, Any]:
             continue
         value = getattr(config, name)
         if value is not None:
+            if name == 'max_tokens':
+                # OpenAI reasoning models reject the deprecated max_tokens
+                # field. Keep the explicit max_completion_tokens value when
+                # both knobs are supplied so the request remains valid.
+                if config.max_completion_tokens is not None:
+                    continue
+                if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
+                    body['max_completion_tokens'] = value
+                    continue
             body[name] = value
     extras = config.model_extra
     if extras:
@@ -143,6 +172,69 @@ def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
         ),
         custom=custom or None,
     )
+
+
+def _failure_message(extras: dict[str, Any] | None) -> str | None:
+    """The message of an error object a provider attached to a choice.
+
+    A gateway whose upstream fails part-way through a generation answers with
+    a 200 — status and headers are already committed — and reports the failure
+    as an ``error`` object on the choice, beside whatever text was produced
+    before it.
+
+    Args:
+        extras: The fields a choice carried that are not in OpenAI's schema.
+
+    Returns:
+        The failure message, or None when the choice carries no error object.
+    """
+    failure = extras.get('error') if extras else None
+    if not isinstance(failure, dict):
+        return None
+    message = failure.get('message')
+    return message if isinstance(message, str) and message else None
+
+
+_FINISH_REASONS: dict[str, FinishReason] = {
+    'content_filter': FinishReason.BLOCKED,
+    'end_turn': FinishReason.STOP,
+    'error': FinishReason.OTHER,
+    'function_call': FinishReason.OTHER,
+    'insufficient_system_resource': FinishReason.OTHER,
+    'length': FinishReason.LENGTH,
+    'model_context_window_exceeded': FinishReason.LENGTH,
+    'network_error': FinishReason.OTHER,
+    'sensitive': FinishReason.BLOCKED,
+    'stop': FinishReason.STOP,
+    'tool_calls': FinishReason.STOP,
+}
+
+
+def _finish_state(
+    reason: str | None, *, refusal: str | None, failure_message: str | None
+) -> tuple[FinishReason, str | None]:
+    """The finish reason and finish message to report for a choice.
+
+    A refusal is the more specific answer and wins over a failure message: the
+    model replied, having declined. A choice that stopped cleanly reports no
+    finish message even when an error-shaped extra rides beside it.
+
+    Args:
+        reason: The ``finish_reason`` the provider sent, or None when it sent
+            none.
+        refusal: The refusal the model replied with, or None.
+        failure_message: The message of an error object on the choice, or None.
+
+    Returns:
+        The mapped finish reason, UNKNOWN when the reason is unrecognized or
+        absent, and the finish message, None when there is none to report.
+    """
+    if refusal:
+        return FinishReason.BLOCKED, refusal
+    finish_reason = _FINISH_REASONS.get(reason or '', FinishReason.UNKNOWN)
+    if finish_reason is FinishReason.STOP:
+        return finish_reason, None
+    return finish_reason, failure_message
 
 
 class OpenAIModel:
@@ -305,15 +397,7 @@ class OpenAIModel:
                 cleaned_parts.append(part)
 
         if changed:
-            return ModelResponse(
-                request=request,
-                message=Message(role=response.message.role, content=cleaned_parts),
-                finish_reason=response.finish_reason,
-                finish_message=response.finish_message,
-                latency_ms=response.latency_ms,
-                usage=response.usage,
-                custom=response.custom,
-            )
+            return response.model_copy(update={'message': Message(role=response.message.role, content=cleaned_parts)})
         return response
 
     @staticmethod
@@ -380,7 +464,8 @@ class OpenAIModel:
             )
             if config.version:
                 openai_config['model'] = config.version
-            openai_config.update(_openai_create_kwargs(config=config))
+            effective_model = config.model or config.version or self._model
+            openai_config.update(_openai_create_kwargs(config=config, model=effective_model))
         return openai_config
 
     async def _generate(self, request: ModelRequest) -> ModelResponse:
@@ -396,16 +481,41 @@ class OpenAIModel:
         openai_config.pop('stream_options', None)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
         response = await self._openai_client.chat.completions.create(**openai_config)
+        if not response.choices:
+            raise GenkitError(
+                status='INTERNAL',
+                message='No choices in completion.',
+                details={'usage': _usage_from_completion(response.usage).model_dump(exclude_none=True)},
+            )
+
         logger.debug(
             'OpenAI raw API response',
             model=self._model,
-            finish_reason=str(response.choices[0].finish_reason) if response.choices else None,
+            finish_reason=str(response.choices[0].finish_reason),
         )
 
+        choice = response.choices[0]
+        message = MessageAdapter(choice.message)
+        finish_reason, finish_message = _finish_state(
+            choice.finish_reason,
+            refusal=message.refusal,
+            failure_message=_failure_message(choice.model_extra),
+        )
+
+        genkit_message = MessageConverter.to_genkit(message)
+        # An empty message is the answer when the model was blocked or cut off; at a clean stop it is unreadable.
+        if not genkit_message.content and finish_reason is FinishReason.STOP:
+            raise ValueError('Unable to determine content part')
+
+        metadata = extract_response_metadata(response)
         result = ModelResponse(
             request=request,
-            message=MessageConverter.to_genkit(MessageAdapter(response.choices[0].message)),
+            message=genkit_message,
+            finish_reason=finish_reason,
+            finish_message=finish_message,
             usage=_usage_from_completion(response.usage),
+            custom=metadata or None,
+            raw=metadata or None,
         )
         return self._clean_json_response(result, request)
 
@@ -431,70 +541,95 @@ class OpenAIModel:
         stream = await self._openai_client.chat.completions.create(**openai_config)
 
         tool_calls: dict[int, Any] = {}
-        accumulated_content: list[Part] = []
+        reasoning_parts: list[Part] = []
+        text_parts: list[Part] = []
+        metadata: dict[str, Any] = {}
         usage: CompletionUsage | None = None
+        saw_choice = False
+        raw_finish_reason: str | None = None
+        refusal_fragments: list[str] = []
+        failure_message: str | None = None
         async for chunk in stream:  # type: ignore
+            metadata.update(extract_response_metadata(chunk))
             # Usage rides on a final chunk that carries no choices.
             if chunk.usage is not None:
                 usage = chunk.usage
             if not chunk.choices:
                 continue
 
-            delta = chunk.choices[0].delta
+            saw_choice = True
+            choice = chunk.choices[0]
+            # The reason rides on the last chunk and is null on the rest.
+            if choice.finish_reason:
+                raw_finish_reason = choice.finish_reason
+            if failure := _failure_message(choice.model_extra):
+                failure_message = failure
 
-            # Text content chunk
-            if delta.content:
-                message = MessageConverter.to_genkit(MessageAdapter(delta))
-                accumulated_content.extend(message.content)
-                callback(
-                    ModelResponseChunk(
-                        role=Role.MODEL,
-                        content=message.content,
-                    )
-                )
+            delta = choice.delta
+            parts: list[Part] = []
 
-            # Reasoning content chunk (DeepSeek R1 / reasoner models).
-            # Note: Pydantic models raise AttributeError for unknown fields,
-            # so getattr() with a default doesn't work. Use try-except.
-            elif reasoning_text := MessageAdapter(delta).reasoning_content:
+            # A refusal streams in fragments and is reported as the finish message, not content.
+            if delta.refusal:
+                refusal_fragments.append(delta.refusal)
+
+            # Reasoning content (DeepSeek R1 / reasoner models).
+            if reasoning_text := MessageAdapter(delta).reasoning_content:
                 reasoning_part = Part.from_reasoning(reasoning_text)
-                accumulated_content.append(reasoning_part)
-                callback(
-                    ModelResponseChunk(
-                        role=Role.MODEL,
-                        content=[reasoning_part],
-                    )
-                )
+                reasoning_parts.append(reasoning_part)
+                parts.append(reasoning_part)
 
-            # Tool call chunk (partial function call)
-            elif delta.tool_calls:
+            # Text content
+            if delta.content:
+                text_part = MessageConverter.text_part_to_genkit(delta.content)
+                text_parts.append(text_part)
+                parts.append(text_part)
+
+            # Tool calls (partial function calls)
+            if delta.tool_calls:
                 for tool_call in delta.tool_calls:
+                    fragment = (tool_call.function.arguments or '') if tool_call.function else ''
                     # Accumulate fragmented tool call arguments
                     if tool_call.index not in tool_calls:
                         tool_calls[tool_call.index] = tool_call
                     else:
                         existing = tool_calls[tool_call.index]
                         if hasattr(existing, 'function') and existing.function and tool_call.function:
-                            existing.function.arguments += tool_call.function.arguments
-                content = [
-                    MessageConverter.tool_call_to_genkit(
-                        tool_calls[tool_call.index],
-                        args_segment=tool_call.function.arguments if tool_call.function else None,
+                            existing.function.arguments = (existing.function.arguments or '') + fragment
+                    parts.append(
+                        MessageConverter.tool_call_to_genkit(tool_calls[tool_call.index], args_segment=fragment)
                     )
-                    for tool_call in delta.tool_calls
-                ]
-                callback(ModelResponseChunk(role=Role.MODEL, content=content))
 
+            if parts:
+                callback(ModelResponseChunk(role=Role.MODEL, content=parts))
+
+        if not saw_choice:
+            raise GenkitError(
+                status='INTERNAL',
+                message='No choices in completion.',
+                details={'usage': _usage_from_completion(usage).model_dump(exclude_none=True)},
+            )
+
+        accumulated_content: list[Part] = [*reasoning_parts, *text_parts]
         if tool_calls:
             message = MessageConverter.to_genkit(
                 DictMessageAdapter({'tool_calls': tool_calls.values(), 'role': Role.MODEL})
             )
             accumulated_content.extend(message.content)
 
+        finish_reason, finish_message = _finish_state(
+            raw_finish_reason,
+            refusal=''.join(refusal_fragments),
+            failure_message=failure_message,
+        )
+
         result = ModelResponse(
             request=request,
             message=Message(role=Role.MODEL, content=accumulated_content),
+            finish_reason=finish_reason,
+            finish_message=finish_message,
             usage=_usage_from_completion(usage),
+            custom=metadata or None,
+            raw=metadata or None,
         )
         return self._clean_json_response(result, request)
 

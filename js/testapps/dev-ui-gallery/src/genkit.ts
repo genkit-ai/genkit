@@ -144,6 +144,9 @@ export const ai = genkit({
         indexId: 'pinecone-index',
         embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
+        clientParams: {
+          apiKey: process.env.PINECONE_API_KEY || 'dummy-api-key',
+        },
       },
     ]),
 

@@ -243,6 +243,16 @@ describe('GoogleAI Plugin', () => {
         !modelRef.info?.supports?.multiturn,
         'Gemini TTS model should not support multiturn'
       );
+      assert.strictEqual(
+        modelRef.info?.supports?.constrained,
+        'none',
+        'Gemini TTS model should not support constrained generation'
+      );
+      assert.deepStrictEqual(
+        modelRef.info?.supports?.output,
+        ['media'],
+        'Gemini TTS model should output media'
+      );
     });
 
     it('should have config values for gemini TTS', () => {

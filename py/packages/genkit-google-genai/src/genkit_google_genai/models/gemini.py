@@ -730,8 +730,9 @@ GENERIC_TTS_MODEL = ModelInfo(
         media=False,
         tools=False,
         tool_choice=False,
-        system_role=True,
-        constrained=Constrained.ALL,
+        system_role=False,
+        constrained=Constrained.NONE,
+        output=['media'],
     ),
 )
 
