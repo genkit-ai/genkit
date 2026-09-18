@@ -30,6 +30,7 @@ dependencies = [
   "genkit-google-genai",
   "genkit-middleware",
   "genkit-ollama",
+  "genkit-otel",
   "genkit-vertexai",
 ]
 description = "Workspace for Genkit packages"
@@ -152,6 +153,7 @@ google-genai-media   = { workspace = true }
 middleware           = { workspace = true }
 middleware-coding-agent = { workspace = true }
 ollama-sample        = { workspace = true }
+otel-jaeger          = { workspace = true }
 output-formats       = { workspace = true }
 prompts              = { workspace = true }
 tool-interrupts      = { workspace = true }
@@ -171,6 +173,7 @@ genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-ollama       = { workspace = true }
+genkit-otel         = { workspace = true }
 genkit-vertexai     = { workspace = true }
 
 [tool.uv.workspace]
@@ -374,6 +377,7 @@ root = [
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
+  "packages/genkit-otel/src",
   "packages/genkit-vertexai/src",
   ".",  # For samples.shared and other root-level imports
 ]
@@ -404,6 +408,7 @@ extraPaths = [
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
+  "packages/genkit-otel/src",
   "packages/genkit-vertexai/src",
 ]
 pythonVersion = "3.10"
@@ -447,6 +452,7 @@ search-path = [
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
+  "packages/genkit-otel/src",
   "packages/genkit-vertexai/src",
 ]
 python_version = "3.10"

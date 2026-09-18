@@ -134,6 +134,7 @@ async def test_run_turn_span_output_is_session_state_with_store(
 
     turn_span = _by_name(spans, 'runTurn-1')
     assert turn_span.attributes is not None
+    assert turn_span.attributes[Attr.TYPE] == 'flowStep'
     assert turn_span.attributes[SNAPSHOT_ID_ATTR] == out.snapshot_id
     assert SESSION_ID_ATTR not in turn_span.attributes
 

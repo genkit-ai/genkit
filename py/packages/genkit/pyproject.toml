@@ -94,6 +94,7 @@ google-genai          = ["genkit-google-genai"]
 middleware            = ["genkit-middleware"]
 ollama                = ["genkit-ollama"]
 openai                = ["genkit-openai"]
+otel                  = ["genkit-otel"]
 vertex-ai             = ["genkit-vertexai"]
 
 [project.urls]
@@ -126,4 +127,5 @@ genkit-google-genai                 = { workspace = true }
 genkit-middleware                   = { workspace = true }
 genkit-ollama                       = { workspace = true }
 genkit-openai                       = { workspace = true }
+genkit-otel                         = { workspace = true }
 genkit-vertexai                     = { workspace = true }

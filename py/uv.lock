@@ -34,12 +34,14 @@ members = [
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
+    "genkit-otel",
     "genkit-vertexai",
     "genkit-workspace",
     "google-genai-media",
     "middleware",
     "middleware-coding-agent",
     "ollama-sample",
+    "otel-jaeger",
     "output-formats",
     "prompts",
     "tool-interrupts",
@@ -1654,6 +1656,9 @@ ollama = [
 openai = [
     { name = "genkit-openai" },
 ]
+otel = [
+    { name = "genkit-otel" },
+]
 vertex-ai = [
     { name = "genkit-vertexai" },
 ]
@@ -1674,6 +1679,7 @@ requires-dist = [
     { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
+    { name = "genkit-otel", marker = "extra == 'otel'", editable = "packages/genkit-otel" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "json5", specifier = ">=0.10.0" },
@@ -1696,7 +1702,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "vertex-ai"]
+provides-extras = ["amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "otel", "vertex-ai"]
 
 [[package]]
 name = "genkit-amazon-bedrock"
@@ -1908,6 +1914,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "genkit-otel"
+version = "0.10.0"
+source = { editable = "packages/genkit-otel" }
+dependencies = [
+    { name = "genkit" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "opentelemetry-api", specifier = ">=1.29.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.29.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.29.0" },
+]
+
+[[package]]
 name = "genkit-vertexai"
 version = "0.10.0"
 source = { editable = "packages/genkit-vertexai" }
@@ -1954,6 +1979,7 @@ dependencies = [
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
+    { name = "genkit-otel" },
     { name = "genkit-vertexai" },
 ]
 
@@ -2020,6 +2046,7 @@ requires-dist = [
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
+    { name = "genkit-otel", editable = "packages/genkit-otel" },
     { name = "genkit-vertexai", editable = "packages/genkit-vertexai" },
 ]
 
@@ -4509,6 +4536,19 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-exporter-otlp"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/30/9c/3ab1db90f32da200dba332658f2bbe602369e3d19f6aba394031a42635be/opentelemetry_exporter_otlp-1.39.1.tar.gz", hash = "sha256:7cf7470e9fd0060c8a38a23e4f695ac686c06a48ad97f8d4867bc9b420180b9c", size = 6147, upload-time = "2025-12-11T13:32:40.309Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/6c/bdc82a066e6fb1dcf9e8cc8d4e026358fe0f8690700cc6369a6bf9bd17a7/opentelemetry_exporter_otlp-1.39.1-py3-none-any.whl", hash = "sha256:68ae69775291f04f000eb4b698ff16ff685fdebe5cb52871bc4e87938a7b00fe", size = 7019, upload-time = "2025-12-11T13:32:19.387Z" },
+]
+
+[[package]]
 name = "opentelemetry-exporter-otlp-proto-common"
 version = "1.39.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4536,6 +4576,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/53/48/b329fed2c610c2c32c9366d9dc597202c9d1e58e631c137ba15248d8850f/opentelemetry_exporter_otlp_proto_grpc-1.39.1.tar.gz", hash = "sha256:772eb1c9287485d625e4dbe9c879898e5253fea111d9181140f51291b5fec3ad", size = 24650, upload-time = "2025-12-11T13:32:41.429Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/a3/cc9b66575bd6597b98b886a2067eea2693408d2d5f39dad9ab7fc264f5f3/opentelemetry_exporter_otlp_proto_grpc-1.39.1-py3-none-any.whl", hash = "sha256:fa1c136a05c7e9b4c09f739469cbdb927ea20b34088ab1d959a849b5cc589c18", size = 19766, upload-time = "2025-12-11T13:32:21.027Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-proto-http"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "googleapis-common-protos" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/04/2a08fa9c0214ae38880df01e8bfae12b067ec0793446578575e5080d6545/opentelemetry_exporter_otlp_proto_http-1.39.1.tar.gz", hash = "sha256:31bdab9745c709ce90a49a0624c2bd445d31a28ba34275951a6a362d16a0b9cb", size = 17288, upload-time = "2025-12-11T13:32:42.029Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/f1/b27d3e2e003cd9a3592c43d099d2ed8d0a947c15281bf8463a256db0b46c/opentelemetry_exporter_otlp_proto_http-1.39.1-py3-none-any.whl", hash = "sha256:d9f5207183dd752a412c4cd564ca8875ececba13be6e9c6c370ffb752fd59985", size = 19641, upload-time = "2025-12-11T13:32:22.248Z" },
 ]
 
 [[package]]
@@ -4674,6 +4732,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/50/fc/c47bb04a1d8a941a4061307e1eddfa331ed4d0ab13d8a9781e6db256940a/opentelemetry_util_http-0.60b1.tar.gz", hash = "sha256:0d97152ca8c8a41ced7172d29d3622a219317f74ae6bb3027cfbdcf22c3cc0d6", size = 11053, upload-time = "2025-12-11T13:37:25.115Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/5c/d3f1733665f7cd582ef0842fb1d2ed0bc1fba10875160593342d22bba375/opentelemetry_util_http-0.60b1-py3-none-any.whl", hash = "sha256:66381ba28550c91bee14dcba8979ace443444af1ed609226634596b4b0faf199", size = 8947, upload-time = "2025-12-11T13:36:37.151Z" },
+]
+
+[[package]]
+name = "otel-jaeger"
+version = "0.2.0"
+source = { editable = "samples/otel-jaeger" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-google-genai" },
+    { name = "genkit-otel" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-otel", editable = "packages/genkit-otel" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.29.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.29.0" },
 ]
 
 [[package]]
