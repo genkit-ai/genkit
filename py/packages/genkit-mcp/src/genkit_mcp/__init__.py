@@ -16,7 +16,7 @@
 
 """Model Context Protocol client for Genkit.
 
-Exposes the tools of a stdio MCP server as Genkit ``tool.v2`` actions.
+Exposes the tools of one or more stdio MCP servers as Genkit ``tool.v2`` actions.
 """
 
 from genkit_mcp._client import McpClient, create_mcp_client, define_mcp_client
@@ -27,14 +27,19 @@ from genkit_mcp._errors import (
     McpConnectionFailedError,
     McpProtocolError,
 )
+from genkit_mcp._host import McpHost, McpHostServer, create_mcp_host, define_mcp_host
 
 __all__ = [
     'McpClient',
     'McpClientError',
     'McpConnectionClosedError',
     'McpConnectionFailedError',
+    'McpHost',
+    'McpHostServer',
     'McpProtocolError',
     'McpStdioServerConfig',
     'create_mcp_client',
+    'create_mcp_host',
     'define_mcp_client',
+    'define_mcp_host',
 ]

@@ -79,3 +79,50 @@ replaced on next use, so one bad server start is not permanent.
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,
 and a closed client shows no tools in the Dev UI.
+
+## Several servers behind one name
+
+`define_mcp_host` registers one provider over any number of servers, so a single selector reaches
+all of them:
+
+```python
+from genkit import Genkit
+from genkit_mcp import McpHostServer, McpStdioServerConfig, define_mcp_host
+
+ai = Genkit()
+
+host = define_mcp_host(
+    ai,
+    name='hosted',
+    servers=[
+        McpHostServer(
+            name='everything',
+            server=McpStdioServerConfig(command='npx', args=['-y', '@modelcontextprotocol/server-everything']),
+        ),
+        McpHostServer(
+            name='git',
+            server=McpStdioServerConfig(command='uvx', args=['mcp-server-git']),
+        ),
+    ],
+)
+
+result = await ai.generate(prompt='Echo "hello".', tools=['hosted:tool/*'])
+one = f'{host.name}:tool/{host.tool_name("everything", "echo")}'
+result = await ai.generate(prompt='Echo "hello".', tools=[one])
+```
+
+Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
+name a host gives a server is the prefix, and `tool_prefix=` on the entry overrides it; the host's
+own name is only the provider name, so it has to fit a selector but no model ever reads it. Two
+servers cannot share a name within a host, since a shared name would mean two tools with one name.
+
+A server that cannot be started is logged and skipped, so the other servers stay selectable. Only
+the server you ask for is affected by `await host.connect(...)`, `await host.disconnect(...)` and
+`await host.reconnect(...)`; `await host.close()` disconnects every server the host holds. Unlike
+`McpClient.close()`, that is not final: the host holds no servers afterwards, and `connect()` puts
+servers back.
+
+`create_mcp_host` builds the same host and registers nothing, as `create_mcp_client` does.
+
+One provider means one listing. A tool call that fails on one server drops the listing for all of
+them, so the next `generate` lists every server again.
