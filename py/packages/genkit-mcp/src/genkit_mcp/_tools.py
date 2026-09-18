@@ -49,6 +49,29 @@ MAX_TOOL_NAME_LENGTH = 64
 TOOL_NAME_PATTERN = re.compile(r'[A-Za-z_][A-Za-z0-9_-]*')
 """What both Gemini and OpenAI accept in a function declaration name."""
 
+SELECTOR_SEPARATORS = (':', '/')
+"""Characters a tool selector puts around a provider name, so a name cannot hold them."""
+
+
+def validate_provider_name(name: str) -> None:
+    """Reject a provider name no tool selector could carry.
+
+    Looser than the tool name rule a prefix has to meet: a provider name reaches
+    no model, so only the selector constrains it.
+
+    Args:
+        name: Candidate name for a client or host.
+
+    Raises:
+        ValueError: If ``<name>:tool/<tool>`` would not parse as a selector.
+    """
+    if name and not any(separator in name for separator in SELECTOR_SEPARATORS):
+        return
+    raise ValueError(
+        f'{name!r} cannot name an MCP provider: its tools are selected as '
+        f"'{name}:tool/<tool>', so the name must not be empty and must hold no ':' or '/'."
+    )
+
 
 def validate_tool_prefix(prefix: str) -> None:
     """Reject a prefix that cannot appear in a model-facing tool name.
@@ -68,7 +91,7 @@ def validate_tool_prefix(prefix: str) -> None:
     raise ValueError(
         f'{prefix!r} cannot prefix an MCP tool name: a function declaration name must start with a '
         'letter or an underscore and hold only letters, digits, underscores and hyphens. Pass '
-        'tool_prefix= to define_mcp_client with a name that can.'
+        'tool_prefix= with a name that can.'
     )
 
 

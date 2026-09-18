@@ -18,6 +18,7 @@ from genkit_mcp._tools import (
     call_result_to_multipart,
     mcp_tool_name,
     mcp_tool_to_action,
+    validate_provider_name,
     validate_tool_prefix,
 )
 from mcp.types import (
@@ -209,6 +210,22 @@ def test_validate_tool_prefix_rejects_a_prefix_a_model_would_reject(prefix: str)
     """A prefix which cannot appear in a function declaration name fails loudly."""
     with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
         validate_tool_prefix(prefix)
+
+
+@pytest.mark.parametrize(
+    'name',
+    ['everything', 'my server', 'tools.everything', 'caf\u00e9', '9lives'],
+)
+def test_validate_provider_name_accepts_a_name_a_selector_can_carry(name: str) -> None:
+    """A provider name reaches no model, so only the selector constrains it."""
+    validate_provider_name(name)
+
+
+@pytest.mark.parametrize('name', ['mcp-servers/everything', 'fake:everything', ':', '/', ''])
+def test_validate_provider_name_rejects_a_name_no_selector_could_carry(name: str) -> None:
+    """A name holding a selector separator could never be picked out again."""
+    with pytest.raises(ValueError, match='cannot name an MCP provider'):
+        validate_provider_name(name)
 
 
 @pytest.mark.parametrize(

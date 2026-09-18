@@ -18,6 +18,16 @@
 
 from genkit_google_cloud import package_name as google_cloud_package_name
 from genkit_google_genai import package_name as google_genai_package_name
+from genkit_mcp import (
+    McpClient,
+    McpClientError,
+    McpConnectionClosedError,
+    McpConnectionFailedError,
+    McpProtocolError,
+    McpStdioServerConfig,
+    create_mcp_client,
+    define_mcp_client,
+)
 from genkit_ollama import package_name as ollama_package_name
 from genkit_vertexai import package_name as vertex_ai_package_name
 
@@ -32,3 +42,19 @@ def test_package_names() -> None:
     assert google_genai_package_name() == 'genkit_google_genai'
     assert ollama_package_name() == 'genkit_ollama'
     assert vertex_ai_package_name() == 'genkit_vertexai'
+
+
+def test_mcp_exports() -> None:
+    """A test that ensures the MCP entry points import from the installed package.
+
+    This test verifies that the package imports work correctly from the
+    end-user perspective.
+    """
+    assert McpClient.__module__ == 'genkit_mcp._client'
+    assert McpStdioServerConfig.__module__ == 'genkit_mcp._config'
+    assert create_mcp_client.__module__ == 'genkit_mcp._client'
+    assert define_mcp_client.__module__ == 'genkit_mcp._client'
+    assert issubclass(McpConnectionClosedError, McpClientError)
+    assert issubclass(McpConnectionFailedError, McpClientError)
+    assert issubclass(McpProtocolError, McpClientError)
+    assert not issubclass(McpClientError, RuntimeError)
