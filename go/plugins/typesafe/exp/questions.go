@@ -37,9 +37,7 @@ const (
 	// levelsKeyword carries a score question's ordered level descriptions.
 	levelsKeyword = "x-levels"
 	// trueKeyword and falseKeyword carry a noul question's optional
-	// criteria. A field sets them through its jsonschema_extras tag:
-	//
-	//	jsonschema_extras:"x-true=Explicitly time-sensitive,x-false=No urgency expressed"
+	// criteria, which [NoulOf] emits from its type parameter.
 	trueKeyword  = "x-true"
 	falseKeyword = "x-false"
 )
@@ -105,32 +103,59 @@ func (Choice[T]) JSONSchema() *jsonschema.Schema {
 	return answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
 }
 
-// Noul is the answer to a yes/no question: the probability that the
-// statement is true. A value near 0.5 means the model could not tell, not
-// that the answer is "somewhat". There is no separate confidence; the
-// probability is the whole answer.
+// YesNo supplies what yes and no mean for a [NoulOf] question, as the
+// criteria of a [Choice] and the levels of a [Score] come from their
+// types. Both sides are given: the API takes the pair or nothing.
 //
-// A field of this type may carry the true and false criteria in its
-// jsonschema_extras tag under x-true and x-false.
-type Noul struct {
+//	type Urgent struct{}
+//
+//	func (Urgent) Criteria() (yes, no string) {
+//		return "Names a deadline, or says now or today", "No time pressure is expressed"
+//	}
+type YesNo interface {
+	Criteria() (yes, no string)
+}
+
+// NoCriteria is the [YesNo] of a plain [Noul]: the question is its
+// description alone.
+type NoCriteria struct{}
+
+// Criteria implements [YesNo] with no criteria.
+func (NoCriteria) Criteria() (yes, no string) { return "", "" }
+
+// NoulOf is the answer to a yes/no question whose criteria come from C:
+// the probability that the statement is true. A value near 0.5 means the
+// model could not tell, not that the answer is "somewhat". There is no
+// separate confidence; the probability is the whole answer.
+type NoulOf[C YesNo] struct {
 	Probability float64 `json:"noul"`
 }
 
+// Noul is a [NoulOf] with no criteria: the question is its description
+// alone, which is the usual yes/no question.
+type Noul = NoulOf[NoCriteria]
+
 // JSONSchema encodes the question, marked as a noul question for
-// [compileQuestions].
-func (Noul) JSONSchema() *jsonschema.Schema {
+// [compileQuestions], with C's criteria on the x-true and x-false keywords
+// when it has any.
+func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
 	props := jsonschema.NewProperties()
 	props.Set("noul", &jsonschema.Schema{Type: "number", Minimum: "0", Maximum: "1"})
-	return answerSchema(kindNoul, &jsonschema.Schema{Properties: props}, "noul")
+	s := answerSchema(kindNoul, &jsonschema.Schema{Properties: props}, "noul")
+	var zero C
+	if yes, no := zero.Criteria(); yes != "" || no != "" {
+		s.Extras[trueKeyword] = yes
+		s.Extras[falseKeyword] = no
+	}
+	return s
 }
 
 // Score is the answer to a rubric question: the expected level, computed
 // from the probability of each level, so it falls between levels when the
 // model is split. Legend maps each level number back to its description.
 //
-// Probabilities, Confidence, and Legend are set only by a System One
-// model. The [DecisionFormat] clears them on any other model's answer and
-// rounds Score to a whole level.
+// Probabilities, Confidence, and Legend are calibrated by a System One
+// model, as for a [Choice]; on a chat model they are whatever it wrote.
 type Score[L Rubric] struct {
 	Score         float64            `json:"score"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
@@ -270,9 +295,9 @@ func scoreCriteria(id string, prop map[string]any) ([]string, error) {
 	return levels, nil
 }
 
-// noulCriteria reads the optional true and false criteria. They are sent
-// as a pair or not at all: the API describes the pair, and one side alone
-// would leave the other implied.
+// noulCriteria reads the optional true and false criteria a [NoulOf]
+// emits. They are sent as a pair or not at all: the API describes the
+// pair, and one side alone would leave the other implied.
 func noulCriteria(id string, prop map[string]any) (map[string]string, error) {
 	yes, _ := prop[trueKeyword].(string)
 	no, _ := prop[falseKeyword].(string)
@@ -280,7 +305,7 @@ func noulCriteria(id string, prop map[string]any) (map[string]string, error) {
 	case yes == "" && no == "":
 		return nil, nil
 	case yes == "" || no == "":
-		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: noul question %q sets only one of x-true and x-false", id)
+		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: noul question %q says what only one side means; Criteria must return both yes and no", id)
 	}
 	return map[string]string{"true": yes, "false": no}, nil
 }

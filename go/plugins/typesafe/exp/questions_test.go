@@ -41,10 +41,14 @@ type anger int
 
 func (anger) Levels() []string { return []string{"Calm", "Concerned but civil", "Very angry"} }
 
+type urgent struct{}
+
+func (urgent) Criteria() (yes, no string) { return "Explicitly time-sensitive", "No urgency expressed" }
+
 type triage struct {
-	Department  Choice[dept] `json:"department" jsonschema_description:"Which team should handle this?"`
-	IsUrgent    Noul         `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?" jsonschema_extras:"x-true=Explicitly time-sensitive,x-false=No urgency expressed"`
-	Frustration Score[anger] `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+	Department  Choice[dept]   `json:"department" jsonschema_description:"Which team should handle this?"`
+	IsUrgent    NoulOf[urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration Score[anger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
 }
 
 // triageQuestions is what the triage schema compiles to.
@@ -124,7 +128,13 @@ func TestSchemaEncodesQuestions(t *testing.T) {
 		t.Errorf("is_urgent %s = %v, want %q", kindKeyword, got, kindNoul)
 	}
 	if got := urgent[trueKeyword]; got != "Explicitly time-sensitive" {
-		t.Errorf("is_urgent %s = %v: the extras tag was not applied", trueKeyword, got)
+		t.Errorf("is_urgent %s = %v: the criteria type was not applied", trueKeyword, got)
+	}
+	if got := urgent[falseKeyword]; got != "No urgency expressed" {
+		t.Errorf("is_urgent %s = %v: the criteria type was not applied", falseKeyword, got)
+	}
+	if got := property(t, urgent, "noul")["type"]; got != "number" {
+		t.Errorf("is_urgent noul type = %v: NoulOf did not keep the plain answer schema", got)
 	}
 
 	frustration := property(t, schema, "frustration")
@@ -176,7 +186,7 @@ func TestCompileQuestionsRejects(t *testing.T) {
 		{"unknown kind", prop(map[string]any{kindKeyword: "vibe", "description": "d"}), "unknown type"},
 		{"choice without options", prop(map[string]any{kindKeyword: kindChoice, "description": "d"}), "no options"},
 		{"one level", prop(map[string]any{kindKeyword: kindScore, "description": "d", levelsKeyword: []any{"only"}}), "at least two levels"},
-		{"half a noul", prop(map[string]any{kindKeyword: kindNoul, "description": "d", trueKeyword: "yes"}), "only one of"},
+		{"half a noul", prop(map[string]any{kindKeyword: kindNoul, "description": "d", trueKeyword: "yes"}), "only one side"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -226,17 +236,55 @@ func TestAnswersFillTheType(t *testing.T) {
 	}
 }
 
+type noCriteria struct{}
+
+func (noCriteria) Criteria() (yes, no string) { return "", "" }
+
+type halfCriteria struct{}
+
+func (halfCriteria) Criteria() (yes, no string) { return "yes means this", "" }
+
 func TestNoulWithoutCriteriaOmitsTheField(t *testing.T) {
 	type handoff struct {
-		WantsHuman Noul `json:"wants_human" jsonschema_description:"Does the user ask for a person?"`
+		WantsHuman Noul               `json:"wants_human" jsonschema_description:"Does the user ask for a person?"`
+		Empty      NoulOf[noCriteria] `json:"empty" jsonschema_description:"Is the sky blue? The type gives an empty pair, so this is a plain noul."`
 	}
 	questions, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(handoff{})), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := base.JSONString(questions["wants_human"])
-	if strings.Contains(wire, "criteria") {
-		t.Errorf("a noul without criteria put the field on the wire: %s", wire)
+	for _, id := range []string{"wants_human", "empty"} {
+		if wire := base.JSONString(questions[id]); strings.Contains(wire, "criteria") {
+			t.Errorf("%s: a noul without criteria put the field on the wire: %s", id, wire)
+		}
+	}
+}
+
+func TestNoulOfRejectsHalfCriteria(t *testing.T) {
+	type decision struct {
+		Half NoulOf[halfCriteria] `json:"half" jsonschema_description:"d"`
+	}
+	_, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(decision{})), "")
+	if err == nil || !strings.Contains(err.Error(), "only one side") {
+		t.Errorf("error = %v, want the half pair rejected before the model is called", err)
+	}
+}
+
+func TestNoulOfFillsFromThePlainAnswer(t *testing.T) {
+	var out NoulOf[urgent]
+	if err := json.Unmarshal([]byte(`{"noul": 0.93}`), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Probability != 0.93 {
+		t.Errorf("out = %+v, want the probability", out)
+	}
+	if text := base.JSONString(out); text != `{"noul":0.93}` {
+		t.Errorf("JSON = %s, want the plain answer", text)
+	}
+	// Every instantiation shares one underlying struct, so a helper that
+	// takes the plain Noul takes any of them by conversion.
+	if plain := Noul(out); plain.Probability != 0.93 {
+		t.Errorf("Noul(out) = %+v", plain)
 	}
 }
 

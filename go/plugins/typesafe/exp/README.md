@@ -74,11 +74,19 @@ the token counters.
 | `Choice[T]`      | pick one of `T.Criteria()` | `Choice`, `Probabilities` per option, `Confidence` |
 | `Score[L]`       | rate on `L.Levels()`       | `Score` (expected level, fractional), `Probabilities`, `Confidence`, `Legend` |
 | `Noul`           | is this true?              | `Probability`; near 0.5 means "could not tell"    |
+| `NoulOf[C]`      | is this true, where `C.Criteria()` says what yes and no mean | as `Noul`, which is `NoulOf` with no criteria |
 
-A `Noul` field may name what yes and no mean through its extras tag:
+The criteria of every question belong to a type, so a pair of yes and no
+criteria is a type too, and it is reused wherever the question is asked:
 
 ```go
-IsUrgent typesafex.Noul `json:"is_urgent" jsonschema_description:"..." jsonschema_extras:"x-true=Explicitly time-sensitive,x-false=No urgency expressed"`
+type Urgent struct{}
+
+func (Urgent) Criteria() (yes, no string) {
+	return "Names a deadline, or says now or today", "No time pressure is expressed"
+}
+
+IsUrgent typesafex.NoulOf[Urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 ```
 
 The built-in `enum` output format also works, with no decision type: the enum
