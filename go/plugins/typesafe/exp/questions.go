@@ -52,6 +52,8 @@ const (
 // Option is the key type of a [Choice]: a string type that lists its own
 // options and what each one means. The criteria are what the model
 // chooses among, so they belong to the type rather than to any one call.
+// A description is a string; the wire format also takes an object with
+// named parts, such as examples, which this type does not express.
 //
 //	type Dept string
 //

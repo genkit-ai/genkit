@@ -92,6 +92,10 @@ func (Urgent) Criteria() (yes, no string) {
 IsUrgent typesafex.NoulOf[Urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 ```
 
+Descriptions, criteria, and levels are strings. The wire format also takes
+an object with named parts, such as examples per option or per level; put
+that detail in the string instead.
+
 The built-in `enum` output format also works, with no decision type: the enum
 values are the options of one choice question, the system message is the
 question, and `resp.Text()` is the option.
@@ -122,7 +126,8 @@ out of the messages.
   data part. `ai.WithPromptParts(ai.NewDataPart(v))` sends any value as an
   object state, which TypeSafe recommends so that a question can name a field.
 - Several messages are sent as an array of `{role, content}` records, roles
-  included, which is the shape TypeSafe documents for a conversation.
+  included, so a question can refer to what the user said and what the model
+  said.
 - With documents attached, the state is `{messages, context}`, each document as
   its text or as `{content, metadata}` when it has metadata.
 
@@ -186,6 +191,8 @@ not carry over to the next, and the resolved version is on
   writes are not calibrated; do not gate on them.
 - No per-item questions. Score a list of passages with one call per passage.
 - No nested decision types: a question is a top-level field.
+- Instructions, criteria, and levels are strings; the wire format's object
+  form, with named parts such as examples, is not expressible.
 - Text only, English mostly, 32k tokens of state per request.
 - No streaming; the answer arrives whole.
 

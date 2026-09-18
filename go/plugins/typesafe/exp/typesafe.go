@@ -409,11 +409,11 @@ func buildState(req *ai.ModelRequest, cfg *Config) (any, error) {
 		return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: the request carries no state; a system message is instructions, so pass a prompt or messages too")
 	}
 	if len(req.Docs) > 0 {
-		context := make([]any, 0, len(req.Docs))
+		docs := make([]any, 0, len(req.Docs))
 		for _, doc := range req.Docs {
-			context = append(context, documentValue(doc))
+			docs = append(docs, documentValue(doc))
 		}
-		return map[string]any{"messages": records, "context": context}, nil
+		return map[string]any{"messages": records, "context": docs}, nil
 	}
 	if len(records) == 1 {
 		return records[0]["content"], nil
