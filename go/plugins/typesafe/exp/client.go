@@ -18,8 +18,10 @@ package exp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"math/rand/v2"
@@ -371,7 +373,15 @@ func httpError(endpoint string, code int, body []byte) error {
 	return status.Errorf(sentinel, "%s: HTTP %d: %s", endpoint, code, errorMessage(body))
 }
 
+// errorMessage reads the message out of an error body. The endpoints use
+// three shapes: {error: {message}} or {error: "..."}, a {message}, and a
+// validation list, which TypeSafe's API sends under detail as {loc, msg}
+// records and OpenRouter sends as the bare array of {path, message}
+// records. A body in none of these shapes is quoted as it came.
 func errorMessage(body []byte) string {
+	if msg := validationErrors(body); msg != "" {
+		return msg
+	}
 	var envelope struct {
 		Error   json.RawMessage `json:"error"`
 		Message string          `json:"message"`
@@ -394,6 +404,13 @@ func errorMessage(body []byte) string {
 			return envelope.Message
 		}
 		if len(envelope.Detail) > 0 {
+			if msg := validationErrors(envelope.Detail); msg != "" {
+				return msg
+			}
+			var flat string
+			if json.Unmarshal(envelope.Detail, &flat) == nil && flat != "" {
+				return flat
+			}
 			return string(envelope.Detail)
 		}
 	}
@@ -405,6 +422,36 @@ func errorMessage(body []byte) string {
 		msg = http.StatusText(http.StatusInternalServerError)
 	}
 	return msg
+}
+
+// validationErrors joins a list of validation records into one line, each
+// as its path and message, or returns "" when the body is not such a list.
+func validationErrors(body []byte) string {
+	var records []struct {
+		Message string `json:"message"`
+		Msg     string `json:"msg"`
+		Path    []any  `json:"path"`
+		Loc     []any  `json:"loc"`
+	}
+	if json.Unmarshal(body, &records) != nil || len(records) == 0 {
+		return ""
+	}
+	var msgs []string
+	for _, r := range records {
+		msg := cmp.Or(r.Message, r.Msg)
+		if msg == "" {
+			continue
+		}
+		var path []string
+		for _, p := range append(r.Path, r.Loc...) {
+			path = append(path, fmt.Sprint(p))
+		}
+		if len(path) > 0 {
+			msg = strings.Join(path, ".") + ": " + msg
+		}
+		msgs = append(msgs, msg)
+	}
+	return strings.Join(msgs, "; ")
 }
 
 func backoff(attempt int) time.Duration {

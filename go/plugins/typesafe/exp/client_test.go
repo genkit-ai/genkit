@@ -247,7 +247,9 @@ func TestErrorsMapToStatus(t *testing.T) {
 		msg  string
 	}{
 		{401, `{"error":{"message":"Missing or invalid API key"}}`, status.ErrUnauthenticated, "Missing or invalid API key"},
-		{422, `{"detail":[{"loc":["body","questions"],"msg":"field required"}]}`, status.ErrInvalidArgument, "field required"},
+		{422, `{"detail":[{"loc":["body","questions"],"msg":"field required"}]}`, status.ErrInvalidArgument, "body.questions: field required"},
+		{400, `[{"code":"invalid_union","path":["questions","u","criteria","false"],"message":"Invalid input"},{"path":[],"message":"Unrecognized key"}]`, status.ErrInvalidArgument, "questions.u.criteria.false: Invalid input; Unrecognized key"},
+		{400, `{"error":{"message":"HTTP 400: {\"detail\":\"Too many score levels\"}"}}`, status.ErrInvalidArgument, "Too many score levels"},
 		{429, `{"error":"rate limited"}`, status.ErrResourceExhausted, "rate limited"},
 		{503, `service unavailable`, status.ErrUnavailable, "service unavailable"},
 		{500, ``, status.ErrInternal, "HTTP 500"},
