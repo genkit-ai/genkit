@@ -48,7 +48,6 @@ g := genkit.Init(ctx, genkit.WithPlugins(&typesafex.TypeSafe{})) // TYPESAFE_API
 
 out, resp, err := genkit.GenerateData[Triage](ctx, g,
 	ai.WithModel(typesafex.Model(g, "jev-1.13.0")),
-	ai.WithOutputFormat(typesafex.OutputFormatDecision),
 	ai.WithPrompt(ticket))
 if err != nil {
 	return err
@@ -61,6 +60,10 @@ case "billing":
 	// ...
 }
 ```
+
+That is the whole call: the model, the state, and the type. The questions ride
+on the output schema, which the model reads back, so no output format needs
+naming.
 
 Everything else is the generate API as it already is: prompt files and the Dev
 UI prompts page, model middleware such as fallback across gateways, the trace
@@ -143,7 +146,6 @@ model: typesafe/jev-1.13.0
 input:
   schema: TicketInput
 output:
-  format: decision
   schema: Triage
 ---
 {{ticket}}
@@ -177,19 +179,11 @@ Pin a version in production. Confidence thresholds tuned against one release do
 not carry over to the next, and the resolved version is on
 `resp.Custom["model"]` for every call.
 
-## The decision format on other models
-
-`decision` is an output format, so the same decision type runs on any model,
-which is useful before a TypeSafe key is at hand. The format keeps the contract
-honest: on jev the questions ride on the output schema and the answers come
-back calibrated; on another model the questions are rendered as instructions,
-and the answer is hardened before it is parsed. Probabilities and confidence
-are removed, a score is rounded to a whole level, and a noul becomes 0 or 1. A
-zero confidence therefore means unknown, and code that gates on it routes to a
-human rather than trusting a number the model invented.
-
 ## Limits
 
+- A decision type is for a System One model. A chat model fills the same
+  JSON through constrained output, and the probabilities and confidence it
+  writes are not calibrated; do not gate on them.
 - No per-item questions. Score a list of passages with one call per passage.
 - No nested decision types: a question is a top-level field.
 - Text only, English mostly, 32k tokens of state per request.

@@ -78,9 +78,9 @@ type Rubric interface {
 // is. Its JSON is the wire answer, so an output type built from these
 // fields is filled straight from the response.
 //
-// Probabilities and Confidence are set only by a System One model. The
-// [DecisionFormat] clears them on any other model's answer, so a zero
-// Confidence means unknown, never certain.
+// Probabilities and Confidence are calibrated by a System One model. A
+// chat model fills the same JSON through constrained output, and then they
+// are numbers it wrote, not a distribution it computed.
 type Choice[T Option[T]] struct {
 	Choice        T             `json:"choice"`
 	Probabilities map[T]float64 `json:"probabilities,omitempty"`

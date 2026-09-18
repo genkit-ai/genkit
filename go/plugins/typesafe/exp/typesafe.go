@@ -22,8 +22,9 @@
 //
 // The plugin serves jev as a model that speaks only constrained JSON, which
 // is the subset of the generate API the model fits exactly. The questions
-// are the fields of the output type, declared with [Choice], [Score], and
-// [Noul], so a decision is one typed generate call:
+// are the fields of the output type, declared with [Choice], [Score],
+// [Noul], and [NoulOf], so a decision is one typed generate call with
+// nothing more than the model and the state:
 //
 //	type Dept string
 //
@@ -42,7 +43,6 @@
 //
 //	out, resp, err := genkit.GenerateData[Triage](ctx, g,
 //		ai.WithModel(typesafe.Model(g, "jev-1.13.0")),
-//		ai.WithOutputFormat(typesafe.OutputFormatDecision),
 //		ai.WithPrompt(ticket))
 //	if out.Department.Confidence < 0.6 {
 //		// route to a human
@@ -158,11 +158,6 @@ func (t *TypeSafe) Init(ctx context.Context) []api.Action {
 	return nil
 }
 
-// Formats implements [ai.FormatPlugin], registering the [DecisionFormat].
-func (t *TypeSafe) Formats(ctx context.Context) []ai.Formatter {
-	return []ai.Formatter{DecisionFormat{}}
-}
-
 // ListActions implements [api.DynamicPlugin]. TypeSafe's own API lists its
 // models; a gateway has no such listing, so the known IDs are advertised.
 // A listing failure falls back to the known IDs too, so the Dev UI still
@@ -255,7 +250,7 @@ type model struct {
 // generate answers the questions the request's output schema encodes.
 func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	if req.Output == nil || (req.Output.Schema == nil && req.Output.Format != ai.OutputFormatEnum) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: the model answers questions encoded in an output type; call with ai.WithOutputType and the decision format")
+		return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: the model answers questions encoded in an output type; call GenerateData with a decision type or pass ai.WithOutputType")
 	}
 	enum := req.Output.Format == ai.OutputFormatEnum
 	preamble, err := systemPreamble(req.Messages)
@@ -294,7 +289,6 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 	if enum {
 		part = ai.NewTextPart(text)
 	}
-	part.Metadata = map[string]any{"typesafe": map[string]any{"model": resp.Model, calibratedKey: true}}
 
 	custom := map[string]any{"model": resp.Model, "answers": resp.Answers}
 	if resp.Provider != "" {

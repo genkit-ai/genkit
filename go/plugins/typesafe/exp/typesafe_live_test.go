@@ -24,7 +24,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
-	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
 )
 
 // The live checks run jev through OpenRouter, the gateway an ordinary key
@@ -37,9 +36,9 @@ func TestOpenRouterLive(t *testing.T) {
 	model := Model(g, "jev-latest")
 
 	t.Run("decision", func(t *testing.T) {
+		// The documented call: the model, the state, and the type.
 		out, resp, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithPromptParts(ai.NewDataPart(map[string]any{
 				"ticket":       "I was charged twice for one order and I need the duplicate refunded today.",
 				"account_tier": "business",
@@ -84,7 +83,6 @@ func TestOpenRouterLive(t *testing.T) {
 	t.Run("decision with preamble", func(t *testing.T) {
 		out, _, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithSystem("The state is a support ticket from a business customer of an online store."),
 			ai.WithPromptParts(ai.NewDataPart(map[string]any{
 				"ticket": "I was charged twice for one order and I need the duplicate refunded today.",
@@ -119,7 +117,6 @@ func TestOpenRouterLive(t *testing.T) {
 		}
 		out, _, err := genkit.GenerateData[handoff](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithMessages(
 				ai.NewUserMessage(ai.NewTextPart("Hi, I cannot log in.")),
 				ai.NewModelMessage(ai.NewTextPart("Let me help. Have you tried resetting your password?")),
@@ -133,37 +130,4 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Errorf("wants_human = %v, want over 0.5", out.WantsHuman.Probability)
 		}
 	})
-}
-
-// TestDecisionFormatOnChatModelLive runs the same decision type on a chat
-// model through OpenRouter's chat completions, which exercises the format's
-// instruction and hardening path on a model that has no calibration.
-func TestDecisionFormatOnChatModelLive(t *testing.T) {
-	if os.Getenv("OPENROUTER_API_KEY") == "" {
-		t.Skip("OPENROUTER_API_KEY is not set")
-	}
-	g := genkit.Init(t.Context(), genkit.WithPlugins(&TypeSafe{Endpoint: OpenRouter()}, &openrouter.OpenRouter{}))
-
-	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModelName("openrouter/openai/gpt-5-mini"),
-		ai.WithOutputFormat(OutputFormatDecision),
-		ai.WithPrompt("I was charged twice for one order and I need the duplicate refunded today."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("chat model answers: %s", base.JSONString(out))
-	t.Logf("hardened text: %s", resp.Text())
-
-	if out.Department.Choice != "billing" {
-		t.Errorf("department = %q, want billing", out.Department.Choice)
-	}
-	if out.Department.Confidence != 0 || out.Department.Probabilities != nil {
-		t.Errorf("an uncalibrated model's numbers survived: %+v", out.Department)
-	}
-	if p := out.IsUrgent.Probability; p != 0 && p != 1 {
-		t.Errorf("noul = %v, want 0 or 1 from an uncalibrated model", p)
-	}
-	if s := out.Frustration.Score; s != math.Round(s) || out.Frustration.Legend != nil || out.Frustration.Confidence != 0 {
-		t.Errorf("score = %+v, want a whole level with no distribution", out.Frustration)
-	}
 }

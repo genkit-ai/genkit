@@ -10,7 +10,6 @@ config:
 input:
   schema: TicketRequest
 output:
-  format: decision
   schema: Triage
 ---
 {{role "system"}}

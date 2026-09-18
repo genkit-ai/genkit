@@ -305,7 +305,6 @@ func DefineTriage(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "triageFlow", func(ctx context.Context, input TicketRequest) (TriageResult, error) {
 		decision, resp, err := genkit.GenerateData[Triage](ctx, g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(typesafex.OutputFormatDecision),
 			ai.WithSystem("The state is a support ticket from a customer of an online store; accountTier is the customer's plan."),
 			ai.WithPromptParts(ai.NewDataPart(input)),
 		)
@@ -377,7 +376,6 @@ func DefineScreen(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "screenFlow", func(ctx context.Context, input ScreenRequest) (ScreenResult, error) {
 		decision, _, err := genkit.GenerateData[Screen](ctx, g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(typesafex.OutputFormatDecision),
 			ai.WithPrompt(input.Message),
 		)
 		if err != nil {
@@ -415,7 +413,6 @@ func DefineRank(g *genkit.Genkit) {
 				defer func() { <-inFlight }()
 				relevance, _, err := genkit.GenerateData[Relevance](ctx, g,
 					ai.WithModel(model),
-					ai.WithOutputFormat(typesafex.OutputFormatDecision),
 					ai.WithPromptParts(ai.NewDataPart(map[string]any{"query": input.Query, "passage": passage})),
 				)
 				if err != nil {
@@ -461,7 +458,6 @@ func DefineAsk(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "askFlow", func(ctx context.Context, input AskRequest) (AskResult, error) {
 		routing, _, err := genkit.GenerateData[Routing](ctx, g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(typesafex.OutputFormatDecision),
 			ai.WithPrompt(input.Query),
 		)
 		if err != nil {

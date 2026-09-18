@@ -108,16 +108,13 @@ func newGenkit(t *testing.T, fake *fakeJev, ep *Endpoint) *genkit.Genkit {
 	}))
 }
 
-func TestGenerateDataWithDecisionFormat(t *testing.T) {
+func TestGenerateData(t *testing.T) {
+	// The documented call: the model, the state, and the type. The
+	// questions ride on the output schema, so no format is named.
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, nil)
-	if !genkit.IsDefinedFormat(g, OutputFormatDecision) {
-		t.Fatal("the plugin did not register the decision format")
-	}
-
 	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModel(Model(g, "jev-1.13.0")),
-		ai.WithOutputFormat(OutputFormatDecision),
 		ai.WithPrompt("I was charged twice and need the duplicate refunded today."))
 	if err != nil {
 		t.Fatal(err)
@@ -159,26 +156,8 @@ func TestGenerateDataWithDecisionFormat(t *testing.T) {
 	if custom["model"] != "jev-1.13.0" || custom["answers"] == nil {
 		t.Errorf("custom = %v", resp.Custom)
 	}
-	if !calibrated(resp.Message.Content[0].Metadata) {
-		t.Errorf("the answer part is not marked calibrated: %+v", resp.Message.Content[0].Metadata)
-	}
 	if resp.FinishReason != ai.FinishReasonStop {
 		t.Errorf("finish reason = %v", resp.FinishReason)
-	}
-}
-
-func TestGenerateDataWithJSONFormat(t *testing.T) {
-	// The plain JSON format works too: the questions are in the schema
-	// whatever the format, and the answers validate against it.
-	g := newGenkit(t, &fakeJev{}, nil)
-	out, _, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModel(Model(g, "jev-latest")),
-		ai.WithPrompt("hello"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Department.Choice != "billing" || out.Frustration.Score != 1.3 {
-		t.Errorf("out = %+v", out)
 	}
 }
 
@@ -188,7 +167,7 @@ func TestStateShapes(t *testing.T) {
 	model := Model(g, "jev-latest")
 	decide := func(t *testing.T, opts ...ai.GenerateOption) any {
 		t.Helper()
-		opts = append(opts, ai.WithModel(model), ai.WithOutputType(triage{}), ai.WithOutputFormat(OutputFormatDecision))
+		opts = append(opts, ai.WithModel(model), ai.WithOutputType(triage{}))
 		if _, err := genkit.Generate(t.Context(), g, opts...); err != nil {
 			t.Fatal(err)
 		}
@@ -267,7 +246,7 @@ func TestRefusals(t *testing.T) {
 		type mood struct {
 			Mood string `json:"mood" jsonschema_description:"How does the customer feel?"`
 		}
-		_, _, err := genkit.GenerateData[mood](t.Context(), g, ai.WithModel(model), ai.WithOutputFormat(OutputFormatDecision), ai.WithPrompt("hi"))
+		_, _, err := genkit.GenerateData[mood](t.Context(), g, ai.WithModel(model), ai.WithPrompt("hi"))
 		if err == nil || !strings.Contains(err.Error(), "not a question") {
 			t.Errorf("error = %v", err)
 		}
@@ -353,7 +332,6 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 	t.Run("preamble on every question", func(t *testing.T) {
 		if _, _, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithSystem("The state is a support ticket."),
 			ai.WithPrompt("My card was charged twice.")); err != nil {
 			t.Fatal(err)
@@ -372,7 +350,6 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 	t.Run("system alone is not state", func(t *testing.T) {
 		_, _, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithMessages(ai.NewSystemMessage(ai.NewTextPart("The state is a support ticket."))))
 		if err == nil || !strings.Contains(err.Error(), "no state") {
 			t.Errorf("error = %v", err)
@@ -381,7 +358,6 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 	t.Run("system is text only", func(t *testing.T) {
 		_, _, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModel(model),
-			ai.WithOutputFormat(OutputFormatDecision),
 			ai.WithMessages(
 				ai.NewSystemMessage(ai.NewDataPart(map[string]any{"tier": "business"})),
 				ai.NewUserMessage(ai.NewTextPart("hi"))))
@@ -396,7 +372,6 @@ func TestOpenRouterThroughGenerate(t *testing.T) {
 	g := newGenkit(t, fake, OpenRouter())
 	out, _, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModel(Model(g, "jev-1.13.0")),
-		ai.WithOutputFormat(OutputFormatDecision),
 		ai.WithPrompt("hi"))
 	if err != nil {
 		t.Fatal(err)
