@@ -512,9 +512,11 @@ class TestMessageConverterReasoningContent:
         assert len(msg.content) == 3
         assert msg.content[0].reasoning == 'Some reasoning'
         assert msg.content[1].text == 'Checking the weather.'
-        assert msg.content[2].tool_request.ref == 'call_1'
-        assert msg.content[2].tool_request.name == 'get_weather'
-        assert msg.content[2].tool_request.input == {'location': 'NYC'}
+        req = msg.content[2].tool_request
+        assert req is not None
+        assert req.ref == 'call_1'
+        assert req.name == 'get_weather'
+        assert req.input == {'location': 'NYC'}
 
     def test_text_and_tool_calls_without_reasoning(self) -> None:
         """Keep text alongside tool calls when there is no reasoning."""
@@ -534,7 +536,9 @@ class TestMessageConverterReasoningContent:
         msg = MessageConverter.to_genkit(adapter)
         assert len(msg.content) == 2
         assert msg.content[0].text == 'Let me look that up.'
-        assert msg.content[1].tool_request.input == {'location': 'NYC'}
+        req = msg.content[1].tool_request
+        assert req is not None
+        assert req.input == {'location': 'NYC'}
 
     def test_zero_argument_tool_call_has_empty_input(self) -> None:
         """A tool call whose arguments are an empty string parses to an empty input."""
@@ -545,8 +549,10 @@ class TestMessageConverterReasoningContent:
         })
         msg = MessageConverter.to_genkit(adapter)
         assert len(msg.content) == 1
-        assert msg.content[0].tool_request.name == 'ping'
-        assert msg.content[0].tool_request.input == {}
+        req = msg.content[0].tool_request
+        assert req is not None
+        assert req.name == 'ping'
+        assert req.input == {}
 
     def test_role_defaults_to_model(self) -> None:
         """Default role should be MODEL when not provided."""

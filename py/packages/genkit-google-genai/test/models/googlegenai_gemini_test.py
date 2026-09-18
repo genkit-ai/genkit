@@ -1118,7 +1118,7 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
 
 def _json_output_request() -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         output=OutputConfig(
             format='json',
             json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
