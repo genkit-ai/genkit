@@ -9,7 +9,10 @@ This module contains unit tests for the Registry class and its associated
 functionality, ensuring proper registration and management of Genkit resources.
 """
 
+import asyncio
+
 import pytest
+from structlog.testing import capture_logs
 
 from genkit import Genkit, Plugin
 from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
@@ -111,7 +114,7 @@ async def test_child_resolve_action_dap_tool_returns_action_without_catalog() ->
 
 @pytest.mark.asyncio
 async def test_resolve_action_by_key_dap_qualified() -> None:
-    """Qualified DAP key returns the child Action. It does not bind or catalog it."""
+    """Qualified DAP key returns the child Action without binding it as a canonical tool."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -135,7 +138,7 @@ async def test_resolve_action_by_key_dap_qualified() -> None:
 
     catalog = await registry.list_actions()
     assert '/dynamic-action-provider/my-dap' in catalog
-    assert '/dynamic-action-provider/my-dap:tool/inner-tool' not in catalog
+    assert '/dynamic-action-provider/my-dap:tool/inner-tool' in catalog
     assert '/tool.v2/inner-tool' not in catalog
 
 
@@ -374,8 +377,8 @@ async def test_child_resolvable_local_tool_shadows_parent_plugin_metadata() -> N
 
 
 @pytest.mark.asyncio
-async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> None:
-    """DAP children are not catalog rows; plugin-advertised ``/tool.v2/`` stays until generate binds."""
+async def test_child_dap_child_row_does_not_shadow_parent_plugin_metadata() -> None:
+    """A DAP child is its own catalog row; the plugin-advertised ``/tool.v2/`` row is untouched."""
 
     class ParentPlugin(Plugin):
         name = 'parentplugin'
@@ -416,13 +419,13 @@ async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> Non
 
     catalog = await child.list_actions()
     qualified = create_action_key(ActionKind.DYNAMIC_ACTION_PROVIDER, 'mcp:tool/parentplugin/mcp-tool')
-    assert qualified not in catalog
+    assert catalog[qualified].description == 'from mcp'
     assert catalog['/tool.v2/parentplugin/mcp-tool'].description == 'stale parent schema'
 
 
 @pytest.mark.asyncio
 async def test_list_actions_registered_canonical_coexists_with_qualified_dap_rows() -> None:
-    """Registered ``/tool.v2/...`` row is the catalog key; DAP children are not listed."""
+    """A DAP child sharing a registered tool's name gets its own row, it does not replace it."""
     tool_name = 'suite/same-canonical'
 
     async def registered_fn(_: str) -> str:
@@ -461,7 +464,7 @@ async def test_list_actions_registered_canonical_coexists_with_qualified_dap_row
     assert canonical in catalog
     assert catalog[canonical].description == 'from registry registration'
 
-    assert qualified not in catalog
+    assert catalog[qualified].description == 'from dap nested'
     assert provider_key in catalog
 
 
@@ -543,3 +546,289 @@ async def test_resolve_model_finds_plugin_background_model() -> None:
     assert got is not None
     assert got.kind == ActionKind.BACKGROUND_MODEL
     assert got.name == 'plug/veo-2.0-generate-001'
+
+
+def _dap_child(name: str, description: str) -> Action:
+    async def child_fn(x: str) -> str:
+        return x
+
+    return Action(kind=ActionKind.TOOL, name=name, fn=child_fn, description=description)
+
+
+@pytest.mark.asyncio
+async def test_list_actions_expands_dap_children() -> None:
+    """Every child gets a catalog row under the key resolve_action_by_key accepts."""
+    registry = Registry()
+    registry.register_action(kind=ActionKind.TOOL, name='local-tool', fn=_identity)
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [_dap_child('echo', 'echoes'), _dap_child('add', 'adds')]}
+
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+
+    catalog = await registry.list_actions()
+
+    assert '/tool.v2/local-tool' in catalog
+    assert '/dynamic-action-provider/mcp' in catalog
+    echo = catalog['/dynamic-action-provider/mcp:tool/echo']
+    assert echo.key == '/dynamic-action-provider/mcp:tool/echo'
+    assert echo.name == 'echo'
+    assert echo.action_type == 'tool'
+    assert echo.description == 'echoes'
+    assert '/dynamic-action-provider/mcp:tool/add' in catalog
+    assert await registry.resolve_action_by_key(echo.key) is not None
+
+
+@pytest.mark.asyncio
+async def test_list_actions_without_dap_is_unaffected() -> None:
+    """A registry with no provider lists exactly its registered actions."""
+    registry = Registry()
+    registry.register_action(kind=ActionKind.TOOL, name='local-tool', fn=_identity)
+    registry.register_action(kind=ActionKind.CUSTOM, name='local-custom', fn=_identity)
+
+    catalog = await registry.list_actions()
+
+    assert sorted(catalog) == ['/custom/local-custom', '/tool.v2/local-tool']
+
+
+@pytest.mark.asyncio
+async def test_list_actions_survives_a_failing_dap() -> None:
+    """One unreachable provider costs its own rows, not the catalog."""
+    registry = Registry()
+    registry.register_action(kind=ActionKind.TOOL, name='local-tool', fn=_identity)
+
+    async def broken_fn() -> DapValue:
+        raise RuntimeError('mcp server is down')
+
+    async def healthy_fn() -> DapValue:
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(registry, 'broken', broken_fn)
+    define_dynamic_action_provider(registry, 'healthy', healthy_fn)
+
+    with capture_logs() as logs:
+        catalog = await registry.list_actions()
+
+    assert any('Error listing actions' in entry['event'] and 'broken' in entry['event'] for entry in logs)
+    assert '/tool.v2/local-tool' in catalog
+    assert '/dynamic-action-provider/broken' in catalog
+    assert '/dynamic-action-provider/healthy:tool/echo' in catalog
+    assert not [key for key in catalog if key.startswith('/dynamic-action-provider/broken:')]
+
+
+@pytest.mark.asyncio
+async def test_list_actions_survives_a_dap_child_without_a_name() -> None:
+    """A nameless child is rejected by the provider, and that rejection stays local."""
+    registry = Registry()
+    registry.register_action(kind=ActionKind.TOOL, name='local-tool', fn=_identity)
+
+    async def nameless_fn() -> DapValue:
+        return {'tool': [_dap_child('', 'no name')]}
+
+    define_dynamic_action_provider(registry, 'nameless', nameless_fn)
+
+    catalog = await registry.list_actions()
+
+    assert '/tool.v2/local-tool' in catalog
+    assert '/dynamic-action-provider/nameless' in catalog
+    assert not [key for key in catalog if key.startswith('/dynamic-action-provider/nameless:')]
+
+
+@pytest.mark.asyncio
+async def test_list_actions_drops_children_of_a_timed_out_dap() -> None:
+    """A stalled provider yields no rows, and its fetch keeps running to warm the cache."""
+    registry = Registry()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def slow_fn() -> DapValue:
+        await release.wait()
+        finished.set()
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(registry, 'slow', slow_fn)
+
+    with capture_logs() as logs:
+        catalog = await asyncio.wait_for(registry.list_actions(dap_timeout_seconds=0.05), timeout=5)
+
+    assert any('Timed out listing actions' in entry['event'] and 'slow' in entry['event'] for entry in logs)
+    assert '/dynamic-action-provider/slow' in catalog
+    assert '/dynamic-action-provider/slow:tool/echo' not in catalog
+
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=5)
+
+    assert '/dynamic-action-provider/slow:tool/echo' in await registry.list_actions()
+
+
+@pytest.mark.asyncio
+async def test_list_actions_holds_a_timed_out_listing_until_it_finishes() -> None:
+    """The in-flight fetch is referenced until it completes, then released."""
+    from genkit._core._registry import _dap_listing_tasks
+
+    registry = Registry()
+    release = asyncio.Event()
+
+    async def slow_fn() -> DapValue:
+        await release.wait()
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(registry, 'slow', slow_fn)
+
+    before = set(_dap_listing_tasks)
+    await asyncio.wait_for(registry.list_actions(dap_timeout_seconds=0.05), timeout=5)
+    abandoned = _dap_listing_tasks - before
+
+    assert len(abandoned) == 1
+    (task,) = abandoned
+
+    release.set()
+    await task
+
+    assert task not in _dap_listing_tasks
+
+
+@pytest.mark.asyncio
+async def test_list_actions_lists_daps_concurrently() -> None:
+    """Listing is concurrent: a provider that waits on a later one still returns rows."""
+    registry = Registry()
+    second_started = asyncio.Event()
+
+    async def first_fn() -> DapValue:
+        await second_started.wait()
+        return {'tool': [_dap_child('first', 'first')]}
+
+    async def second_fn() -> DapValue:
+        second_started.set()
+        return {'tool': [_dap_child('second', 'second')]}
+
+    define_dynamic_action_provider(registry, 'first', first_fn)
+    define_dynamic_action_provider(registry, 'second', second_fn)
+
+    catalog = await registry.list_actions(dap_timeout_seconds=5)
+
+    assert '/dynamic-action-provider/first:tool/first' in catalog
+    assert '/dynamic-action-provider/second:tool/second' in catalog
+
+
+@pytest.mark.asyncio
+async def test_list_actions_only_lists_children_that_can_be_run() -> None:
+    """Every child row must resolve, so the Dev UI never offers a row that fails on run."""
+    registry = Registry()
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [_dap_child('echo', 'echoes')], ActionKind.TOOL: [_dap_child('shadow', 'wrong bucket')]}
+
+    define_dynamic_action_provider(registry, 'mcp', dap_fn)
+
+    catalog = await registry.list_actions()
+    children = [key for key in catalog if key.startswith('/dynamic-action-provider/mcp:')]
+
+    assert children == ['/dynamic-action-provider/mcp:tool/echo']
+    for key in children:
+        assert await registry.resolve_action_by_key(key) is not None
+
+
+@pytest.mark.asyncio
+async def test_list_actions_skips_children_of_a_namespaced_provider() -> None:
+    """A provider name holding a slash cannot host a resolvable child key."""
+    registry = Registry()
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(registry, 'myplugin/mcp', dap_fn)
+
+    with capture_logs() as logs:
+        catalog = await registry.list_actions()
+
+    assert any('their keys cannot be resolved' in entry['event'] for entry in logs)
+    assert '/dynamic-action-provider/myplugin/mcp' in catalog
+    assert not [key for key in catalog if ':tool/echo' in key]
+
+
+@pytest.mark.asyncio
+async def test_list_actions_releases_a_cancelled_listing() -> None:
+    """Cancelling a listing leaves its fetch running and its outcome taken."""
+    from genkit._core._registry import _dap_listing_tasks
+
+    registry = Registry()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def failing_fn() -> DapValue:
+        started.set()
+        await release.wait()
+        raise RuntimeError('mcp server died')
+
+    define_dynamic_action_provider(registry, 'slow', failing_fn)
+
+    before = set(_dap_listing_tasks)
+    listing = asyncio.ensure_future(registry.list_actions())
+    await started.wait()
+    in_flight = _dap_listing_tasks - before
+
+    assert len(in_flight) == 1
+    (task,) = in_flight
+
+    listing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await listing
+
+    release.set()
+    with pytest.raises(RuntimeError):
+        await task
+
+    assert task not in _dap_listing_tasks
+
+
+@pytest.mark.asyncio
+async def test_list_actions_forwards_the_timeout_to_the_parent_registry() -> None:
+    """A child listing must not wait on a parent's stalled provider for the default timeout."""
+    parent = Registry()
+    release = asyncio.Event()
+
+    async def slow_fn() -> DapValue:
+        await release.wait()
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(parent, 'slow', slow_fn)
+    child = parent.new_child()
+
+    catalog = await asyncio.wait_for(child.list_actions(dap_timeout_seconds=0.05), timeout=5)
+
+    assert '/dynamic-action-provider/slow' in catalog
+    assert '/dynamic-action-provider/slow:tool/echo' not in catalog
+
+    release.set()
+
+
+@pytest.mark.asyncio
+async def test_list_actions_survives_a_third_party_cancelling_a_listing() -> None:
+    """A fetch cancelled from outside costs its provider's rows, not the catalog."""
+    from genkit._core._registry import _dap_listing_tasks
+
+    registry = Registry()
+    registry.register_action(kind=ActionKind.TOOL, name='local-tool', fn=_identity)
+    started = asyncio.Event()
+
+    async def stalled_fn() -> DapValue:
+        started.set()
+        await asyncio.Event().wait()
+        return {'tool': [_dap_child('echo', 'echoes')]}
+
+    define_dynamic_action_provider(registry, 'shared', stalled_fn)
+
+    before = set(_dap_listing_tasks)
+    listing = asyncio.ensure_future(registry.list_actions())
+    await started.wait()
+    (task,) = _dap_listing_tasks - before
+
+    task.cancel()
+    with capture_logs() as logs:
+        catalog = await asyncio.wait_for(listing, timeout=5)
+
+    assert any('was cancelled' in entry['event'] and 'shared' in entry['event'] for entry in logs)
+    assert '/tool.v2/local-tool' in catalog
+    assert '/dynamic-action-provider/shared' in catalog
+    assert not [key for key in catalog if key.startswith('/dynamic-action-provider/shared:')]

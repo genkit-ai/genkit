@@ -98,11 +98,11 @@ async def test_mcp_tool_echo_becomes_tool_v2_echo() -> None:
 
     define_dynamic_action_provider(registry, 'mcp', dap_fn)
 
-    # The provider is a catalog row. Its tools are not — people pick them
-    # with a selector, and generate binds them on the child it passes in.
+    # The provider and its tools are catalog rows, but only under the DAP-qualified
+    # key: generate binds ``/tool.v2/echo`` on the child registry it passes in.
     before = await registry.list_actions()
     assert '/dynamic-action-provider/mcp' in before
-    assert '/dynamic-action-provider/mcp:tool/echo' not in before
+    assert '/dynamic-action-provider/mcp:tool/echo' in before
     assert '/tool.v2/echo' not in before
 
     expanded = await expand_wildcard_tools(registry, ['mcp:tool/echo'])
@@ -110,7 +110,7 @@ async def test_mcp_tool_echo_becomes_tool_v2_echo() -> None:
     assert registry._entries.get(ActionKind.TOOL, {}).get('echo') is echo
     catalog = await registry.list_actions()
     assert catalog['/tool.v2/echo'].name == 'echo'
-    assert '/dynamic-action-provider/mcp:tool/echo' not in catalog
+    assert '/dynamic-action-provider/mcp:tool/echo' in catalog
     assert '/dynamic-action-provider/mcp' in catalog
 
 
@@ -143,8 +143,8 @@ async def test_dap_wildcard_registers_on_passed_registry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_echo_does_not_appear_on_the_app_catalog() -> None:
-    """mcp:tool/echo is not a row on the app catalog. /tool.v2/echo lives on the generate child."""
+async def test_mcp_tool_echo_is_not_a_tool_v2_row_on_the_app_catalog() -> None:
+    """mcp:tool/echo is a DAP-qualified row. /tool.v2/echo lives on the generate child."""
     parent = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -165,7 +165,7 @@ async def test_mcp_tool_echo_does_not_appear_on_the_app_catalog() -> None:
 
     parent_catalog = await parent.list_actions()
     assert '/dynamic-action-provider/mcp' in parent_catalog
-    assert '/dynamic-action-provider/mcp:tool/echo' not in parent_catalog
+    assert '/dynamic-action-provider/mcp:tool/echo' in parent_catalog
     assert '/tool.v2/echo' not in parent_catalog
 
     child_catalog = await child.list_actions()
@@ -356,7 +356,7 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
     root_catalog = await ai.registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
-    assert '/dynamic-action-provider/mcp:tool/echo' not in root_catalog
+    assert '/dynamic-action-provider/mcp:tool/echo' in root_catalog
     assert '/tool.v2/echo' not in root_catalog
 
 
@@ -393,7 +393,7 @@ async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
     assert 'dap_only_tool' not in root_tools
     root_catalog = await ai.registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
-    assert '/dynamic-action-provider/mcp:tool/dap_only_tool' not in root_catalog
+    assert '/dynamic-action-provider/mcp:tool/dap_only_tool' in root_catalog
     assert '/tool.v2/dap_only_tool' not in root_catalog
 
 
