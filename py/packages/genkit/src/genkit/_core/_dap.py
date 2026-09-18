@@ -17,6 +17,7 @@
 """Dynamic Action Provider (DAP) support for Genkit."""
 
 import asyncio
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -40,7 +41,18 @@ _DEFAULT_CACHE_TTL_MS = 3000
 
 
 class DynamicActionProvider:
-    """Lazily resolves actions from an external source with TTL caching."""
+    """Lazily resolves actions from an external source with TTL caching.
+
+    The cached actions are shared by every event loop that lists this provider,
+    so an action returned by ``dap_fn`` must resolve any loop-bound resource of
+    its own when it is called, not when it is listed. In-flight fetches are
+    coalesced per loop, because a task cannot be awaited from a loop other than
+    the one that created it.
+
+    The cache is one attribute holding both the value and its expiry, so a
+    reader takes a consistent pair in a single read and an invalidation from
+    another thread cannot land between the two.
+    """
 
     def __init__(
         self,
@@ -50,45 +62,53 @@ class DynamicActionProvider:
     ) -> None:
         self.action = action
         self._dap_fn = dap_fn
-        self._value: DapValue | None = None
-        self._expires_at: float | None = None
-        self._fetch_task: asyncio.Task[DapValue] | None = None
+        self._cache: tuple[DapValue, float] | None = None
+        self._fetch_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task[DapValue]] = {}
+        self._fetch_tasks_lock = threading.Lock()
         self._ttl_millis = (
             _DEFAULT_CACHE_TTL_MS if cache_ttl_millis is None or cache_ttl_millis == 0 else cache_ttl_millis
         )
 
     def invalidate_cache(self) -> None:
-        self._value = None
-        self._expires_at = None
+        """Drop the cached actions so the next call fetches them again."""
+        self._cache = None
 
     async def _get_or_fetch(self, skip_trace: bool = False) -> DapValue:
-        """Get cached value or fetch fresh data, coalescing concurrent fetches."""
-        is_stale = (
-            self._value is None
-            or self._expires_at is None
-            or self._ttl_millis < 0
-            or time.time() * 1000 > self._expires_at
-        )
-        if not is_stale and self._value is not None:
-            return self._value
+        """Get cached value or fetch fresh data, coalescing concurrent fetches per loop."""
+        cached = self._cache
+        if cached is not None and self._ttl_millis >= 0:
+            value, expires_at = cached
+            if time.time() * 1000 <= expires_at:
+                return value
 
-        if self._fetch_task is not None:
-            return await self._fetch_task
+        loop = asyncio.get_running_loop()
+        with self._fetch_tasks_lock:
+            # A pending task strongly references its loop, so weak keys never fire.
+            for ended in [known for known in self._fetch_tasks if known.is_closed()]:
+                del self._fetch_tasks[ended]
+            task = self._fetch_tasks.get(loop)
+            owns_task = task is None
+            if task is None:
+                task = asyncio.create_task(self._do_fetch(skip_trace))
+                self._fetch_tasks[loop] = task
 
-        self._fetch_task = asyncio.create_task(self._do_fetch(skip_trace))
+        if not owns_task:
+            return await task
         try:
-            return await self._fetch_task
+            return await task
         finally:
-            self._fetch_task = None
+            with self._fetch_tasks_lock:
+                if self._fetch_tasks.get(loop) is task:
+                    del self._fetch_tasks[loop]
 
     async def _do_fetch(self, skip_trace: bool) -> DapValue:
         try:
-            self._value = await self._dap_fn()
-            self._expires_at = time.time() * 1000 + self._ttl_millis
+            value = await self._dap_fn()
+            self._cache = (value, time.time() * 1000 + self._ttl_millis)
             if not skip_trace:
-                metadata = {k: [a.metadata or {} for a in v] for k, v in self._value.items()}
+                metadata = {k: [a.metadata or {} for a in v] for k, v in value.items()}
                 await self.action.run(metadata)
-            return self._value
+            return value
         except Exception:
             self.invalidate_cache()
             raise
