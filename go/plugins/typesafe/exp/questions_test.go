@@ -19,6 +19,7 @@ package exp
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -342,5 +343,46 @@ func TestEnumQuestion(t *testing.T) {
 	text, err := answersText(resp, got, true)
 	if err != nil || text != "billing" {
 		t.Errorf("enum answer text = %q, %v; want the option itself", text, err)
+	}
+}
+
+func TestScoreLevelAndLabel(t *testing.T) {
+	for _, tt := range []struct {
+		score float64
+		level int
+		label string
+	}{
+		{1.3, 1, "Concerned but civil"},
+		{1.5, 2, "Very angry"},
+		{2.7, 2, "Very angry"},
+		{-0.4, 0, "Calm"},
+	} {
+		s := Score[anger]{Score: tt.score}
+		if s.Level() != tt.level || s.Label() != tt.label {
+			t.Errorf("Score %v: level %d %q, want %d %q", tt.score, s.Level(), s.Label(), tt.level, tt.label)
+		}
+	}
+}
+
+func TestChoiceRankedAndMargin(t *testing.T) {
+	c := Choice[dept]{Choice: "billing", Probabilities: map[dept]float64{"billing": 0.75, "technical": 0.25, "other": 0}}
+	if got, want := c.Ranked(), []dept{"billing", "technical", "other"}; !slices.Equal(got, want) {
+		t.Errorf("Ranked = %v, want %v", got, want)
+	}
+	if got := c.Margin(); got != 0.5 {
+		t.Errorf("Margin = %v, want 0.5", got)
+	}
+
+	tied := Choice[dept]{Probabilities: map[dept]float64{"technical": 0.5, "billing": 0.5}}
+	if got, want := tied.Ranked(), []dept{"billing", "technical"}; !slices.Equal(got, want) {
+		t.Errorf("tied Ranked = %v, want ties by name %v", got, want)
+	}
+	if got := tied.Margin(); got != 0 {
+		t.Errorf("tied Margin = %v, want 0", got)
+	}
+
+	var empty Choice[dept]
+	if len(empty.Ranked()) != 0 || empty.Margin() != 0 {
+		t.Errorf("no distribution: Ranked = %v, Margin = %v, want none and 0", empty.Ranked(), empty.Margin())
 	}
 }

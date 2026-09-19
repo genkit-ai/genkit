@@ -79,6 +79,12 @@ the token counters.
 | `Noul`           | is this true?              | `Probability`; near 0.5 means "could not tell"    |
 | `NoulOf[C]`      | is this true, where `C.Criteria()` says what yes and no mean | as `Noul`, which is `NoulOf` with no criteria |
 
+A `Choice` also answers `Ranked()`, the options from most to least likely,
+and `Margin()`, the probability gap between the top two, which is how
+decisive the choice is. A `Score` answers `Level()`, the nearest whole level,
+and `Label()`, that level's text from the rubric type, with or without a
+legend on the answer.
+
 The criteria of every question belong to a type, so a pair of yes and no
 criteria is a type too, and it is reused wherever the question is asked:
 

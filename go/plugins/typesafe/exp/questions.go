@@ -17,8 +17,10 @@
 package exp
 
 import (
+	"cmp"
 	"encoding/json"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 
@@ -105,6 +107,25 @@ func (Choice[T]) JSONSchema() *jsonschema.Schema {
 	return answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
 }
 
+// Ranked is the options from most to least likely, ties broken by name. It
+// is empty when the answer carries no distribution.
+func (c Choice[T]) Ranked() []T {
+	return slices.SortedFunc(maps.Keys(c.Probabilities), func(a, b T) int {
+		return cmp.Or(cmp.Compare(c.Probabilities[b], c.Probabilities[a]), cmp.Compare(a, b))
+	})
+}
+
+// Margin is the probability gap between the two most likely options: how
+// decisive the choice is, where Confidence reads the whole distribution.
+// It is zero with fewer than two options in the distribution.
+func (c Choice[T]) Margin() float64 {
+	ranked := c.Ranked()
+	if len(ranked) < 2 {
+		return 0
+	}
+	return c.Probabilities[ranked[0]] - c.Probabilities[ranked[1]]
+}
+
 // YesNo supplies what yes and no mean for a [NoulOf] question, as the
 // criteria of a [Choice] and the levels of a [Score] come from their
 // types. Both sides are given: the API takes the pair or nothing.
@@ -181,6 +202,27 @@ func (Score[L]) JSONSchema() *jsonschema.Schema {
 	s := answerSchema(kindScore, &jsonschema.Schema{Properties: props}, "score")
 	s.Extras[levelsKeyword] = levels
 	return s
+}
+
+// Level is the nearest whole level, clamped to the rubric.
+func (s Score[L]) Level() int {
+	var zero L
+	n := len(zero.Levels())
+	if n == 0 {
+		return 0
+	}
+	return min(max(int(math.Round(s.Score)), 0), n-1)
+}
+
+// Label is the rubric's description of [Score.Level]. It comes from L, so
+// it does not depend on the answer carrying a legend.
+func (s Score[L]) Label() string {
+	var zero L
+	levels := zero.Levels()
+	if len(levels) == 0 {
+		return ""
+	}
+	return levels[s.Level()]
 }
 
 func probabilitiesSchema() *jsonschema.Schema {
