@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 
 from ._catalog import A2uiCatalog
@@ -56,8 +57,22 @@ class ClosedBlock:
     prose: str = ''
 
 
-class A2uiParseError(ValueError):
-    """Raised in strict mode when a fence is malformed or names an unknown component."""
+class A2uiParseError(GenkitError, ValueError):
+    """Raised in strict mode when a fence is malformed or names an unknown component.
+
+    Strict mode kills the turn: generate boxes this into a failed response whose
+    message is dropped, so a hallucinated surface never lands in resendable
+    history. `GenkitError` with a non-INTERNAL status is what keeps the real
+    sentence ("component 'X' is not in catalog 'Y'") on `finish_message` instead
+    of being redacted. Still a `ValueError` so callers that caught it keep working.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status='INVALID_ARGUMENT',
+            message=message,
+            reason=RuntimeErrorReason.INVALID_OUTPUT,
+        )
 
 
 class StreamParser:

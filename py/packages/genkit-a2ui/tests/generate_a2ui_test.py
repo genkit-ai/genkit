@@ -26,6 +26,7 @@ from genkit_a2ui import A2uiParseError, Surfaces
 from helpers import (
     WEATHER_PROMPT,
     a2ui_parts,
+    assert_dead_turn,
     assert_finished_message,
     assert_no_a2ui_parts,
     assert_no_fence_in_text,
@@ -45,6 +46,7 @@ from helpers import (
 from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
+from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import Candidate
 from genkit._core._typing import FinishReason, Role
 
@@ -209,22 +211,22 @@ async def test_generate_a2ui_drops_bad_block_and_keeps_prose() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_a2ui_strict_raises_on_bad_block() -> None:
-    """Strict mode fails the generate call when the fence names an unknown component."""
+async def test_generate_a2ui_strict_fails_the_turn_on_bad_block() -> None:
+    """Strict mode kills the turn when the fence names an unknown component."""
     ai, pm = setup()
     pm.responses = [model_ok(bad_component_fence())]
 
-    with pytest.raises(A2uiParseError):
-        await ai.generate(
-            model='programmableModel',
-            prompt=WEATHER_PROMPT,
-            use=[Surfaces(validate='strict')],
-        )
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_strict_raises_on_bad_block() -> None:
-    """Strict mode fails generate_stream with A2uiParseError when the fence names an unknown component."""
+async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
+    """Strict mode kills a streaming turn too, and paints nothing on the way out."""
     ai, pm = setup()
     fence = bad_component_fence()
     pm.responses = [model_ok(fence)]
@@ -235,10 +237,22 @@ async def test_generate_stream_strict_raises_on_bad_block() -> None:
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validate='strict')],
     )
-    with pytest.raises(A2uiParseError, match='NotAThing'):
-        async for _chunk in stream.stream:
-            pass
-        await stream.response
+    streamed_envs: list[dict[str, Any]] = []
+    async for chunk in stream.stream:
+        streamed_envs.extend(envelopes(chunk.content))
+    response = await stream.response
+
+    # The refusal fires at flush, before any envelope reaches the sink.
+    assert streamed_envs == []
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+
+
+def test_a2ui_parse_error_is_still_a_value_error() -> None:
+    """Carrying a status is what stops boxing from redacting the message to 'internal error'."""
+    exc = A2uiParseError("A2UI: component 'NotAThing' is not in catalog 'basic'.")
+    assert isinstance(exc, ValueError)
+    assert exc.status == 'INVALID_ARGUMENT'
+    assert exc.reason == RuntimeErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio

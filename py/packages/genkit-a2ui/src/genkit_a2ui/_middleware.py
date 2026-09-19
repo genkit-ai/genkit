@@ -57,6 +57,9 @@ class SurfacesConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     instructions: Literal['system', 'none'] = 'system'
+    # 'off' passes envelopes through unchecked, 'warn' logs and drops the
+    # offending block, 'strict' kills the turn. Default is 'warn' because a
+    # single hallucinated component should not cost the whole answer.
     validation: ValidateMode = Field(default='warn', alias='validate')
     surface_id: str | None = Field(default=None, alias='surfaceId')
     # Registry id from load_catalog. The Developer UI lists those same ids.
@@ -72,6 +75,11 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
     prior surfaces and button clicks. A stopped turn (blocked / interrupted /
     aborted / failed / unknown / other) is left alone — the stop is the result,
     not a salvaged card.
+
+    Under `validate='strict'` a bad fence fails the turn: generate returns a
+    response with `finish_reason` failed, no `message`, and the reason on
+    `error`. `messages` ends at the user turn, so a retry does not feed the
+    hallucinated surface back to the model.
     """
 
     async def wrap_model(
