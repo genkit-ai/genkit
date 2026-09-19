@@ -63,7 +63,7 @@ from genkit._core._action import (
     get_current_context,
 )
 from genkit._core._channel import Channel
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
 from genkit._core._model import (
@@ -182,8 +182,8 @@ class PromptCache:
     messages: PromptFunction[Any] | None = None
 
 
-class PromptConfig(BaseModel):
-    """Model for a prompt action."""
+class GenerateCall(BaseModel):
+    """User-shaped args for one generate. Prompts fill this; ``ai.generate`` builds it."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
@@ -339,19 +339,19 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         opts: PromptGenerateOptions,
     ) -> ModelResponse[OutputT]:
         """Execute the prompt with resolved opts. Used by __call__ and stream."""
-        child_registry, gen_options = await _prepare(self, input, opts)
+        registry, options = await prepare_prompt(prompt=self, input=input, opts=opts)
         on_chunk = opts.get('on_chunk')
         context = opts.get('context')
         result = await generate_action(
-            child_registry,
-            gen_options,
+            registry,
+            options,
             on_chunk=on_chunk,
             context=context if context is not None else get_current_context(),
         )
         return cast(ModelResponse[OutputT], result)
 
-    async def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
-        """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
+    async def _call_from_opts(self, opts: PromptGenerateOptions) -> GenerateCall:
+        """Merge this prompt's definition with per-call ``opts`` into a :class:`GenerateCall`."""
         output_opts = opts.get('output') or {}
         merged_config: Mapping[str, Any] | BaseModel | None
         if opts.get('config') is not None:
@@ -375,7 +375,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # Leftover-key overlay lives in overlay_config, not here.
+        # Extra keys overlay in overlay_config, not here.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._config,
@@ -390,7 +390,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         def _or(opt_val: Any, default: Any) -> Any:  # noqa: ANN401
             return opt_val if opt_val is not None else default
 
-        return PromptConfig(
+        return GenerateCall(
             model=resolved.name,
             prompt=self._prompt,
             system=self._system,
@@ -418,12 +418,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def stream(
         self,
         input: InputT | dict[str, Any] | None = None,
-        *,
-        timeout: float | None = None,
         **opts: Unpack[PromptGenerateOptions],
     ) -> ModelStreamResponse[OutputT]:
         """Stream the prompt execution, returning (stream, response_future)."""
-        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel(timeout=timeout)
+        if 'timeout' in opts:
+            raise TypeError("ExecutablePrompt.stream() got an unexpected keyword argument 'timeout'")
+        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel()
         stream_opts: PromptGenerateOptions = {
             **opts,  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
             'on_chunk': lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
@@ -444,8 +444,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
         call_opts: PromptGenerateOptions = opts  # type: ignore[assignment]
-        _child_registry, gen_options = await _prepare(self, input, call_opts)
-        return gen_options
+        _registry, options = await prepare_prompt(prompt=self, input=input, opts=call_opts)
+        return options
 
 
 def _register_prompt_action_pair(
@@ -471,8 +471,8 @@ def _register_prompt_action_pair(
 
     async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
         ep = await ep_factory()
-        child_registry, gen_options = await _prepare(ep, input, {})
-        return await to_generate_request(child_registry, gen_options)
+        registry, options = await prepare_prompt(prompt=ep, input=input, opts={})
+        return await to_prompt_model_request(registry=registry, options=options)
 
     async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
         ep = await ep_factory()
@@ -544,7 +544,8 @@ def register_prompt_actions(
             action.output_schema = out_js
 
 
-def _resolve_output_schema(
+def resolve_output_schema(
+    *,
     registry: Registry,
     output_schema: type | dict[str, Any] | str | None,
     output: GenerateActionOutputConfig,
@@ -582,99 +583,90 @@ def _resolve_output_schema(
         output.json_schema = to_json_schema(output_schema)
 
 
-async def _prepare(
-    ep: ExecutablePrompt[Any, Any],
+async def prepare_prompt(
+    *,
+    prompt: ExecutablePrompt[Any, Any],
     input: Any,  # noqa: ANN401
-    call_opts: PromptGenerateOptions,
+    opts: PromptGenerateOptions,
 ) -> tuple[Registry, GenerateActionOptions]:
-    """Render an ``ExecutablePrompt`` into resolved generate options + a per-call registry.
+    """Render an ``ExecutablePrompt`` into engine ``options`` and a per-call registry."""
+    await prompt._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
+    call = await prompt._call_from_opts(opts)  # pyright: ignore[reportPrivateUsage]
+    registry = prompt._registry.new_child()  # pyright: ignore[reportPrivateUsage]
+    await register_tools(registry, call.tools)
+    use = register_middleware(registry, call.use)
+    if call.use is not None:
+        # Inline ``use=[Foo()]`` becomes refs the registry can resolve.
+        call = call.model_copy()
+        call.use = use
 
-    Returns:
-        * ``child_registry`` — fresh child of ``ep._registry`` holding any
-          inline tools and ``use=[Logger()]`` middleware for this call. Pass
-          it to whatever consumes ``gen_options`` (the generate action,
-          ``to_generate_request``, etc.) so name-based lookups resolve those
-          inline entries.
-        * ``gen_options`` — the resolved request the engine consumes.
-    """
-    await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
-    prompt_config = await ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
-    child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
-    await register_tools(child_registry, prompt_config.tools)
-    refs = register_middleware(child_registry, prompt_config.use)
-    if prompt_config.use is not None:
-        # `use` may have contained inline BaseMiddleware instances that
-        # register_middleware swapped for refs; rewrite so downstream sees
-        # the registry-resolvable shape. (Skip the copy when `use` is None
-        # — the common path — since refs is None too.)
-        prompt_config = prompt_config.model_copy()
-        prompt_config.use = refs
-
-    gen_options = await executable_prompt_call_to_generate_options(ep, child_registry, prompt_config, input, call_opts)
-    return child_registry, gen_options
+    call = await render_call(prompt=prompt, registry=registry, call=call, input=input, opts=opts)
+    options = await to_generate_options(registry=registry, call=call)
+    return registry, options
 
 
-async def to_generate_action_options(
+async def to_generate_options(
+    *,
     registry: Registry,
-    options: PromptConfig,
+    call: GenerateCall,
 ) -> GenerateActionOptions:
-    """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    resolved = resolve_call_model(model=options.model, config=options.config, registry=registry)
+    """Fold a ``GenerateCall`` into the ``options`` the engine runs."""
+    resolved = resolve_call_model(model=call.model, config=call.config, registry=registry)
     model = resolved.name
     default_model = registry.lookup_value('defaultModel', 'defaultModel')
-    uses_ref = isinstance(options.model, ModelRef) or isinstance(default_model, ModelRef)
-    config = resolved.config if uses_ref else options.config
+    uses_ref = isinstance(call.model, ModelRef) or isinstance(default_model, ModelRef)
+    config = resolved.config if uses_ref else call.config
 
-    ri: dict[str, Any] = {}
     cache = PromptCache()
     resolved_msgs: list[Message] = []
-    if options.system:
-        result = await render_system_prompt(registry, ri, options, cache, None)
+    if call.system:
+        result = await render_system_prompt(registry=registry, input={}, call=call, cache=cache)
         resolved_msgs.append(result)
-    if options.messages:
-        resolved_msgs.extend(await render_message_prompt(registry, ri, options, cache, None, history=None))
-    if options.prompt:
-        result = await render_user_prompt(registry, ri, options, cache, None)
+    if call.messages:
+        resolved_msgs.extend(
+            await render_message_prompt(registry=registry, input={}, call=call, cache=cache, history=None)
+        )
+    if call.prompt:
+        result = await render_user_prompt(registry=registry, input={}, call=call, cache=cache)
         resolved_msgs.append(result)
 
     # If is schema is set but format is not explicitly set, default to
     # `json` format.
-    output_format = 'json' if options.output_schema and not options.output_format else options.output_format
+    output_format = 'json' if call.output_schema and not call.output_format else call.output_format
 
     output = GenerateActionOutputConfig()
     if output_format:
         output.format = output_format
-    if options.output_content_type:
-        output.content_type = options.output_content_type
-    if options.output_instructions is not None:
-        output.instructions = options.output_instructions
-    _resolve_output_schema(registry, options.output_schema, output)
-    if options.output_constrained is not None:
-        output.constrained = options.output_constrained
+    if call.output_content_type:
+        output.content_type = call.output_content_type
+    if call.output_instructions is not None:
+        output.instructions = call.output_instructions
+    resolve_output_schema(registry=registry, output_schema=call.output_schema, output=output)
+    if call.output_constrained is not None:
+        output.constrained = call.output_constrained
 
     resume = resume_options_to_resume(
-        resume_respond=options.resume_respond,
-        resume_restart=options.resume_restart,
-        resume_metadata=options.resume_metadata,
+        resume_respond=call.resume_respond,
+        resume_restart=call.resume_restart,
+        resume_metadata=call.resume_metadata,
     )
 
-    # Convert tool refs (str name or Tool object) to string names for GenerateActionOptions
-    tools_refs = tools_to_action_names(options.tools)
+    tools_refs = tools_to_action_names(call.tools)
 
-    merged_docs = await render_docs({}, options, None)
+    merged_docs = await render_docs(input={}, call=call)
 
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
         config=config,
         tools=tools_refs,
-        return_tool_requests=options.return_tool_requests,
-        tool_choice=options.tool_choice,
+        return_tool_requests=call.return_tool_requests,
+        tool_choice=call.tool_choice,
         output=output,
-        max_turns=options.max_turns,
+        max_turns=call.max_turns,
         docs=merged_docs,  # type: ignore[arg-type]
         resume=resume,
-        use=options.use,  # type: ignore[arg-type]
+        use=call.use,  # type: ignore[arg-type]
     )
 
 
@@ -692,16 +684,10 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
     return cast(dict[str, Any], template_input)
 
 
-async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
+async def to_prompt_model_request(*, registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools = await resolve_tools_from_options(registry, options.tools)
     tool_defs = [to_tool_definition(tool) for tool in tools] if tools else []
-
-    if not options.messages:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message='at least one message is required in generate request',
-        )
 
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
@@ -711,7 +697,8 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         constrained=options.output.constrained if options.output else None,
     )
     return ModelRequest(
-        messages=options.messages,  # type: ignore[arg-type]
+        # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
+        messages=options.messages or [],  # type: ignore[arg-type]
         config=options.config if options.config is not None else {},  # type: ignore[arg-type]
         docs=options.docs if options.docs else None,  # type: ignore[arg-type]
         tools=tool_defs,
@@ -720,14 +707,13 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
     )
 
 
-def _normalize_prompt_arg(
+def parts_from_prompt(
     prompt: str | list[Part] | None,
 ) -> list[Part]:
     """Convert string/Part/list to list[Part]."""
     if not prompt:
         return []
     if isinstance(prompt, str):
-        # Part is a RootModel, so we pass content via 'root' parameter
         return [Part.from_text(prompt)]
     elif isinstance(prompt, list):
         return prompt
@@ -737,7 +723,8 @@ def _normalize_prompt_arg(
         return []  # pyright: ignore[reportUnreachable] - defensive fallback
 
 
-async def _render_template(
+async def render_template(
+    *,
     registry: Registry,
     role: Role,
     template: str | list[Part] | None,
@@ -770,26 +757,27 @@ async def _render_template(
         )
         return Message(role=role, content=rendered_parts), compiled_fn
 
-    return Message(role=role, content=_normalize_prompt_arg(template)), compiled_fn
+    return Message(role=role, content=parts_from_prompt(template)), compiled_fn
 
 
 async def render_system_prompt(
+    *,
     registry: Registry,
     input: dict[str, Any],
-    options: PromptConfig,
-    prompt_cache: PromptCache,
+    call: GenerateCall,
+    cache: PromptCache,
     context: dict[str, Any] | None = None,
 ) -> Message:
     """Render the system prompt."""
-    msg, prompt_cache.system = await _render_template(
-        registry,
-        Role.SYSTEM,
-        options.system,
-        input,
-        options.input_schema,
-        options.metadata,
-        prompt_cache.system,
-        context,
+    msg, cache.system = await render_template(
+        registry=registry,
+        role=Role.SYSTEM,
+        template=call.system,
+        input=input,
+        input_schema=call.input_schema,
+        metadata=call.metadata,
+        compiled_fn=cache.system,
+        context=context,
     )
     return msg
 
@@ -824,20 +812,21 @@ async def render_dotprompt_to_parts(
 
 
 async def render_message_prompt(
+    *,
     registry: Registry,
     input: dict[str, Any],
-    options: PromptConfig,
-    prompt_cache: PromptCache,
+    call: GenerateCall,
+    cache: PromptCache,
     context: dict[str, Any] | None = None,
     history: list[Message] | None = None,
 ) -> list[Message]:
     """Render a messages template (string or list) into Message objects."""
-    if isinstance(options.messages, str):
-        if prompt_cache.messages is None:
-            prompt_cache.messages = await registry.dotprompt.compile(options.messages)
+    if isinstance(call.messages, str):
+        if cache.messages is None:
+            cache.messages = await registry.dotprompt.compile(call.messages)
 
-        if options.metadata:
-            context = {**(context or {}), 'state': options.metadata.get('state')}
+        if call.metadata:
+            context = {**(context or {}), 'state': call.metadata.get('state')}
 
         # Convert history to dict format for template
         messages_ = None
@@ -846,7 +835,7 @@ async def render_message_prompt(
 
         # Flatten input and context for template resolution
         flattened_data = {**(context or {}), **(input or {})}
-        rendered = await prompt_cache.messages(
+        rendered = await cache.messages(
             data=DataArgument[dict[str, Any]](
                 input=flattened_data,
                 context=context,
@@ -854,87 +843,101 @@ async def render_message_prompt(
             ),
             options=PromptMetadata(
                 input=PromptInputConfig(
-                    schema=to_json_schema(options.input_schema) if options.input_schema else None,
+                    schema=to_json_schema(call.input_schema) if call.input_schema else None,
                 )
             ),
         )
         return [Message.model_validate(e.model_dump()) for e in rendered.messages]
 
-    elif isinstance(options.messages, list):
-        return [m if isinstance(m, Message) else Message.model_validate(m) for m in options.messages]
+    elif isinstance(call.messages, list):
+        return [m if isinstance(m, Message) else Message.model_validate(m) for m in call.messages]
 
-    raise TypeError(f'Unsupported type for messages: {type(options.messages)}')
+    raise TypeError(f'Unsupported type for messages: {type(call.messages)}')
 
 
 async def render_user_prompt(
+    *,
     registry: Registry,
     input: dict[str, Any],
-    options: PromptConfig,
-    prompt_cache: PromptCache,
+    call: GenerateCall,
+    cache: PromptCache,
     context: dict[str, Any] | None = None,
 ) -> Message:
     """Render the user prompt."""
-    msg, prompt_cache.user_prompt = await _render_template(
-        registry,
-        Role.USER,
-        options.prompt,
-        input,
-        options.input_schema,
-        options.metadata,
-        prompt_cache.user_prompt,
-        context,
+    msg, cache.user_prompt = await render_template(
+        registry=registry,
+        role=Role.USER,
+        template=call.prompt,
+        input=input,
+        input_schema=call.input_schema,
+        metadata=call.metadata,
+        compiled_fn=cache.user_prompt,
+        context=context,
     )
     return msg
 
 
 async def render_docs(
+    *,
     input: dict[str, Any],
-    options: PromptConfig,
+    call: GenerateCall,
     context: dict[str, Any] | None = None,
 ) -> list[Document] | None:
-    """Return the docs from options (placeholder for future doc rendering)."""
-    return options.docs
+    """Return the docs from the call (placeholder for future doc rendering)."""
+    return call.docs
 
 
-async def render_prompt_config_for_executable_call(
-    executable_prompt: ExecutablePrompt[Any, Any],
+async def render_call(
+    *,
+    prompt: ExecutablePrompt[Any, Any],
     registry: Registry,
-    prompt_config: PromptConfig,
-    template_input: Any,  # noqa: ANN401
+    call: GenerateCall,
+    input: Any,  # noqa: ANN401
     opts: PromptGenerateOptions,
-) -> PromptConfig:
-    """Expand dotprompt with the call's input into one merged :class:`PromptConfig`.
+) -> GenerateCall:
+    """Expand dotprompt with the call's input into one merged :class:`GenerateCall`.
 
     Sets final ``messages`` and merged ``docs``, and clears template source
-    fields, before :func:`to_generate_action_options`.
+    fields, before :func:`to_generate_options`.
     """
-    ri = coerce_prompt_template_input(template_input)
+    template_input = coerce_prompt_template_input(input)
     render_context = opts.get('context')
     message_history = opts.get('messages')
-    cache = executable_prompt._cache_prompt
+    cache = prompt._cache_prompt
     extra_docs = opts.get('docs')
 
     resolved_msgs: list[Message] = []
-    if prompt_config.system:
-        result = await render_system_prompt(registry, ri, prompt_config, cache, render_context)
+    if call.system:
+        result = await render_system_prompt(
+            registry=registry, input=template_input, call=call, cache=cache, context=render_context
+        )
         resolved_msgs.append(result)
-    if prompt_config.messages:
+    if call.messages:
         resolved_msgs.extend(
-            await render_message_prompt(registry, ri, prompt_config, cache, render_context, history=message_history)
+            await render_message_prompt(
+                registry=registry,
+                input=template_input,
+                call=call,
+                cache=cache,
+                context=render_context,
+                history=message_history,
+            )
         )
     elif message_history:
         resolved_msgs.extend(message_history)
-    if prompt_config.prompt:
-        result = await render_user_prompt(registry, ri, prompt_config, cache, render_context)
+    if call.prompt:
+        result = await render_user_prompt(
+            registry=registry, input=template_input, call=call, cache=cache, context=render_context
+        )
         resolved_msgs.append(result)
 
-    merged_docs = await render_docs(ri, prompt_config, render_context)
+    merged_docs = await render_docs(input=template_input, call=call, context=render_context)
     if extra_docs:
         merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
 
     # Keep the merged config bag as-is. dump/revalidate would rebuild it
     # and drop keys the plugin is about to see.
-    return prompt_config.model_copy(
+    return call.model_copy(
         update={
             'system': None,
             'prompt': None,
@@ -942,20 +945,6 @@ async def render_prompt_config_for_executable_call(
             'docs': merged_docs,
         }
     )
-
-
-async def executable_prompt_call_to_generate_options(
-    executable_prompt: ExecutablePrompt[Any, Any],
-    registry: Registry,
-    prompt_config: PromptConfig,
-    template_input: Any,  # noqa: ANN401
-    opts: PromptGenerateOptions,
-) -> GenerateActionOptions:
-    """Expand executable prompt templates, then build :class:`GenerateActionOptions`."""
-    merged = await render_prompt_config_for_executable_call(
-        executable_prompt, registry, prompt_config, template_input, opts
-    )
-    return await to_generate_action_options(registry, merged)
 
 
 def registry_definition_key(name: str, variant: str | None = None, ns: str | None = None) -> str:
@@ -1100,6 +1089,7 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'dotprompt `use` must be a list, got {type(raw).__name__}',
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
     refs: list[MiddlewareRef] = []
     for i, entry in enumerate(raw):
@@ -1108,6 +1098,7 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'dotprompt `use[{i}]` is an empty string',
+                    reason=RuntimeErrorReason.INVALID_INPUT,
                 )
             refs.append(MiddlewareRef(name=entry))
         elif isinstance(entry, dict):
@@ -1116,12 +1107,14 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'dotprompt `use[{i}]` is missing required `name` field',
+                    reason=RuntimeErrorReason.INVALID_INPUT,
                 )
             refs.append(MiddlewareRef(name=name, config=entry.get('config')))
         else:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'dotprompt `use[{i}]` must be a string or map, got {type(entry).__name__}',
+                reason=RuntimeErrorReason.INVALID_INPUT,
             )
     return refs
 
@@ -1434,6 +1427,7 @@ async def lookup_prompt(registry: Registry, name: str, variant: str | None = Non
     raise GenkitError(
         status='NOT_FOUND',
         message=f'Prompt {name}{variant_str} not found',
+        reason=RuntimeErrorReason.ACTION_NOT_FOUND,
     )
 
 

@@ -27,8 +27,6 @@ from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._logger import get_logger
 
-from ._compat import wait_for
-
 if sys.version_info >= (3, 13):
     # Reuse the stdlib exception so a queue closed via native shutdown() and one
     # closed via the emulated path raise the exact same type, and so callers
@@ -50,13 +48,10 @@ R = TypeVarExt('R', default=Any)
 class Channel(Generic[T_co, R]):
     """Async channel for streaming values with a final result when closed."""
 
-    def __init__(self, timeout: float | int | None = None) -> None:
-        if timeout is not None and timeout < 0:
-            raise ValueError('Timeout must be non-negative')
+    def __init__(self) -> None:
         self.queue: asyncio.Queue[T_co] = asyncio.Queue()
         self.closed: asyncio.Future[R] = asyncio.Future()
         self._close_future: asyncio.Future[R] | None = None
-        self._timeout = timeout
 
     def __aiter__(self) -> AsyncIterator[T_co]:
         return self
@@ -67,17 +62,12 @@ class Channel(Generic[T_co, R]):
 
         pop_task = asyncio.ensure_future(self._pop())
         if not self._close_future:
-            return await wait_for(pop_task, timeout=self._timeout)
+            return await pop_task
 
         finished, _ = await asyncio.wait(
             [pop_task, self._close_future],
             return_when=asyncio.FIRST_COMPLETED,
-            timeout=self._timeout,
         )
-
-        if not finished:
-            _ = pop_task.cancel()
-            raise TimeoutError('Channel timeout exceeded')
 
         if pop_task in finished:
             return pop_task.result()
@@ -92,7 +82,7 @@ class Channel(Generic[T_co, R]):
                 return self.queue.get_nowait()
             raise StopAsyncIteration
 
-        return await wait_for(pop_task, timeout=self._timeout)
+        return await pop_task
 
     def send(self, value: T_co) -> None:
         """Send a value into the channel."""

@@ -10,7 +10,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._array import ArrayFormat
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 
 
 class TestArrayFormatStreaming:
@@ -109,6 +109,8 @@ class TestArrayFormatErrors:
         with pytest.raises(GenkitError) as exc_info:
             array_fmt.handle({'type': 'string'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
+        assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
+        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
 
     def test_throws_error_for_object_schema_type(self) -> None:
         """Test that object schema type raises error."""
@@ -117,6 +119,8 @@ class TestArrayFormatErrors:
         with pytest.raises(GenkitError) as exc_info:
             array_fmt.handle({'type': 'object'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
+        assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
+        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
 
 
 class TestArrayFormatInstructions:

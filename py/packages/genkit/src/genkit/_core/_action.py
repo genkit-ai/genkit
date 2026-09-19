@@ -32,7 +32,7 @@ from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
@@ -607,12 +607,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input: InputT | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        timeout: float | None = None,
         init: InitT | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """Execute and return a StreamResponse with .stream and .response properties."""
-        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel(timeout=timeout)
+        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
 
         def send_chunk(c: ChunkT) -> None:
             channel.send(c)
@@ -716,11 +715,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                         f"Action '{self.name}' requires init but none was provided. Please supply a valid init payload."
                     ),
                     status='INVALID_ARGUMENT',
+                    reason=RuntimeErrorReason.INVALID_INPUT,
                 ) from e
             raise GenkitError(
                 message=f"Invalid init for action '{self.name}': {e}",
                 status='INVALID_ARGUMENT',
                 cause=e,
+                reason=RuntimeErrorReason.INVALID_INPUT,
             ) from e
 
     def _validate_input(self, input: InputT | None) -> InputT | None:
@@ -751,6 +752,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                             f'got {config_type_path(type(config))}'
                         ),
                         status='INVALID_ARGUMENT',
+                        reason=RuntimeErrorReason.INVALID_INPUT,
                     ) from None
                 payload = input.model_dump(mode='python')
 
@@ -762,7 +764,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if input is None
                 else f"Invalid input for action '{self.name}': {e}"
             )
-            raise GenkitError(message=msg, status='INVALID_ARGUMENT', cause=e) from e
+            raise GenkitError(
+                message=msg,
+                status='INVALID_ARGUMENT',
+                cause=e,
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            ) from e
 
     async def _run_with_telemetry(
         self,
@@ -819,6 +826,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     output = await self._invoke(input, ctx)
                 latency_ms = (time.perf_counter() - start_time) * 1000
                 output = cast(OutputT, _record_latency(output, latency_ms))
+                # A dead turn returns a response instead of raising.
+                # /util/generate is the Dev UI path; paint that span error
+                # so the trace is not a win.
+                if (
+                    self._kind == ActionKind.UTIL
+                    and self._name == 'generate'
+                    and getattr(output, 'error', None) is not None
+                ):
+                    span_meta.state = 'error'
                 # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
                 span_meta.output = output
                 return ActionResponse(
@@ -912,6 +928,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                     'is called.'
                 ),
                 status='FAILED_PRECONDITION',
+                reason=RuntimeErrorReason.CONNECTION_CLOSED,
             )
         await self._in_queue.put(item)
 

@@ -42,6 +42,7 @@ from genkit._ai._agents._session_stores._util import (
     session_id_of,
     subscribe,
 )
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import SessionSnapshot
 
 
@@ -171,6 +172,12 @@ class FileSessionStore(SessionStoreLock, SessionStore[StateT], SnapshotSubscribe
             next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None
+            if not session_id_of(next_snapshot):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message="FileSessionStore requires 'sessionId' on the snapshot.",
+                    reason=RuntimeErrorReason.SESSION_ID_REQUIRED,
+                )
             await asyncio.to_thread(self.write_sync, next_snapshot)
             if self.max_persisted_chain_length:
                 await asyncio.to_thread(self.prune_chain_sync, next_snapshot)

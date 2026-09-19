@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._protocols import GenkitLike, RegistryLike
 
@@ -30,14 +31,31 @@ from ._types import A2UI_CATALOG_VALUE_TYPE, BASIC_CATALOG_ID, DEFAULT_CATALOG_I
 logger = get_logger(__name__)
 
 
+class A2uiCatalogError(GenkitError, ValueError):
+    """Raised when a catalog cannot be read, registered, or resolved.
+
+    `resolve_catalog` runs inside the model call, so generate boxes this into a
+    failed response. A non-INTERNAL status is what keeps the real sentence on
+    `finish_message` instead of being redacted. Still a `ValueError` so callers
+    that caught it keep working.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status='INVALID_ARGUMENT',
+            message=message,
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+
+
 def load_catalog(ai: GenkitLike, catalog: A2uiCatalog) -> A2uiCatalog:
     if not catalog.id:
-        raise ValueError('a2ui: load_catalog: catalog has no id')
+        raise A2uiCatalogError('a2ui: load_catalog: catalog has no id')
     existing = ai.registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, catalog.id)
     if existing is not None:
         current = A2uiCatalog.from_value(existing)
         if current is None:
-            raise ValueError(f'a2ui: load_catalog: registry value {catalog.id!r} is not a catalog')
+            raise A2uiCatalogError(f'a2ui: load_catalog: registry value {catalog.id!r} is not a catalog')
         if current != catalog:
             logger.warning(
                 'a2ui: load_catalog: a different catalog is already registered under this id; keeping the existing one'
@@ -59,12 +77,12 @@ def read_catalog_file(*, path: str) -> A2uiCatalog:
     try:
         raw = json.loads(Path(path).read_text(encoding='utf-8'))
     except (OSError, UnicodeDecodeError) as exc:
-        raise ValueError(f'a2ui: failed to read catalog file {path!r}: {exc}') from exc
+        raise A2uiCatalogError(f'a2ui: failed to read catalog file {path!r}: {exc}') from exc
     except json.JSONDecodeError as exc:
-        raise ValueError(f'a2ui: catalog file {path!r} is not valid JSON: {exc}') from exc
+        raise A2uiCatalogError(f'a2ui: catalog file {path!r} is not valid JSON: {exc}') from exc
     catalog = A2uiCatalog.from_value(raw)
     if catalog is None:
-        raise ValueError(
+        raise A2uiCatalogError(
             f'a2ui: catalog file {path!r} is not a catalog '
             '(need an id, a components array, and a name on every component)'
         )
@@ -77,11 +95,11 @@ def resolve_catalog(*, registry: RegistryLike, catalog: str | None) -> A2uiCatal
     if found is not None:
         resolved = A2uiCatalog.from_value(found)
         if resolved is None:
-            raise ValueError(f'a2ui: registry value {lookup!r} is not a catalog')
+            raise A2uiCatalogError(f'a2ui: registry value {lookup!r} is not a catalog')
         return resolved
     if lookup in {DEFAULT_CATALOG_ID, BASIC_CATALOG_ID}:
         return BASIC_CATALOG
-    raise ValueError(
+    raise A2uiCatalogError(
         f'a2ui: no catalog registered under id {lookup!r}; '
         f'register one with load_catalog(ai, catalog) or use the default {DEFAULT_CATALOG_ID!r} catalog'
     )

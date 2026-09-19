@@ -37,7 +37,7 @@ from genkit._ai._testing import (
 )
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue, define_dynamic_action_provider
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._typing import Role, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
@@ -113,6 +113,14 @@ async def test_simple_prompt() -> None:
     result = my_prompt.stream()
 
     assert (await result.response).text == want_txt
+
+
+def test_prompt_stream_does_not_accept_timeout() -> None:
+    """prompt.stream has no timeout=; the async for waits until generate finishes."""
+    ai = Genkit()
+    my_prompt = ai.define_prompt(prompt='hi')
+    with pytest.raises(TypeError, match='timeout'):
+        my_prompt.stream(timeout=5)  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
@@ -922,9 +930,12 @@ def test_parse_dotprompt_use(raw: object, want: list[MiddlewareRef] | None) -> N
     ],
 )
 def test_parse_dotprompt_use_invalid(raw: object) -> None:
-    """Malformed frontmatter ``use`` raises a clear error."""
-    with pytest.raises(GenkitError):
+    """Malformed frontmatter ``use`` raises; reason is INVALID_INPUT."""
+    with pytest.raises(GenkitError) as raised:
         _parse_dotprompt_use(raw)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in raised.value.original_message
 
 
 @pytest.mark.asyncio
@@ -957,12 +968,14 @@ async def test_load_prompt_with_use_middleware_not_registered() -> None:
         load_prompt_folder(ai.registry, prompt_dir)
 
         missing = await prompt(ai.registry, 'missing_mw')
-        with pytest.raises(GenkitError, match='missing_mw'):
+        with pytest.raises(GenkitError, match='missing_mw') as raised:
             await missing()
+        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.original_message
 
 
 @pytest.mark.asyncio
-async def test_load_prompt_with_use_middleware_invalid_shape() -> None:
+async def test_load_prompt_with_use_not_a_list_raises_invalid_input() -> None:
     """Non-list dotprompt ``use`` fails when the prompt is first resolved."""
     ai, *_ = setup_test()
 
@@ -972,8 +985,65 @@ async def test_load_prompt_with_use_middleware_invalid_shape() -> None:
         (prompt_dir / 'bad_use.prompt').write_text('---\nmodel: echoModel\nuse: not-a-list\n---\nhi\n')
         load_prompt_folder(ai.registry, prompt_dir)
 
-        with pytest.raises(GenkitError, match='must be a list'):
+        with pytest.raises(GenkitError, match='must be a list') as raised:
             await prompt(ai.registry, 'bad_use')
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_empty_use_entry_raises_invalid_input() -> None:
+    """An empty middleware name in dotprompt ``use`` fails when the prompt is resolved."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'empty_use.prompt').write_text('---\nmodel: echoModel\nuse:\n  - ""\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with pytest.raises(GenkitError, match='empty string') as raised:
+            await prompt(ai.registry, 'empty_use')
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_use_missing_name_raises_invalid_input() -> None:
+    """A ``use`` map without ``name`` fails when the prompt is resolved."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'no_name.prompt').write_text('---\nmodel: echoModel\nuse:\n  - config: x\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with pytest.raises(GenkitError, match='missing required `name`') as raised:
+            await prompt(ai.registry, 'no_name')
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_numeric_use_entry_raises_invalid_input() -> None:
+    """A non-string, non-map ``use`` entry fails when the prompt is resolved."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'num_use.prompt').write_text('---\nmodel: echoModel\nuse:\n  - 42\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with pytest.raises(GenkitError, match='must be a string or map') as raised:
+            await prompt(ai.registry, 'num_use')
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.original_message
 
 
 @pytest.mark.asyncio

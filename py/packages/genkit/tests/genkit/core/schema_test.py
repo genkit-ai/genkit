@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._schema import InvalidOutputSchemaError, parse_schema, to_json_schema
 
 
@@ -224,4 +224,6 @@ def test_parse_schema_invalid_schema_is_invalid_argument() -> None:
     with pytest.raises(InvalidOutputSchemaError, match='Invalid output_schema') as raised:
         parse_schema(data={'a': 1}, json_schema={'type': 'not-a-json-type'})
     assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SCHEMA
+    assert 'INVALID_SCHEMA' not in raised.value.original_message
     assert isinstance(raised.value, GenkitError)

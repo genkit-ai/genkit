@@ -24,7 +24,7 @@ from genkit._ai._generate import expand_wildcard_tools, resolve_tool
 from genkit._ai._testing import define_programmable_model
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue, define_dynamic_action_provider
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -618,7 +618,9 @@ async def test_generate_mcp_star_and_local_tool_a_same_name_raises() -> None:
         )
 
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'Cannot provide two tools with the same name' in ei.value.original_message
+    assert 'INVALID_INPUT' not in ei.value.original_message
     assert pm.request_count == 0
     assert pm.last_request is None
 
@@ -652,6 +654,8 @@ async def test_generate_local_tool_a_then_mcp_star_same_name_raises() -> None:
         )
 
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'Cannot provide two tools with the same name' in ei.value.original_message
+    assert 'INVALID_INPUT' not in ei.value.original_message
     assert pm.request_count == 0
     assert pm.last_request is None

@@ -23,7 +23,7 @@ import pytest
 from genkit import Part
 from genkit._ai._agents._session_stores._util import apply_save
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -408,7 +408,9 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
     with pytest.raises(GenkitError) as exc:
         await store.get_snapshot(snapshot_id=bad_id)
     assert exc.value.status == 'INVALID_ARGUMENT'
+    assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
     assert 'Invalid snapshotId' in str(exc.value)
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.original_message
 
     with pytest.raises(GenkitError) as exc:
         await store.save_snapshot(
@@ -416,9 +418,64 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
             lambda current: make_snapshot('sess', 'x') if current is None else current,
         )
     assert exc.value.status == 'INVALID_ARGUMENT'
+    assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.original_message
 
     # Path traversal must not create files outside the store directory.
     assert not (tmp_path.parent / 'escape.json').exists()
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_empty_snapshot_id_raises_invalid_snapshot_id() -> None:
+    """An empty snapshot id is a bad id, not a missing row."""
+    store = InMemorySessionStore()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(snapshot_id='   ')
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert 'snapshot_id must not be empty' in error.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in error.original_message
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_empty_session_id_raises_session_id_required() -> None:
+    """An empty session id is a missing session id, not a missing row."""
+    store = InMemorySessionStore()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(session_id='')
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert 'session_id must not be empty' in error.original_message
+    assert 'SESSION_ID_REQUIRED' not in error.original_message
+
+
+@pytest.mark.asyncio
+async def test_file_store_save_without_session_id_raises_session_id_required(tmp_path: Path) -> None:
+    """A file-store row has to belong to a session before it is written."""
+    store = FileSessionStore(str(tmp_path))
+
+    def mutator(_: SessionSnapshot | None) -> SessionSnapshot:
+        return SessionSnapshot(
+            snapshot_id='snap-1',
+            created_at='2026-06-18T12:00:00Z',
+            status=SnapshotStatus.COMPLETED,
+            state=SessionState(
+                messages=[Message(role='user', content=[Part.from_text('hi')])],
+                custom={},
+            ),
+        )
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot('snap-1', mutator)
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert 'sessionId' in error.original_message
+    assert 'SESSION_ID_REQUIRED' not in error.original_message
 
 
 @pytest.mark.asyncio

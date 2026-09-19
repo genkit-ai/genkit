@@ -29,7 +29,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
@@ -64,14 +64,14 @@ from genkit._ai._model import (
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
+    GenerateCall,
     ModelStreamResponse,
-    PromptConfig,
     define_helper,
     define_partial,
     define_schema,
     load_prompt_folder,
     register_prompt_actions,
-    to_generate_action_options,
+    to_generate_options,
 )
 from genkit._ai._resource import (
     ResourceFn,
@@ -97,7 +97,7 @@ from genkit._core._dap import (
     define_dynamic_action_provider as define_dap_block,
 )
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -1152,15 +1152,8 @@ class Genkit:
             print(res.text)
             print(res.output)
         """
-        # One call-scoped registry layer holds anything inline (tools +
-        # middleware) so it dies with the call and stays out of self.registry.
-        child_registry = self.registry.new_child()
-        await register_tools(child_registry, tools)
-        refs = register_middleware(child_registry, use)
-        resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
-        prompt_config = PromptConfig(
-            model=resolved.name,
+        return await self._generate(
+            model=model,
             prompt=prompt,
             system=system,
             messages=messages,
@@ -1170,21 +1163,16 @@ class Genkit:
             resume_respond=resume_respond,
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
-            config=resolved.config,
+            config=config,
             max_turns=max_turns,
+            context=context,
+            output_schema=output_schema,
             output_format=output_format,
             output_content_type=output_content_type,
             output_instructions=output_instructions,
-            output_schema=output_schema,
             output_constrained=output_constrained,
+            use=use,
             docs=docs,
-            use=refs,
-        )
-        gen_options = await to_generate_action_options(child_registry, prompt_config)
-        return await generate_action(
-            child_registry,
-            gen_options,
-            context=context if context is not None else get_current_context(),
         )
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelStreamResponse[T]
@@ -1212,7 +1200,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
     # Overload: config=ModelRefConfigT | Mapping, output_schema=type[T] -> ModelStreamResponse[T]
@@ -1240,7 +1227,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
     # Overload: config=ModelConfigDict, no output_schema -> ModelStreamResponse[Any]
@@ -1268,7 +1254,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
     # Overload: config=ModelRefConfigT | Mapping, no output_schema -> ModelStreamResponse[Any]
@@ -1296,7 +1281,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
     def generate_stream(
@@ -1322,7 +1306,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
         """Stream generated text, returning a ModelStreamResponse with .stream and .response.
 
@@ -1337,17 +1320,76 @@ class Genkit:
                 print(chunk.text)
             final = await stream.response
         """
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
+        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
         async def _run_generate() -> ModelResponse[Any]:
-            # One call-scoped registry layer holds anything inline (tools +
-            # middleware) so it dies with the call and stays out of self.registry.
-            child_registry = self.registry.new_child()
-            await register_tools(child_registry, tools)
-            refs = register_middleware(child_registry, use)
-            resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-            assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
-            prompt_config = PromptConfig(
+            return await self._generate(
+                model=model,
+                prompt=prompt,
+                system=system,
+                messages=messages,
+                tools=tools,
+                return_tool_requests=return_tool_requests,
+                tool_choice=tool_choice,
+                resume_respond=resume_respond,
+                resume_restart=resume_restart,
+                resume_metadata=resume_metadata,
+                config=config,
+                max_turns=max_turns,
+                context=context,
+                output_schema=output_schema,
+                output_format=output_format,
+                output_content_type=output_content_type,
+                output_instructions=output_instructions,
+                output_constrained=output_constrained,
+                use=use,
+                docs=docs,
+                on_chunk=lambda c: channel.send(c),
+            )
+
+        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
+        channel.set_close_future(response_future)
+
+        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+
+    async def _generate(
+        self,
+        *,
+        model: str | ModelRef[BaseModel] | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type | dict | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        docs: list[Document] | None = None,
+        on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+    ) -> ModelResponse[Any]:
+        """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
+
+        Inline tools and middleware live on a child registry so they die
+        with the call and stay out of ``self.registry``.
+        """
+        registry = self.registry.new_child()
+        await register_tools(registry, tools)
+        use = register_middleware(registry, use)
+        resolved = await resolve_for_generate(model=model, config=config, registry=registry)
+        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        options = await to_generate_options(
+            registry=registry,
+            call=GenerateCall(
                 model=resolved.name,
                 prompt=prompt,
                 system=system,
@@ -1366,20 +1408,15 @@ class Genkit:
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=refs,
-            )
-            gen_options = await to_generate_action_options(child_registry, prompt_config)
-            return await generate_action(
-                child_registry,
-                gen_options,
-                on_chunk=lambda c: channel.send(c),
-                context=context if context is not None else get_current_context(),
-            )
-
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+                use=use,
+            ),
+        )
+        return await generate_action(
+            registry,
+            options,
+            on_chunk=on_chunk,
+            context=context if context is not None else get_current_context(),
+        )
 
     async def embed(
         self,
@@ -1666,12 +1703,14 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Model '{resolved.name}' not found.",
+                reason=RuntimeErrorReason.MODEL_NOT_FOUND,
             )
 
         if model_action.kind != ActionKind.BACKGROUND_MODEL:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",
+                reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
             )
 
         # Call generate with already-resolved wire name + config.
@@ -1695,7 +1734,15 @@ class Genkit:
             docs=docs,
         )
 
+        if response.error is not None:
+            # This call is "give me the ticket." A start that already
+            # failed is not that ticket — while-not-done would poll it
+            # as a live job.
+            raise GenkitError(
+                status=cast(StatusName, response.error.status or 'INTERNAL'),
+                message=response.error.message,
+                reason=response.error.reason,
+            )
         if not response.operation:
             raise missing_operation_error(name=model_action.name)
-
         return response.operation

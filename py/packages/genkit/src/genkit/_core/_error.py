@@ -18,12 +18,16 @@
 
 import math
 import time
+from collections.abc import Mapping
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
-from typing import Any, ClassVar, Literal, TypedDict
+from typing import Any, ClassVar, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
+
+from genkit._core._compat import StrEnum
+from genkit._core._typing import GenkitRuntimeError as GenkitRuntimeErrorData
 
 
 class StatusCodes(IntEnum):
@@ -68,6 +72,61 @@ StatusName = Literal[
     'UNAVAILABLE',
     'DATA_LOSS',
 ]
+
+
+class RuntimeErrorReason(StrEnum):
+    """Extra why on a classified generate failure or a helper raise.
+
+    The message stays human. The helper that fails sets this so it
+    bubbles on the exception the caller actually catches.
+    """
+
+    INVALID_SCHEMA = 'INVALID_SCHEMA'
+    INVALID_INPUT = 'INVALID_INPUT'
+    INVALID_OUTPUT = 'INVALID_OUTPUT'
+    ACTION_NOT_FOUND = 'ACTION_NOT_FOUND'
+    MODEL_NOT_FOUND = 'MODEL_NOT_FOUND'
+    TOOL_NOT_FOUND = 'TOOL_NOT_FOUND'
+    MAX_TURNS_EXCEEDED = 'MAX_TURNS_EXCEEDED'
+    TOOL_FAILED = 'TOOL_FAILED'
+    UNSUPPORTED_BY_MODEL = 'UNSUPPORTED_BY_MODEL'
+    INVALID_PART = 'INVALID_PART'
+    UNRESOLVED_TOOL_REQUEST = 'UNRESOLVED_TOOL_REQUEST'
+    INVALID_RESUME = 'INVALID_RESUME'
+    SNAPSHOT_NOT_FOUND = 'SNAPSHOT_NOT_FOUND'
+    SNAPSHOT_NOT_RESUMABLE = 'SNAPSHOT_NOT_RESUMABLE'
+    SESSION_STORE_NOT_CONFIGURED = 'SESSION_STORE_NOT_CONFIGURED'
+    SESSION_ID_REQUIRED = 'SESSION_ID_REQUIRED'
+    INVALID_SESSION_ID = 'INVALID_SESSION_ID'
+    INVALID_SNAPSHOT_ID = 'INVALID_SNAPSHOT_ID'
+    CONNECTION_CLOSED = 'CONNECTION_CLOSED'
+
+
+def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
+    """Read a known stable reason from runtime error details."""
+    if not isinstance(details, Mapping):
+        return None
+    value = cast(Mapping[str, object], details).get('reason')
+    if not isinstance(value, str):
+        return None
+    try:
+        return RuntimeErrorReason(value)  # pyrefly: ignore[bad-return]
+    except ValueError:
+        return None
+
+
+class GenkitRuntimeError(GenkitRuntimeErrorData):
+    """Classified generate failure sitting on ``response.error``.
+
+    The wire is still status, message, and details. ``reason`` is the
+    framework why when we put one in details, so callers can branch
+    without parsing the message.
+    """
+
+    @property
+    def reason(self) -> RuntimeErrorReason | None:
+        return runtime_error_reason(self.details)
+
 
 # Mapping of status names to HTTP status codes
 _STATUS_CODE_MAP: dict[StatusName, int] = {
@@ -287,6 +346,7 @@ class GenkitError(Exception):
         status: StatusName | None = None,
         cause: Exception | None = None,
         details: Any = None,  # noqa: ANN401
+        reason: RuntimeErrorReason | None = None,
         trace_id: str | None = None,
         source: str | None = None,
         response_metadata: ErrorResponseMetadata | None = None,
@@ -298,6 +358,7 @@ class GenkitError(Exception):
             status: The status name for this error.
             cause: The underlying exception that caused this error.
             details: Optional detail information.
+            reason: Extra why when we classified the failure.
             trace_id: A unique identifier for tracing the action execution.
             source: Optional source of the error.
             response_metadata: Optional HTTP response metadata for in-process use.
@@ -324,6 +385,9 @@ class GenkitError(Exception):
 
         if not details:
             details = {}
+        if reason is not None:
+            details = dict(details)
+            details['reason'] = reason.value
         if 'stack' not in details:
             details['stack'] = get_error_stack(cause if cause else self)
         if 'trace_id' not in details and trace_id:
@@ -334,6 +398,10 @@ class GenkitError(Exception):
         self.trace_id: str | None = trace_id
         self.cause: Exception | None = cause
         self.response_metadata: ErrorResponseMetadata | None = response_metadata
+
+    @property
+    def reason(self) -> RuntimeErrorReason | None:
+        return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
         """Returns a JSON-serializable representation of this object.

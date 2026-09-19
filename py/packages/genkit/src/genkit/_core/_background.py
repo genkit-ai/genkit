@@ -25,7 +25,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -207,14 +207,19 @@ class BackgroundAction(Generic[OutputT]):
             raise GenkitError(
                 status='UNIMPLEMENTED',
                 message=f'Background action {operation.action} does not support cancellation.',
+                reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
             )
         result = await self.cancel_action.run(operation, context=context)
         return _ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
-def missing_operation_error(*, name: str) -> GenkitError:
+class MissingOperationError(GenkitError):
+    """A background action lost the operation handle it created."""
+
+
+def missing_operation_error(*, name: str) -> MissingOperationError:
     """The caller asked for a handle and this action did not return one."""
-    return GenkitError(
+    return MissingOperationError(
         status='FAILED_PRECONDITION',
         message=f"'{name}' did not return an operation.",
     )
@@ -419,15 +424,18 @@ def require_operation(*, value: object) -> Operation:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='got ModelResponse; pass response.operation',
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
     if isinstance(value, Mapping):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='got a dump; pass Operation.model_validate(...)',
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'got {type(value).__name__}, expected Operation',
+        reason=RuntimeErrorReason.INVALID_INPUT,
     )
 
 
@@ -441,6 +449,7 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='Provided operation is missing original request information',
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
 
     try:
@@ -451,11 +460,13 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve background action from original request: {operation.action}',
+            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
         ) from e
     if background_action is None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve background action from original request: {operation.action}',
+            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
         )
     return background_action
 

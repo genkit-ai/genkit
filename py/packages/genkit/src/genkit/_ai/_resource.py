@@ -22,6 +22,7 @@ from typing import Any, TypedDict, cast
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import Part
 from genkit._core._registry import Registry
 
@@ -68,7 +69,11 @@ async def resolve_resources(registry: Registry, resources: list[ResourceArgument
         elif isinstance(ref, Action):  # pyright: ignore[reportUnnecessaryIsInstance]
             resolved_actions.append(ref)
         else:
-            raise ValueError('Resources must be strings or actions')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Resources must be strings or actions',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
     return resolved_actions
 
 
@@ -80,7 +85,11 @@ async def lookup_resource_by_name(registry: Registry, name: str) -> Action:
         or await registry.resolve_action(ActionKind.RESOURCE, f'/dynamic-action-provider/{name}')
     )
     if not resource:
-        raise ValueError(f'Resource {name} not found')
+        raise GenkitError(
+            status='NOT_FOUND',
+            message=f'Resource {name} not found',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
     return resource
 
 

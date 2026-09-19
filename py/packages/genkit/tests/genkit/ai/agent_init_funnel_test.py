@@ -25,12 +25,14 @@ from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
 from genkit._core._action import ActionRunContext
+from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
 from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentFinishReason,
     SnapshotStatus,
 )
+from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
 
 
@@ -84,7 +86,9 @@ async def test_non_resumable_snapshot_resolves_as_failed_agent_output() -> None:
     assert out.finish_reason == AgentFinishReason.FAILED
     assert out.error is not None
     assert out.error.status == 'INVALID_ARGUMENT'
+    assert runtime_error_reason(out.error.details) is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in (out.error.message or '')
+    assert 'SNAPSHOT_NOT_RESUMABLE' not in (out.error.message or '')
 
 
 @pytest.mark.asyncio
@@ -155,7 +159,9 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
         await conn.output()
 
     assert exc.value.status == 'FAILED_PRECONDITION'
+    assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
     assert 'no store configured' in str(exc.value)
+    assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.original_message
 
 
 @pytest.mark.asyncio
@@ -169,3 +175,18 @@ async def test_chat_surfaces_missing_snapshot_as_agent_error() -> None:
         await agent.chat(snapshot_id='gone').send('hi')
 
     assert exc.value.status == 'NOT_FOUND'
+    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_unknown_agent_raises_with_action_not_found() -> None:
+    """A missing agent raises at lookup; reason is on the exception."""
+    ai = Genkit()
+
+    with pytest.raises(GenkitError) as exc:
+        await ai.agent('ghost')
+
+    assert exc.value.status == 'NOT_FOUND'
+    assert exc.value.reason is RuntimeErrorReason.ACTION_NOT_FOUND
+    assert "Agent 'ghost' not found" in exc.value.original_message
+    assert 'ACTION_NOT_FOUND' not in exc.value.original_message

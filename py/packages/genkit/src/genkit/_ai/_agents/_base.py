@@ -62,13 +62,13 @@ from genkit._ai._agents._types import (
 from genkit._ai._prompt import (
     ExecutablePrompt,
     PromptGenerateOptions,
-    _prepare,
     lookup_prompt,
+    prepare_prompt,
     register_prompt_actions,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import (
     AgentInit,
@@ -312,7 +312,11 @@ def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) ->
             # an empty-but-successful read, so surface it as NOT_FOUND instead of a
             # null the caller has to re-interpret.
             target = sid or sess_id or 'unknown'
-            raise GenkitError(status='NOT_FOUND', message=f'Snapshot {target!r} not found for agent {name!r}.')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'Snapshot {target!r} not found for agent {name!r}.',
+                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+            )
         return snap
 
     async def abort_fn(req: AgentAbortRequest) -> AgentAbortResponse:
@@ -429,17 +433,17 @@ def define_prompt_agent(
                 'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
-            child_registry, gen_options = await _prepare(executable, {}, call_opts)
-            rendered_messages = list(gen_options.messages or [])
-            gen_options = gen_options.model_copy(
+            call_registry, options = await prepare_prompt(prompt=executable, input={}, opts=call_opts)
+            rendered_messages = list(options.messages or [])
+            options = options.model_copy(
                 update={'messages': apply_preamble_tags(rendered_messages)},
             )
 
             return await generate_prompt_agent_turn(
                 session_runner=session_runner,
                 ctx=ctx,
-                registry=child_registry,
-                gen_options=gen_options,
+                registry=call_registry,
+                options=options,
                 history=history,
             )
 

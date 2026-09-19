@@ -37,8 +37,11 @@ from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
     GenkitError,
+    GenkitRuntimeError,
+    RuntimeErrorReason,
     StatusCodes,
     StatusName,
+    runtime_error_reason,
 )
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -59,7 +62,6 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     AgentFinishReason,
-    GenkitRuntimeError,
     Media,
     Role,
     SnapshotStatus,
@@ -305,6 +307,10 @@ class AgentError(Exception):
         self.state = state
         self.snapshot_id = snapshot_id
         self.response = response
+
+    @property
+    def reason(self) -> RuntimeErrorReason | None:
+        return runtime_error_reason(self.details)
 
 
 HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
@@ -661,7 +667,11 @@ class AgentClient(Generic[StateT]):
         """
         snapshot = await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot is None:
-            raise ValueError(f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.',
+                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+            )
         session_transport = copy.copy(self._transport)
         session_transport.state_management = 'server'
         chat = AgentChat(session_transport, state_schema=self._state_schema)
@@ -1206,7 +1216,7 @@ class AgentChat(Generic[StateT]):
             self.messages.append(inp.message)
 
         # This session never sees a detached turn's chunks, so start from an empty
-        # accumulator — otherwise a prior turn's leftover messages would be folded
+        # accumulator — otherwise a prior turn's messages would be folded
         # in when the output settles.
         self._turn_accumulator = StreamedMessageAccumulator()
 

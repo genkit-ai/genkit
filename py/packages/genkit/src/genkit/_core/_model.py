@@ -44,7 +44,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
@@ -56,7 +56,7 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
-    GenkitRuntimeError,
+    GenkitRuntimeError as GenkitRuntimeErrorData,
     JsonPatch,
     Media,
     MessageData,
@@ -82,8 +82,8 @@ from genkit._core._typing import (
 ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
-# The model's own reason stays on the response. A leftover that failed
-# schema on a normal stop becomes ERROR instead.
+# The model's own reason stays on the response. Output validation is
+# post-processing, so its failure is carried separately on ``error``.
 _KEEP_MODEL_FINISH_REASONS = frozenset({
     FinishReason.BLOCKED,
     FinishReason.ABORTED,
@@ -797,7 +797,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: GenkitRuntimeErrorData | None = None
     state: SessionState | None = None
 
     @field_validator('state', mode='before')
@@ -854,7 +854,7 @@ class AgentOutput(GenkitModel):
     message: Message | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: GenkitRuntimeErrorData | None = None
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1067,6 +1067,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
+    error: GenkitRuntimeError | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -1108,26 +1109,37 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     def assert_valid(self) -> None:
         """No-op. A blocked or empty reply is still a response the caller can read."""
 
+    def _mark_invalid_output(self, message: str) -> None:
+        self.error = GenkitRuntimeError(
+            status='INTERNAL',
+            message=message,
+            details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
+        )
+
     def assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
-        A leftover echo or a wrong-shape JSON is not a Recipe. generate()
-        still returns so the leftover stays on ``.text``; we set
-        ``finish_reason=error`` and ``.output`` is None.
+        Raw text or a wrong-shape JSON is not a Recipe. generate()
+        still returns so that text stays on ``.text``; the model's finish
+        reason stays intact and ``error`` records the post-processing failure.
+        ``.output`` is None.
         A blocked/aborted/interrupted/other finish keeps the model's reason.
         """
         schema = self.request.output_schema if self.request is not None else None
         if schema is None and self._schema_type is None:
+            return
+        if self.error is not None:
             return
         if self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
             return
 
         try:
             parsed = self._raw_parsed_output()
-        except ValueError:
+        except Exception as exc:
+            if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
+                raise
             preview = (self.text or '')[:200]
-            self.finish_reason = FinishReason.FAILED
-            self.finish_message = f'Model output was not valid JSON for the requested schema: {preview}'
+            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
             return
 
         # A custom format's parser can return a string on purpose (enum,
@@ -1140,8 +1152,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 except GenkitError as error:
                     if error.original_message.startswith('Invalid output_schema'):
                         raise
-                    self.finish_reason = FinishReason.FAILED
-                    self.finish_message = error.original_message
+                    self._mark_invalid_output(error.original_message)
             return
 
         if schema is not None:
@@ -1150,16 +1161,14 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             except GenkitError as error:
                 if error.original_message.startswith('Invalid output_schema'):
                     raise
-                self.finish_reason = FinishReason.FAILED
-                self.finish_message = error.original_message
+                self._mark_invalid_output(error.original_message)
                 return
         if self._schema_type is None:
             return
         try:
             _ = self._schema_type.model_validate(parsed)
         except ValidationError:
-            self.finish_reason = FinishReason.FAILED
-            self.finish_message = 'Model output did not match the requested schema.'
+            self._mark_invalid_output('Model output did not match the requested schema.')
 
     def _raw_parsed_output(self) -> object:
         if self._message_parser and self.message is not None:
@@ -1195,8 +1204,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     def output(self) -> OutputT:
         """Parsed structured output, or None when the reply is not that shape.
 
-        generate() does not throw on a leftover string. If you asked for a
-        schema and this is not it, read ``finish_reason`` / ``.text`` instead.
+        generate() does not throw when the text is not the schema. If you
+        asked for a schema and this is not it, read ``error`` / ``.text``.
         """
         schema = self.request.output_schema if self.request is not None else None
         wants_schema = schema is not None or self._schema_type is not None
@@ -1207,7 +1216,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         try:
             parsed = self._raw_parsed_output()
-        except ValueError:
+        except Exception:
             if wants_schema:
                 return cast(OutputT, None)
             raise

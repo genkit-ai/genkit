@@ -26,7 +26,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._core._compat import override
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_json_array_from_text
 
 
@@ -90,6 +90,7 @@ class ArrayFormat(FormatDef):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message="Must supply an 'array' schema type when using the 'items' parser format.",
+                reason=RuntimeErrorReason.INVALID_SCHEMA,
             )
 
         def message_parser(msg: Message) -> list[object] | None:

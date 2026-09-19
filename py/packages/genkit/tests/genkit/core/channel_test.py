@@ -95,66 +95,15 @@ async def test_channel_aiter_anext() -> None:
 
 
 @pytest.mark.asyncio
-async def test_channel_invalid_timeout() -> None:
-    """Tests that an invalid timeout value raises ValueError."""
-    with pytest.raises(ValueError):
-        Channel(timeout=-0.1)
-
-
-@pytest.mark.asyncio
-async def test_channel_timeout() -> None:
-    """Tests that the channel raises TimeoutError when timeout is reached."""
-    channel: Channel[Any] = Channel(timeout=0.1)
-    with pytest.raises(TimeoutError):
-        await channel.__anext__()
-
-
-@pytest.mark.asyncio
-async def test_channel_no_timeout() -> None:
-    """Tests that the channel doesn't timeout when timeout=None."""
-    channel: Channel[Any] = Channel(timeout=None)
+async def test_channel_waits_until_a_value_arrives() -> None:
+    """The next chunk wait does not raise on its own; a send unblocks it."""
+    channel: Channel[Any] = Channel()
     anext_task = asyncio.create_task(channel.__anext__())
     await asyncio.sleep(0.1)
     assert not anext_task.done()
     channel.send('value')
     result = await anext_task
     assert result == 'value'
-
-
-@pytest.mark.asyncio
-async def test_channel_timeout_with_close_future() -> None:
-    """Tests timeout with an active close_future."""
-    channel: Channel[Any] = Channel(timeout=0.1)
-    close_future: asyncio.Future[Any] = asyncio.Future()
-    channel.set_close_future(close_future)
-    with pytest.raises(TimeoutError):
-        await channel.__anext__()
-    close_future.set_result(None)
-    with pytest.raises(StopAsyncIteration):
-        await channel.__anext__()
-
-
-@pytest.mark.asyncio
-async def test_channel_invalid_timeout_negative() -> None:
-    """Tests that negative timeout values raise ValueError."""
-    with pytest.raises(ValueError) as excinfo:
-        Channel(timeout=-1.0)
-    assert 'Timeout must be non-negative' in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_channel_timeout_race_condition() -> None:
-    """Tests the behavior when a value arrives just as the timeout occurs."""
-    channel: Channel[Any] = Channel(timeout=0.2)
-
-    async def delayed_send() -> None:
-        await asyncio.sleep(0.15)
-        channel.send('just in time')
-
-    send_task = asyncio.create_task(delayed_send())
-    result = await channel.__anext__()
-    assert result == 'just in time'
-    await send_task
 
 
 @pytest.mark.asyncio

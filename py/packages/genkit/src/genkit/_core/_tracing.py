@@ -217,6 +217,11 @@ def record_span_outcome(
 
     if metadata.output is not None:
         span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
+    if metadata.state == 'error':
+        # Leftover generate returns a response instead of raising; the
+        # span still has to look unfinished so the trace is not a win.
+        span.set_attribute(Attr.STATE, State.ERROR)
+        return
     span.set_attribute(Attr.STATE, State.SUCCESS)
 
 

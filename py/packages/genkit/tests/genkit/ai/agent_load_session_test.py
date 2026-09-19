@@ -25,7 +25,7 @@ import pytest
 
 from genkit._ai._agents._runtime import AgentInitError, load_session
 from genkit._ai._agents._session import SessionStore
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import AgentInit, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -83,6 +83,19 @@ class _ScriptedStore(SessionStore[Any]):
 
 
 @pytest.mark.asyncio
+async def test_missing_snapshot_raises_with_snapshot_not_found() -> None:
+    """A snapshot id the store does not have raises; reason bubbles on the exception."""
+    store = _ScriptedStore({}, leaf=None)
+
+    with pytest.raises(GenkitError) as exc:
+        await load_session(init=AgentInit(snapshot_id='gone'), store=store, agent_name='a')
+    assert exc.value.status == 'NOT_FOUND'
+    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+    assert 'gone' in exc.value.original_message
+    assert 'SNAPSHOT_NOT_FOUND' not in exc.value.original_message
+
+
+@pytest.mark.asyncio
 async def test_resume_by_snapshot_id_rejects_non_completed() -> None:
     failed = _snap('snap-f', SnapshotStatus.FAILED)
     store = _ScriptedStore({'snap-f': failed}, leaf=None)
@@ -90,7 +103,23 @@ async def test_resume_by_snapshot_id_rejects_non_completed() -> None:
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(snapshot_id='snap-f'), store=store, agent_name='a')
     assert exc.value.status == INVALID_ARGUMENT
-    assert 'not resumable' in str(exc.value)
+    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert 'not resumable' in exc.value.original_message
+    assert 'SNAPSHOT_NOT_RESUMABLE' not in exc.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_resume_by_snapshot_id_rejects_pending() -> None:
+    """A pending snapshot is kept for inspection and is not a place to continue."""
+    pending = _snap('snap-p', SnapshotStatus.PENDING)
+    store = _ScriptedStore({'snap-p': pending}, leaf=None)
+
+    with pytest.raises(GenkitError) as exc:
+        await load_session(init=AgentInit(snapshot_id='snap-p'), store=store, agent_name='a')
+    assert exc.value.status == INVALID_ARGUMENT
+    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert 'not resumable' in exc.value.original_message
+    assert 'SNAPSHOT_NOT_RESUMABLE' not in exc.value.original_message
 
 
 @pytest.mark.asyncio
@@ -153,5 +182,7 @@ async def test_snapshot_id_with_mismatched_session_id_rejected() -> None:
             agent_name='a',
         )
     assert exc.value.status == INVALID_ARGUMENT
-    assert 'does not belong to session' in str(exc.value)
-    assert 'it belongs to' in str(exc.value)
+    assert exc.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert 'does not belong to session' in exc.value.original_message
+    assert 'INVALID_SESSION_ID' not in exc.value.original_message
+    assert 'it belongs to' in exc.value.original_message

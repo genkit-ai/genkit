@@ -27,7 +27,7 @@ from genkit._ai._tools import (
     response,
 )
 from genkit._core._action import Action, create_action_key, parse_action_key
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -62,7 +62,9 @@ def test_response_rejects_hollow_parts() -> None:
     with pytest.raises(GenkitError) as ei:
         response({'ok': True}, parts=[Part.from_media('')])
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
     assert 'no live payload' in ei.value.original_message
+    assert 'INVALID_PART' not in ei.value.original_message
 
 
 def test_response_builds_the_envelope() -> None:
@@ -90,21 +92,27 @@ def test_response_rejects_bare_part() -> None:
     with pytest.raises(GenkitError) as ei:
         response({'ok': True}, parts=_png())  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
     assert 'parts' in ei.value.original_message
+    assert 'INVALID_PART' not in ei.value.original_message
 
 
 def test_response_rejects_non_part_parts() -> None:
     with pytest.raises(GenkitError) as ei:
         response({'ok': True}, parts='not-a-part')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
     assert 'parts' in ei.value.original_message
+    assert 'INVALID_PART' not in ei.value.original_message
 
 
 def test_response_rejects_non_dict_metadata() -> None:
     with pytest.raises(GenkitError) as ei:
         response(1, metadata='nope')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'metadata' in ei.value.original_message
+    assert 'INVALID_INPUT' not in ei.value.original_message
 
 
 class CamelOut(BaseModel):
@@ -315,18 +323,24 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
         )
     )
 
-    with pytest.raises(GenkitError) as ei:
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
-                tools=['screenshot'],
-            ),
-        )
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
+            tools=['screenshot'],
+        ),
+    )
     assert ran
-    assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'screenshot' in ei.value.original_message
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert 'screenshot' in response.finish_message
+    assert 'not JSON-serializable' in response.finish_message
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert [message.role for message in response.messages] == ['user']
 
 
 @pytest.mark.asyncio

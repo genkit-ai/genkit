@@ -24,14 +24,74 @@ from genkit import ErrorResponseMetadata
 from genkit._core import _error as error_mod
 from genkit._core._error import (
     GenkitError,
+    GenkitRuntimeError,
     PublicError,
     ReflectionError,
+    RuntimeErrorReason,
     get_callable_json,
     get_error_stack,
     get_http_status,
     parse_retry_after_ms,
     wrap_http_error,
 )
+
+
+def test_runtime_error_reasons_are_the_ones_helpers_write() -> None:
+    assert {reason.value for reason in RuntimeErrorReason} == {
+        'INVALID_SCHEMA',
+        'INVALID_INPUT',
+        'INVALID_OUTPUT',
+        'ACTION_NOT_FOUND',
+        'MODEL_NOT_FOUND',
+        'TOOL_NOT_FOUND',
+        'MAX_TURNS_EXCEEDED',
+        'TOOL_FAILED',
+        'UNSUPPORTED_BY_MODEL',
+        'INVALID_PART',
+        'UNRESOLVED_TOOL_REQUEST',
+        'INVALID_RESUME',
+        'SNAPSHOT_NOT_FOUND',
+        'SNAPSHOT_NOT_RESUMABLE',
+        'SESSION_STORE_NOT_CONFIGURED',
+        'SESSION_ID_REQUIRED',
+        'INVALID_SESSION_ID',
+        'INVALID_SNAPSHOT_ID',
+        'CONNECTION_CLOSED',
+    }
+
+
+def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
+    error = GenkitRuntimeError(
+        status='ABORTED',
+        message='stopped',
+        details={'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
+    )
+
+    assert error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert error.model_dump(exclude_none=True) == {
+        'status': 'ABORTED',
+        'message': 'stopped',
+        'details': {'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
+    }
+    assert GenkitRuntimeError(message='bad', details={'reason': 5}).reason is None
+    assert GenkitRuntimeError(message='bad', details={'reason': 'not-valid'}).reason is None
+    with pytest.raises(AttributeError):
+        error.reason = RuntimeErrorReason.TOOL_FAILED  # type: ignore[misc]
+
+
+def test_genkit_error_reason_stays_in_details() -> None:
+    error = GenkitError(
+        status='NOT_FOUND',
+        message="Failed to resolve model 'nope/ghost'.",
+        reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+    )
+
+    assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert error.details['reason'] == 'MODEL_NOT_FOUND'
+    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert GenkitError(status='NOT_FOUND', message='missing').reason is None
+    with pytest.raises(AttributeError):
+        error.reason = RuntimeErrorReason.TOOL_NOT_FOUND  # type: ignore[misc]
 
 
 def test_genkit_error() -> None:

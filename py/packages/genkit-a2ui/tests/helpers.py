@@ -12,6 +12,7 @@ from genkit_a2ui import A2UI_MIME_TYPE
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
+from genkit._core._error import RuntimeErrorReason
 from genkit._core._typing import FinishReason, Role
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
@@ -144,6 +145,29 @@ def assert_no_a2ui_parts(content: list[Part]) -> None:
 
 def assert_no_fence_in_text(content: list[Part]) -> None:
     assert A2UI_FENCE not in joined_text(content)
+
+
+def assert_dead_turn(
+    response: ModelResponse,
+    *,
+    reason: RuntimeErrorReason,
+    match: str,
+) -> None:
+    """Pin the shape a2ui hands back when it refuses the turn.
+
+    The unanswered model call is dropped, so `messages` ends at the user turn
+    and can be sent again. The real sentence has to survive: a bare exception
+    would have been redacted to 'internal error'.
+    """
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert response.finish_message is not None
+    assert match in response.finish_message
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.reason == reason
+    assert match in response.error.message
 
 
 def request_messages(pm: ProgrammableModel) -> list[Message]:

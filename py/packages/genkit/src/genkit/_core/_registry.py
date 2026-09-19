@@ -40,7 +40,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     set_action_name,
 )
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     EmbedRequest,
@@ -144,7 +144,11 @@ class Registry:
         async def async_schema_resolver(name: str) -> dict[str, object]:
             schema = self.lookup_schema(name)
             if schema is None:
-                raise GenkitError(status='NOT_FOUND', message=f"Schema '{name}' not found")
+                raise GenkitError(
+                    status='NOT_FOUND',
+                    message=f"Schema '{name}' not found",
+                    reason=RuntimeErrorReason.INVALID_INPUT,
+                )
             return schema
 
         # Children share the parent's Dotprompt instance (prompts are global).

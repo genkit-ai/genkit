@@ -31,7 +31,7 @@ from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import ReadAfterWriteError
 
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import SessionSnapshot, SessionState
 from genkit._core._typing import SnapshotStatus
 
@@ -410,6 +410,34 @@ async def test_firestore_session_store_get_by_session_id() -> None:
     assert loaded.snapshot_id == 'snap-1'
     assert loaded.state is not None
     assert loaded.state.custom == {'hello': 'world'}
+
+
+@pytest.mark.asyncio
+async def test_firestore_get_slash_session_id_raises_invalid_session_id() -> None:
+    """Lookup by a path-like session id fails before a pointer read."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(session_id='a/b')
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.original_message
+    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_firestore_get_slash_snapshot_id_raises_invalid_snapshot_id() -> None:
+    """Lookup by a path-like snapshot id fails before a document read."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(snapshot_id='a/b')
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
 
 
 @pytest.mark.asyncio
@@ -1371,12 +1399,62 @@ async def test_firestore_session_store_shrinking_checkpoint_prunes_orphan_shards
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_missing_session_id_raises_invalid_argument() -> None:
-    """A snapshot without a sessionId cannot be pointer-indexed: INVALID_ARGUMENT."""
+async def test_firestore_save_without_session_id_raises_session_id_required() -> None:
+    """A snapshot with no session id cannot be pointer-indexed."""
     h = FakeStoreHarness()
     store = h.store()
 
-    with pytest.raises(GenkitError) as exc_info:
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            'snap-1',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id=None,
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id=None),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.original_message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert _snap_path('snap-1') not in h.docs
+    assert _pointer_path('') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_uses_state_session_id_when_top_level_is_missing() -> None:
+    """None on the snapshot still pointer-indexes from state.session_id."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    saved = await store.save_snapshot(
+        'snap-1',
+        lambda _e: SessionSnapshot(
+            snapshot_id='snap-1',
+            session_id=None,
+            created_at='2026-07-03T00:00:00Z',
+            status=SnapshotStatus.COMPLETED,
+            state=SessionState(session_id='sess-1', messages=[]),
+        ),
+    )
+    assert saved is not None
+    assert saved.state is not None
+    assert saved.state.session_id == 'sess-1'
+    assert _pointer_path('sess-1') in h.docs
+    loaded = await store.get_snapshot(session_id='sess-1')
+    assert loaded is not None
+    assert loaded.snapshot_id == 'snap-1'
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_empty_session_id_raises_invalid_session_id() -> None:
+    """An empty session id is an unusable document id, not a missing one."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
         await store.save_snapshot(
             'snap-1',
             lambda _e: SessionSnapshot(
@@ -1384,12 +1462,135 @@ async def test_firestore_session_store_missing_session_id_raises_invalid_argumen
                 session_id='',
                 created_at='2026-07-03T00:00:00Z',
                 status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id='sess-1'),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id ''" in raised.value.original_message
+    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert _snap_path('snap-1') not in h.docs
+    assert _pointer_path('sess-1') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_slash_session_id_raises_invalid_session_id() -> None:
+    """A path-like session id is an unusable document id."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            'snap-1',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id='a/b',
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id='a/b'),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.original_message
+    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert _snap_path('snap-1') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_state_empty_session_id_raises_invalid_session_id() -> None:
+    """A missing top-level id still rejects an empty id on state."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            'snap-1',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id=None,
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
                 state=SessionState(session_id=''),
             ),
         )
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'session_id' in str(exc_info.value)
-    assert _pointer_path('') not in h.docs
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id ''" in raised.value.original_message
+    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert _snap_path('snap-1') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_state_slash_session_id_raises_invalid_session_id() -> None:
+    """A missing top-level id still rejects a path-like id on state."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            'snap-1',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id=None,
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id='a/b'),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.original_message
+    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert _snap_path('snap-1') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_empty_snapshot_id_raises_invalid_snapshot_id() -> None:
+    """An empty snapshot id is not a Firestore document id."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            '',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-1',
+                session_id='sess-1',
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id='sess-1'),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id ''" in raised.value.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert _pointer_path('sess-1') not in h.docs
+
+
+@pytest.mark.asyncio
+async def test_firestore_save_slash_snapshot_id_raises_invalid_snapshot_id() -> None:
+    """A path-like snapshot id is not a Firestore document id."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot(
+            'a/b',
+            lambda _e: SessionSnapshot(
+                snapshot_id='a/b',
+                session_id='sess-1',
+                created_at='2026-07-03T00:00:00Z',
+                status=SnapshotStatus.COMPLETED,
+                state=SessionState(session_id='sess-1'),
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert _pointer_path('sess-1') not in h.docs
 
 
 @pytest.mark.asyncio
@@ -1809,7 +2010,9 @@ async def test_firestore_session_store_mutator_supplied_path_ids_rejected() -> N
 
     with pytest.raises(GenkitError) as e1:
         await store.save_snapshot('snap-1', bad_session)
-    assert e1.value.status == 'INVALID_ARGUMENT' and 'session_id' in str(e1.value)
+    assert e1.value.status == 'INVALID_ARGUMENT'
+    assert e1.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert 'session_id' in str(e1.value)
     assert _snap_path('snap-1') not in h.docs
 
     def bad_parent(_e: SessionSnapshot | None) -> SessionSnapshot:
@@ -1824,7 +2027,9 @@ async def test_firestore_session_store_mutator_supplied_path_ids_rejected() -> N
 
     with pytest.raises(GenkitError) as e2:
         await store.save_snapshot('snap-1', bad_parent)
-    assert e2.value.status == 'INVALID_ARGUMENT' and 'parent_id' in str(e2.value)
+    assert e2.value.status == 'INVALID_ARGUMENT'
+    assert e2.value.reason is None
+    assert 'parent_id' in str(e2.value)
 
 
 @pytest.mark.asyncio

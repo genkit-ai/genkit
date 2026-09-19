@@ -21,6 +21,7 @@ from genkit import (
     Role,
 )
 from genkit._ai._model import text_from_content
+from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import OutputConfig
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
@@ -383,7 +384,7 @@ def test_text_from_content_skips_thoughts() -> None:
     assert text_from_content(content) == 'hello'
 
 
-def test_assert_valid_schema_marks_failed_when_output_does_not_conform() -> None:
+def test_assert_valid_schema_marks_error_when_output_does_not_conform() -> None:
     """Structured output that is the wrong shape stays on the response as error."""
 
     class Person(BaseModel):
@@ -401,7 +402,10 @@ def test_assert_valid_schema_marks_failed_when_output_does_not_conform() -> None
     response._schema_type = Person
 
     response.assert_valid_schema()
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
     assert response.output is None
     assert response.text == '{"name": "John", "age": "30"}'
 
@@ -430,7 +434,7 @@ def test_assert_valid_schema_passes_when_output_conforms() -> None:
 
 
 def test_assert_valid_schema_names_non_json_output() -> None:
-    """A leftover echo string is a schema miss, not a json5 column error."""
+    """A raw echo string is a schema miss, not a json5 column error."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('[ECHO] hi')]),
         finish_reason=FinishReason.STOP,
@@ -438,13 +442,15 @@ def test_assert_valid_schema_names_non_json_output() -> None:
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
     response.assert_valid_schema()
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
     assert response.output is None
-    assert 'not valid JSON' in (response.finish_message or '')
+    assert response.finish_message is None
+    assert response.error is not None
+    assert 'not valid JSON' in response.error.message
 
 
 def test_assert_valid_schema_keeps_blocked_finish() -> None:
-    """A safety refusal keeps finish_reason=blocked; leftover is on .text."""
+    """A safety refusal keeps finish_reason=blocked; the text stays on .text."""
     response = ModelResponse(
         finish_reason=FinishReason.BLOCKED,
         finish_message='Content was blocked',
@@ -458,8 +464,8 @@ def test_assert_valid_schema_keeps_blocked_finish() -> None:
     assert response.output is None
 
 
-def test_assert_valid_schema_marks_failed_on_truncated_json() -> None:
-    """Hit the token cap — non-conforming json becomes FAILED."""
+def test_assert_valid_schema_keeps_length_on_truncated_json() -> None:
+    """Hit the token cap — output validation does not replace the model's reason."""
     response = ModelResponse(
         finish_reason=FinishReason.LENGTH,
         message=Message(role=Role.MODEL, content=[Part.from_text('The recipe starts with')]),
@@ -467,7 +473,9 @@ def test_assert_valid_schema_marks_failed_on_truncated_json() -> None:
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
     response.assert_valid_schema()
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
     assert response.text == 'The recipe starts with'
     assert response.output is None
 
@@ -491,7 +499,7 @@ def test_length_finish_still_parses_complete_json() -> None:
     assert response.output.title == 'Soup'
 
 
-def test_assert_valid_schema_marks_failed_when_output_is_empty() -> None:
+def test_assert_valid_schema_marks_error_when_output_is_empty() -> None:
     """An empty reply is a miss when a schema was requested."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('')]),
@@ -500,7 +508,9 @@ def test_assert_valid_schema_marks_failed_when_output_is_empty() -> None:
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
     response.assert_valid_schema()
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
     assert response.output is None
 
 

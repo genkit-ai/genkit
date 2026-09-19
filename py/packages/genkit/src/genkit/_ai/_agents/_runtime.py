@@ -44,7 +44,7 @@ from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     AgentInit,
@@ -66,7 +66,6 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     AgentFinishReason,
     FinishReason,
-    GenkitRuntimeError,
     JsonPatch,
     JsonPatchOp,
     JsonPatchOperation,
@@ -278,6 +277,7 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
                 'schema': state_schema.model_json_schema(),
                 'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
             },
+            reason=RuntimeErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -330,6 +330,7 @@ def assert_init_matches_state_management(
                 f"Cannot use '{field}' with agent '{agent_name}': this agent has no "
                 "store configured (client-managed state). Send 'state' instead."
             ),
+            reason=RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
         )
     if init.state is not None and store is not None:
         raise AgentInitError(
@@ -374,6 +375,7 @@ async def load_session(
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
+                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
             )
         # When init carries both ids, the snapshot id picks the row and the
         # session id is an ownership check: the snapshot must belong to that
@@ -388,6 +390,7 @@ async def load_session(
                         f'Snapshot {init.snapshot_id!r} does not belong to session '
                         f'{init.session_id!r} (it belongs to {owner!r}).'
                     ),
+                    reason=RuntimeErrorReason.INVALID_SESSION_ID,
                 )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
@@ -399,6 +402,7 @@ async def load_session(
                     f'(status: {snap.status.value if snap.status else "unknown"}). '
                     "Only 'completed' snapshots can be resumed."
                 ),
+                reason=RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE,
             )
         validate_custom_state(
             custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
@@ -1032,7 +1036,7 @@ async def generate_prompt_agent_turn(
     session_runner: SessionRunner,
     ctx: ActionRunContext,
     registry: Registry,
-    gen_options: GenerateActionOptions,
+    options: GenerateActionOptions,
     history: list[Message],
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
@@ -1042,7 +1046,7 @@ async def generate_prompt_agent_turn(
 
     response = await generate_action(
         registry,
-        gen_options,
+        options,
         on_chunk=on_chunk,
         abort_signal=ctx.abort_signal,
         context=ctx.context,
@@ -1057,12 +1061,21 @@ async def generate_prompt_agent_turn(
         )
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
 
-    if response.message:
-        await persist_turn_messages(
-            session_runner=session_runner,
-            history=history,
-            response_message=response.message,
-            response=response,
+    # Max-turns abort has no model message (the refused round was
+    # dropped) but request.messages still has the closed tool turns.
+    await persist_turn_messages(
+        session_runner=session_runner,
+        history=history,
+        response_message=response.message,
+        response=response,
+    )
+
+    # Bad JSON is not a dead turn — generate already kept the model text.
+    if response.error is not None and response.error.reason is not RuntimeErrorReason.INVALID_OUTPUT:
+        raise GenkitError(
+            message=response.error.message,
+            status=cast(Any, response.error.status),
+            details=response.error.details,
         )
 
     # Return the turn result wrapping the model finish reason

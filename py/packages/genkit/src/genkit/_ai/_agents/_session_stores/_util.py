@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import SessionSnapshot
 from genkit._core._typing import SnapshotStatus
 
@@ -70,12 +70,13 @@ def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
                 f'Invalid snapshotId: "{snapshot_id}". '
                 'A snapshotId must be a plain file name (no path separators or "..").'
             ),
+            reason=RuntimeErrorReason.INVALID_SNAPSHOT_ID,
         )
 
 
 def session_id_of(snapshot: SessionSnapshot) -> str | None:
     """Session a snapshot belongs to, preferring the top-level id over state's."""
-    if snapshot.session_id:
+    if snapshot.session_id is not None:
         return snapshot.session_id
     return snapshot.state.session_id if snapshot.state is not None else None
 
@@ -126,9 +127,10 @@ def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str) -> None:
         snapshot.created_at = datetime.now(timezone.utc).isoformat()
     if not snapshot.status:
         snapshot.status = SnapshotStatus.COMPLETED
-    # Mirror the session id up to the top level so session lookups and callers
-    # reading snapshot.session_id don't have to dig into state.
-    if not snapshot.session_id and snapshot.state is not None:
+    # Mirror a missing top-level session id from state so session lookups
+    # and callers reading snapshot.session_id don't have to dig in. An
+    # empty string is a present id, not a missing one.
+    if snapshot.session_id is None and snapshot.state is not None:
         snapshot.session_id = snapshot.state.session_id
 
 

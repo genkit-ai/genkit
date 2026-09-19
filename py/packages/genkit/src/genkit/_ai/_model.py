@@ -31,7 +31,7 @@ from genkit._core._action import (
     ActionRunContext,
     get_func_description,
 )
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     Message,
@@ -124,6 +124,7 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
+        reason=RuntimeErrorReason.INVALID_INPUT,
     )
 
 
@@ -150,6 +151,7 @@ def resolve_model_arg(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'model is {type(model).__name__}, expected str or ModelRef.',
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
     resolved = registry.lookup_value('defaultModel', 'defaultModel')
     if isinstance(resolved, ModelRef):
@@ -162,8 +164,13 @@ def resolve_model_arg(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(f'defaultModel is {type(resolved).__name__}, expected str or ModelRef.'),
+            reason=RuntimeErrorReason.INVALID_INPUT,
         )
-    raise GenkitError(status='INVALID_ARGUMENT', message=message)
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=message,
+        reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+    )
 
 
 def resolve_model_name(
@@ -438,6 +445,7 @@ def assert_correct_config_class(
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'{model}: {body}' if model else body,
+        reason=RuntimeErrorReason.INVALID_INPUT,
     )
 
 
