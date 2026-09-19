@@ -4407,7 +4407,9 @@ async def test_wait_for_generate_raises_timeout() -> None:
         raise AssertionError('unreachable')
 
     ai.define_model(name='slow', fn=slow_model)
-    with pytest.raises(TimeoutError):
+    # asyncio.TimeoutError, not the builtin: on 3.10 they are different classes
+    # and wait_for raises the asyncio one. 3.11 aliased them.
+    with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(ai.generate(model='slow', prompt='x'), timeout=0.3)
 
 
