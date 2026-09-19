@@ -1158,7 +1158,7 @@ def message_with_output_meta(*, message: Message, output: GenerateActionOutputCo
 
 
 def tool_requests_on(message: Message) -> list[Part]:
-    return [part for part in message.content if part.tool_request]
+    return [part for part in message.content if part.tool_request is not None]
 
 
 def log_model_responded(
@@ -2293,7 +2293,7 @@ async def resolve_resume_options(
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None
-    tool_requests = [p for p in last_message.content if p.tool_request] if last_message else []
+    tool_requests = [p for p in last_message.content if p.tool_request is not None] if last_message else []
     if last_message is None or last_message.role != Role.MODEL or len(tool_requests) == 0:
         raise GenkitError(
             status='FAILED_PRECONDITION',
