@@ -49,7 +49,7 @@ from genkit_openai.models import (
     OpenAITTSModel,
 )
 from genkit_openai.models.model_info import KnownGpt, get_default_openai_model_info
-from genkit_openai.models.utils import reraise_openai_error
+from genkit_openai.models.utils import coerce_embedding_vector, reraise_openai_error
 from genkit_openai.typing import OpenAIConfig
 
 
@@ -509,8 +509,9 @@ class OpenAI(Plugin):
             except APIStatusError as e:
                 reraise_openai_error(e)
 
-            # Convert OpenAI response to Genkit format
-            embeddings = [Embedding(embedding=item.embedding) for item in response.data]
+            # Convert OpenAI response to Genkit format. With
+            # encoding_format='base64' the API returns strings; Genkit needs floats.
+            embeddings = [Embedding(embedding=coerce_embedding_vector(item.embedding)) for item in response.data]
             return EmbedResponse(embeddings=embeddings)
 
         return embedder(

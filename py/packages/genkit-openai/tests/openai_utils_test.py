@@ -18,6 +18,7 @@
 
 import base64
 import json
+import struct
 from collections.abc import Callable
 
 import httpx
@@ -29,6 +30,7 @@ from genkit_openai.models.utils import (
     _extract_media,
     _extract_text,
     _find_text,
+    coerce_embedding_vector,
     decode_data_uri_bytes,
     extract_config_dict,
     extract_response_metadata,
@@ -48,6 +50,43 @@ from genkit import (
     ToolRequest,
     ToolResponse,
 )
+
+
+class TestCoerceEmbeddingVector:
+    """Tests for coerce_embedding_vector."""
+
+    def test_float_list_passthrough(self) -> None:
+        """Leave float lists unchanged."""
+        values = [0.1, -0.25, 0.5]
+        assert coerce_embedding_vector(values) is values
+
+    def test_decodes_base64_float32_le(self) -> None:
+        """Decode OpenAI's little-endian float32 base64 wire format."""
+        values = [0.1, -0.25, 0.5]
+        encoded = base64.b64encode(struct.pack(f'<{len(values)}f', *values)).decode('ascii')
+        decoded = coerce_embedding_vector(encoded)
+        assert len(decoded) == len(values)
+        for got, want in zip(decoded, values, strict=True):
+            assert got == pytest.approx(want)
+
+    def test_invalid_base64_raises(self) -> None:
+        """Reject embeddings that are not valid base64."""
+        with pytest.raises(GenkitError) as exc_info:
+            coerce_embedding_vector('!!!not-base64!!!')
+        assert exc_info.value.status == 'INTERNAL'
+
+    def test_truncated_payload_raises(self) -> None:
+        """Reject base64 whose decoded length is not a multiple of 4."""
+        encoded = base64.b64encode(b'abc').decode('ascii')
+        with pytest.raises(GenkitError) as exc_info:
+            coerce_embedding_vector(encoded)
+        assert exc_info.value.status == 'INTERNAL'
+
+    def test_unexpected_type_raises(self) -> None:
+        """Reject embedding values that are neither list nor str."""
+        with pytest.raises(GenkitError) as exc_info:
+            coerce_embedding_vector(123)  # type: ignore[arg-type]
+        assert exc_info.value.status == 'INTERNAL'
 
 
 class TestParseDataUriContentType:
