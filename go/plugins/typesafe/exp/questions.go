@@ -80,9 +80,9 @@ type Rubric interface {
 // is. Its JSON is the wire answer, so an output type built from these
 // fields is filled straight from the response.
 //
-// Probabilities and Confidence are calibrated by a System One model. A
-// chat model fills the same JSON through constrained output, and then they
-// are numbers it wrote, not a distribution it computed.
+// Probabilities is the model's distribution over the options and sums to
+// 1; Choice is the option with the most of it; Confidence, from 0 to 1, is
+// how concentrated the distribution is.
 type Choice[T Option[T]] struct {
 	Choice        T             `json:"choice"`
 	Probabilities map[T]float64 `json:"probabilities,omitempty"`
@@ -154,10 +154,9 @@ func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
 
 // Score is the answer to a rubric question: the expected level, computed
 // from the probability of each level, so it falls between levels when the
-// model is split. Legend maps each level number back to its description.
-//
-// Probabilities, Confidence, and Legend are calibrated by a System One
-// model, as for a [Choice]; on a chat model they are whatever it wrote.
+// model is split. Probabilities is that distribution, keyed by level
+// number; Confidence, from 0 to 1, is how concentrated it is; Legend maps
+// each level number back to its description.
 type Score[L Rubric] struct {
 	Score         float64            `json:"score"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
@@ -188,9 +187,9 @@ func probabilitiesSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "object", AdditionalProperties: &jsonschema.Schema{Type: "number"}}
 }
 
-// answerSchema completes the object schema shared by the three answer
-// types. It is closed, so the answer the model returns must be exactly the
-// wire answer with the type discriminator removed.
+// answerSchema completes the object schema shared by the answer types. It
+// is closed: answersText projects a wire answer onto exactly these fields
+// before the generate loop validates it.
 func answerSchema(kind string, s *jsonschema.Schema, required ...string) *jsonschema.Schema {
 	s.Type = "object"
 	s.Required = required

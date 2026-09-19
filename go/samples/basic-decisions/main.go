@@ -480,9 +480,8 @@ func DefineAsk(g *genkit.Genkit) {
 
 // DefineTeam is the enum format on the same model, with no decision type:
 // the system message is the question, the enum values are the options, and
-// the option itself is the text. The same call runs on a chat model. What it
-// does not give is a probability per option; triageFlow gets that from a
-// Choice field.
+// the option itself is the text. What it does not give is a probability per
+// option; triageFlow gets that from a Choice field.
 func DefineTeam(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "teamFlow", func(ctx context.Context, input TicketRequest) (Dept, error) {
 		resp, err := genkit.Generate(ctx, g,

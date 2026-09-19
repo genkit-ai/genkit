@@ -209,7 +209,8 @@ func TestAnswersFillTheType(t *testing.T) {
 	}
 
 	// The text must validate against the type's own schema, extension
-	// keywords included, since that is what the format handlers check.
+	// keywords included, since the JSON format validates it before it is
+	// parsed into the type.
 	var parsed any
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
 		t.Fatal(err)

@@ -128,7 +128,7 @@ func TestGenerateData(t *testing.T) {
 		t.Errorf("model = %v", body["model"])
 	}
 	if body["state"] != "I was charged twice and need the duplicate refunded today." {
-		t.Errorf("state = %v: a single text part is the string state, with no format instructions in it", body["state"])
+		t.Errorf("state = %v: a single text part is the string state, nothing added", body["state"])
 	}
 	var questions map[string]question
 	if err := json.Unmarshal([]byte(base.JSONString(body["questions"])), &questions); err != nil {
@@ -200,6 +200,30 @@ func TestStateShapes(t *testing.T) {
 			t.Errorf("state = %v, want records with roles", state)
 		}
 	})
+	t.Run("history with loop plumbing", func(t *testing.T) {
+		// A history recorded from another model's turn keeps the output
+		// instructions the loop injected for that model. They are plumbing,
+		// not something anyone said, so they reach neither the state nor
+		// the questions.
+		plumbing := ai.NewTextPart("Output should be in JSON format.")
+		plumbing.Metadata = map[string]any{"purpose": "output"}
+		state := decide(t, ai.WithMessages(
+			ai.NewSystemMessage(plumbing),
+			ai.NewUserMessage(ai.NewTextPart("My card was charged twice."), plumbing),
+			ai.NewModelMessage(ai.NewTextPart(`{"refund": true}`)),
+		))
+		want := []any{
+			map[string]any{"role": "user", "content": "My card was charged twice."},
+			map[string]any{"role": "model", "content": `{"refund": true}`},
+		}
+		if !reflect.DeepEqual(state, want) {
+			t.Errorf("state = %v, want the plumbing left out", state)
+		}
+		_, body := fake.last(t)
+		if got := base.JSONString(body["questions"]); strings.Contains(got, "JSON format") {
+			t.Errorf("the plumbing reached the questions: %s", got)
+		}
+	})
 	t.Run("documents", func(t *testing.T) {
 		state := decide(t,
 			ai.WithPrompt("Is the refund policy 30 days?"),
@@ -253,7 +277,7 @@ func TestRefusals(t *testing.T) {
 			t.Errorf("error = %v", err)
 		}
 		if fake.calls() != 0 {
-			t.Error("the endpoint was called for a type the format had already rejected")
+			t.Error("the endpoint was called for a type that is not a question set")
 		}
 	})
 	t.Run("media", func(t *testing.T) {

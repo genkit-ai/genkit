@@ -361,8 +361,7 @@ func answersText(resp *response, questions map[string]question, enum bool) (stri
 // front of every question's instructions. The model has no system role: the
 // state is what it evaluates and the questions are what it is told, so a
 // system message belongs with the questions, never in the state. Only text
-// can be instructions; a part the loop injected to ask for a format is
-// skipped.
+// can be instructions; loop plumbing left in a history is skipped.
 func systemPreamble(messages []*ai.Message) (string, error) {
 	var texts []string
 	for _, msg := range messages {
@@ -446,9 +445,9 @@ func messageValue(msg *ai.Message, cfg *Config) (any, error) {
 }
 
 // partValue is a part's contribution to the state. Text is sent as is, or
-// parsed when the config asks; a data part is sent as its value. A part
-// the loop injected to ask for a format is skipped rather than sent as
-// state, and any other kind is refused rather than stringified.
+// parsed when the config asks; a data part is sent as its value. Loop
+// plumbing left in a history is skipped rather than sent as state, and any
+// other kind of part is refused rather than stringified.
 func partValue(part *ai.Part, cfg *Config) (any, error) {
 	if isFormatInstructions(part) {
 		return nil, nil
@@ -470,9 +469,11 @@ func partValue(part *ai.Part, cfg *Config) (any, error) {
 	}
 }
 
-// isFormatInstructions reports whether the generate loop injected the part
-// to ask a model for an output format. Such a part is neither state nor
-// instructions for this model, which takes its questions from the schema.
+// isFormatInstructions reports whether the part is the output instructions
+// the generate loop injects for a model without constrained output. The
+// loop never injects one for this model, but a history recorded from
+// another model's turn keeps it in that turn's messages, and when such a
+// history is the state the part is plumbing, not something anyone said.
 func isFormatInstructions(part *ai.Part) bool {
 	purpose, _ := part.Metadata["purpose"].(string)
 	return purpose == "output"

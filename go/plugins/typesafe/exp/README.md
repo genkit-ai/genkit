@@ -109,9 +109,8 @@ resp, err := genkit.Generate(ctx, g,
 team := Dept(resp.Text())
 ```
 
-The same call runs unchanged on a chat model. What the enum format does not
-give is criteria per option or a probability per option; a `Choice` field in a
-decision type gives both.
+What the enum format does not give is criteria per option or a probability per
+option; a `Choice` field in a decision type gives both.
 
 ## State
 
@@ -186,9 +185,6 @@ not carry over to the next, and the resolved version is on
 
 ## Limits
 
-- A decision type is for a System One model. A chat model fills the same
-  JSON through constrained output, and the probabilities and confidence it
-  writes are not calibrated; do not gate on them.
 - No per-item questions. Score a list of passages with one call per passage.
 - No nested decision types: a question is a top-level field.
 - Instructions, criteria, and levels are strings; the wire format's object
