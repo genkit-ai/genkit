@@ -251,9 +251,10 @@ type AskResult struct {
 //go:embed prompts/*
 var promptsFS embed.FS
 
-// model is shared by every decision. Pin a version in production:
-// thresholds tuned against one release do not carry over to the next.
-var model = typesafex.ModelRef("jev-latest", nil)
+// model is the decision model, by name, shared by every flow. Pin a version
+// in production: thresholds tuned against one release do not carry over to
+// the next.
+const model = "typesafe/jev-latest"
 
 // The answer models behind askFlow. The light one is fast and cheap; the
 // heavy one thinks before it answers and costs accordingly, which is what
@@ -304,7 +305,7 @@ func main() {
 func DefineTriage(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "triageFlow", func(ctx context.Context, input TicketRequest) (TriageResult, error) {
 		decision, resp, err := genkit.GenerateData[Triage](ctx, g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithSystem("The state is a support ticket from a customer of an online store; accountTier is the customer's plan."),
 			ai.WithPromptParts(ai.NewDataPart(input)),
 		)
@@ -375,7 +376,7 @@ const (
 func DefineScreen(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "screenFlow", func(ctx context.Context, input ScreenRequest) (ScreenResult, error) {
 		decision, _, err := genkit.GenerateData[Screen](ctx, g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithPrompt(input.Message),
 		)
 		if err != nil {
@@ -412,7 +413,7 @@ func DefineRank(g *genkit.Genkit) {
 				inFlight <- struct{}{}
 				defer func() { <-inFlight }()
 				relevance, _, err := genkit.GenerateData[Relevance](ctx, g,
-					ai.WithModel(model),
+					ai.WithModelName(model),
 					ai.WithPromptParts(ai.NewDataPart(map[string]any{"query": input.Query, "passage": passage})),
 				)
 				if err != nil {
@@ -457,7 +458,7 @@ const heavyLine = 1.5
 func DefineAsk(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "askFlow", func(ctx context.Context, input AskRequest) (AskResult, error) {
 		routing, _, err := genkit.GenerateData[Routing](ctx, g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithPrompt(input.Query),
 		)
 		if err != nil {
@@ -485,7 +486,7 @@ func DefineAsk(g *genkit.Genkit) {
 func DefineTeam(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "teamFlow", func(ctx context.Context, input TicketRequest) (Dept, error) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithSystem("Which team should handle this ticket?"),
 			ai.WithOutputEnums(Billing, Technical, Sales),
 			ai.WithPrompt(input.Ticket),

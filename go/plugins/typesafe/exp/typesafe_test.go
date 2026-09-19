@@ -116,7 +116,7 @@ func TestGenerateData(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, nil)
 	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModel(Model(g, "jev-1.13.0")),
+		ai.WithModelName("typesafe/jev-1.13.0"),
 		ai.WithPrompt("I was charged twice and need the duplicate refunded today."))
 	if err != nil {
 		t.Fatal(err)
@@ -166,10 +166,10 @@ func TestGenerateData(t *testing.T) {
 func TestStateShapes(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, nil)
-	model := Model(g, "jev-latest")
+	const model = "typesafe/jev-latest"
 	decide := func(t *testing.T, opts ...ai.GenerateOption) any {
 		t.Helper()
-		opts = append(opts, ai.WithModel(model), ai.WithOutputType(triage{}))
+		opts = append(opts, ai.WithModelName(model), ai.WithOutputType(triage{}))
 		if _, err := genkit.Generate(t.Context(), g, opts...); err != nil {
 			t.Fatal(err)
 		}
@@ -260,10 +260,10 @@ func TestStateShapes(t *testing.T) {
 func TestRefusals(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, nil)
-	model := Model(g, "jev-latest")
+	const model = "typesafe/jev-latest"
 
 	t.Run("no output type", func(t *testing.T) {
-		_, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithPrompt("hi"))
+		_, err := genkit.Generate(t.Context(), g, ai.WithModelName(model), ai.WithPrompt("hi"))
 		if err == nil || !strings.Contains(err.Error(), "output type") {
 			t.Errorf("error = %v", err)
 		}
@@ -272,7 +272,7 @@ func TestRefusals(t *testing.T) {
 		type mood struct {
 			Mood string `json:"mood" jsonschema_description:"How does the customer feel?"`
 		}
-		_, _, err := genkit.GenerateData[mood](t.Context(), g, ai.WithModel(model), ai.WithPrompt("hi"))
+		_, _, err := genkit.GenerateData[mood](t.Context(), g, ai.WithModelName(model), ai.WithPrompt("hi"))
 		if err == nil || !strings.Contains(err.Error(), "not a question") {
 			t.Errorf("error = %v", err)
 		}
@@ -281,14 +281,14 @@ func TestRefusals(t *testing.T) {
 		}
 	})
 	t.Run("media", func(t *testing.T) {
-		_, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithOutputType(triage{}),
+		_, err := genkit.Generate(t.Context(), g, ai.WithModelName(model), ai.WithOutputType(triage{}),
 			ai.WithMessages(ai.NewUserMessage(ai.NewMediaPart("image/png", "data:image/png;base64,AAAA"))))
 		if err == nil || !strings.Contains(err.Error(), "media") {
 			t.Errorf("error = %v", err)
 		}
 	})
 	t.Run("stateJSON on prose", func(t *testing.T) {
-		_, err := genkit.Generate(t.Context(), g, ai.WithModel(model), ai.WithOutputType(triage{}),
+		_, err := genkit.Generate(t.Context(), g, ai.WithModelName(model), ai.WithOutputType(triage{}),
 			ai.WithPrompt("not json"), ai.WithConfig(&Config{StateJSON: true}))
 		if err == nil || !strings.Contains(err.Error(), "not JSON") {
 			t.Errorf("error = %v", err)
@@ -303,7 +303,7 @@ func TestEnumFormat(t *testing.T) {
 	// The enum option carries no description, so the question gets the
 	// default instructions.
 	resp, err := genkit.Generate(t.Context(), g,
-		ai.WithModel(Model(g, "jev-latest")),
+		ai.WithModelName("typesafe/jev-latest"),
 		ai.WithOutputEnums("technical", "billing"),
 		ai.WithPrompt("My card was charged twice."))
 	if err != nil {
@@ -320,7 +320,7 @@ func TestEnumFormat(t *testing.T) {
 
 	// A schema with a description names the instructions.
 	if _, err := genkit.Generate(t.Context(), g,
-		ai.WithModel(Model(g, "jev-latest")),
+		ai.WithModelName("typesafe/jev-latest"),
 		ai.WithOutputSchema(map[string]any{"description": "Which team should handle this?", "enum": []string{"technical", "billing"}}),
 		ai.WithOutputFormat(ai.OutputFormatEnum),
 		ai.WithPrompt("My card was charged twice.")); err != nil {
@@ -334,7 +334,7 @@ func TestEnumFormat(t *testing.T) {
 
 	// The system message is the question, and it leaves the state alone.
 	if _, err := genkit.Generate(t.Context(), g,
-		ai.WithModel(Model(g, "jev-latest")),
+		ai.WithModelName("typesafe/jev-latest"),
 		ai.WithSystem("Which team should handle this?"),
 		ai.WithOutputEnums("technical", "billing"),
 		ai.WithPrompt("My card was charged twice.")); err != nil {
@@ -353,11 +353,11 @@ func TestEnumFormat(t *testing.T) {
 func TestSystemMessageIsInstructions(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, nil)
-	model := Model(g, "jev-latest")
+	const model = "typesafe/jev-latest"
 
 	t.Run("preamble on every question", func(t *testing.T) {
 		if _, _, err := genkit.GenerateData[triage](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithSystem("The state is a support ticket."),
 			ai.WithPrompt("My card was charged twice.")); err != nil {
 			t.Fatal(err)
@@ -375,7 +375,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 	})
 	t.Run("system alone is not state", func(t *testing.T) {
 		_, _, err := genkit.GenerateData[triage](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithMessages(ai.NewSystemMessage(ai.NewTextPart("The state is a support ticket."))))
 		if err == nil || !strings.Contains(err.Error(), "no state") {
 			t.Errorf("error = %v", err)
@@ -383,7 +383,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 	})
 	t.Run("system is text only", func(t *testing.T) {
 		_, _, err := genkit.GenerateData[triage](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithMessages(
 				ai.NewSystemMessage(ai.NewDataPart(map[string]any{"tier": "business"})),
 				ai.NewUserMessage(ai.NewTextPart("hi"))))
@@ -397,7 +397,7 @@ func TestOpenRouterThroughGenerate(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, OpenRouter())
 	out, _, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModel(Model(g, "jev-1.13.0")),
+		ai.WithModelName("typesafe/jev-1.13.0"),
 		ai.WithPrompt("hi"))
 	if err != nil {
 		t.Fatal(err)
@@ -450,11 +450,13 @@ func TestListActions(t *testing.T) {
 		if m := genkit.LookupModel(g, "typesafe/jev-9.9.9"); m == nil {
 			t.Error("an unlisted version did not resolve")
 		}
-		if Model(g, "typesafe/jev-latest") == nil || Model(g, "jev-latest") == nil {
-			t.Error("the prefixed and bare forms did not both resolve")
+		if genkit.LookupModel(g, "typesafe/jev-latest") == nil {
+			t.Error("the alias did not resolve")
 		}
-		if ref := ModelRef("jev-latest", nil); ref.Name() != "typesafe/jev-latest" || ref.Config() != nil {
-			t.Errorf("ref = %v, %v", ref.Name(), ref.Config())
+		for _, id := range []string{"jev-latest", "typesafe/jev-latest"} {
+			if ref := ModelRef(id, nil); ref.Name() != "typesafe/jev-latest" || ref.Config() != nil {
+				t.Errorf("ModelRef(%q) = %q with config %v, want typesafe/jev-latest with none", id, ref.Name(), ref.Config())
+			}
 		}
 	})
 }

@@ -33,12 +33,12 @@ func TestOpenRouterLive(t *testing.T) {
 		t.Skip("OPENROUTER_API_KEY is not set")
 	}
 	g := genkit.Init(t.Context(), genkit.WithPlugins(&TypeSafe{Endpoint: OpenRouter()}))
-	model := Model(g, "jev-latest")
+	const model = "typesafe/jev-latest"
 
 	t.Run("decision", func(t *testing.T) {
 		// The documented call: the model, the state, and the type.
 		out, resp, err := genkit.GenerateData[triage](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithPromptParts(ai.NewDataPart(map[string]any{
 				"ticket":       "I was charged twice for one order and I need the duplicate refunded today.",
 				"account_tier": "business",
@@ -82,7 +82,7 @@ func TestOpenRouterLive(t *testing.T) {
 
 	t.Run("decision with preamble", func(t *testing.T) {
 		out, _, err := genkit.GenerateData[triage](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithSystem("The state is a support ticket from a business customer of an online store."),
 			ai.WithPromptParts(ai.NewDataPart(map[string]any{
 				"ticket": "I was charged twice for one order and I need the duplicate refunded today.",
@@ -98,7 +98,7 @@ func TestOpenRouterLive(t *testing.T) {
 
 	t.Run("enum", func(t *testing.T) {
 		resp, err := genkit.Generate(t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithSystem("Which team should handle this ticket?"),
 			ai.WithOutputEnums("billing", "technical", "sales"),
 			ai.WithPrompt("The API returns 500 errors since this morning's deploy."))
@@ -116,7 +116,7 @@ func TestOpenRouterLive(t *testing.T) {
 			WantsHuman Noul `json:"wants_human" jsonschema_description:"Does the user ask to talk to a human?"`
 		}
 		out, _, err := genkit.GenerateData[handoff](t.Context(), g,
-			ai.WithModel(model),
+			ai.WithModelName(model),
 			ai.WithMessages(
 				ai.NewUserMessage(ai.NewTextPart("Hi, I cannot log in.")),
 				ai.NewModelMessage(ai.NewTextPart("Let me help. Have you tried resetting your password?")),

@@ -47,7 +47,7 @@ type Triage struct {
 g := genkit.Init(ctx, genkit.WithPlugins(&typesafex.TypeSafe{})) // TYPESAFE_API_KEY
 
 out, resp, err := genkit.GenerateData[Triage](ctx, g,
-	ai.WithModel(typesafex.Model(g, "jev-1.13.0")),
+	ai.WithModelName("typesafe/jev-1.13.0"),
 	ai.WithPrompt(ticket))
 if err != nil {
 	return err
@@ -102,7 +102,7 @@ question, and `resp.Text()` is the option.
 
 ```go
 resp, err := genkit.Generate(ctx, g,
-	ai.WithModel(model),
+	ai.WithModelName("typesafe/jev-1.13.0"),
 	ai.WithSystem("Which team should handle this ticket?"),
 	ai.WithOutputEnums(Billing, Technical, Sales),
 	ai.WithPrompt(ticket))
@@ -181,7 +181,9 @@ error are retried twice, with `Retry-After` honored.
 
 Pin a version in production. Confidence thresholds tuned against one release do
 not carry over to the next, and the resolved version is on
-`resp.Custom["model"]` for every call.
+`resp.Custom["model"]` for every call. Where a reference with a config is
+needed, such as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)`
+builds one.
 
 ## Limits
 

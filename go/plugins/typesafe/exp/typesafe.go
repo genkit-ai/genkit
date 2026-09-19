@@ -42,7 +42,7 @@
 //	}
 //
 //	out, resp, err := genkit.GenerateData[Triage](ctx, g,
-//		ai.WithModel(typesafe.Model(g, "jev-1.13.0")),
+//		ai.WithModelName("typesafe/jev-1.13.0"),
 //		ai.WithPrompt(ticket))
 //	if out.Department.Confidence < 0.6 {
 //		// route to a human
@@ -76,7 +76,6 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 )
 
@@ -203,14 +202,10 @@ func (t *TypeSafe) ResolveAction(atype api.ActionType, id string) api.Action {
 	return newModel(c, id)
 }
 
-// Model returns the model for a jev ID, resolving it on first use. The ID
-// may carry the typesafe/ prefix or not.
-func Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, modelName(id))
-}
-
 // ModelRef returns a reference to a jev model with a config, for the places
-// that take a reference rather than a model, such as a fallback list.
+// that take a reference rather than a name, such as a fallback list. The ID
+// may carry the typesafe/ prefix or not. With no config to attach,
+// [ai.WithModelName] with the full name is the usual way to pick the model.
 func ModelRef(id string, config *Config) ai.ModelRef {
 	if config == nil {
 		return ai.NewModelRef(modelName(id), nil)
