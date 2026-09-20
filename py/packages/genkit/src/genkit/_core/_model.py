@@ -82,11 +82,21 @@ from genkit._core._typing import (
 ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
-# The model's own reason stays on the response. Output validation is
+# A termination known to carry no conforming output. Every path that would
+# parse a response against its output schema consults this first: a schema
+# error on such a response would mask the finish reason the caller needs.
+# The model's own reason stays on the response; output validation is
 # post-processing, so its failure is carried separately on ``error``.
-_KEEP_MODEL_FINISH_REASONS = frozenset({
+#
+# UNKNOWN is excluded on purpose: plugins map unrecognized provider reasons
+# to it, so treating it as abnormal would silently drop validation for
+# responses the model may well have completed.
+#
+# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go).
+ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.BLOCKED,
     FinishReason.ABORTED,
+    FinishReason.FAILED,
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
@@ -1130,7 +1140,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return
         if self.error is not None:
             return
-        if self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
+        if self.finish_reason in ABNORMAL_FINISH_REASONS:
             return
 
         try:
@@ -1209,9 +1219,13 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         """
         schema = self.request.output_schema if self.request is not None else None
         wants_schema = schema is not None or self._schema_type is not None
+        # BLOCKED and FAILED carry no legitimate content at all, so there is
+        # nothing to hand back even when the caller only asked for a format.
+        # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
+        # interrupt carries tool requests), so they only gate the schema path.
         if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
             return cast(OutputT, None)
-        if wants_schema and self.finish_reason in _KEEP_MODEL_FINISH_REASONS:
+        if wants_schema and self.finish_reason in ABNORMAL_FINISH_REASONS:
             return cast(OutputT, None)
 
         try:

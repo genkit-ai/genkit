@@ -80,6 +80,7 @@ from genkit._core._middleware import (
     middleware_class_index,
 )
 from genkit._core._model import (
+    ABNORMAL_FINISH_REASONS,
     Document,
     GenerateActionOptions,
     MultipartToolResponse,
@@ -144,17 +145,6 @@ def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
 
 class ModelContractError(GenkitError):
     """A model action returned a value its registered kind cannot use."""
-
-
-# A termination known to be abnormal carries no conforming output, so a schema
-# error here would mask the finish reason the caller needs to handle it.
-# OTHER is the providers' catch-all for unmapped stop reasons (a normal
-# pause or compaction), not a signal that parsing should be skipped.
-ABNORMAL_FINISH_REASONS = frozenset({
-    FinishReason.BLOCKED,
-    FinishReason.ABORTED,
-    FinishReason.INTERRUPTED,
-})
 
 
 def log_output_parse(

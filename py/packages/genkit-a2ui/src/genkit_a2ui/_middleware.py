@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit._core._model import (
+    ABNORMAL_FINISH_REASONS,
     Message,
     ModelRequest,
     ModelResponse,
@@ -41,14 +42,13 @@ from ._parser import A2uiParseError, Segment, StreamParser
 from ._part import a2ui_part, envelopes_from_parts, has_a2ui_mime
 from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, ValidateMode
 
-ABNORMAL_FINISH_REASONS = frozenset({
-    FinishReason.BLOCKED,
-    FinishReason.ABORTED,
-    FinishReason.INTERRUPTED,
-    FinishReason.FAILED,
-    FinishReason.OTHER,
-    FinishReason.UNKNOWN,
-})
+# Everything core refuses to parse, plus UNKNOWN. Core asks "is there
+# conforming output to validate?"; this asks "is there a complete fence to
+# turn into a card?" UNKNOWN answers no here and yes there: plugins map
+# unrecognized provider reasons to it, so core keeps validating in case the
+# model finished, while a turn that may have stopped mid-fence would paint a
+# half-written card.
+SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 
 
 class SurfacesConfig(BaseModel):
@@ -115,7 +115,7 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
             if handler is not None:
                 ctx.replace_on_chunk(handler.emit)
 
-        if response.finish_reason in ABNORMAL_FINISH_REASONS:
+        if response.finish_reason in SKIP_REWRITE_FINISH_REASONS:
             return response
         if handler is not None and handler.parse_error is not None:
             raise handler.parse_error

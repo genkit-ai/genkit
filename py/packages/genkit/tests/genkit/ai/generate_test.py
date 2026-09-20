@@ -3793,6 +3793,38 @@ async def test_output_schema_does_not_replace_tool_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_failed_finish_is_not_relabelled_invalid_output() -> None:
+    """A model reporting ``failed`` owns the failure; output parsing does not overwrite it.
+
+    The turn above is a failure Genkit boxed itself. This one arrives from the
+    provider with text attached, so there is something to parse and a wrong
+    answer available: stamping INVALID_OUTPUT here would blame the schema for
+    a model-side failure. Matches Go, where FinishReasonFailed is in
+    FinishReason.isAbnormal and so never reaches the parser.
+    """
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part.from_text('upstream blew up')]),
+            finish_reason=FinishReason.FAILED,
+            finish_message='provider failed',
+        )
+    ]
+
+    response = await ai.generate(prompt='make a recipe', output_schema=Recipe, output_instructions=False)
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is None
+    assert response.output is None
+    assert response.text == 'upstream blew up'
+
+
+@pytest.mark.asyncio
 async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
     """A partial set of tool responses is not a resendable conversation round."""
     ai = Genkit(model='programmableModel')

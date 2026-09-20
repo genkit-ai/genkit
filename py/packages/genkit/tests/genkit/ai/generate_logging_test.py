@@ -211,8 +211,12 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_other_finish_does_not_warn_as_abnormal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OTHER is an unmapped stop reason, not a refusal — do not warn at info."""
+async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTHER skips on the finish reason alone. This text satisfies the schema and is still not parsed.
+
+    The warning has to reach info: skipping validation silently would leave a
+    caller holding ``output=None`` with no error and no breadcrumb.
+    """
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'info')
     ai = Genkit()
@@ -225,17 +229,32 @@ async def test_other_finish_does_not_warn_as_abnormal(monkeypatch: pytest.Monkey
     ]
 
     with capture_logs() as entries:
-        await generate_action(
+        response = await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-                output=GenerateActionOutputConfig(format='json'),
+                output=GenerateActionOutputConfig(
+                    format='json',
+                    json_schema={
+                        'type': 'object',
+                        'properties': {'ok': {'type': 'boolean'}},
+                        'required': ['ok'],
+                    },
+                ),
             ),
         )
 
     warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
-    assert warned == []
+    assert len(warned) == 1
+    assert warned[0]['finishReason'] == FinishReason.OTHER
+
+    # The text parses and matches, but the finish reason is what decides.
+    assert response.text == '{"ok": true}'
+    assert response.output is None
+    # Nothing is blamed on the output shape: the model's reason is the story.
+    assert response.error is None
+    assert 'model output does not match the expected schema' not in [e['event'] for e in entries]
 
 
 @pytest.mark.asyncio
