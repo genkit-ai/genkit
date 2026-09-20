@@ -601,7 +601,15 @@ export function maybeRegisterDynamicTools<
       // flag, so without this guard they are re-registered on every generate,
       // tripping "already registered" errors for what is a no-op overwrite.
       // See genkit-ai/genkit#6381.
-      if ((t as Action).__registry === registry) {
+      //
+      // generate() wraps the registry in a child registry before calling us,
+      // so the tool's __registry (the parent where it was first registered)
+      // is never strictly equal to the child. Walk the parent chain instead.
+      let r: Registry | undefined = registry;
+      while (r && (t as Action).__registry !== r) {
+        r = r.parent;
+      }
+      if (r) {
         return;
       }
       if (isMultipartTool(t)) {

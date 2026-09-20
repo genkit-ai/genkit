@@ -1130,6 +1130,19 @@ describe('maybeRegisterDynamicTools', () => {
     assert.strictEqual(await registry.lookupAction('/tool/plug'), pluginTool);
   });
 
+  it('does not re-register a tool already registered in a parent registry', async () => {
+    const parentRegistry = new Registry();
+    const childRegistry = Registry.withParent(parentRegistry);
+    const pluginTool = tool({ name: 'plug', description: 'd' });
+    parentRegistry.registerAction('tool', pluginTool);
+
+    const getCalls = countRegistrations(childRegistry);
+    maybeRegisterDynamicTools(childRegistry, { tools: [pluginTool] } as any);
+
+    assert.strictEqual(getCalls(), 0);
+    assert.strictEqual(await childRegistry.lookupAction('/tool/plug'), pluginTool);
+  });
+
   it('still registers the tool into a different registry', async () => {
     const registryA = new Registry();
     const registryB = new Registry();
