@@ -17,7 +17,6 @@
 """Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
 from genkit._ai._model import (
-    ModelConfigDict,
     model,
     model_action_metadata,
     model_ref,
@@ -25,20 +24,17 @@ from genkit._ai._model import (
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
     Candidate,
-    Document,
-    GenerateActionOptions,
-    Message,
+    ModelConfig,
     ModelRef,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
     ModelUsage,
-    Part,
     get_basic_usage_stats,
 )
 from genkit._core._typing import (
     Constrained,
-    Error,
+    Error as OperationError,
     FinishReason,
     ModelInfo,
     Operation,
@@ -59,10 +55,9 @@ __all__ = [
     'ModelUsage',
     'Candidate',
     'FinishReason',
-    'GenerateActionOptions',
-    # Error and operation
-    'Error',
+    # Long-running operations
     'Operation',
+    'OperationError',
     # Tool types
     'ToolRequest',
     'ToolDefinition',
@@ -80,11 +75,7 @@ __all__ = [
     # Reference types
     'ModelRef',
     # Config
-    'ModelConfigDict',
-    # Message
-    'Document',
-    'Message',
-    'Part',
+    'ModelConfig',
     # Usage
     'get_basic_usage_stats',
 ]

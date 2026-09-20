@@ -10,16 +10,7 @@ import warnings
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    Role,
-)
+from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
 from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import OutputConfig
@@ -28,7 +19,7 @@ from genkit._core._typing import (
     ActionMetadata,
     ToolRequest,
 )
-from genkit.model import get_basic_usage_stats, model_action_metadata
+from genkit.model import ModelRequest, ModelUsage, get_basic_usage_stats, model_action_metadata
 
 
 class PluginConfig(BaseModel):

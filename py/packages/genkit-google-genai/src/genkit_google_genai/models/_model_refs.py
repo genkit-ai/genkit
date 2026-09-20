@@ -28,9 +28,9 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from genkit import GenkitError, ModelInfo
+from genkit import GenkitError
 from genkit.embedder import EmbedderRef
-from genkit.model import ModelRef, model_ref
+from genkit.model import ModelInfo, ModelRef, model_ref
 from genkit_google_genai.models._routing import classify_family, strip_ref_prefixes
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)

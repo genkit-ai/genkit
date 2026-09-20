@@ -25,8 +25,8 @@ from django.http import HttpRequest, HttpResponse, HttpResponseBase, JsonRespons
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
-from genkit import Action, Genkit, GenkitError
-from genkit.plugin_api import ContextProvider, RequestData, get_callable_json
+from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit.plugin_api import Action, get_callable_json
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')

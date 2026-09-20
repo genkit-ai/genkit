@@ -25,7 +25,8 @@ import pytest
 from genkit_openai.models import OpenAIModel
 from openai.types.chat import ChatCompletion
 
-from genkit import ModelRequest, ModelResponseChunk
+from genkit import ModelResponseChunk
+from genkit.model import ModelRequest
 
 
 @pytest.mark.asyncio

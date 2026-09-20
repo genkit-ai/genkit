@@ -16,12 +16,11 @@ from genkit import (
     MultipartToolResponse,
     Part,
     Role,
-    ToolRequest,
-    ToolResponse,
     response,
 )
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._schema import to_json_schema
+from genkit.model import ToolRequest, ToolResponse
 
 
 class ShotOut(BaseModel):

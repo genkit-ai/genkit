@@ -26,19 +26,8 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
-from genkit import (
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    Role,
-    ToolDefinition,
-)
-from genkit.plugin_api import ActionRunContext, ModelConfig
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai.models.utils import (
     DictMessageAdapter,

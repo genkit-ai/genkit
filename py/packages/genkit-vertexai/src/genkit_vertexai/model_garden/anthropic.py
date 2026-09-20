@@ -26,8 +26,9 @@ from genkit_anthropic.models import AnthropicModel
 from pydantic import ConfigDict
 from pydantic.config import JsonDict
 
-from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.plugin_api import ActionRunContext, ModelConfig, loop_local_client
+from genkit import ActionRunContext, ModelResponse
+from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
+from genkit.plugin_api import loop_local_client
 
 
 def _vertex_anthropic_config_schema_extra(schema: JsonDict) -> None:

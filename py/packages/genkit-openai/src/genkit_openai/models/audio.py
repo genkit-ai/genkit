@@ -32,18 +32,8 @@ from openai import APIStatusError, AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 
-from genkit import (
-    GenkitError,
-    Message,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    Supports,
-)
-from genkit.model import FinishReason
-from genkit.plugin_api import ActionRunContext
+from genkit import ActionRunContext, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import FinishReason, ModelInfo, ModelRequest, Supports
 from genkit_openai.models.utils import (
     _extract_media,
     _extract_text,

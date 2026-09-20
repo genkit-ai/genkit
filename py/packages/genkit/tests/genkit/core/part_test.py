@@ -16,13 +16,12 @@
 
 """Unit tests for Part factory methods and property getters."""
 
-import importlib
 from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit import Document, Media, Message, Part, ToolRequest, ToolResponse, respond_to_interrupt, restart_tool
+from genkit import Document, Media, Message, Part, respond_to_interrupt, restart_tool
 from genkit._ai._agents._client import (
     SessionSnapshot as ClientSessionSnapshot,
     SessionState as ClientSessionState,
@@ -71,16 +70,7 @@ from genkit._core._typing import (
     TextPart,
 )
 from genkit.middleware import ToolHookParams
-from genkit.model import Document as ModelDocument
-
-
-def _from_import(module: str, name: str) -> object:
-    """``from module import name`` — ImportError if the name is gone."""
-    try:
-        return getattr(importlib.import_module(module), name)
-    except AttributeError as exc:
-        raise ImportError(f'cannot import name {name!r} from {module!r}') from exc
-
+from genkit.model import ToolRequest, ToolResponse
 
 _GETTERS = ('text', 'media', 'tool_request', 'tool_response', 'data', 'reasoning', 'custom')
 
@@ -404,35 +394,10 @@ def test_document_from_another_document_raises() -> None:
         Document(doc)  # type: ignore[arg-type]
 
 
-def test_text_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='TextPart'):
-        _from_import('genkit', 'TextPart')
-
-
-def test_media_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='MediaPart'):
-        _from_import('genkit', 'MediaPart')
-
-
-def test_document_imports_from_genkit_model() -> None:
-    doc = ModelDocument.from_text('hi')
+def test_document_from_text() -> None:
+    doc = Document.from_text('hi')
     assert type(doc) is Document
     assert doc.text == 'hi'
-
-
-def test_reasoning_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ReasoningPart'):
-        _from_import('genkit', 'ReasoningPart')
-
-
-def test_tool_request_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ToolRequestPart'):
-        _from_import('genkit', 'ToolRequestPart')
-
-
-def test_tool_response_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ToolResponsePart'):
-        _from_import('genkit', 'ToolResponsePart')
 
 
 def test_respond_to_interrupt_returns_part() -> None:

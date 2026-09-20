@@ -19,10 +19,10 @@
 import pytest
 from genkit_middleware import ToolApproval
 
-from genkit import Part
+from genkit import MultipartToolResponse, Part
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._registry import Registry
-from genkit.middleware import GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
+from genkit.middleware import GenerateMiddlewareContext, ToolHookParams
 
 
 def _make_tool(name: str):

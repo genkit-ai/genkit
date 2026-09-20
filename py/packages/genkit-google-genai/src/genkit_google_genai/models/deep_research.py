@@ -23,9 +23,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import ModelRequest
-from genkit.model import BackgroundAction, ModelRef, Operation, model_ref
-from genkit.plugin_api import Action, ActionKind, ActionRunContext, to_json_schema
+from genkit import ActionRunContext
+from genkit.model import BackgroundAction, ModelRef, ModelRequest, Operation, model_ref
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 from genkit_google_genai._interactions.client import (
     cancel_interaction,
     create_interaction,

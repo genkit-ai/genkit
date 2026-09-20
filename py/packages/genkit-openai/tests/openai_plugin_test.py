@@ -31,7 +31,9 @@ from genkit_openai.typing import SupportedOutputFormat
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 
-from genkit import Document, EmbedRequest, EmbedResponse, GenkitError, Supports
+from genkit import Document, GenkitError
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.model import Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
 
 

@@ -60,14 +60,17 @@ from google.genai.interactions import (
 )
 from pydantic import BaseModel
 
-from genkit import (
-    GenkitError,
-    Media,
-    Part,
+from genkit import GenkitError, Media, Message, Part
+from genkit.model import (
+    FinishReason,
+    ModelResponse,
+    ModelUsage,
+    Operation,
+    OperationError,
+    ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
-from genkit.model import Error, FinishReason, Message, ModelResponse, ModelUsage, Operation, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -834,19 +837,19 @@ def from_interaction(interaction: Interaction) -> Operation:
         op.done = True
         op.output = steps_response(interaction, finish_reason=finish_reason, finish_message=message)
         if op.output is None:
-            op.error = Error(message=message)
+            op.error = OperationError(message=message)
     elif status == 'failed':
         # Always exit the poll loop on failure; leaving done unset hangs forever.
         op.done = True
-        op.error = Error(message=interaction_error_message(interaction) or FAILED_MESSAGE)
+        op.error = OperationError(message=interaction_error_message(interaction) or FAILED_MESSAGE)
     elif status == 'requires_action':
         # Chat generate can pause for a tool. A background job cannot — there
         # is no interrupt/resume on generate_operation — so end the poll
         # instead of hanging `while not op.done` or inventing a resume handle.
         op.done = True
-        op.error = Error(message=BACKGROUND_INTERRUPT_UNSUPPORTED)
+        op.error = OperationError(message=BACKGROUND_INTERRUPT_UNSUPPORTED)
     else:
         # A status we do not map still has to exit `while not op.done`.
         op.done = True
-        op.error = Error(message=f'Unknown interaction status: {status!r}')
+        op.error = OperationError(message=f'Unknown interaction status: {status!r}')
     return op

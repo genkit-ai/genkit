@@ -6,81 +6,53 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.Genkit
 
-::: genkit.Plugin
-
-::: genkit.Action
-
-::: genkit.Flow
-
-::: genkit.ActionKind
-
-::: genkit.ActionRunContext
-
-::: genkit.ExecutablePrompt
-
-::: genkit.PromptGenerateOptions
-
-::: genkit.ToolRunContext
-
-::: genkit.StreamResponse
-
-::: genkit.ModelStreamResponse
-
-::: genkit.GenkitError
-
-::: genkit.PublicError
-
-::: genkit.Interrupt
-
 ::: genkit.Message
+
+::: genkit.Role
 
 ::: genkit.Part
 
 ::: genkit.Media
 
-::: genkit.Role
-
-::: genkit.Metadata
-
-::: genkit.ToolRequest
-
-::: genkit.ToolResponse
-
-::: genkit.ToolDefinition
-
-::: genkit.ToolChoice
-
 ::: genkit.Document
-
-::: genkit.EmbedderRef
-
-::: genkit.EmbedderInfo
-
-::: genkit.Embedding
-
-::: genkit.EmbedRequest
-
-::: genkit.EmbedResponse
-
-::: genkit.ModelRequest
 
 ::: genkit.ModelResponse
 
 ::: genkit.ModelResponseChunk
 
-::: genkit.ModelConfigDict
-
-::: genkit.ModelInfo
-
-::: genkit.ModelUsage
-
-::: genkit.Constrained
-
-::: genkit.Stage
-
-::: genkit.Supports
+::: genkit.ModelStreamResponse
 
 ::: genkit.FinishReason
+
+::: genkit.tool
+
+::: genkit.Tool
+
+::: genkit.ToolRunContext
+
+::: genkit.Interrupt
+
+::: genkit.respond_to_interrupt
+
+::: genkit.restart_tool
+
+::: genkit.response
+
+::: genkit.MultipartToolResponse
+
+::: genkit.Flow
+
+::: genkit.ActionRunContext
+
+::: genkit.ExecutablePrompt
+
+::: genkit.GenkitError
+
+::: genkit.PublicError
+
+::: genkit.ContextProvider
+
+::: genkit.RequestData
 
 ## genkit.model
 
@@ -98,11 +70,9 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.model.FinishReason
 
-::: genkit.model.GenerateActionOptions
-
-::: genkit.model.Error
-
 ::: genkit.model.Operation
+
+::: genkit.model.OperationError
 
 ::: genkit.model.ToolRequest
 
@@ -120,9 +90,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.model.ModelRef
 
-::: genkit.model.ModelConfigDict
-
-::: genkit.model.Message
+::: genkit.model.ModelConfig
 
 ## genkit.embedder
 
@@ -148,25 +116,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.plugin_api.ActionKind
 
-::: genkit.plugin_api.ActionRunContext
-
-::: genkit.plugin_api.StatusCodes
-
 ::: genkit.plugin_api.StatusName
-
-::: genkit.plugin_api.GenkitError
-
-::: genkit.plugin_api.ModelConfig
-
-::: genkit.plugin_api.ModelRef
-
-::: genkit.plugin_api.EmbedderRef
-
-::: genkit.plugin_api.EvaluatorRef
-
-::: genkit.plugin_api.ContextProvider
-
-::: genkit.plugin_api.RequestData
 
 ## genkit.evaluator
 

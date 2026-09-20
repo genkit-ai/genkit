@@ -43,16 +43,9 @@ from google import genai
 from google.auth.credentials import Credentials
 from google.genai.types import HttpOptions
 
-from genkit import (
-    ActionKind,
-    Genkit,
-    Message,
-    ModelInfo,
-    ModelRequest,
-    Part,
-    Role,
-)
-from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit import Genkit, Message, Part, Role
+from genkit.model import ModelInfo, ModelRequest
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, ActionKind
 
 
 async def _get_runtime_client(plugin: GoogleAI | VertexAI) -> object:

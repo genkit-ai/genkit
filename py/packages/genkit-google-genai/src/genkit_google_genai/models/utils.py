@@ -48,17 +48,13 @@ kept in mind when modifying media handling or tool conversion logic:
 
 import base64
 import logging
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from google import genai
 
-from genkit import (
-    Metadata,
-    Part,
-    ToolRequest,
-    ToolResponse,
-)
+from genkit import Part
+from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import get_cached_client
 
 logger = logging.getLogger(__name__)
@@ -390,7 +386,7 @@ class PartConverter:
         return Part.from_text('')
 
     @classmethod
-    def _extract_thought_signature(cls, metadata: Metadata | None) -> bytes | None:
+    def _extract_thought_signature(cls, metadata: dict[str, Any] | None) -> bytes | None:
         """Extracts and decodes the thought signature from metadata."""
         thought_sig = metadata.get('thoughtSignature') if metadata else None
         if isinstance(thought_sig, str):
@@ -398,7 +394,7 @@ class PartConverter:
         return None
 
     @classmethod
-    def _encode_thought_signature(cls, thought_signature: bytes | None) -> Metadata | None:
+    def _encode_thought_signature(cls, thought_signature: bytes | None) -> dict[str, Any] | None:
         """Encodes the thought signature into metadata format."""
         if thought_signature:
             return {'thoughtSignature': base64.b64encode(thought_signature).decode('utf-8')}

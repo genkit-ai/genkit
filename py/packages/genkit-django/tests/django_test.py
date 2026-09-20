@@ -30,8 +30,7 @@ from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
 
-from genkit import ActionRunContext, Genkit
-from genkit.plugin_api import RequestData
+from genkit import ActionRunContext, Genkit, RequestData
 
 
 def _assert_is_error_response(parsed: dict) -> None:

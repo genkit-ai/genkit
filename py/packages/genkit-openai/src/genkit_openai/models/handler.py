@@ -21,12 +21,8 @@ from typing import cast
 
 from openai import AsyncOpenAI
 
-from genkit import (
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-)
-from genkit.plugin_api import ActionRunContext
+from genkit import ActionRunContext, ModelResponse
+from genkit.model import ModelInfo, ModelRequest
 from genkit_openai.models.model import OpenAIModel
 from genkit_openai.models.model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,

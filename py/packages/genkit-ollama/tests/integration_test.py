@@ -21,7 +21,8 @@ from unittest.mock import Mock
 import ollama as ollama_api
 import pytest
 
-from genkit import ActionKind, Genkit, Message, ModelResponse, Part, Role
+from genkit import Genkit, Message, ModelResponse, Part, Role
+from genkit.plugin_api import ActionKind
 
 
 @pytest.mark.asyncio

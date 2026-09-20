@@ -40,7 +40,7 @@ from typing import Any
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from genkit import Part
+from genkit import MultipartToolResponse, Part
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._action import Action
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk
@@ -52,7 +52,6 @@ from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
     GenerateMiddlewareContext,
-    MultipartToolResponse,
     ToolHookParams,
 )
 

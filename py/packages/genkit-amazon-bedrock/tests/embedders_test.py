@@ -35,9 +35,8 @@ from genkit_amazon_bedrock.embedders import (
 )
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 
-from genkit import Document, Part
+from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest
-from genkit.plugin_api import GenkitError
 
 TITAN_TEXT = 'amazon.titan-embed-text-v2:0'
 TITAN_MM = 'amazon.titan-embed-image-v1'

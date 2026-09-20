@@ -39,15 +39,8 @@ from openai import APIStatusError
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import (
-    GenkitError,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolRequest,
-    ToolResponse,
-)
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, ToolRequest, ToolResponse
 
 
 class TestParseDataUriContentType:

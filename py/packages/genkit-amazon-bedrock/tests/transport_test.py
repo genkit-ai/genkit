@@ -31,7 +31,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError, EventStreamError
 from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit.plugin_api import GenkitError
+from genkit import GenkitError
 
 AWS_ENV_VARS = (
     'AWS_REGION',

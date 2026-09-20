@@ -28,12 +28,8 @@ from genkit_google_genai.models.embedder import (
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit import (
-    Document,
-    EmbedRequest,
-    EmbedResponse,
-    Part,
-)
+from genkit import Document, Part
+from genkit.embedder import EmbedRequest, EmbedResponse
 
 
 @pytest.mark.asyncio

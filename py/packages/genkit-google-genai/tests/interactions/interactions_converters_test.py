@@ -40,13 +40,8 @@ from genkit_google_genai._interactions.converters import (
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
 from pydantic import BaseModel, TypeAdapter
 
-from genkit import (
-    GenkitError,
-    Part,
-    ToolRequest,
-    ToolResponse,
-)
-from genkit.model import Message, ToolDefinition
+from genkit import GenkitError, Message, Part
+from genkit.model import ToolDefinition, ToolRequest, ToolResponse
 
 ContentAdapter: TypeAdapter[Content] = TypeAdapter(Content)
 StepAdapter: TypeAdapter[Step] = TypeAdapter(Step)

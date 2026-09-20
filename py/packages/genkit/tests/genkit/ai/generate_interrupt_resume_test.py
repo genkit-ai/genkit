@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from genkit import Genkit, Message, MiddlewareRef, ModelResponse, Part
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import (
@@ -30,7 +30,7 @@ from genkit._core._typing import (
     Media,
     Role,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
 
 
 def _wire(messages: list[Message]) -> list[dict[str, Any]]:

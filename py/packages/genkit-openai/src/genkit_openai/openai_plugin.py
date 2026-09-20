@@ -23,14 +23,29 @@ from typing import Any, Literal, TypeAlias, cast
 from openai import APIStatusError, AsyncOpenAI
 from openai.types import Model
 
-from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.embedder import EmbedderInfo, EmbedderSupports, embedder, embedder_action_metadata
-from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
+from genkit import ActionRunContext, GenkitError, ModelResponse
+from genkit.embedder import (
+    EmbedderInfo,
+    EmbedderSupports,
+    Embedding,
+    EmbedRequest,
+    EmbedResponse,
+    embedder,
+    embedder_action_metadata,
+)
+from genkit.model import (
+    ModelInfo,
+    ModelRef,
+    ModelRequest,
+    Supports,
+    model as create_model,
+    model_action_metadata,
+    model_ref,
+)
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
-    ActionRunContext,
     Plugin,
     loop_local_client,
     to_json_schema,

@@ -22,7 +22,8 @@ import json
 import structlog
 from google.genai import types as genai_types
 
-from genkit import GenkitError, ModelRequest
+from genkit import GenkitError
+from genkit.model import ModelRequest
 from genkit_google_genai.models.context_caching.constants import (
     CONTEXT_CACHE_SUPPORTED_MODELS,
     INVALID_ARGUMENT_MESSAGES,

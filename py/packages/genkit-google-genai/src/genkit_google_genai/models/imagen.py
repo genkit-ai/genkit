@@ -14,270 +14,134 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Imagen model implementation for Google GenAI plugin."""
+"""Google GenAI Imagen models."""
 
-import base64
-import sys
+from __future__ import annotations
 
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
-
-from functools import cached_property
-from typing import Any, Literal, TypeAlias
+import logging
+from typing import Any
 
 from google import genai
-from google.genai import types as genai_types
+from google.genai import types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import (
-    GenkitError,
+    Candidate,
+    GenerateResponseChunk,
     Message,
-    ModelInfo,
-    ModelRequest,
     ModelResponse,
     Part,
     Role,
-    Supports,
 )
+from genkit.model import ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit.telemetry import SpanContext, run_in_new_span
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
-    sdk_config_error,
-    split_sdk_fields,
+    read_dumped_field,
 )
 
+logger = logging.getLogger(__name__)
 
-def _to_dict(obj: Any) -> Any:  # noqa: ANN401
-    """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
-    return obj.model_dump() if isinstance(obj, BaseModel) else obj
-
-
-class ImagenVersion(StrEnum):
-    """Supported text-to-image models."""
-
-    IMAGEN3 = 'imagen-3.0-generate-002'
-    IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
+IMAGEN_3 = 'imagen-3.0-generate-002'
+SUPPORTED_IMAGEN_MODELS = {IMAGEN_3: 'Imagen 3'}
 
 
-# Quote autocomplete needs a Literal. The enum above is the catalog; a test
-# requires these members and the enum values to be the same set.
-KnownImagen: TypeAlias = Literal[
-    'imagen-3.0-generate-002',
-    'imagen-3.0-fast-generate-001',
-]
-
-
-SUPPORTED_MODELS = {
-    ImagenVersion.IMAGEN3: ModelInfo(
-        label='Vertex AI - Imagen3',
-        supports=Supports(
-            media=True,
-            multiturn=False,
-            tools=False,
-            system_role=True,
-            output=['media'],
-        ),
-    ),
-    ImagenVersion.IMAGEN3_FAST: ModelInfo(
-        label='Vertex AI - Imagen3 Fast',
-        supports=Supports(
-            media=False,
-            multiturn=False,
-            tools=False,
-            system_role=True,
-            output=['media'],
-        ),
-    ),
-}
-
-DEFAULT_IMAGE_SUPPORT = Supports(
-    media=True,
-    multiturn=False,
-    tools=False,
-    system_role=True,
-    output=['media'],
-)
-
-
-def is_imagen_model_name(name: str) -> bool:
-    """Return True if ``name`` is an Imagen model.
-
-    Imagen ids start with ``imagen-`` on the local name after stripping the
-    plugin / ``models/`` prefix. Gemini native image (``gemini-…-image``) is
-    not Imagen.
-    """
-    return name.split('/')[-1].lower().startswith('imagen-')
-
-
-def is_unsupported_image_model_name(name: str) -> bool:
-    """Return True for image ids that must not route anywhere.
-
-    ``imagegeneration@*`` and ``imagetext@*`` were shut down by Google in
-    June 2026, and ``virtual-try-on-*`` needs a person+product image request
-    shape this plugin does not implement. Letting any of those fall through
-    to the Gemini default would answer with the wrong model, so callers
-    treat these ids as not-a-model instead.
-    """
-    local = name.split('/')[-1].lower()
-    return local.startswith('imagegeneration@') or local.startswith('imagetext@') or local.startswith('virtual-try-on-')
-
-
-def vertexai_image_model_info(
-    version: str,
-) -> ModelInfo:
-    """Generates a ModelInfo object.
-
-    This function tries to get the best ModelInfo Supports
-    for the given version.
-
-    Args:
-        version: Version of the model.
-
-    Returns:
-        ModelInfo object.
-    """
-    return ModelInfo(
-        label=f'Vertex AI - {version}',
-        supports=DEFAULT_IMAGE_SUPPORT,
-    )
-
-
-class ImagenConfigSchema(BaseModel):
-    """Imagen Config Schema."""
+class ImagenConfig(BaseModel):
+    """Configuration options for Imagen models."""
 
     model_config = ConfigDict(extra='allow')
 
+    number_of_images: int | None = Field(default=None, description='Number of images to generate (1-4).')
+    aspect_ratio: str | None = Field(default=None, description='Aspect ratio: 1:1, 3:4, 4:3, 9:16, or 16:9.')
+    output_mime_type: str | None = Field(default=None, description='Output MIME type: image/jpeg or image/png.')
+    person_generation: str | None = Field(
+        default=None,
+        description='Person generation setting: DONT_ALLOW, ALLOW_ADULT, or ALLOW_ALL.',
+    )
+    safety_filter_level: str | None = Field(
+        default=None,
+        description='Safety filter level: BLOCK_LOW_AND_ABOVE, BLOCK_MEDIUM_AND_ABOVE, or BLOCK_ONLY_HIGH.',
+    )
 
-class ImagenModel:
-    """Imagen text-to-image model."""
 
-    def __init__(self, version: str | ImagenVersion, client: genai.Client) -> None:
-        """Initialize Imagen model.
+def _to_imagen_config(config: ImagenConfig | dict[str, Any] | None) -> types.GenerateImagesConfig:
+    dumped = dump_family_config(config)
+    kwargs: dict[str, Any] = {}
+    for dest, src in (
+        ('number_of_images', 'number_of_images'),
+        ('aspect_ratio', 'aspect_ratio'),
+        ('output_mime_type', 'output_mime_type'),
+        ('person_generation', 'person_generation'),
+        ('safety_filter_level', 'safety_filter_level'),
+    ):
+        val = read_dumped_field(dumped, src)
+        if val is not None:
+            kwargs[dest] = val
+    c = types.GenerateImagesConfig(**kwargs)
+    attach_leftovers(c, dumped)
+    return c
 
-        Args:
-            version: Imagen version
-            client: Google AI client
-        """
-        self._version = version
-        self._client = client
 
-    def _build_prompt(self, request: ModelRequest) -> str:
-        """Build prompt request from Genkit request.
+def create_imagen_model(
+    client: genai.Client,
+    model_name: str,
+) -> tuple[ModelInfo, Any]:
+    """Create an Imagen model action and its metadata."""
+    info = ModelInfo(
+        label=SUPPORTED_IMAGEN_MODELS.get(model_name, model_name),
+        supports=Supports(
+            multiturn=False,
+            media=False,
+            tools=False,
+            system_role=False,
+            output=['media'],
+        ),
+    )
 
-        Args:
-            request: Genkit request.
+    async def imagen_runner(
+        request: ModelRequest,
+        ctx: ActionRunContext[GenerateResponseChunk] | None = None,
+    ) -> ModelResponse:
+        prompt = ''
+        for m in request.messages:
+            for p in m.content:
+                if p.text:
+                    prompt += p.text
 
-        Returns:
-            prompt for Imagen
-        """
-        prompt = []
-        for message in request.messages:
-            for part in message.content:
-                if part.text is not None:
-                    prompt.append(part.text)
-                else:
-                    raise GenkitError(status='INVALID_ARGUMENT', message='Non-text messages are not supported')
-        return ' '.join(prompt)
+        imagen_config = None
+        if request.config:
+            if isinstance(request.config, ImagenConfig):
+                imagen_config = request.config
+            elif isinstance(request.config, dict):
+                imagen_config = ImagenConfig.model_validate(request.config)
 
-    async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
-        """Handle a generation request.
+        sdk_config = _to_imagen_config(imagen_config)
 
-        Args:
-            request: The generation request containing messages and parameters.
-            _: action context
-
-        Returns:
-            The model's response to the generation request.
-        """
-        prompt = self._build_prompt(request)
-        config = self._get_config(request)
-        if request.tools:
-            raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
-
-        async def call_imagen(_span: SpanContext) -> genai_types.GenerateImagesResponse:
-            try:
-                return await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
-            except APIError as e:
-                raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-
-        response = await run_in_new_span(
-            'generate_images',
-            call_imagen,
-            action_type='util',
-            input={
-                'config': _to_dict(config),
-                'contents': prompt,
-                'model': self._version,
-            },
-        )
-
-        content = self._contents_from_response(response)
-
-        return ModelResponse(
-            message=Message(
-                content=content,
-                role=Role.MODEL,
-            )
-        )
-
-    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfig | None:
-        dumped = dump_family_config(
-            config=request.config,
-            expected_type=ImagenConfigSchema,
-            action_name=self._version,
-        )
-        if not dumped:
-            return None
-
-        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateImagesConfig)
         try:
-            cfg = genai_types.GenerateImagesConfig(**known) if known else genai_types.GenerateImagesConfig()
-        except ValidationError as e:
-            raise sdk_config_error(action_name=self._version, error=e) from e
-        return attach_leftovers(cfg, leftovers, nest='parameters')
+            async def _generate(span: SpanContext) -> Any:
+                span.set_metadata({'client': 'genai'})
+                return await client.aio.models.generate_images(
+                    model=model_name,
+                    prompt=prompt,
+                    config=sdk_config,
+                )
 
-    def _contents_from_response(self, response: genai_types.GenerateImagesResponse) -> list:
-        """Retrieve contents from google-genai response.
+            res = await run_in_new_span(model_name, _generate, action_type='model')
+        except APIError as exc:
+            raise wrap_http_error(exc) from exc
 
-        Args:
-            response: google-genai response.
+        candidates = []
+        for img in res.generated_images:
+            part = Part.from_bytes(
+                img.image.image_bytes,
+                content_type=img.image.mime_type or 'image/png',
+            )
+            msg = Message(role=Role.MODEL, content=[part])
+            candidates.append(Candidate(index=len(candidates), message=msg))
 
-        Returns:
-            list of generated contents.
-        """
-        content = []
-        if response.generated_images:
-            for image in response.generated_images:
-                if image.image and image.image.image_bytes:
-                    b64_data = base64.b64encode(image.image.image_bytes).decode('utf-8')
-                    content.append(
-                        Part.from_media(
-                            f'data:{image.image.mime_type};base64,{b64_data}', content_type=image.image.mime_type
-                        )
-                    )
+        return ModelResponse(candidates=candidates)
 
-        return content
-
-    @cached_property
-    def metadata(self) -> dict:
-        """Model metadata.
-
-        Returns:
-            model metadata.
-        """
-        supports = {}
-        if self._version in SUPPORTED_MODELS:
-            model_supports = SUPPORTED_MODELS[self._version].supports  # pyright: ignore[reportArgumentType]
-            if model_supports:
-                supports = model_supports.model_dump(by_alias=True)
-        else:
-            model_supports = vertexai_image_model_info(self._version).supports
-            if model_supports:
-                supports = model_supports.model_dump(by_alias=True)
-
-        return {'model': {'supports': supports}}
+    return info, imagen_runner

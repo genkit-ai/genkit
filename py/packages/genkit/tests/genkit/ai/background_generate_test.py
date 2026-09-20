@@ -23,7 +23,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind, Document, Genkit, Message, Part
+from genkit import Document, Genkit, Message, Part
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
@@ -35,6 +35,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.plugin_api import ActionKind
 
 
 @pytest.fixture
