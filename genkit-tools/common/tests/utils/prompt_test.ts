@@ -95,19 +95,19 @@ describe('jsonSchemaToPicoschema', () => {
     expect(jsonSchemaToPicoschema(schema)).toEqual({ 'name?': 'string' });
   });
 
-  it('converts top-level arrays and unconstrained schemas', () => {
+  it('falls back for top-level arrays and converts unconstrained schemas', () => {
     expect(
       jsonSchemaToPicoschema({ type: 'array', items: { type: 'string' } })
-    ).toBe('string');
+    ).toBeUndefined();
     expect(
       jsonSchemaToPicoschema({
         type: 'array',
         items: { type: ['string'] },
       })
-    ).toBe('string');
-    expect(jsonSchemaToPicoschema({ items: { type: 'string' } })).toBe(
-      'string'
-    );
+    ).toBeUndefined();
+    expect(
+      jsonSchemaToPicoschema({ items: { type: 'string' } })
+    ).toBeUndefined();
     expect(jsonSchemaToPicoschema({ description: 'Anything goes' })).toBe(
       'any, Anything goes'
     );
