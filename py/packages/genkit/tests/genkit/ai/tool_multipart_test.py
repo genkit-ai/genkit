@@ -16,7 +16,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.alias_generators import to_camel
 
-from genkit import ActionKind, Genkit, Message, MiddlewareRef, ModelResponse, Part
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import generate_action, to_tool_definition
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import (
@@ -34,7 +34,8 @@ from genkit._core._typing import (
     FinishReason,
     MultipartToolResponse as MultipartToolResponseData,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.plugin_api import ActionKind
 
 
 def _png() -> Part:

@@ -31,23 +31,10 @@ import structlog
 from anthropic import APIError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import (
-    Constrained,
-    ErrorResponseMetadata,
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    Role,
-    ToolRequest,
-)
-from genkit.model import get_basic_usage_stats
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import (
-    ActionRunContext,
+    ErrorResponseMetadata,
     StatusName,
     from_http_code,
     parse_retry_after_ms,

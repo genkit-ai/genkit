@@ -25,13 +25,9 @@ from typing import Any, TypeAlias, TypeVar
 from flask import Response, request
 from pydantic import BaseModel
 
-from genkit import Genkit, GenkitError
+from genkit import ContextProvider, Genkit, GenkitError, RequestData
 from genkit._core._action import Action
-from genkit.plugin_api import (
-    ContextProvider,
-    RequestData,
-    get_callable_json,
-)
+from genkit.plugin_api import get_callable_json
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')

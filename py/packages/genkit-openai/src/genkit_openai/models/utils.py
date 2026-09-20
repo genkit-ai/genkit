@@ -26,14 +26,8 @@ from typing import Any, NoReturn
 from openai import APIStatusError, BaseModel
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from genkit import (
-    GenkitError,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolRequest,
-)
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, ToolRequest
 from genkit.plugin_api import wrap_http_error
 
 

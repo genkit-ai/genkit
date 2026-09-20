@@ -24,8 +24,9 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
-from genkit import ModelRequest, ModelResponse
-from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata
+from genkit import ActionRunContext, ModelResponse
+from genkit.model import ModelRequest, model_action_metadata
+from genkit.plugin_api import Action, ActionKind
 from genkit_google_genai._interactions.client import create_interaction
 from genkit_google_genai._interactions.converters import from_interaction_sync
 from genkit_google_genai._interactions.options import ClientOptions

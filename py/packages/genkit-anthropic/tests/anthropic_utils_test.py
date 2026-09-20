@@ -36,11 +36,8 @@ from genkit_anthropic.utils import (
     to_anthropic_media,
 )
 
-from genkit import (
-    Metadata,
-    ModelUsage,
-    Part,
-)
+from genkit import Part
+from genkit.model import ModelUsage
 
 # ---------------------------------------------------------------------------
 # get_cache_control tests
@@ -61,19 +58,19 @@ class TestGetCacheControl:
         assert get_cache_control(part) is None
 
     def test_returns_cache_control_with_metadata_rootmodel(self) -> None:
-        """Extracts cache_control when metadata is a Metadata RootModel."""
-        part = Part.from_text('hello', metadata=Metadata({'cache_control': {'type': 'ephemeral'}}))
+        """Extracts cache_control when metadata is a dict."""
+        part = Part.from_text('hello', metadata={'cache_control': {'type': 'ephemeral'}})
         result = get_cache_control(part)
         assert result == {'type': 'ephemeral'}
 
     def test_returns_none_when_no_cache_control_key(self) -> None:
         """Returns None when metadata has no cache_control key."""
-        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata={'other_key': 'value'})
         assert get_cache_control(part) is None
 
     def test_returns_none_for_non_dict_cache_control(self) -> None:
         """Returns None when cache_control is not a dict."""
-        part = Part.from_text('hello', metadata=Metadata({'cache_control': 'invalid'}))
+        part = Part.from_text('hello', metadata={'cache_control': 'invalid'})
         assert get_cache_control(part) is None
 
     def test_works_with_media_part(self) -> None:
@@ -81,7 +78,7 @@ class TestGetCacheControl:
         part = Part.from_media(
             url='https://example.com/img.png',
             content_type='image/png',
-            metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
+            metadata={'cache_control': {'type': 'ephemeral'}},
         )
         result = get_cache_control(part)
         assert result == {'type': 'ephemeral'}
@@ -111,32 +108,32 @@ class TestGetThinkingSignature:
 
     def test_returns_none_when_metadata_key_absent(self) -> None:
         """Returns None when metadata has no signature keys."""
-        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata={'other_key': 'value'})
         assert get_thinking_signature(part) is None
 
     def test_reads_thought_signature(self) -> None:
         """Reads JS-style thoughtSignature metadata."""
-        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js'}))
+        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js'})
         assert get_thinking_signature(part) == 'sig-js'
 
     def test_falls_back_to_signature(self) -> None:
         """Reads Go-style signature metadata when thoughtSignature is absent."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': 'sig-go'}))
+        part = Part.from_text('hello', metadata={'signature': 'sig-go'})
         assert get_thinking_signature(part) == 'sig-go'
 
     def test_prefers_thought_signature(self) -> None:
         """Prefers JS-style metadata when both aliases are present."""
-        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js', 'signature': 'sig-go'}))
+        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js', 'signature': 'sig-go'})
         assert get_thinking_signature(part) == 'sig-js'
 
     def test_decodes_bytes_signature(self) -> None:
         """Decodes Go-style raw byte signatures."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': b'sig-go'}))
+        part = Part.from_text('hello', metadata={'signature': b'sig-go'})
         assert get_thinking_signature(part) == 'sig-go'
 
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': 123}))
+        part = Part.from_text('hello', metadata={'signature': 123})
         assert get_thinking_signature(part) is None
 
 

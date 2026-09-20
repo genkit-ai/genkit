@@ -49,21 +49,9 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 from pytest_mock import MockerFixture
 
-from genkit import (
-    ActionRunContext,
-    Constrained,
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    Supports,
-    ToolDefinition,
-)
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit._core._model import OutputConfig
+from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, ToolDefinition
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)

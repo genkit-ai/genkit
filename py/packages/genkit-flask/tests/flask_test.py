@@ -22,8 +22,7 @@ from typing import Any
 from flask import Flask, Request
 from genkit_flask import genkit_flask_handler
 
-from genkit import ActionRunContext, Genkit
-from genkit.plugin_api import RequestData
+from genkit import ActionRunContext, Genkit, RequestData
 
 
 def create_app() -> Flask:

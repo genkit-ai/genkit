@@ -29,18 +29,8 @@ from typing import Any
 
 import structlog
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-    ToolDefinition,
-    ToolRequest,
-)
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock.converters import (
     bedrock_reasoning_part,
     coerce_tool_input,

@@ -935,7 +935,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     types (Message, Document) for helpers like ``.text``.
 
     Example:
-        from genkit.plugin_api import ModelConfig
+        from genkit.model import ModelConfig
 
         class GeminiConfig(ModelConfig):
             safety_settings: dict[str, str] | None = None

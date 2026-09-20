@@ -24,12 +24,8 @@ import pytest
 from genkit_openai.typing import OpenAIConfig
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest
 
 
 @pytest.fixture

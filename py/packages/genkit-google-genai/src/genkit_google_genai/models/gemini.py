@@ -46,24 +46,20 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema
 
-from genkit import (
+from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import (
+    Candidate,
     Constrained,
-    GenkitError,
-    Message,
+    FinishReason,
+    ModelConfig,
     ModelInfo,
     ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
     ModelUsage,
-    Part,
-    Role,
     Supports,
     ToolDefinition,
+    get_basic_usage_stats,
 )
-from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
-    ActionRunContext,
-    ModelConfig,
     wrap_http_error,
 )
 

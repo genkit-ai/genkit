@@ -24,7 +24,7 @@ from genkit_amazon_bedrock.model_info import (
     strip_inference_profile_prefix,
 )
 
-from genkit import Stage
+from genkit.model import Stage
 
 
 @pytest.mark.parametrize('prefix', INFERENCE_PROFILE_PREFIXES)

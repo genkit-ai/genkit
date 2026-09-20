@@ -38,15 +38,8 @@ from genkit_amazon_bedrock.converters import (
     usage_from_response,
 )
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolDefinition,
-)
-from genkit.plugin_api import GenkitError, ModelConfig
+from genkit import FinishReason, GenkitError, Message, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ToolDefinition
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfakeimagedata'
 PNG_B64 = base64.b64encode(PNG_BYTES).decode()

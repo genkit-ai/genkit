@@ -42,6 +42,7 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
+from genkit import GenkitError
 from genkit._core._model import Document, as_document
 from genkit.embedder import (
     EmbedderInfo,
@@ -50,7 +51,6 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
-from genkit.plugin_api import GenkitError
 from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
 
