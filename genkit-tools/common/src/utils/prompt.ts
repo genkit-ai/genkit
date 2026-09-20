@@ -30,19 +30,41 @@ const PICOSCHEMA_SCALAR_TYPES = new Set([
  * Converts JSON Schema into Dotprompt's compact Picoschema notation.
  * Picoschema is a subset of JSON Schema, so constraints without a Picoschema
  * equivalent are omitted as part of this opt-in, best-effort conversion.
+ * Returns undefined when the original JSON Schema must be retained to avoid
+ * losing structure or producing notation that Dotprompt cannot parse.
  */
 export function jsonSchemaToPicoschema(schema: unknown): unknown {
   if (!isRecord(schema) || Object.keys(schema).length === 0) return undefined;
-  return convertJsonSchemaNode(schema);
+  const converted = convertJsonSchemaNode(schema);
+  // Dotprompt treats these root `type` values as JSON Schema, not properties.
+  if (
+    isRecord(converted) &&
+    typeof converted.type === 'string' &&
+    (PICOSCHEMA_SCALAR_TYPES.has(converted.type) || converted.type === 'any')
+  ) {
+    return undefined;
+  }
+  return converted;
 }
 
-function convertJsonSchemaNode(schema: Record<string, unknown>): unknown {
+function convertJsonSchemaNode(
+  schema: Record<string, unknown>,
+  optional = false
+): unknown {
   const description =
     typeof schema.description === 'string' ? schema.description : undefined;
   const type = scalarType(schema.type);
 
-  if (Array.isArray(schema.enum)) {
-    return schema.enum.filter((value) => value !== null);
+  // Arrays and enums need a property-key annotation in Picoschema. Returning
+  // just their items/values here would lose structure at the root or in items.
+  if (
+    Array.isArray(schema.enum) ||
+    type === 'array' ||
+    isRecord(schema.items) ||
+    (!optional && Array.isArray(schema.type) && schema.type.includes('null')) ||
+    (description && /[\r\n\u2028\u2029]/.test(description))
+  ) {
+    return undefined;
   }
 
   if (type && PICOSCHEMA_SCALAR_TYPES.has(type)) {
@@ -51,12 +73,6 @@ function convertJsonSchemaNode(schema: Record<string, unknown>): unknown {
 
   if (!type && schema.properties === undefined && schema.items === undefined) {
     return description ? `any, ${description}` : 'any';
-  }
-
-  if (type === 'array' || isRecord(schema.items)) {
-    return isRecord(schema.items) && Object.keys(schema.items).length > 0
-      ? convertJsonSchemaNode(schema.items)
-      : 'any';
   }
 
   if (type === 'object' || isRecord(schema.properties)) {
@@ -89,26 +105,32 @@ function convertJsonSchemaObject(
       return undefined;
     }
 
-    const key = requiredProperties.has(propertyName)
-      ? propertyName
-      : `${propertyName}?`;
+    const optional = !requiredProperties.has(propertyName);
+    const key = optional ? `${propertyName}?` : propertyName;
     const type = scalarType(value.type);
 
+    // Only optional (`?`) properties can express nullable types compactly.
+    if (!optional && Array.isArray(value.type) && value.type.includes('null')) {
+      return undefined;
+    }
+
     if (Array.isArray(value.enum)) {
-      result[`${key}(enum)`] = value.enum.filter(
-        (enumValue) => enumValue !== null
-      );
+      const values = value.enum.filter((enumValue) => enumValue !== null);
+      if (values.length === 0) return undefined;
+      result[`${key}(enum)`] = values;
     } else if (type === 'array') {
-      result[`${key}(array)`] =
+      const items =
         isRecord(value.items) && Object.keys(value.items).length > 0
           ? convertJsonSchemaNode(value.items)
           : 'any';
+      if (items === undefined) return undefined;
+      result[`${key}(array)`] = items;
     } else if (type === 'object' || isRecord(value.properties)) {
       const nestedObject = convertJsonSchemaObject(value);
       if (!nestedObject) return undefined;
       result[`${key}(object)`] = nestedObject;
     } else {
-      const converted = convertJsonSchemaNode(value);
+      const converted = convertJsonSchemaNode(value, optional);
       if (converted === undefined) return undefined;
       result[key] = converted;
     }
@@ -124,7 +146,9 @@ function convertJsonSchemaObject(
     result['(*)'] = additionalProperties;
   }
 
-  return result;
+  // Empty compact objects are removed by frontmatter cleanup. Retain the
+  // original root JSON Schema instead of silently dropping the object/field.
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function scalarType(type: unknown): string | undefined {
