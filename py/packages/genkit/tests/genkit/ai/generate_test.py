@@ -17,7 +17,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
-from genkit._ai._generate import ChunkAccumulator, augment_with_context, generate_action
+from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._resource import ResourceInput, ResourceOutput, define_resource
 from genkit._ai._testing import (
@@ -2861,8 +2861,8 @@ async def test_return_tool_requests_keeps_model_message_without_running_tool() -
 
 
 @pytest.mark.asyncio
-async def test_default_max_turns_allows_fifty_tool_rounds_to_finish() -> None:
-    """The default leaves room for fifty completed tool rounds and a final reply."""
+async def test_default_max_turns_allows_a_full_cap_of_tool_rounds_to_finish() -> None:
+    """The default leaves room for a full cap of completed tool rounds and a final reply."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
     tool_calls = 0
@@ -2874,7 +2874,7 @@ async def test_default_max_turns_allows_fifty_tool_rounds_to_finish() -> None:
         return 'ok'
 
     pm.responses = [
-        *[_model_calls_tool(name='step', ref=str(index)) for index in range(50)],
+        *[_model_calls_tool(name='step', ref=str(index)) for index in range(DEFAULT_MAX_TURNS)],
         ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
@@ -2883,26 +2883,31 @@ async def test_default_max_turns_allows_fifty_tool_rounds_to_finish() -> None:
 
     response = await ai.generate(prompt='finish the work', tools=['step'])
 
+    # Each round contributes a MODEL then a TOOL message after the leading USER
+    # message, so the model turns land on odd indices and their outputs on even.
+    model_turns = range(1, 2 * DEFAULT_MAX_TURNS + 1, 2)
+    tool_turns = range(2, 2 * DEFAULT_MAX_TURNS + 2, 2)
+
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'done'
     assert response.error is None
-    assert tool_calls == 50
-    assert pm.request_count == 51
+    assert tool_calls == DEFAULT_MAX_TURNS
+    assert pm.request_count == DEFAULT_MAX_TURNS + 1
     assert [message.role for message in response.messages] == [
         Role.USER,
-        *[role for _ in range(50) for role in (Role.MODEL, Role.TOOL)],
+        *[role for _ in range(DEFAULT_MAX_TURNS) for role in (Role.MODEL, Role.TOOL)],
         Role.MODEL,
     ]
-    assert [_tool_request(response.messages[index]).ref for index in range(1, 101, 2)] == [
-        str(index) for index in range(50)
+    assert [_tool_request(response.messages[index]).ref for index in model_turns] == [
+        str(index) for index in range(DEFAULT_MAX_TURNS)
     ]
-    assert [_tool_output(response.messages[index]) for index in range(2, 102, 2)] == ['ok'] * 50
+    assert [_tool_output(response.messages[index]) for index in tool_turns] == ['ok'] * DEFAULT_MAX_TURNS
     assert response.messages[-1] == response.message
 
 
 @pytest.mark.asyncio
-async def test_default_max_turns_drops_fifty_first_tool_round() -> None:
-    """The fifty-first open tool round is excluded from resendable history."""
+async def test_default_max_turns_drops_the_round_past_the_cap() -> None:
+    """The first open tool round past the cap is excluded from resendable history."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
     tool_calls = 0
@@ -2913,28 +2918,31 @@ async def test_default_max_turns_drops_fifty_first_tool_round() -> None:
         tool_calls += 1
         return 'ok'
 
-    pm.responses = [_model_calls_tool(name='step', ref=str(index)) for index in range(51)]
+    pm.responses = [_model_calls_tool(name='step', ref=str(index)) for index in range(DEFAULT_MAX_TURNS + 1)]
 
     response = await ai.generate(prompt='keep going', tools=['step'])
 
+    model_turns = range(1, 2 * DEFAULT_MAX_TURNS + 1, 2)
+    tool_turns = range(2, 2 * DEFAULT_MAX_TURNS + 2, 2)
+
     assert response.finish_reason == FinishReason.ABORTED
-    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.finish_message == f'Exceeded maximum tool call iterations ({DEFAULT_MAX_TURNS})'
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'ABORTED'
     assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
     assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
     assert response.error.message == response.finish_message
-    assert tool_calls == 50
-    assert pm.request_count == 51
+    assert tool_calls == DEFAULT_MAX_TURNS
+    assert pm.request_count == DEFAULT_MAX_TURNS + 1
     assert [message.role for message in response.messages] == [
         Role.USER,
-        *[role for _ in range(50) for role in (Role.MODEL, Role.TOOL)],
+        *[role for _ in range(DEFAULT_MAX_TURNS) for role in (Role.MODEL, Role.TOOL)],
     ]
-    assert [_tool_request(response.messages[index]).ref for index in range(1, 101, 2)] == [
-        str(index) for index in range(50)
+    assert [_tool_request(response.messages[index]).ref for index in model_turns] == [
+        str(index) for index in range(DEFAULT_MAX_TURNS)
     ]
-    assert [_tool_output(response.messages[index]) for index in range(2, 101, 2)] == ['ok'] * 50
+    assert [_tool_output(response.messages[index]) for index in tool_turns] == ['ok'] * DEFAULT_MAX_TURNS
 
 
 @pytest.mark.asyncio
