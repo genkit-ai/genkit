@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	otrace "go.opentelemetry.io/otel/trace"
@@ -179,8 +180,16 @@ func convertEvents(evs []sdktrace.Event) []TimeEvent {
 }
 
 func convertStatus(s sdktrace.Status) Status {
+	// Go's status-code ordinals are internal and reverse OTLP's Ok/Error values.
+	var code uint32
+	switch s.Code {
+	case codes.Ok:
+		code = 1
+	case codes.Error:
+		code = 2
+	}
 	return Status{
-		Code:        uint32(s.Code),
+		Code:        code,
 		Description: s.Description,
 	}
 }

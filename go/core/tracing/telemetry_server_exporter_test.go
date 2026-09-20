@@ -111,7 +111,7 @@ func TestConvertSpan(t *testing.T) {
 			Attributes:             map[string]any{"k3": "v3"},
 			DroppedAttributesCount: 1,
 		}},
-		Status: Status{Code: 2, Description: "desc"},
+		Status: Status{Code: 1, Description: "desc"},
 		InstrumentationScope: InstrumentationScope{
 			Name:      "iname",
 			Version:   "version",
@@ -122,6 +122,27 @@ func TestConvertSpan(t *testing.T) {
 	got := convertSpan(ss.Snapshot())
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("mismatch (-want, +got)\n%s", diff)
+	}
+}
+
+func TestConvertStatusUsesOTLPCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		code codes.Code
+		want uint32
+	}{
+		{name: "unset", code: codes.Unset, want: 0},
+		{name: "ok", code: codes.Ok, want: 1},
+		{name: "error", code: codes.Error, want: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := convertStatus(sdktrace.Status{Code: test.code}).Code
+			if got != test.want {
+				t.Errorf("convertStatus(%v).Code = %d, want %d", test.code, got, test.want)
+			}
+		})
 	}
 }
 
