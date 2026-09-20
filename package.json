@@ -20,6 +20,7 @@
     "pack:tools": "cd genkit-tools && pnpm pack:all",
     "pack:js": "cd js && pnpm pack:all",
     "dist:zip": "cd dist && zip genkit-dist.zip *.tgz",
+    "test:copyright": "tsx --test scripts/copyright_test.ts",
     "test:all": "npm-run-all test:js test:genkit-tools",
     "test:js": "cd js && pnpm i && pnpm test:all",
     "test:genkit-tools": "pnpm test:genkit-tools-cli && pnpm test:genkit-tools-common",
