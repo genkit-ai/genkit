@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic.alias_generators import to_camel
 
 from genkit import Part
+from genkit._ai._agents._client import TERMINAL_SNAPSHOT_STATUSES
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnContext, TurnResult
@@ -66,7 +67,6 @@ from genkit._core._typing import (
 from genkit.exp import Genkit
 from genkit.exp.agent import Agent
 
-TERMINAL_STATUSES = {'completed', 'failed', 'aborted'}
 DEFAULT_STEP_TIMEOUT_S = 5.0
 
 
@@ -830,13 +830,13 @@ async def execute_wait_until_completed(*, agent: Agent, step: WaitUntilCompleted
     snap = None
     while time.monotonic() < deadline:
         snap = await agent.get_snapshot_data(snapshot_id=resolved.snapshot_id)
-        if snap is not None and snap.status is not None and snap.status.value in TERMINAL_STATUSES:
+        if snap is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
             break
         await asyncio.sleep(0.1)
 
     assert snap is not None, f'Snapshot {resolved.snapshot_id!r} not found after waiting'
     status = snap.status.value if snap.status is not None else None
-    assert status in TERMINAL_STATUSES, (
+    assert snap.status in TERMINAL_SNAPSHOT_STATUSES, (
         f'Snapshot {resolved.snapshot_id!r} did not reach terminal status within {timeout_s}s. Status: {status!r}'
     )
 
