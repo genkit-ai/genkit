@@ -294,11 +294,6 @@ async function getRegionalDerivedOptions(
     process.env.GOOGLE_CLOUD_LOCATION ||
     process.env.GCLOUD_LOCATION ||
     'us-central1';
-  if (!location) {
-    throw new Error(
-      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GOOGLE_CLOUD_LOCATION' or 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
-    );
-  }
 
   const clientOpt: RegionalClientOptions = {
     kind: 'regional',
