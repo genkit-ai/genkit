@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -143,7 +144,7 @@ func TestCreateTransportAppliesTimeoutToCustomClient(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      mcp.NewRequestId(1),
 		Method:  string(mcp.MethodInitialize),
-	}); err == nil {
-		t.Error("SendRequest() error = nil, want a timeout error; the configured Timeout was not applied to the custom client")
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("SendRequest() error = %v, want context.DeadlineExceeded; the configured Timeout was not applied to the custom client", err)
 	}
 }
