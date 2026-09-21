@@ -131,8 +131,9 @@ class VertexEmbeddingConfigSchema(EmbeddingConfigSchema):
 GOOGLEAI_EMBED_BATCH_SIZE = 100
 VERTEXAI_EMBED_BATCH_SIZE = 250
 
-# Caps simultaneous embedding calls; large batches otherwise trip rate limits or
-# exhaust the client's connection pool.
+# Calls in flight per embed request. Quotas are per-minute request counts, so
+# this bounds the burst and the share of the SDK's connection pool one request
+# takes, not the quota itself.
 EMBED_CONCURRENCY_LIMIT = 10
 
 # Option names that only VertexEmbeddingConfigSchema declares, in both accepted
@@ -317,8 +318,9 @@ class Embedder:
         """Generate embeddings for a given request.
 
         Requests with more documents than the endpoint accepts per call are
-        split into batches, sent with bounded concurrency; the response carries
-        one embedding per document, in input order.
+        split into batches, with at most ``EMBED_CONCURRENCY_LIMIT`` (10) calls
+        in flight at once; the response carries one embedding per document, in
+        input order.
 
         Args:
             request: Genkit embed request.
@@ -471,8 +473,9 @@ class Embedder:
         """Embed text/image/video via the Vertex multimodal ``:predict`` endpoint.
 
         ``multimodalembedding@001`` accepts one instance per ``:predict`` call,
-        so every document is sent as its own request, with bounded concurrency,
-        and the resulting embeddings are concatenated in document order. All
+        so every document is sent as its own request, at most
+        ``EMBED_CONCURRENCY_LIMIT`` (10) in flight at once, and the resulting
+        embeddings are concatenated in document order. All
         documents are validated before the first request is made.
 
         Args:
