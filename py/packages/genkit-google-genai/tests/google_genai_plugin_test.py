@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import (
+    EmbeddingConfigSchema,
     EmbeddingTaskType,
     GeminiConfigSchema,
     GeminiEmbeddingModels,
@@ -50,6 +51,7 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfig, VeoModel
+from google import genai
 
 from genkit import ActionKind, Genkit, GenkitError, Message, ModelRequest, Part, Role
 from genkit.model import Operation
@@ -466,6 +468,33 @@ async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_clien
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
     assert action.name == 'googleai/gemini-embedding-001'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """ai.embed() merges a typed ref config and version into the API call."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedding(
+        'gemini-embedding-001',
+        config=EmbeddingConfigSchema(task_type=EmbeddingTaskType.RETRIEVAL_QUERY, output_dimensionality=256),
+        version='gemini-embedding-2',
+    )
+
+    embeddings = await ai.embed(embedder=ref, content='hello')
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['model'] == 'gemini-embedding-2'
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+    assert call.kwargs['config'].output_dimensionality == 256
+    assert [e.embedding for e in embeddings] == [[0.5]]
 
 
 @patch('genkit_google_genai.google.genai.client.Client')

@@ -114,7 +114,8 @@ def family_embedder_ref(
     """Strip, gate, and build an EmbedderRef for ai.embed().
 
     This deliberately returns an EmbedderRef, not a ModelRef: an embedder id
-    must never end up in generate(model=...).
+    must never end up in generate(model=...). A typed ``config`` is stored as
+    a dict, the form ``ai.embed()`` merges with per-call options.
     """
     if not isinstance(name, str):
         raise GenkitError(
@@ -128,4 +129,6 @@ def family_embedder_ref(
         raise wrong_family_error(
             plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
         )
+    if isinstance(config, EmbeddingConfigSchema):
+        config = config.model_dump(exclude_none=True)
     return EmbedderRef(name=f'{namespace}/{local}', config=config, version=version)

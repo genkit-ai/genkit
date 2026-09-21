@@ -505,6 +505,7 @@ class GoogleFamilyRefs:
     ) -> EmbedderRef:
         """EmbedderRef for ``ai.embed()``, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
 
+        ``config`` takes an ``EmbeddingConfigSchema`` or a dict of its fields.
         Returns an EmbedderRef, not a ModelRef: an embedder id must never
         end up in ``generate(model=...)``.
         """

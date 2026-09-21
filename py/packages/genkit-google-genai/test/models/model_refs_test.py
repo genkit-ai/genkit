@@ -237,11 +237,11 @@ class TestEmbeddingConstructor:
         assert not isinstance(ref, ModelRef)
         assert ref.name == 'googleai/gemini-embedding-001'
 
-    def test_embedding_accepts_config_schema_instance(self) -> None:
-        """A typed EmbeddingConfigSchema is carried on the ref as given."""
+    def test_embedding_stores_a_typed_config_as_a_dict(self) -> None:
+        """A typed EmbeddingConfigSchema lands on the ref as the dict ai.embed() merges."""
         config = EmbeddingConfigSchema(task_type=EmbeddingTaskType.RETRIEVAL_QUERY, output_dimensionality=256)
         ref = GoogleAI.embedding('gemini-embedding-001', config=config)
-        assert ref.config is config
+        assert ref.config == {'task_type': 'RETRIEVAL_QUERY', 'output_dimensionality': 256}
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
