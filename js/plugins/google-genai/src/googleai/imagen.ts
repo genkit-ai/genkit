@@ -118,7 +118,7 @@ const GENERIC_MODEL = commonRef('imagen', {
 
 const DEPRECATED_MODELS = {
   // When models are < 1 month from shutdown, move them here instead.
-  // They will still be instatiated with the correct options,
+  // They will still be instantiated with the correct options,
   // but they will no longer appear in autocomplete suggestions.
 };
 
