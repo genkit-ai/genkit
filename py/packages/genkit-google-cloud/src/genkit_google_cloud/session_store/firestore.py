@@ -429,7 +429,6 @@ def _validate_doc_id(value: str | None, name: str) -> None:
     if (
         not value
         or value != value.strip()
-        or not value.strip()
         or '/' in value
         or value in ('.', '..')
         or (value.startswith('__') and value.endswith('__'))
