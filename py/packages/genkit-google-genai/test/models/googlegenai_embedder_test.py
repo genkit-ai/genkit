@@ -1087,3 +1087,22 @@ async def test_text_embedding_cancellation_cancels_in_flight_requests(mocker: Mo
     await _yield_until(lambda: blocked.completed > 0)
     assert blocked.completed == 0
     assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task()] == []
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_reraises_a_call_that_cancelled_itself(mocker: MockerFixture) -> None:
+    """A CancelledError raised inside one request surfaces as CancelledError, not as a result."""
+
+    async def cancel_the_second(
+        *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        if (contents[0].parts or [])[0].text == '1':
+            raise asyncio.CancelledError()
+        return _indexed_embed_content(model=model, contents=contents, config=config)
+
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = cancel_the_second
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await embedder.generate(EmbedRequest(input=_numbered_docs(3)))

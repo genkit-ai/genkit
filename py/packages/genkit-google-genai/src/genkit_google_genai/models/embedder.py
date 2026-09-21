@@ -233,7 +233,8 @@ async def _run_bounded(calls: list[Coroutine[Any, Any, _T]]) -> list[_T]:
     Raises:
         BaseException: The failure of the earliest call in that order among the
             calls that completed. A call still pending when another one fails is
-            cancelled, so its own outcome is never reported.
+            cancelled, so its own outcome is never reported. A ``CancelledError``
+            raised by a call itself is re-raised as such.
     """
     if not calls:
         return []
@@ -268,6 +269,11 @@ async def _run_bounded(calls: list[Coroutine[Any, Any, _T]]) -> list[_T]:
         # Call order, not completion order, so the reported failure is
         # deterministic across the calls that were left to run.
         if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
+    for result in results:
+        # Nothing failed, so nothing was cancelled here: this one came out of
+        # the call itself and must not be returned as a result.
+        if isinstance(result, asyncio.CancelledError):
             raise result
     return cast(list[_T], results)
 
