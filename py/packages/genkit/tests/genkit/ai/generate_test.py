@@ -4376,7 +4376,7 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_on_chunk_failure_echoes_full_request() -> None:
-    """A dead sink kills the turn outside generate, so it copies the turn's request."""
+    """A streaming callback that raises still reports the request the turn sent."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
 

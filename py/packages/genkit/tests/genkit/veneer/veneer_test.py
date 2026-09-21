@@ -1834,9 +1834,11 @@ async def test_generate_operation_with_model_info_long_running(
     assert op is not None
 
 
-# A turn that never reaches the model still has to echo what the caller asked
-# for. Go builds the turn's request once and copies it onto the response on
-# every exit; these pin the Python side to the same contract.
+# ModelResponse.request is the request Genkit sent for that turn. It carries
+# every field the caller configured -- messages, docs, config, tools,
+# tool_choice and output -- and it is populated the same way whether the turn
+# succeeded, failed, or stopped early. These pin that contract on the exits
+# where no model call completed, which are the ones most likely to regress.
 
 _ECHO_CONFIG = {'temperature': 0.5}
 
@@ -1882,7 +1884,7 @@ def _tool_call_message(name: str) -> Message:
 
 @pytest.mark.asyncio
 async def test_generate_echoes_full_request_when_model_raises(setup_test: SetupFixture) -> None:
-    """A model that raises still reports the request it was called with."""
+    """The model call failed, but response.request still holds what you configured."""
     ai, _, pm = setup_test
     _define_echo_request_tool(ai)
 
@@ -1904,7 +1906,7 @@ async def test_generate_echoes_full_request_when_model_raises(setup_test: SetupF
 
 @pytest.mark.asyncio
 async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFixture) -> None:
-    """A generate hook that raises returns before the model builds a request."""
+    """A middleware that raises still hands back the request your options described."""
     ai, _, pm = setup_test
     _define_echo_request_tool(ai)
 
@@ -1934,7 +1936,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
 async def test_generate_echoes_full_request_when_max_turns_exceeded(
     setup_test: SetupFixture,
 ) -> None:
-    """The tool-cap exit keeps the request from the turn that ran."""
+    """Hitting the tool-call cap still reports the request from the turn that ran."""
     ai, _, pm = setup_test
     _define_echo_request_tool(ai)
 
@@ -1957,7 +1959,7 @@ async def test_generate_echoes_full_request_when_max_turns_exceeded(
 
 @pytest.mark.asyncio
 async def test_generate_echoes_full_request_when_tool_missing(setup_test: SetupFixture) -> None:
-    """A model naming an unknown tool still reports the request."""
+    """The model asked for a tool that does not exist; your request is still reported."""
     ai, _, pm = setup_test
     _define_echo_request_tool(ai)
 
@@ -1983,7 +1985,7 @@ async def test_generate_echoes_full_request_when_tool_missing(setup_test: SetupF
 async def test_generate_echoes_full_request_across_interrupt_and_resume(
     setup_test: SetupFixture,
 ) -> None:
-    """Both halves of an interrupt round trip report the full request."""
+    """An interrupt and the resume that follows both report the full request."""
     ai, _, pm = setup_test
 
     class ToolInput(BaseModel):
@@ -2030,7 +2032,11 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
 async def test_generate_echoes_full_request_when_restart_interrupts_again(
     setup_test: SetupFixture,
 ) -> None:
-    """A restart that pauses again returns before the model is ever called."""
+    """Restarting an interrupted tool that interrupts again still reports the request.
+
+    No model call happens on this turn, so there is nothing for the model to
+    echo back. You get the request that turn would have sent anyway.
+    """
     ai, _, pm = setup_test
 
     class ToolInput(BaseModel):
@@ -2089,3 +2095,183 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     assert answered.finish_reason == FinishReason.STOP
     assert answered.text == 'all done'
     _assert_request_fully_echoed(answered)
+
+
+@pytest.mark.asyncio
+async def test_generate_restart_can_pause_any_number_of_times(
+    setup_test: SetupFixture,
+) -> None:
+    """A restart may pause as many times as the tool needs.
+
+    Each pause hands back the same shape, so you can keep restarting, answer
+    the interrupt, or give up. The history you resend and the request you read
+    back do not drift between rounds.
+    """
+    ai, _, pm = setup_test
+
+    class ToolInput(BaseModel):
+        value: int | None = Field(None, description='value field')
+
+    attempts = {'n': 0}
+
+    @ai.tool(name='gatekeeper')
+    async def gatekeeper(input: ToolInput) -> str:
+        """Interrupts three times, then allows the call."""
+        attempts['n'] += 1
+        if attempts['n'] <= 3:
+            raise Interrupt({'attempt': attempts['n']})
+        return 'finally allowed'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=_tool_call_message('gatekeeper'),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('all done')]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['gatekeeper'],
+        **_echo_request_kwargs(),
+    )
+    history = response.messages
+
+    # Restarts two and three have to behave exactly like the first one.
+    for attempt in range(2, 4):
+        response = await ai.generate(
+            model='programmableModel',
+            messages=response.messages,
+            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            tools=['gatekeeper'],
+            **_echo_request_kwargs(),
+        )
+        assert response.finish_reason == FinishReason.INTERRUPTED
+        _assert_request_fully_echoed(response)
+        # Nothing accumulates: the history keeps its shape and the model is
+        # never re-invoked. The interrupt payload is replaced, not appended
+        # to, so a tool reporting fresh state does not grow the message.
+        assert [m.role for m in response.messages] == [m.role for m in history]
+        assert len(response.messages[-1].content) == 1
+        assert pm.request_count == 1
+        assert response.interrupts[0].metadata is not None
+        assert response.interrupts[0].metadata['interrupt'] == {'attempt': attempt}
+
+    # The fourth restart succeeds, so the run closes normally.
+    answered = await ai.generate(
+        model='programmableModel',
+        messages=response.messages,
+        resume_restart=restart_tool(interrupt=response.interrupts[0]),
+        tools=['gatekeeper'],
+        **_echo_request_kwargs(),
+    )
+
+    assert answered.finish_reason == FinishReason.STOP
+    assert answered.text == 'all done'
+    assert [m.role for m in answered.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    _assert_request_fully_echoed(answered)
+
+
+@pytest.mark.asyncio
+async def test_generate_resolved_sibling_survives_repeated_interrupts(
+    setup_test: SetupFixture,
+) -> None:
+    """A tool that already ran is never run again while a sibling stays paused.
+
+    When one tool in a turn finishes and another interrupts, the finished
+    tool's output is carried forward rather than recomputed. A tool with side
+    effects -- a charge, an email, a write -- runs exactly once no matter how
+    many times the other tool is restarted.
+    """
+    ai, _, pm = setup_test
+
+    class ToolInput(BaseModel):
+        value: int | None = Field(None, description='value field')
+
+    calls = {'charge': 0, 'approve': 0}
+
+    @ai.tool(name='charge_card')
+    async def charge_card(input: ToolInput) -> str:
+        """Succeeds on the first turn. Charging twice would be a real bug."""
+        calls['charge'] += 1
+        return f'charged#{calls["charge"]}'
+
+    @ai.tool(name='approve')
+    async def approve(input: ToolInput) -> str:
+        """Interrupts three times, then approves."""
+        calls['approve'] += 1
+        if calls['approve'] <= 3:
+            raise Interrupt({'need': 'human', 'attempt': calls['approve']})
+        return 'approved'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(tool_request=ToolRequest(input={'value': 1}, name='charge_card', ref='c1')),
+                    Part(tool_request=ToolRequest(input={'value': 2}, name='approve', ref='a1')),
+                ],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('all settled')]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='pay and approve',
+        tools=['charge_card', 'approve'],
+    )
+    assert response.finish_reason == FinishReason.INTERRUPTED
+    assert calls['charge'] == 1
+
+    def charge_part(resp: ModelResponse) -> Part:
+        return next(
+            p for p in resp.messages[-1].content if p.tool_request is not None and p.tool_request.name == 'charge_card'
+        )
+
+    # The completed sibling rides along as a stash, not as a re-run.
+    assert charge_part(response).metadata == {'pendingOutput': 'charged#1'}
+    sizes = set()
+
+    for attempt in range(2, 5):
+        response = await ai.generate(
+            model='programmableModel',
+            messages=response.messages,
+            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            tools=['charge_card', 'approve'],
+        )
+        if attempt < 5 and response.interrupts:
+            assert response.finish_reason == FinishReason.INTERRUPTED
+            assert response.interrupts[0].metadata is not None
+            assert response.interrupts[0].metadata['interrupt'] == {
+                'need': 'human',
+                'attempt': attempt,
+            }
+            stash = charge_part(response).metadata or {}
+            assert stash['pendingOutput'] == 'charged#1'
+            # The stash must not nest itself deeper on every round.
+            sizes.add(len(json.dumps(stash, sort_keys=True, default=str)))
+        assert calls['charge'] == 1
+
+    # Bounded: the stash settles on one shape instead of growing per round.
+    assert len(sizes) == 1, f'pending stash grew across rounds: {sizes}'
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'all settled'
+    assert calls['charge'] == 1, 'a resolved tool was re-run across the interrupts'
+    tool_msg = next(m for m in response.messages if m.role == Role.TOOL)
+    outputs = {p.tool_response.name: p.tool_response.output for p in tool_msg.content if p.tool_response}
+    assert outputs == {'charge_card': 'charged#1', 'approve': 'approved'}

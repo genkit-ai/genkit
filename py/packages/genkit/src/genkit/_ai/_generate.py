@@ -1006,13 +1006,20 @@ async def paused_request(
     resolved: ResolvedTurn,
     messages: list[Message],
 ) -> ModelRequest:
-    """The turn's request on a restart that interrupted again.
+    """The request to report when a restarted tool interrupts again.
 
-    Go copies the turn's request here and only swaps the messages, so a field
-    added to ModelRequest carries through. Building the request costs a tool
-    resolution, so it is only paid when the restart actually pauses.
+    Nothing reached the model on this turn, so there is no request to echo
+    back from the model call. The caller still gets what that turn would have
+    sent -- the docs, config, tools and tool choice they configured -- with
+    the messages trimmed to the history they can resend to try again.
+
+    A restart can pause any number of times. Each one returns the same shape,
+    so the caller can keep restarting, answer the interrupt, or give up
+    without the history or the echoed request drifting.
     """
     request = await turn_request(options=options, resolved=resolved)
+    # Copy and override rather than rebuild, so a field added to ModelRequest
+    # carries through instead of silently going missing on this exit.
     return request.model_copy(update={'messages': list(messages)})
 
 
