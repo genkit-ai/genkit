@@ -212,10 +212,12 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OTHER skips on the finish reason alone. This text satisfies the schema and is still not parsed.
+    """An abnormal finish means response.output is None even if the text would have parsed.
 
-    The warning has to reach info: skipping validation silently would leave a
-    caller holding ``output=None`` with no error and no breadcrumb.
+    Genkit decides on the finish reason alone, so a model that stopped for its
+    own reasons is never treated as having answered -- even when the text it
+    did emit happens to satisfy your schema. The skip is logged at info so an
+    empty output is traceable rather than silent.
     """
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'info')

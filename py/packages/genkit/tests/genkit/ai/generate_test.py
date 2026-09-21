@@ -2862,8 +2862,13 @@ async def test_return_tool_requests_keeps_model_message_without_running_tool() -
 
 
 @pytest.mark.asyncio
-async def test_default_max_turns_allows_a_full_cap_of_tool_rounds_to_finish() -> None:
-    """The default leaves room for a full cap of completed tool rounds and a final reply."""
+async def test_max_turns_budget_is_spent_entirely_on_tool_rounds() -> None:
+    """max_turns counts tool rounds, and every one of them may complete.
+
+    A run that uses the whole budget still gets its final answer: the cap
+    allows max_turns tool rounds plus the model call that replies, so the
+    history comes back as max_turns model/tool pairs followed by the answer.
+    """
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
     tool_calls = 0
@@ -2907,8 +2912,13 @@ async def test_default_max_turns_allows_a_full_cap_of_tool_rounds_to_finish() ->
 
 
 @pytest.mark.asyncio
-async def test_default_max_turns_drops_the_round_past_the_cap() -> None:
-    """The first open tool round past the cap is excluded from resendable history."""
+async def test_max_turns_exceeded_leaves_the_unanswered_round_out_of_history() -> None:
+    """Going past the cap drops the round that never finished, so the history stays resendable.
+
+    The model asked for one more tool call than the budget allows. That last
+    request was never answered, so it is left out of response.messages -- what
+    you get back is the completed rounds only, which you can send again as-is.
+    """
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
     tool_calls = 0
@@ -3803,13 +3813,13 @@ async def test_output_schema_does_not_replace_tool_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_failed_finish_is_not_relabelled_invalid_output() -> None:
-    """A model reporting ``failed`` owns the failure; output parsing does not overwrite it.
+    """When the provider reports a failure, you see that failure, not a schema complaint.
 
-    The turn above is a failure Genkit boxed itself. This one arrives from the
-    provider with text attached, so there is something to parse and a wrong
-    answer available: stamping INVALID_OUTPUT here would blame the schema for
-    a model-side failure. Matches Go, where FinishReasonFailed is in
-    FinishReason.isAbnormal and so never reaches the parser.
+    A provider can return finish_reason='failed' with text attached. That text
+    will not match your output schema, but the schema is not the problem, so
+    Genkit leaves the model's own failure in place instead of relabelling it
+    as invalid output. Read finish_reason and finish_message to find out what
+    went wrong; response.output is None and response.error stays unset.
     """
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)

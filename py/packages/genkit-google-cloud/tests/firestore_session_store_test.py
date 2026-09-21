@@ -428,7 +428,11 @@ async def test_firestore_get_slash_session_id_raises_invalid_session_id() -> Non
 
 @pytest.mark.asyncio
 async def test_firestore_get_empty_session_id_raises_session_id_required() -> None:
-    """An empty session id acts like a missing one, requiring a session ID."""
+    """An empty session id counts as no session id at all.
+
+    Every session store agrees on this, so switching between the file store
+    and Firestore does not change the error you handle.
+    """
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1464,7 +1468,11 @@ async def test_firestore_save_uses_state_session_id_when_top_level_is_missing() 
 
 @pytest.mark.asyncio
 async def test_firestore_save_empty_session_id_raises_session_id_required() -> None:
-    """An empty session id acts like a missing one, requiring a session ID."""
+    """An empty session id counts as no session id at all.
+
+    Every session store agrees on this, so switching between the file store
+    and Firestore does not change the error you handle.
+    """
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1513,7 +1521,11 @@ async def test_firestore_save_slash_session_id_raises_invalid_session_id() -> No
 
 @pytest.mark.asyncio
 async def test_firestore_save_state_empty_session_id_raises_session_id_required() -> None:
-    """A missing top-level id and an empty id on state raises SESSION_ID_REQUIRED."""
+    """An empty session id on the state is reported the same as an empty argument.
+
+    Passing the id inside the snapshot state rather than as an argument does
+    not change the answer: empty still means missing.
+    """
     h = FakeStoreHarness()
     store = h.store()
 
