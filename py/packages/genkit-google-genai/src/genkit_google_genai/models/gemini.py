@@ -856,8 +856,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
     GEMMA_3_4B_IT = 'gemma-3-4b-it'
     GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
-    GEMMA_4_26B_A4B_IT = 'gemma-4-26b-a4b-it'
-    GEMMA_4_31B_IT = 'gemma-4-31b-it'
 
 
 class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
