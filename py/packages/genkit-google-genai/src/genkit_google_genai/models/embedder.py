@@ -446,13 +446,12 @@ class Embedder:
     def _embed_batch_size(self, model: str) -> int:
         """Maximum number of documents sent in one ``embed_content`` call.
 
-        Vertex AI serves gemini-* and MaaS embedding models one input per
-        request; other Vertex models accept 250 and the Gemini API 100.
+        Vertex AI serves gemini-* embedding models one input per request;
+        other Vertex models accept 250 and the Gemini API 100.
         """
         if not self._is_vertex:
             return GOOGLEAI_EMBED_BATCH_SIZE
-        lowered = model.lower()
-        if 'gemini' in lowered or 'maas' in lowered:
+        if 'gemini' in model.lower():
             return 1
         return VERTEXAI_EMBED_BATCH_SIZE
 
