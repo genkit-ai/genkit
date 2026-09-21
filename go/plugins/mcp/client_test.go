@@ -93,3 +93,57 @@ func TestCreateTransportHonorsStreamableHTTPClient(t *testing.T) {
 		t.Error("custom HTTP client transport was not used; expected at least one request")
 	}
 }
+
+// TestCreateTransportAppliesTimeoutToCustomClient verifies that
+// StreamableHTTPConfig.Timeout still takes effect when a custom http.Client is
+// supplied, and that it is applied to the copy rather than depending on the
+// order in which transport options happen to be assembled.
+func TestCreateTransportAppliesTimeoutToCustomClient(t *testing.T) {
+	customClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-req.Context().Done():
+				// The client's Timeout cancelled the request, as expected.
+				return nil, req.Context().Err()
+			case <-time.After(2 * time.Second):
+				// The timeout never reached this client. Answer normally so the
+				// assertion below reports it rather than hanging the test.
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(
+						`{"jsonrpc":"2.0","id":1,"result":{}}`,
+					)),
+					Request: req,
+				}, nil
+			}
+		}),
+	}
+
+	c := &GenkitMCPClient{}
+	tr, err := c.createTransport(MCPClientOptions{
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL:    "http://example.com/mcp",
+			HTTPClient: customClient,
+			Timeout:    50 * time.Millisecond,
+		},
+	})
+	if err != nil {
+		t.Fatalf("createTransport() error = %v", err)
+	}
+	if customClient.Timeout != 0 {
+		t.Errorf("custom client Timeout = %v, want 0; the transport must not mutate the caller's client", customClient.Timeout)
+	}
+
+	ctx := context.Background()
+	if err := tr.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := tr.SendRequest(ctx, transport.JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      mcp.NewRequestId(1),
+		Method:  string(mcp.MethodInitialize),
+	}); err == nil {
+		t.Error("SendRequest() error = nil, want a timeout error; the configured Timeout was not applied to the custom client")
+	}
+}
