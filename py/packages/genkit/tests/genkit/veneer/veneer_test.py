@@ -2066,3 +2066,26 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
 
     assert again.finish_reason == FinishReason.INTERRUPTED
     _assert_request_fully_echoed(again)
+    # The restart re-ran the tool, not the model, so the caller is back where
+    # they were: same history to resend, same interrupt to answer.
+    assert pm.request_count == 1
+    assert again.messages == interrupted.messages
+    assert len(again.interrupts) == 1
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('all done')]),
+        )
+    )
+    answered = await ai.generate(
+        model='programmableModel',
+        messages=again.messages,
+        resume_respond=[respond_to_interrupt({'ok': True}, interrupt=again.interrupts[0])],
+        tools=['test_interrupt'],
+        **_echo_request_kwargs(),
+    )
+
+    assert answered.finish_reason == FinishReason.STOP
+    assert answered.text == 'all done'
+    _assert_request_fully_echoed(answered)
