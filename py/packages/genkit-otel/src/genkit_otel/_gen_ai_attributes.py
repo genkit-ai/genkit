@@ -20,6 +20,10 @@ Provider, model, finish reason, and output type are plain functions, so
 tests can check them without a tracer.
 """
 
+from __future__ import annotations
+
+from enum import Enum
+
 
 class GenAiAttr:
     """Canonical ``gen_ai.*`` attribute names."""
@@ -83,6 +87,49 @@ class GenAiMetric:
 
     TOKEN_USAGE = 'gen_ai.client.token.usage'
     OPERATION_DURATION = 'gen_ai.client.operation.duration'
+
+
+GEN_AI_SEMCONV_VERSION = '1.38.0'
+
+GEN_AI_OPERATION_DETAILS_EVENT = 'gen_ai.client.inference.operation.details'
+
+CAPTURE_CONTENT_ENV_VAR = 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
+
+
+class ContentCapturingMode(Enum):
+    """Where captured GenAI message content is recorded.
+
+    Content may contain PII and is often large, so the default is
+    ``NO_CONTENT``. ``EVENT_ONLY`` keeps structured content on a
+    dedicated log event (preferred in production). ``SPAN_ONLY`` puts
+    it on span attributes as a JSON string — easy to eyeball in a
+    trace UI, but subject to backend attribute limits. ``SPAN_AND_EVENT``
+    does both.
+
+    Env tokens are the spec's UPPER_SNAKE names
+    (``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, ``SPAN_AND_EVENT``).
+    """
+
+    NO_CONTENT = 'NO_CONTENT'
+    SPAN_ONLY = 'SPAN_ONLY'
+    EVENT_ONLY = 'EVENT_ONLY'
+    SPAN_AND_EVENT = 'SPAN_AND_EVENT'
+
+
+def parse_content_capturing_mode(raw: str | None) -> ContentCapturingMode | None:
+    """Parse a spec ``ContentCapturingMode`` env token.
+
+    Null/empty → ``NO_CONTENT``. A known token (case-insensitive,
+    surrounding whitespace ignored) → that mode. Unknown → ``None``
+    so the caller can warn and fall back.
+    """
+    if raw is None or not raw.strip():
+        return ContentCapturingMode.NO_CONTENT
+    token = raw.strip().upper()
+    for mode in ContentCapturingMode:
+        if mode.value == token:
+            return mode
+    return None
 
 
 def split_model_name(name: str) -> tuple[str | None, str]:
