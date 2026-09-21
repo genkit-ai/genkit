@@ -942,6 +942,7 @@ class GenerateRun:
     ticket: ModelResponse | None = None
     last_response: ModelResponse | None = None
     output: GenerateActionOutputConfig | None = None
+    request: ModelRequest | None = None
 
     def set_messages(self, messages: list[Message]) -> None:
         self.messages = list(messages)
@@ -985,6 +986,20 @@ def output_config_from(out: GenerateActionOutputConfig) -> OutputConfig:
     )
 
 
+async def turn_request(*, options: GenerateActionOptions, resolved: ResolvedTurn) -> ModelRequest:
+    """The request this turn sends, built in one place.
+
+    Go builds the turn's request once and copies it onto whatever the caller
+    gets back. Python does the same here so a turn that dies before the model
+    answers still echoes docs, config, tools, and tool_choice instead of a
+    rebuilt subset.
+    """
+    request = await to_model_request(options=options, tools=resolved.tools, model=resolved.model)
+    if request.docs:
+        request = augment_with_context(request)
+    return request
+
+
 def attach_resendable_history(response: ModelResponse, messages: list[Message]) -> ModelResponse:
     """The closed history they resend, not the request the model saw."""
     if response.request is not None:
@@ -999,11 +1014,14 @@ def box_dead_turn(
     finish_reason: FinishReason,
     finish_message: str,
     error: GenkitRuntimeError,
+    request: ModelRequest | None = None,
 ) -> ModelResponse:
     """Stop before this turn closed: only completed rounds stay.
 
     The unanswered model call is dropped so the caller can send the
-    history again.
+    history again. ``request`` is the turn's request when one was built;
+    it is copied so the caller still sees docs, config, tools, and
+    tool_choice on a turn the model never answered.
     """
     # Hooks and the model may still hold the response they returned, so
     # finish_reason, error, and a cleared message go on a copy.
@@ -1017,7 +1035,9 @@ def box_dead_turn(
         # handle so check/cancel is not a clean start.
         out.operation = out.operation.model_copy(update={'error': Error(message=finish_message)})
     if out.request is None:
-        out.request = ModelRequest(messages=list(messages))
+        # attach_resendable_history rewrites messages below, so the copy only
+        # has to carry the fields the caller configured.
+        out.request = request if request is not None else ModelRequest(messages=list(messages))
     return attach_resendable_history(out, messages)
 
 
@@ -1063,6 +1083,7 @@ def box_from_exc(
     exc: BaseException,
     caller_stopped: bool,
     reason: RuntimeErrorReason | None = None,
+    request: ModelRequest | None = None,
 ) -> ModelResponse:
     """Box a failure after generate has entered: closed history, unanswered turn dropped."""
     callback_cause = streaming_callback_cause(exc=exc)
@@ -1096,6 +1117,7 @@ def box_from_exc(
         finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
         finish_message=finish_message,
         error=GenkitRuntimeError(status=status, message=finish_message, details=details),
+        request=request,
     )
 
 
@@ -1273,11 +1295,18 @@ async def run_wrap_generate(
         )
     except (Exception, asyncio.CancelledError) as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        # A hook can raise before the model ever built a request. Build it here
+        # so the caller still gets back what they asked for; the cost is only
+        # paid on the failure path.
+        failed_request = call.request
+        if failed_request is None:
+            failed_request = await turn_request(options=options, resolved=resolved)
         return box_from_exc(
             response=call.last_response if call.last_response is not None else ModelResponse(),
             messages=call.messages,
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
+            request=failed_request,
         )
     dropped = (
         box_if_hook_dropped_ticket(
@@ -1359,6 +1388,7 @@ async def generate_turn(
             messages=call.messages,
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
+            request=call.request,
         )
     dropped = (
         box_if_hook_dropped_ticket(
@@ -1428,9 +1458,10 @@ async def call_model(
     the job is billed.
     """
     turn_model = resolved.model
-    request = await to_model_request(options=options, tools=resolved.tools, model=turn_model)
-    if request.docs:
-        request = augment_with_context(request)
+    request = await turn_request(options=options, resolved=resolved)
+    # Stashed before the model runs so a failure on this turn still echoes the
+    # request the caller made instead of a rebuilt subset of it.
+    call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
         if is_debug_enabled(logger):
@@ -1682,12 +1713,16 @@ def stamp_output(
     out = call.output
     output = output_config_from(out) if out is not None else OutputConfig()
     if response.request is None:
-        response.request = ModelRequest(
-            messages=list(options.messages or []),
-            output=output,
+        # No model call closed on this turn. Copy the turn's request so docs,
+        # config, tools, and tool_choice still reach the caller; only build a
+        # bare one when the turn died before a request existed.
+        base = call.request if call.request is not None else ModelRequest(messages=[])
+        response.request = base.model_copy(
+            update={'messages': list(options.messages or []), 'output': output},
         )
     else:
         response.request = response.request.model_copy(update={'output': output})
+
     if formatter and response._message_parser is None:
         parse = formatter.parse_message
         response._message_parser = lambda msg: parse(msg)

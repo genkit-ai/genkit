@@ -1831,3 +1831,195 @@ async def test_generate_operation_with_model_info_long_running(
 
     op = await ai.generate_operation(model='lr_model', prompt='test')
     assert op is not None
+
+
+# A turn that never reaches the model still has to echo what the caller asked
+# for. Go builds the turn's request once and copies it onto the response on
+# every exit; these pin the Python side to the same contract.
+
+_ECHO_CONFIG = {'temperature': 0.5}
+
+
+def _echo_request_kwargs() -> dict[str, Any]:
+    return {
+        'docs': [Document(content=[Part.from_text('doc content 1')])],
+        'config': dict(_ECHO_CONFIG),
+        'tool_choice': ToolChoice.REQUIRED,
+        'output_format': 'json',
+    }
+
+
+def _assert_request_fully_echoed(response: ModelResponse) -> None:
+    """All six ModelRequest fields survive, not just messages."""
+    request = response.request
+    assert request is not None
+    assert request.messages
+    assert request.docs is not None, 'docs dropped from echoed request'
+    assert request.config == _ECHO_CONFIG, 'config dropped from echoed request'
+    assert request.tools, 'tools dropped from echoed request'
+    assert request.tool_choice == ToolChoice.REQUIRED, 'tool_choice dropped from echoed request'
+    assert request.output is not None
+    assert request.output.format == 'json', 'output dropped from echoed request'
+
+
+def _define_echo_request_tool(ai: Genkit) -> None:
+    class ToolInput(BaseModel):
+        value: int | None = Field(None, description='value field')
+
+    @ai.tool(name='test_tool')
+    async def test_tool(input: ToolInput) -> int:
+        """The tool."""
+        return (input.value or 0) + 7
+
+
+def _tool_call_message(name: str) -> Message:
+    return Message(
+        role=Role.MODEL,
+        content=[Part(tool_request=ToolRequest(input={'value': 5}, name=name, ref='123'))],
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_when_model_raises(setup_test: SetupFixture) -> None:
+    """A model that raises still reports the request it was called with."""
+    ai, _, pm = setup_test
+    _define_echo_request_tool(ai)
+
+    def boom(request: ModelRequest) -> ModelResponse:
+        raise ValueError('model exploded')
+
+    pm.response_cb = boom
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_tool'],
+        **_echo_request_kwargs(),
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    _assert_request_fully_echoed(response)
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFixture) -> None:
+    """A generate hook that raises returns before the model builds a request."""
+    ai, _, pm = setup_test
+    _define_echo_request_tool(ai)
+
+    @ai.middleware(name='raising_mw')
+    class RaisingMiddleware(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: Any,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[Any, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            raise ValueError('hook exploded')
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_tool'],
+        use=[MiddlewareRef(name='raising_mw')],
+        **_echo_request_kwargs(),
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    _assert_request_fully_echoed(response)
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_when_max_turns_exceeded(
+    setup_test: SetupFixture,
+) -> None:
+    """The tool-cap exit keeps the request from the turn that ran."""
+    ai, _, pm = setup_test
+    _define_echo_request_tool(ai)
+
+    pm.response_cb = lambda request: ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=_tool_call_message('test_tool'),
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_tool'],
+        max_turns=1,
+        **_echo_request_kwargs(),
+    )
+
+    assert response.finish_reason == FinishReason.ABORTED
+    _assert_request_fully_echoed(response)
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_when_tool_missing(setup_test: SetupFixture) -> None:
+    """A model naming an unknown tool still reports the request."""
+    ai, _, pm = setup_test
+    _define_echo_request_tool(ai)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=_tool_call_message('nonexistent_tool'),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_tool'],
+        **_echo_request_kwargs(),
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    _assert_request_fully_echoed(response)
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_across_interrupt_and_resume(
+    setup_test: SetupFixture,
+) -> None:
+    """Both halves of an interrupt round trip report the full request."""
+    ai, _, pm = setup_test
+
+    class ToolInput(BaseModel):
+        value: int | None = Field(None, description='value field')
+
+    @ai.tool(name='test_interrupt')
+    async def test_interrupt(input: ToolInput) -> None:
+        """The interrupt."""
+        raise Interrupt({'banana': 'yes please'})
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=_tool_call_message('test_interrupt'),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('tool called')]),
+        )
+    )
+
+    interrupted = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_interrupt'],
+        **_echo_request_kwargs(),
+    )
+    assert interrupted.finish_reason == FinishReason.INTERRUPTED
+    _assert_request_fully_echoed(interrupted)
+
+    resumed = await ai.generate(
+        model='programmableModel',
+        messages=interrupted.messages,
+        resume_respond=[respond_to_interrupt({'bar': 2}, interrupt=interrupted.interrupts[0])],
+        tools=['test_interrupt'],
+        **_echo_request_kwargs(),
+    )
+    _assert_request_fully_echoed(resumed)
