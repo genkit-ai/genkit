@@ -305,7 +305,6 @@ describe('Google AI Gemini', () => {
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
-        console.log('apiRequest: ' + apiRequest);
         assert.ok(Array.isArray(apiRequest.tools));
         assert.strictEqual(apiRequest.tools?.length, 5);
         assert.deepStrictEqual(apiRequest.tools?.[1], { codeExecution: {} });

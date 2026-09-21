@@ -648,7 +648,7 @@ export function isGemmaModelName(value: string): value is GemmaModelName {
 
 const DEPRECATED_MODELS = {
   // When models are < 1 month from shutdown, move them here instead.
-  // They will still be instatiated with the correct options,
+  // They will still be instantiated with the correct options,
   // but they will no longer appear in autocomplete suggestions.
 };
 
@@ -810,6 +810,19 @@ export function defineModel(
       if (systemMessage) {
         messages.splice(messages.indexOf(systemMessage), 1);
         systemInstruction = toGeminiSystemInstruction(systemMessage);
+        if (useInteractions) {
+          if (systemMessage.content.some((c) => !c.text)) {
+            // Technically it's not the model itself, but 'useInteractions' or not,
+            // however, useInteractions is determined by which model... so
+            // this makes the most sense without dragging the user into
+            // the nitty gritty of how their stuff is going through the backend.
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message:
+                'System message contains non-text content which is not supported for this model.',
+            });
+          }
+        }
         interactionsSystemInstruction = systemMessage.content
           .map((c) => c.text)
           .join('\n');

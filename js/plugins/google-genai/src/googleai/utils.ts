@@ -273,9 +273,13 @@ export function camelToSnakeCase(str: string): string {
   return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
+export function convertObjectKeysToSnakeCase(obj: Array<unknown>): unknown[];
 export function convertObjectKeysToSnakeCase(
-  obj: unknown
-): Record<string, unknown> | unknown {
+  obj: Record<string, unknown>
+): Record<string, unknown>;
+export function convertObjectKeysToSnakeCase(obj: unknown): unknown;
+
+export function convertObjectKeysToSnakeCase(obj: unknown): unknown {
   if (typeof obj !== 'object' || obj === null) {
     return obj;
   }
