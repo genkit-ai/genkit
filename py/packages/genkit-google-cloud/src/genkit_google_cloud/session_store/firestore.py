@@ -413,11 +413,19 @@ def _validate_doc_id(value: str | None, name: str) -> None:
     what counts as a valid id. Validating up front turns these failure modes
     into a typed error.
 
-    A missing session_id (None) is not an illegal id: the snapshot may still
-    carry one on state. An empty string is a typed id Firestore cannot use.
+    A missing session_id (None) or an empty string is not a malformed id,
+    but rather a missing one.
     """
-    if name == 'session_id' and value is None:
-        return
+    if name == 'session_id':
+        if value is None:
+            return
+        if value == '':
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message="FirestoreSessionStore requires 'sessionId' on the snapshot.",
+                reason=RuntimeErrorReason.SESSION_ID_REQUIRED,
+            )
+
     if (
         not value
         or value != value.strip()

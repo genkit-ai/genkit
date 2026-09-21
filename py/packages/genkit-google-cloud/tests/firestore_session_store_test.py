@@ -427,6 +427,20 @@ async def test_firestore_get_slash_session_id_raises_invalid_session_id() -> Non
 
 
 @pytest.mark.asyncio
+async def test_firestore_get_empty_session_id_raises_session_id_required() -> None:
+    """An empty session id acts like a missing one, requiring a session ID."""
+    h = FakeStoreHarness()
+    store = h.store()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(session_id='')
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert 'session_id must not be empty' in raised.value.original_message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+
+
+@pytest.mark.asyncio
 async def test_firestore_get_slash_snapshot_id_raises_invalid_snapshot_id() -> None:
     """Lookup by a path-like snapshot id fails before a document read."""
     h = FakeStoreHarness()
@@ -1449,8 +1463,8 @@ async def test_firestore_save_uses_state_session_id_when_top_level_is_missing() 
 
 
 @pytest.mark.asyncio
-async def test_firestore_save_empty_session_id_raises_invalid_session_id() -> None:
-    """An empty session id is an unusable document id, not a missing one."""
+async def test_firestore_save_empty_session_id_raises_session_id_required() -> None:
+    """An empty session id acts like a missing one, requiring a session ID."""
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1466,9 +1480,9 @@ async def test_firestore_save_empty_session_id_raises_invalid_session_id() -> No
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id ''" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.original_message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
     assert _snap_path('snap-1') not in h.docs
     assert _pointer_path('sess-1') not in h.docs
 
@@ -1498,8 +1512,8 @@ async def test_firestore_save_slash_session_id_raises_invalid_session_id() -> No
 
 
 @pytest.mark.asyncio
-async def test_firestore_save_state_empty_session_id_raises_invalid_session_id() -> None:
-    """A missing top-level id still rejects an empty id on state."""
+async def test_firestore_save_state_empty_session_id_raises_session_id_required() -> None:
+    """A missing top-level id and an empty id on state raises SESSION_ID_REQUIRED."""
     h = FakeStoreHarness()
     store = h.store()
 
@@ -1515,9 +1529,9 @@ async def test_firestore_save_state_empty_session_id_raises_invalid_session_id()
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id ''" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.original_message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
     assert _snap_path('snap-1') not in h.docs
 
 
