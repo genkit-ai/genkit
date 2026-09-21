@@ -323,6 +323,11 @@ def _numbered_docs(count: int) -> list[Document]:
     return [Document.from_text(str(i)) for i in range(count)]
 
 
+def _sent_texts(contents: list[genai.types.Content]) -> list[str | None]:
+    """Texts of the contents one ``embed_content`` call carried, in order."""
+    return [(content.parts or [])[0].text for content in contents]
+
+
 @pytest.mark.asyncio
 async def test_googleai_text_embedding_batches_requests(mocker: MockerFixture) -> None:
     """Gemini API requests are split into batches of 100 and embeddings kept in input order."""
@@ -335,6 +340,10 @@ async def test_googleai_text_embedding_batches_requests(mocker: MockerFixture) -
 
     calls = client.aio.models.embed_content.call_args_list
     assert [len(call.kwargs['contents']) for call in calls] == [GOOGLEAI_EMBED_BATCH_SIZE, 50]
+    assert [_sent_texts(call.kwargs['contents']) for call in calls] == [
+        [str(i) for i in range(GOOGLEAI_EMBED_BATCH_SIZE)],
+        [str(i) for i in range(GOOGLEAI_EMBED_BATCH_SIZE, count)],
+    ]
     assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
 
 
@@ -350,6 +359,10 @@ async def test_vertex_text_embedding_batches_requests(mocker: MockerFixture) -> 
 
     calls = client.aio.models.embed_content.call_args_list
     assert [len(call.kwargs['contents']) for call in calls] == [VERTEXAI_EMBED_BATCH_SIZE, 1]
+    assert [_sent_texts(call.kwargs['contents']) for call in calls] == [
+        [str(i) for i in range(VERTEXAI_EMBED_BATCH_SIZE)],
+        [str(VERTEXAI_EMBED_BATCH_SIZE)],
+    ]
     assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
 
 
