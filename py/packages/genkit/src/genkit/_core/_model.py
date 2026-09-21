@@ -1126,6 +1126,19 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
         )
 
+    @property
+    def _wants_structure(self) -> bool:
+        """Whether the caller asked for a schema or a structured output format."""
+        if self._schema_type is not None:
+            return True
+        if self.request is not None:
+            if self.request.output_schema is not None:
+                return True
+            fmt = self.request.output_format
+            if fmt and fmt != 'text':
+                return True
+        return False
+
     def assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
@@ -1135,17 +1148,14 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         ``.output`` is None.
         A blocked/aborted/interrupted/other finish keeps the model's reason.
         """
-        schema = self.request.output_schema if self.request is not None else None
-        fmt = self.request.output_format if self.request is not None else None
-        has_schema = schema is not None or self._schema_type is not None
-        wants_structure = has_schema or (fmt is not None and fmt not in (None, 'text'))
-
-        if not wants_structure:
+        if not self._wants_structure:
             return
         if self.error is not None:
             return
         if self.finish_reason in ABNORMAL_FINISH_REASONS:
             return
+
+        schema = self.request.output_schema if self.request is not None else None
 
         try:
             parsed = self._raw_parsed_output()
@@ -1167,7 +1177,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                     if error.original_message.startswith('Invalid output_schema'):
                         raise
                     self._mark_invalid_output(error.original_message)
-            elif parsed is None and wants_structure:
+            elif parsed is None:
                 preview = (self.text or '')[:200]
                 self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
@@ -1224,18 +1234,16 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         generate() does not throw when the text is not the schema. If you
         asked for a schema and this is not it, read ``error`` / ``.text``.
         """
-        schema = self.request.output_schema if self.request is not None else None
-        fmt = self.request.output_format if self.request is not None else None
-        has_schema = schema is not None or self._schema_type is not None
-        wants_structure = has_schema or (fmt is not None and fmt not in (None, 'text'))
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
         # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
         # interrupt carries tool requests), so they only gate the schema path.
         if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
             return cast(OutputT, None)
-        if wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
+        if self._wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
             return cast(OutputT, None)
+
+        schema = self.request.output_schema if self.request is not None else None
 
         try:
             parsed = self._raw_parsed_output()
