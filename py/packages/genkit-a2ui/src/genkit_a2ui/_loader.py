@@ -41,8 +41,9 @@ class A2uiCatalogError(GenkitError):
     """
 
     def __init__(self, message: str) -> None:
-        # A non-INTERNAL status is what keeps the real sentence on
-        # finish_message; INTERNAL gets redacted to 'internal error'.
+        # A catalog you did not register, or a file that does not parse, is a
+        # bad argument, not a bad model answer. Mirrors Go's
+        # ErrInvalidInput = ErrInvalidArgument.Subtype("invalid input").
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,

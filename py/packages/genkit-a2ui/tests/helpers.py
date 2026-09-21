@@ -152,6 +152,7 @@ def assert_dead_turn(
     *,
     reason: RuntimeErrorReason,
     match: str,
+    status: str = 'INTERNAL',
 ) -> None:
     """Pin the shape a2ui hands back when it refuses the turn.
 
@@ -165,7 +166,7 @@ def assert_dead_turn(
     assert response.finish_message is not None
     assert match in response.finish_message
     assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.status == status
     assert response.error.reason == reason
     assert match in response.error.message
 

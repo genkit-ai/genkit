@@ -111,7 +111,11 @@ async def test_generate_default_stays_basic_when_a_custom_catalog_is_registered(
 
 @pytest.mark.asyncio
 async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> None:
-    """An unregistered catalog id kills the turn without ever reaching the model."""
+    """An unregistered catalog id kills the turn without ever reaching the model.
+
+    This one is your configuration, not the model's answer, so it reports
+    INVALID_ARGUMENT rather than the INTERNAL a strict-mode refusal uses.
+    """
     ai, pm = setup()
     pm.responses = [model_ok(weather_fence())]
 
@@ -120,7 +124,12 @@ async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> Non
         prompt='banner',
         use=[Surfaces(catalog=BANNER_CATALOG.id)],
     )
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_INPUT, match='no catalog registered')
+    assert_dead_turn(
+        response,
+        reason=RuntimeErrorReason.INVALID_INPUT,
+        match='no catalog registered',
+        status='INVALID_ARGUMENT',
+    )
     assert pm.last_request is None
 
 
@@ -220,13 +229,12 @@ def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
         load_catalog(ai, BANNER_CATALOG)
 
 
-def test_catalog_error_keeps_its_message_through_boxing() -> None:
-    """A catalog failure tells you what went wrong, not 'internal error'.
+def test_catalog_error_reports_invalid_argument() -> None:
+    """A catalog you did not register is your configuration, so the status says so.
 
-    `resolve_catalog` runs inside the model call, so `ai.generate` boxes this
-    error rather than letting it escape. Boxing redacts the message of anything
-    reported as INTERNAL; `A2uiCatalogError` reports INVALID_ARGUMENT, so the
-    sentence survives onto `response.finish_message`.
+    INVALID_ARGUMENT tells a client the call itself needs fixing, which is
+    true here and false for a strict-mode refusal — that one is the model's
+    answer and reports INTERNAL. The message is not redacted either way.
     """
     ai, _ = setup()
     ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')

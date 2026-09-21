@@ -67,10 +67,15 @@ class A2uiParseError(GenkitError):
     """
 
     def __init__(self, message: str) -> None:
-        # A non-INTERNAL status is what keeps the real sentence on
-        # finish_message; INTERNAL gets redacted to 'internal error'.
+        # Invalid output is an INTERNAL subtype, not a bad argument: the caller
+        # asked correctly and the model answered with something unrenderable.
+        # Same pairing as ModelResponse._mark_invalid_output and as Go's
+        # ErrInvalidOutput = ErrInternal.Subtype("invalid output").
+        #
+        # INTERNAL does not cost the message. Boxing only redacts an exception
+        # it does not recognize, or a GenkitError wrapping a foreign cause.
         super().__init__(
-            status='INVALID_ARGUMENT',
+            status='INTERNAL',
             message=message,
             reason=RuntimeErrorReason.INVALID_OUTPUT,
         )

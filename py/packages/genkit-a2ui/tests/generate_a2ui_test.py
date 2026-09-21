@@ -48,7 +48,7 @@ from pydantic import ValidationError
 from genkit import Message, ModelResponse, ModelResponseChunk
 from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import Candidate
-from genkit._core._typing import FinishReason, Role
+from genkit._core._typing import FinishReason, GenerationUsage, Role
 
 
 @pytest.mark.asyncio
@@ -247,15 +247,47 @@ async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
-def test_a2ui_parse_error_keeps_its_message_through_boxing() -> None:
-    """A strict-mode refusal tells you which component was wrong, not 'internal error'.
+@pytest.mark.asyncio
+async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
+    """Refusing the surface does not refund the call.
 
-    `ai.generate` redacts the message of any error it boxes unless the error
-    names a status other than INTERNAL. `A2uiParseError` names one, so the
-    component name survives onto `response.finish_message`.
+    The model answered and the provider charged for it before a2ui looked at
+    the fence. The bad surface is dropped from `message` and from history, but
+    `usage` still reports what the turn cost, so a refused render shows up in
+    your spend like any other call.
+    """
+    ai, pm = setup()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[text_part(bad_component_fence())]),
+            usage=GenerationUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+    ]
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+    assert response.usage is not None
+    assert response.usage.output_tokens == 22
+    assert response.usage.total_tokens == 33
+
+
+def test_a2ui_parse_error_reports_invalid_output() -> None:
+    """A surface the catalog cannot render is a bad answer, not a bad request.
+
+    The status follows the failure: INTERNAL, the same pairing
+    `ai.generate` uses when structured output does not match its schema.
+    INVALID_ARGUMENT would tell a client to fix a request that was fine.
+    The message is not redacted — boxing only does that to exceptions it
+    does not recognize.
     """
     exc = A2uiParseError("A2UI: component 'NotAThing' is not in catalog 'basic'.")
-    assert exc.status == 'INVALID_ARGUMENT'
+    assert exc.status == 'INTERNAL'
     assert exc.reason == RuntimeErrorReason.INVALID_OUTPUT
 
 
