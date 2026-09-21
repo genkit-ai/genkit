@@ -1231,9 +1231,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             parsed = self._raw_parsed_output()
         except Exception:
-            if wants_schema:
-                return cast(OutputT, None)
-            raise
+            # Text that is not the shape they asked for is still text. Reading
+            # it back is never worth an exception: `.text` holds the raw reply
+            # and `error` carries INVALID_OUTPUT when structure was requested.
+            # Matches JS, where `extractJson` is called without the throw flag.
+            return cast(OutputT, None)
 
         if self._message_parser is not None and not isinstance(parsed, (dict, list)):
             if schema is not None:

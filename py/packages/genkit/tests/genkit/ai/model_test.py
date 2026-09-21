@@ -613,3 +613,23 @@ def test_model_request_dump_emits_no_serializer_warnings() -> None:
         warnings.simplefilter('error')
         request.model_dump(mode='python')
         request.model_dump_json()
+
+
+def test_output_returns_none_on_unparseable_text_without_schema() -> None:
+    """Reading .output never raises ValueError, even when no schema was requested."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('plain unparseable text')]),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[]),
+    )
+    assert response.output is None
+
+
+def test_output_returns_none_on_unparseable_text_with_json_format_no_schema() -> None:
+    """Reading .output returns None when format='json' is requested but output is unparseable."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('plain unparseable text')]),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[], output=OutputConfig(format='json')),
+    )
+    assert response.output is None

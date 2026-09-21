@@ -6707,3 +6707,22 @@ async def test_generate_numeric_resource_raises_invalid_input() -> None:
     assert error.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'Resources must be strings or actions' in error.original_message
     assert 'INVALID_INPUT' not in error.original_message
+
+
+@pytest.mark.asyncio
+async def test_generate_output_returns_none_on_plain_text_reply() -> None:
+    """Reading .output on a plain conversational turn yields None without throwing."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Hello world')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'Hello world'
+    assert response.output is None
+    assert response.error is None
