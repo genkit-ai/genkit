@@ -580,3 +580,61 @@ def test_a2ui_rejects_unknown_version() -> None:
     """A typo version is rejected so it cannot stamp envelopes the renderer will drop."""
     with pytest.raises(ValidationError):
         Surfaces(version='v9')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_fails_on_malformed_json_fence() -> None:
+    """Strict mode kills the turn when fence content is unparseable JSON."""
+    ai, pm = setup()
+    pm.responses = [model_ok('Here is a card:\n```a2ui\n{invalid json\n```\nDone.')]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_warn_keeps_malformed_json_fence_as_prose() -> None:
+    """Default warn keeps unparseable JSON fence content as raw prose."""
+    ai, pm = setup()
+    raw = 'Here is a card:\n```a2ui\n{invalid json\n```\nDone.'
+    pm.responses = [model_ok(raw)]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='warn')],
+    )
+    message = assert_finished_message(response)
+    assert_no_a2ui_parts(message.content)
+    assert '{invalid json' in joined_text(message.content)
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_fails_on_missing_root() -> None:
+    """Strict mode kills the turn when envelopes lack a root component."""
+    ai, pm = setup()
+    pm.responses = [model_ok(no_root_fence())]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='id "root"')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_empty_fence_does_not_fail_turn() -> None:
+    """An empty fence body returns no card and does not trigger strict refusal."""
+    ai, pm = setup()
+    pm.responses = [model_ok('before\n```a2ui\n   \n```\nafter')]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    message = assert_finished_message(response)
+    assert_no_a2ui_parts(message.content)
+    assert 'before' in joined_text(message.content)
+    assert 'after' in joined_text(message.content)
