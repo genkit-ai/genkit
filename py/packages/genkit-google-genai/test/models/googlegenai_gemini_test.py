@@ -665,12 +665,15 @@ def test_tts_models_register_per_name_capabilities(model_name: str, expected_lab
     model_info = google_model_info(model_name)
 
     assert model_info.label == expected_label
-    assert model_info.supports is not None
-    assert model_info.supports.multiturn is False
-    assert model_info.supports.media is False
-    assert model_info.supports.tools is False
-    assert model_info.supports.tool_choice is False
-    assert model_info.supports.output == ['media']
+    assert model_info.supports == Supports(
+        multiturn=False,
+        media=False,
+        tools=False,
+        tool_choice=False,
+        system_role=False,
+        constrained=Constrained.NONE,
+        output=['media'],
+    )
     assert get_model_config_schema(model_name) is GeminiTtsConfigSchema
 
 
@@ -703,8 +706,15 @@ def test_gemma_4_models_register_per_name_capabilities(model_name: str, expected
     model_info = google_model_info(model_name)
 
     assert model_info.label == expected_label
-    assert model_info.supports is not None
-    assert model_info.supports.output == ['text', 'json']
+    assert model_info.supports == Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    )
     assert get_model_config_schema(model_name) is GemmaConfigSchema
 
 
