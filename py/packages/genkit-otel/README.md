@@ -95,3 +95,9 @@ A token on the constructor wins over the env var. Garbage in the env var warns a
 | `emit_tool_spans` | `False` | Emit `execute_tool` spans for tool actions. |
 | `scope_name` | `genkit-genai` | Instrumentation scope for tracer/meter/logger. |
 | `tracer` / `meter` / `otel_logger` | resolved lazily | Escape hatches to inject explicit instances. |
+
+## Example
+
+See [`samples/otel-jaeger`](../../samples/otel-jaeger) for a runnable sample
+that exports traces to Jaeger and metrics to a local collector, with a
+Docker-free script that downloads and runs both.
