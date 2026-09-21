@@ -403,6 +403,21 @@ def _illegal_doc_id_reason(name: str) -> RuntimeErrorReason | None:
     return None
 
 
+def _is_invalid_firestore_id(value: str | None) -> bool:
+    """Check if an id violates Firestore document path rules."""
+    if not value:
+        return True  # None or empty
+    if value != value.strip():
+        return True  # Leading, trailing, or whitespace-only
+    if '/' in value:
+        return True  # Slashes address subcollections instead of this document
+    if value in ('.', '..'):
+        return True  # Reserved relative path segments
+    if value.startswith('__') and value.endswith('__'):
+        return True  # Reserved dunder names (__id__, etc.)
+    return False
+
+
 def _validate_doc_id(value: str | None, name: str) -> None:
     """Reject ids that Firestore would treat as path structure, not a document id.
 
@@ -426,13 +441,7 @@ def _validate_doc_id(value: str | None, name: str) -> None:
                 reason=RuntimeErrorReason.SESSION_ID_REQUIRED,
             )
 
-    if (
-        not value
-        or value != value.strip()
-        or '/' in value
-        or value in ('.', '..')
-        or (value.startswith('__') and value.endswith('__'))
-    ):
+    if _is_invalid_firestore_id(value):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
