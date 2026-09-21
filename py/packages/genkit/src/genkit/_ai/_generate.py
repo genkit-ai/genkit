@@ -933,9 +933,9 @@ class ResolvedTurn:
 class GenerateRun:
     """One generate call.
 
-    ``messages`` and ``output`` last the whole call. ``ticket`` and
-    ``last_response`` are this wrap_generate — cleared when the next
-    turn starts. ``remember`` feeds the box if a later hook raises.
+    ``messages`` and ``output`` last the whole call. ``ticket``,
+    ``last_response``, and ``billed`` are this wrap_generate — cleared when
+    the next turn starts. ``remember`` feeds the box if a later hook raises.
     """
 
     messages: list[Message]
@@ -943,6 +943,18 @@ class GenerateRun:
     last_response: ModelResponse | None = None
     output: GenerateActionOutputConfig | None = None
     request: ModelRequest | None = None
+    billed: ModelResponse | None = None
+
+    def earned(self) -> ModelResponse:
+        """What this turn already cost, for a failure landing after the model answered.
+
+        A middleware that refuses the output raises after the provider has
+        already charged for it, so usage and custom ride out on the boxed
+        response instead of dying with the exception.
+        """
+        if self.ticket is not None:
+            return self.ticket
+        return self.billed if self.billed is not None else ModelResponse()
 
     def set_messages(self, messages: list[Message]) -> None:
         self.messages = list(messages)
@@ -1057,10 +1069,15 @@ def box_dead_turn(
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.
         out.operation = out.operation.model_copy(update={'error': Error(message=finish_message)})
-    if out.request is None:
+    if request is not None:
+        # The turn's own request wins. A provider may echo back the request its
+        # middleware rewrote, and the caller asked about theirs. Go overrides
+        # the same way in failurePartial.
+        out.request = request
+    elif out.request is None:
         # attach_resendable_history rewrites messages below, so the copy only
         # has to carry the fields the caller configured.
-        out.request = request if request is not None else ModelRequest(messages=list(messages))
+        out.request = ModelRequest(messages=list(messages))
     return attach_resendable_history(out, messages)
 
 
@@ -1407,7 +1424,7 @@ async def generate_turn(
     except (Exception, asyncio.CancelledError) as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         return box_from_exc(
-            response=call.ticket if call.ticket is not None else ModelResponse(),
+            response=call.earned(),
             messages=call.messages,
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
@@ -1481,6 +1498,9 @@ async def call_model(
     the job is billed.
     """
     turn_model = resolved.model
+    # Last turn's accounting does not belong to this one. It is set again the
+    # moment the model answers.
+    call.billed = None
     request = await turn_request(options=options, resolved=resolved)
     # Stashed before the model runs so a failure on this turn still echoes the
     # request the caller made instead of a rebuilt subset of it.
@@ -1509,7 +1529,11 @@ async def call_model(
                 latency_ms=result.latency_ms,
             )
             return call.ticket
-        return require_model_response(raw=raw, name=turn_model.name)
+        answered = require_model_response(raw=raw, name=turn_model.name)
+        # The provider has charged for this by now. Middleware still gets to
+        # reject what came back, and a rejection should not erase the bill.
+        call.billed = answered
+        return answered
 
     with chunks.intercept_model_stream(ctx, role=Role.MODEL):
         response = as_model_response(

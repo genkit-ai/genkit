@@ -823,6 +823,91 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
     assert response.text == '[ECHO] user: "hi" POST'
 
 
+class RefuseTheAnswerMiddleware(BaseMiddleware):
+    """Rejects the model's answer after the provider has already billed for it."""
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        await next_fn(params, ctx)
+        raise GenkitError(status='INTERNAL', message='the rendered card is not in the catalog')
+
+
+@pytest.mark.asyncio
+async def test_middleware_refusing_the_answer_keeps_the_tokens_it_cost() -> None:
+    """A refused answer still costs money, and the response still reports the bill.
+
+    Middleware that inspects what the model said — a validator, a renderer, a
+    safety pass — runs after the provider has charged for it. Refusing drops
+    ``message`` so the bad answer never reaches history you can send again, but
+    ``usage`` and ``custom`` stay put, so cost accounting and provider trace ids
+    survive the failure.
+    """
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('here is a broken card')]),
+            usage=GenerationUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+            custom={'provider_trace_id': 'abc-123'},
+        )
+    ]
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='card please',
+        use=[RefuseTheAnswerMiddleware()],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert response.usage is not None
+    assert response.usage.input_tokens == 11
+    assert response.usage.output_tokens == 22
+    assert response.usage.total_tokens == 33
+    assert response.custom == {'provider_trace_id': 'abc-123'}
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_never_reached_the_model_reports_no_tokens() -> None:
+    """Nothing was billed, so nothing is reported.
+
+    The same middleware refusing before the model runs leaves ``usage`` empty.
+    A failed turn never invents a cost it did not incur.
+    """
+
+    class RefuseBeforeTheModel(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            raise GenkitError(status='INTERNAL', message='refused before the call')
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('never sent')]),
+            usage=GenerationUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+    ]
+
+    response = await ai.generate(model='programmableModel', prompt='hi', use=[RefuseBeforeTheModel()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.usage is not None
+    assert response.usage.output_tokens is None
+    assert pm.request_count == 0
+
+
 @ai.middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
     async def wrap_model(
