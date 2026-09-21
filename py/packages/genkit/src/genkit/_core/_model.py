@@ -1166,20 +1166,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
             return
 
-        # A custom format's parser can return a string on purpose (enum,
-        # text). Still check it against the schema — MAYBE is not one of
-        # POSITIVE/NEGATIVE/NEUTRAL.
-        if self._message_parser is not None and not isinstance(parsed, (dict, list)):
-            if schema is not None:
-                try:
-                    parse_schema(data=parsed, json_schema=schema)
-                except GenkitError as error:
-                    if error.original_message.startswith('Invalid output_schema'):
-                        raise
-                    self._mark_invalid_output(error.original_message)
-            elif parsed is None:
-                preview = (self.text or '')[:200]
-                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+        if parsed is None:
+            preview = (self.text or '')[:200]
+            self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1190,8 +1179,13 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                     raise
                 self._mark_invalid_output(error.original_message)
                 return
-        if self._schema_type is None:
+
+        # A custom format's parser can return a scalar (e.g. enum string).
+        # Skip Pydantic model validation for scalars.
+        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
+        if is_custom_scalar or self._schema_type is None:
             return
+
         try:
             _ = self._schema_type.model_validate(parsed)
         except ValidationError:
@@ -1254,25 +1248,22 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # Matches JS, where `extractJson` is called without the throw flag.
             return cast(OutputT, None)
 
-        if self._message_parser is not None and not isinstance(parsed, (dict, list)):
-            if schema is not None:
-                try:
-                    parse_schema(data=parsed, json_schema=schema)
-                except GenkitError:
-                    return cast(OutputT, None)
-            return cast(OutputT, parsed)
-
         if schema is not None:
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError:
                 return cast(OutputT, None)
-        if self._schema_type is not None and parsed is not None:
-            try:
-                return cast(OutputT, self._schema_type.model_validate(parsed))
-            except ValidationError:
-                return cast(OutputT, None)
-        return cast(OutputT, parsed)
+
+        # A custom format's parser can return a scalar (e.g. enum string).
+        # Skip Pydantic model validation for scalars.
+        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
+        if is_custom_scalar or self._schema_type is None or parsed is None:
+            return cast(OutputT, parsed)
+
+        try:
+            return cast(OutputT, self._schema_type.model_validate(parsed))
+        except ValidationError:
+            return cast(OutputT, None)
 
     @property
     def messages(self) -> list[Message]:
