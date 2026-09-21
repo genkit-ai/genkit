@@ -934,7 +934,7 @@ class GenerateRun:
     """One generate call.
 
     ``messages`` and ``output`` last the whole call. ``ticket``,
-    ``last_response``, and ``billed`` are this wrap_generate — cleared when
+    ``last_response``, and ``answered`` are this wrap_generate — cleared when
     the next turn starts. ``remember`` feeds the box if a later hook raises.
     """
 
@@ -943,7 +943,7 @@ class GenerateRun:
     last_response: ModelResponse | None = None
     output: GenerateActionOutputConfig | None = None
     request: ModelRequest | None = None
-    billed: ModelResponse | None = None
+    answered: ModelResponse | None = None
 
     def earned(self) -> ModelResponse:
         """What this turn already cost, for a failure landing after the model answered.
@@ -954,7 +954,7 @@ class GenerateRun:
         """
         if self.ticket is not None:
             return self.ticket
-        return self.billed if self.billed is not None else ModelResponse()
+        return self.answered if self.answered is not None else ModelResponse()
 
     def set_messages(self, messages: list[Message]) -> None:
         self.messages = list(messages)
@@ -1498,9 +1498,9 @@ async def call_model(
     the job is billed.
     """
     turn_model = resolved.model
-    # Last turn's accounting does not belong to this one. It is set again the
-    # moment the model answers.
-    call.billed = None
+    # Last turn's model answer does not belong to this one. It is set again
+    # the moment the model answers.
+    call.answered = None
     request = await turn_request(options=options, resolved=resolved)
     # Stashed before the model runs so a failure on this turn still echoes the
     # request the caller made instead of a rebuilt subset of it.
@@ -1531,8 +1531,8 @@ async def call_model(
             return call.ticket
         answered = require_model_response(raw=raw, name=turn_model.name)
         # The provider has charged for this by now. Middleware still gets to
-        # reject what came back, and a rejection should not erase the bill.
-        call.billed = answered
+        # reject what came back, and a rejection should not erase usage.
+        call.answered = answered
         return answered
 
     with chunks.intercept_model_stream(ctx, role=Role.MODEL):
