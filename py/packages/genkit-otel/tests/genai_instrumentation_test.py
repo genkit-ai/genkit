@@ -18,8 +18,10 @@ import asyncio
 from collections.abc import Mapping
 
 import pytest
-from genkit_otel import GenAiInstrumentation
+from genkit_otel import ContentCapturingMode, GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import (
+    CAPTURE_CONTENT_ENV_VAR,
+    GEN_AI_OPERATION_DETAILS_EVENT,
     GenAiAttr,
     GenkitAttr,
 )
@@ -73,6 +75,14 @@ async def _run_model(
         SpanMetadata(name=name, action_type='model', input=input),
         fn,
     )
+
+
+def _event_names(harness) -> list[str | None]:
+    names: list[str | None] = []
+    for record in harness.logs.get_finished_logs():
+        inner = getattr(record, 'log_record', record)
+        names.append(getattr(inner, 'event_name', None))
+    return names
 
 
 @pytest.mark.asyncio
@@ -170,6 +180,60 @@ async def test_does_not_capture_content_by_default(harness) -> None:
 
 
 @pytest.mark.asyncio
+async def test_span_only_captures_content_on_span_not_event(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.SPAN_ONLY)
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(
+            messages=[
+                Message(role=Role.SYSTEM, content=[Part.from_text('Be nice')]),
+                Message(role=Role.USER, content=[Part.from_text('hello')]),
+            ]
+        ),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    input_messages = harness.attr(span, GenAiAttr.INPUT_MESSAGES)
+    assert isinstance(input_messages, str)
+    assert 'hello' in input_messages
+    assert 'Be nice' in harness.attr(span, GenAiAttr.SYSTEM_INSTRUCTIONS)
+    assert 'ok' in harness.attr(span, GenAiAttr.OUTPUT_MESSAGES)
+    assert GEN_AI_OPERATION_DETAILS_EVENT not in _event_names(harness)
+
+
+@pytest.mark.asyncio
+async def test_event_only_emits_event_not_span_content(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.EVENT_ONLY)
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('hello')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    assert GEN_AI_OPERATION_DETAILS_EVENT in _event_names(harness)
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+
+
+@pytest.mark.asyncio
+async def test_span_and_event_writes_both(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.SPAN_AND_EVENT)
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('hello')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert 'hello' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
+    assert GEN_AI_OPERATION_DETAILS_EVENT in _event_names(harness)
+
+
+@pytest.mark.asyncio
 async def test_nests_flow_and_model_into_one_trace(harness) -> None:
     instr = harness.instrumentation()
 
@@ -263,6 +327,30 @@ async def test_capture_action_io_records_raw_io_on_all_span_types(harness) -> No
 
 
 @pytest.mark.asyncio
+async def test_captures_legacy_candidates_message(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.SPAN_ONLY)
+    legacy = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        candidates=[
+            Candidate(
+                index=0,
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('legacy answer')]),
+            )
+        ],
+    )
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(),
+        lambda span=None: _awaitable(legacy),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert 'legacy answer' in harness.attr(span, GenAiAttr.OUTPUT_MESSAGES)
+
+
+@pytest.mark.asyncio
 async def test_reports_tool_calls_from_legacy_candidates(harness) -> None:
     instr = harness.instrumentation()
     legacy = ModelResponse(
@@ -308,6 +396,32 @@ async def test_classifies_action_subtype_model_as_chat(harness) -> None:
     )
     assert harness.span_named('chat gemini-flash-latest') is not None
     assert harness.span_named('googleai/gemini-flash-latest') is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_mode_overrides_env(harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'SPAN_ONLY')
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.NO_CONTENT)
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('secret')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_env_token_defaults_to_no_content(harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'bogus')
+    instr = GenAiInstrumentation(
+        tracer=harness.tracer_provider.get_tracer('test'),
+        meter=harness.meter_provider.get_meter('test'),
+        otel_logger=harness.logger_provider.get_logger('test'),
+    )
+    assert instr.content_capturing_mode is ContentCapturingMode.NO_CONTENT
 
 
 @pytest.mark.asyncio
@@ -407,3 +521,169 @@ async def test_cancellation_does_not_record_error_status(harness) -> None:
     assert span is not None
     assert span.status.status_code != StatusCode.ERROR
     assert not any(event.name == 'exception' for event in span.events)
+
+
+@pytest.mark.asyncio
+async def test_model_failure_does_not_leak_prompt_content_under_no_content(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.NO_CONTENT)
+
+    async def fail_body(span=None):
+        raise RuntimeError('upstream API error 500')
+
+    with pytest.raises(RuntimeError, match='upstream API error 500'):
+        await _run_model(
+            instr,
+            'googleai/gemini-flash-latest',
+            _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('secret user medical info')])]),
+            fail_body,
+        )
+
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+    assert harness.attr(span, GenAiAttr.OUTPUT_MESSAGES) is None
+    assert harness.attr(span, GenAiAttr.SYSTEM_INSTRUCTIONS) is None
+    assert harness.attr(span, GenkitAttr.INPUT) is None
+    assert harness.attr(span, GenkitAttr.OUTPUT) is None
+
+
+@pytest.mark.asyncio
+async def test_interrupt_does_not_leak_prompt_content_under_no_content(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.NO_CONTENT)
+
+    async def interrupt_body(span=None):
+        raise GenkitInterrupt('human approval required')
+
+    with pytest.raises(GenkitInterrupt):
+        await _run_model(
+            instr,
+            'googleai/gemini-flash-latest',
+            _model_request(
+                messages=[Message(role=Role.USER, content=[Part.from_text('wire $50,000 to routing 12345')])]
+            ),
+            interrupt_body,
+        )
+
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code != StatusCode.ERROR
+    assert harness.attr(span, 'genkit.interrupted') is True
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+    assert harness.attr(span, GenAiAttr.OUTPUT_MESSAGES) is None
+    assert harness.attr(span, GenkitAttr.INPUT) is None
+
+
+@pytest.mark.asyncio
+async def test_tool_arguments_pii_isolation_under_no_content(harness) -> None:
+    instr = harness.instrumentation(
+        content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        emit_tool_spans=True,
+    )
+
+    # 1. Model response requesting a tool with sensitive arguments
+    tool_call_response = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part.from_tool_request('update_user', input={'ssn': '000-12-3456', 'salary': 150000})],
+        ),
+    )
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('update user record')])]),
+        lambda span=None: _awaitable(tool_call_response),
+    )
+    model_span = harness.span_named('chat gemini-flash-latest')
+    assert model_span is not None
+    assert harness.attr(model_span, GenAiAttr.INPUT_MESSAGES) is None
+    assert harness.attr(model_span, GenAiAttr.OUTPUT_MESSAGES) is None
+
+    # 2. Tool execution itself
+    async def tool_fn(span=None):
+        return {'status': 'updated'}
+
+    await instr.run_in_new_span(
+        SpanMetadata(name='update_user', action_type='tool', input={'ssn': '000-12-3456', 'salary': 150000}),
+        tool_fn,
+    )
+    tool_span = harness.span_named('execute_tool update_user')
+    assert tool_span is not None
+    assert harness.attr(tool_span, GenkitAttr.INPUT) is None
+    assert harness.attr(tool_span, GenkitAttr.OUTPUT) is None
+
+
+@pytest.mark.asyncio
+async def test_inline_data_uri_is_truncated_when_content_capture_enabled(harness) -> None:
+    instr = harness.instrumentation(content_capturing_mode=ContentCapturingMode.SPAN_ONLY)
+    large_b64 = 'A' * 50_000
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[Part.from_media(url=f'data:image/jpeg;base64,{large_b64}', content_type='image/jpeg')],
+                )
+            ]
+        ),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    input_messages = harness.attr(span, GenAiAttr.INPUT_MESSAGES)
+    assert isinstance(input_messages, str)
+    assert '<omitted 50000 bytes>' in input_messages
+    assert large_b64 not in input_messages
+
+
+@pytest.mark.asyncio
+async def test_system_instructions_isolation_and_redaction(harness) -> None:
+    system_prompt = 'You are a proprietary financial compliance officer. Internal rules: Rule#42'
+    req = _model_request(
+        messages=[
+            Message(role=Role.SYSTEM, content=[Part.from_text(system_prompt)]),
+            Message(role=Role.USER, content=[Part.from_text('audit my transaction')]),
+        ]
+    )
+
+    # NO_CONTENT: system prompt must NOT appear anywhere
+    instr_off = harness.instrumentation(content_capturing_mode=ContentCapturingMode.NO_CONTENT)
+    await _run_model(instr_off, 'googleai/gemini-flash-latest', req, lambda span=None: _awaitable(_model_response()))
+    span_off = harness.span_named('chat gemini-flash-latest')
+    assert span_off is not None
+    assert harness.attr(span_off, GenAiAttr.SYSTEM_INSTRUCTIONS) is None
+    assert harness.attr(span_off, GenAiAttr.INPUT_MESSAGES) is None
+
+    # SPAN_ONLY: system prompt isolated in system_instructions, not duplicated in input_messages
+    instr_on = harness.instrumentation(content_capturing_mode=ContentCapturingMode.SPAN_ONLY)
+    await _run_model(instr_on, 'googleai/gemini-flash-latest', req, lambda span=None: _awaitable(_model_response()))
+    span_on = harness.span_named('chat gemini-flash-latest')
+    assert span_on is not None
+    sys_attr = harness.attr(span_on, GenAiAttr.SYSTEM_INSTRUCTIONS)
+    input_attr = harness.attr(span_on, GenAiAttr.INPUT_MESSAGES)
+    assert isinstance(sys_attr, str) and system_prompt in sys_attr
+    assert isinstance(input_attr, str) and system_prompt not in input_attr
+
+
+@pytest.mark.asyncio
+async def test_default_construction_enforces_dual_pii_barriers(harness) -> None:
+    instr = harness.instrumentation()
+    assert instr.content_capturing_mode is ContentCapturingMode.NO_CONTENT
+    assert instr.capture_action_io is False
+
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('secret prompt')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+    assert harness.attr(span, GenAiAttr.OUTPUT_MESSAGES) is None
+    assert harness.attr(span, GenAiAttr.SYSTEM_INSTRUCTIONS) is None
+    assert harness.attr(span, GenkitAttr.INPUT) is None
+    assert harness.attr(span, GenkitAttr.OUTPUT) is None

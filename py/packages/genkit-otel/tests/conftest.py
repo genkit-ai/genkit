@@ -18,6 +18,8 @@ from collections.abc import Iterator
 
 import pytest
 from genkit_otel import GenAiInstrumentation
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -30,15 +32,19 @@ class OtelHarness:
 
     def __init__(self) -> None:
         self.spans = InMemorySpanExporter()
+        self.logs = InMemoryLogRecordExporter()
         self.metrics = InMemoryMetricReader()
         self.tracer_provider = TracerProvider()
         self.tracer_provider.add_span_processor(SimpleSpanProcessor(self.spans))
         self.meter_provider = MeterProvider(metric_readers=[self.metrics])
+        self.logger_provider = LoggerProvider()
+        self.logger_provider.add_log_record_processor(SimpleLogRecordProcessor(self.logs))
 
     def instrumentation(self, **kwargs: object) -> GenAiInstrumentation:
         return GenAiInstrumentation(
             tracer=self.tracer_provider.get_tracer('test'),
             meter=self.meter_provider.get_meter('test'),
+            otel_logger=self.logger_provider.get_logger('test'),
             **kwargs,
         )
 
@@ -52,6 +58,7 @@ class OtelHarness:
 
     def clear(self) -> None:
         self.spans.clear()
+        self.logs.clear()
 
 
 @pytest.fixture

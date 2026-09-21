@@ -97,9 +97,14 @@ def map_part(part: object) -> dict[str, Any]:
 
     media = payload.get('media')
     if isinstance(media, Mapping):
-        mapped = {
+        url = media.get('url')
+        if isinstance(url, str) and url.startswith('data:'):
+            header, sep, data = url.partition(',')
+            if sep and len(data) > 128:
+                url = f'{header},<omitted {len(data)} bytes>'
+        mapped: dict[str, Any] = {
             'type': 'media',
-            'content': media.get('url'),
+            'content': url,
         }
         if media.get('contentType') is not None:
             mapped['content_type'] = media['contentType']
