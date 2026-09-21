@@ -6726,3 +6726,132 @@ async def test_generate_output_returns_none_on_plain_text_reply() -> None:
     assert response.text == 'Hello world'
     assert response.output is None
     assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_no_schema_unparseable_records_invalid_output() -> None:
+    """format='json' without schema marks INVALID_OUTPUT when model emits unparseable prose."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Sorry, I cannot do that.')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me json', output_format='json')
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'Sorry, I cannot do that.'
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_no_schema_unparseable_records_invalid_output() -> None:
+    """format='array' without schema marks INVALID_OUTPUT when model emits unparseable prose."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Sorry, I cannot do that.')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me list', output_format='array')
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'Sorry, I cannot do that.'
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_no_schema_valid_returns_dict() -> None:
+    """format='json' without schema parses dict cleanly with no error."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('{"dish": "Tartine"}')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me json', output_format='json')
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == '{"dish": "Tartine"}'
+    assert response.output == {'dish': 'Tartine'}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_object_reply_records_invalid_output() -> None:
+    """format='array' marks INVALID_OUTPUT when model returns a JSON object instead of a list."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('{"dish": "Tartine"}')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me list', output_format='array')
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == '{"dish": "Tartine"}'
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_blocked_preserves_blocked_reason() -> None:
+    """An abnormal finish like BLOCKED keeps its finish reason and does not mark INVALID_OUTPUT."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            message=Message(role=Role.MODEL, content=[]),
+        )
+    ]
+
+    response = await ai.generate(prompt='sensitive', output_format='json')
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.output is None
+    assert (response.error.reason if response.error else None) is not RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_with_tool_call_validates_only_final_turn() -> None:
+    """Intermediate tool request turns do not fail format validation before final reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup(query: str) -> str:
+        return 'special ingredient'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1', input='secret'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('{"result": "special ingredient"}')]),
+        ),
+    ]
+
+    response = await ai.generate(
+        prompt='find it and output json',
+        output_format='json',
+        tools=['lookup'],
+    )
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is None
+    assert response.output == {'result': 'special ingredient'}

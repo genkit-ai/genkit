@@ -633,3 +633,52 @@ def test_output_returns_none_on_unparseable_text_with_json_format_no_schema() ->
         request=ModelRequest(messages=[], output=OutputConfig(format='json')),
     )
     assert response.output is None
+
+
+def test_assert_valid_schema_marks_invalid_output_when_json_format_no_schema_unparseable() -> None:
+    """Unparseable text with format='json' (no schema) records INVALID_OUTPUT."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('plain unparseable text')]),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[], output=OutputConfig(format='json')),
+    )
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output is None
+    assert response.text == 'plain unparseable text'
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+
+
+def test_assert_valid_schema_marks_invalid_output_when_array_format_no_schema_unparseable() -> None:
+    """Unparseable text with format='array' (no schema) records INVALID_OUTPUT."""
+    from genkit._ai._formats._array import ArrayFormat
+
+    fmt = ArrayFormat()
+    formatter = fmt.handle(None)
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('plain unparseable text')]),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[], output=OutputConfig(format='array')),
+    )
+    response._message_parser = formatter.parse_message
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output is None
+    assert response.text == 'plain unparseable text'
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+def test_assert_valid_schema_passes_when_json_format_no_schema_valid() -> None:
+    """Valid JSON with format='json' (no schema) parses cleanly without error."""
+    response = ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('{"item": "bread"}')]),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[], output=OutputConfig(format='json')),
+    )
+    response.assert_valid_schema()
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is None
+    assert response.output == {'item': 'bread'}

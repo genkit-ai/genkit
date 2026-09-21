@@ -1136,7 +1136,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         A blocked/aborted/interrupted/other finish keeps the model's reason.
         """
         schema = self.request.output_schema if self.request is not None else None
-        if schema is None and self._schema_type is None:
+        fmt = self.request.output_format if self.request is not None else None
+        has_schema = schema is not None or self._schema_type is not None
+        wants_structure = has_schema or (fmt is not None and fmt not in (None, 'text'))
+
+        if not wants_structure:
             return
         if self.error is not None:
             return
@@ -1163,6 +1167,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                     if error.original_message.startswith('Invalid output_schema'):
                         raise
                     self._mark_invalid_output(error.original_message)
+            elif parsed is None and wants_structure:
+                preview = (self.text or '')[:200]
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1218,14 +1225,16 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         asked for a schema and this is not it, read ``error`` / ``.text``.
         """
         schema = self.request.output_schema if self.request is not None else None
-        wants_schema = schema is not None or self._schema_type is not None
+        fmt = self.request.output_format if self.request is not None else None
+        has_schema = schema is not None or self._schema_type is not None
+        wants_structure = has_schema or (fmt is not None and fmt not in (None, 'text'))
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
         # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
         # interrupt carries tool requests), so they only gate the schema path.
         if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
             return cast(OutputT, None)
-        if wants_schema and self.finish_reason in ABNORMAL_FINISH_REASONS:
+        if wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
             return cast(OutputT, None)
 
         try:
