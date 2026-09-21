@@ -1910,7 +1910,7 @@ async def test_firestore_session_store_masked_rollback_valueerror_raises_aborted
 
 @pytest.mark.parametrize(
     'bad_id',
-    ['a/b', 'a/b/c', '.', '..', '', '__id__'],
+    ['a/b', 'a/b/c', '.', '..', '', '   ', '__id__'],
 )
 @pytest.mark.asyncio
 async def test_firestore_session_store_rejects_path_structured_ids(bad_id: str) -> None:
