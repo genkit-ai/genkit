@@ -30,7 +30,6 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
     ModelUsage,
-    get_basic_usage_stats,
 )
 from genkit._core._typing import (
     Constrained,
@@ -76,6 +75,4 @@ __all__ = [
     'ModelRef',
     # Config
     'ModelConfig',
-    # Usage
-    'get_basic_usage_stats',
 ]

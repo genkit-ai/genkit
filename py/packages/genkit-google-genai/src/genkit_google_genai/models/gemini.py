@@ -57,9 +57,9 @@ from genkit.model import (
     ModelUsage,
     Supports,
     ToolDefinition,
-    get_basic_usage_stats,
 )
 from genkit.plugin_api import (
+    get_basic_usage_stats,
     wrap_http_error,
 )
 
