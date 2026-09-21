@@ -70,15 +70,20 @@ def strip_ref_prefixes(name: str) -> str:
     return local
 
 
+def is_imagen_model_name(name: str) -> bool:
+    """True for Imagen ids: ``imagen-`` on the last path segment."""
+    return name.split('/')[-1].lower().startswith('imagen-')
+
+
 def is_unsupported_image_model_name(name: str) -> bool:
     """True for image ids with no generate path here.
 
-    Matches the ``imagen-``, ``imagegeneration@``, ``imagetext@`` and
+    Matches Imagen and the ``imagegeneration@``, ``imagetext@`` and
     ``virtual-try-on-`` prefixes on the last path segment. Gemini native
     image (``gemini-…-image``) is a different family and routes normally.
     """
     local = name.split('/')[-1].lower()
-    return local.startswith(('imagen-', 'imagegeneration@', 'imagetext@', 'virtual-try-on-'))
+    return is_imagen_model_name(local) or local.startswith(('imagegeneration@', 'imagetext@', 'virtual-try-on-'))
 
 
 def classify_family(name: str) -> str:

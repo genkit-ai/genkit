@@ -19,6 +19,7 @@
 import pytest
 from genkit_google_genai.models._routing import (
     classify_family,
+    is_imagen_model_name,
     is_unroutable_model_id,
     is_unsupported_image_model_name,
 )
@@ -55,6 +56,24 @@ from genkit_google_genai.models.veo import is_veo_model
 def test_is_unsupported_image_model_name(name: str, expected: bool) -> None:
     """Image ids with no generate path fail closed instead of routing to Gemini."""
     assert is_unsupported_image_model_name(name) is expected
+
+
+@pytest.mark.parametrize(
+    ('name', 'expected'),
+    [
+        ('imagen-3.0-generate-002', True),
+        ('IMAGEN-4.0-generate-001', True),
+        ('googleai/imagen-4.0-generate-001', True),
+        ('models/imagen-4.0-ultra-generate-001', True),
+        ('imagegeneration@006', False),
+        ('imagetext@001', False),
+        ('virtual-try-on-001', False),
+        ('gemini-2.5-flash-image', False),
+    ],
+)
+def test_is_imagen_model_name(name: str, expected: bool) -> None:
+    """Imagen is the ``imagen-`` prefix alone, not every unsupported image id."""
+    assert is_imagen_model_name(name) is expected
 
 
 @pytest.mark.parametrize(

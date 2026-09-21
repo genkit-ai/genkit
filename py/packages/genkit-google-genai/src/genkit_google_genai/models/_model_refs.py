@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from genkit import GenkitError, ModelInfo
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelRef, model_ref
-from genkit_google_genai.models._routing import classify_family, strip_ref_prefixes
+from genkit_google_genai.models._routing import classify_family, is_imagen_model_name, strip_ref_prefixes
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
@@ -64,7 +64,7 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
             else f"'{local}' has no ref constructor in this plugin."
         )
     elif actual == 'unsupported':
-        if local.lower().startswith('imagen-'):
+        if is_imagen_model_name(local):
             hint = f"'{local}' is not a supported model; for image generation use {plugin_class}.gemini_image_model()."
         else:
             hint = f"'{local}' is not a supported model."
