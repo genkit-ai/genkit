@@ -57,17 +57,18 @@ class ClosedBlock:
     prose: str = ''
 
 
-class A2uiParseError(GenkitError, ValueError):
+class A2uiParseError(GenkitError):
     """Raised in strict mode when a fence is malformed or names an unknown component.
 
-    Strict mode kills the turn: generate boxes this into a failed response whose
-    message is dropped, so a hallucinated surface never lands in resendable
-    history. `GenkitError` with a non-INTERNAL status is what keeps the real
-    sentence ("component 'X' is not in catalog 'Y'") on `finish_message` instead
-    of being redacted. Still a `ValueError` so callers that caught it keep working.
+    You rarely catch this directly. Strict mode fails the turn, so `ai.generate`
+    boxes it into a failed `ModelResponse`: `finish_message` carries the reason
+    ("component 'X' is not in catalog 'Y'") and `messages` stops at your prompt,
+    keeping the unrenderable surface out of history you send again.
     """
 
     def __init__(self, message: str) -> None:
+        # A non-INTERNAL status is what keeps the real sentence on
+        # finish_message; INTERNAL gets redacted to 'internal error'.
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,

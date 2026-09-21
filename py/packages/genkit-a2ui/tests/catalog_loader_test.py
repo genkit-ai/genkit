@@ -220,13 +220,18 @@ def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
         load_catalog(ai, BANNER_CATALOG)
 
 
-def test_catalog_error_is_still_a_value_error() -> None:
-    """The typed error carries a status for boxing; callers that caught ValueError keep working."""
+def test_catalog_error_keeps_its_message_through_boxing() -> None:
+    """A catalog failure tells you what went wrong, not 'internal error'.
+
+    `resolve_catalog` runs inside the model call, so `ai.generate` boxes this
+    error rather than letting it escape. Boxing redacts the message of anything
+    reported as INTERNAL; `A2uiCatalogError` reports INVALID_ARGUMENT, so the
+    sentence survives onto `response.finish_message`.
+    """
     ai, _ = setup()
     ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
-    with pytest.raises(ValueError, match='is not a catalog') as exc_info:
+    with pytest.raises(A2uiCatalogError, match='is not a catalog') as exc_info:
         load_catalog(ai, BANNER_CATALOG)
-    assert isinstance(exc_info.value, A2uiCatalogError)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 

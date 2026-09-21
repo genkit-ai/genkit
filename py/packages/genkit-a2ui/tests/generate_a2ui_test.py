@@ -247,10 +247,14 @@ async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
-def test_a2ui_parse_error_is_still_a_value_error() -> None:
-    """Carrying a status is what stops boxing from redacting the message to 'internal error'."""
+def test_a2ui_parse_error_keeps_its_message_through_boxing() -> None:
+    """A strict-mode refusal tells you which component was wrong, not 'internal error'.
+
+    `ai.generate` redacts the message of any error it boxes unless the error
+    names a status other than INTERNAL. `A2uiParseError` names one, so the
+    component name survives onto `response.finish_message`.
+    """
     exc = A2uiParseError("A2UI: component 'NotAThing' is not in catalog 'basic'.")
-    assert isinstance(exc, ValueError)
     assert exc.status == 'INVALID_ARGUMENT'
     assert exc.reason == RuntimeErrorReason.INVALID_OUTPUT
 

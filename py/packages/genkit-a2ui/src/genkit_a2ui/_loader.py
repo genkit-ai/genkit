@@ -31,16 +31,18 @@ from ._types import A2UI_CATALOG_VALUE_TYPE, BASIC_CATALOG_ID, DEFAULT_CATALOG_I
 logger = get_logger(__name__)
 
 
-class A2uiCatalogError(GenkitError, ValueError):
+class A2uiCatalogError(GenkitError):
     """Raised when a catalog cannot be read, registered, or resolved.
 
-    `resolve_catalog` runs inside the model call, so generate boxes this into a
-    failed response. A non-INTERNAL status is what keeps the real sentence on
-    `finish_message` instead of being redacted. Still a `ValueError` so callers
-    that caught it keep working.
+    `load_catalog` and `load_catalog_file` raise this at startup, so a bad
+    catalog file fails loudly before any model call. `resolve_catalog` runs
+    inside the model call instead, so an unregistered catalog id comes back as a
+    failed `ModelResponse` with the reason on `finish_message`.
     """
 
     def __init__(self, message: str) -> None:
+        # A non-INTERNAL status is what keeps the real sentence on
+        # finish_message; INTERNAL gets redacted to 'internal error'.
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,
