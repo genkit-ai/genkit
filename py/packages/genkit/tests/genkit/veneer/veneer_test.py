@@ -22,6 +22,7 @@ from genkit import (
     ModelResponseChunk,
     Part,
     respond_to_interrupt,
+    restart_tool,
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
@@ -2023,3 +2024,45 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
         **_echo_request_kwargs(),
     )
     _assert_request_fully_echoed(resumed)
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_full_request_when_restart_interrupts_again(
+    setup_test: SetupFixture,
+) -> None:
+    """A restart that pauses again returns before the model is ever called."""
+    ai, _, pm = setup_test
+
+    class ToolInput(BaseModel):
+        value: int | None = Field(None, description='value field')
+
+    @ai.tool(name='test_interrupt')
+    async def test_interrupt(input: ToolInput) -> None:
+        """Always interrupts."""
+        raise Interrupt({'banana': 'yes please'})
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=_tool_call_message('test_interrupt'),
+        )
+    )
+
+    interrupted = await ai.generate(
+        model='programmableModel',
+        prompt='hi',
+        tools=['test_interrupt'],
+        **_echo_request_kwargs(),
+    )
+    _assert_request_fully_echoed(interrupted)
+
+    again = await ai.generate(
+        model='programmableModel',
+        messages=interrupted.messages,
+        resume_restart=restart_tool(interrupt=interrupted.interrupts[0]),
+        tools=['test_interrupt'],
+        **_echo_request_kwargs(),
+    )
+
+    assert again.finish_reason == FinishReason.INTERRUPTED
+    _assert_request_fully_echoed(again)

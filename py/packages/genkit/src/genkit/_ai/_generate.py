@@ -1000,6 +1000,22 @@ async def turn_request(*, options: GenerateActionOptions, resolved: ResolvedTurn
     return request
 
 
+async def paused_request(
+    *,
+    options: GenerateActionOptions,
+    resolved: ResolvedTurn,
+    messages: list[Message],
+) -> ModelRequest:
+    """The turn's request on a restart that interrupted again.
+
+    Go copies the turn's request here and only swaps the messages, so a field
+    added to ModelRequest carries through. Building the request costs a tool
+    resolution, so it is only paid when the restart actually pauses.
+    """
+    request = await turn_request(options=options, resolved=resolved)
+    return request.model_copy(update={'messages': list(messages)})
+
+
 def attach_resendable_history(response: ModelResponse, messages: list[Message]) -> ModelResponse:
     """The closed history they resend, not the request the model saw."""
     if response.request is not None:
@@ -1348,7 +1364,7 @@ async def generate_turn(
     options, paused, resumed_tool_message = await resolve_resume_options(
         options=options,
         mw_pipeline=mw_pipeline,
-        tools=resolved.tools,
+        resolved=resolved,
     )
     if paused:
         # The restart paused again. They can answer it the same
@@ -2310,7 +2326,7 @@ async def resolve_resume_options(
     *,
     options: GenerateActionOptions,
     mw_pipeline: MiddlewarePipeline | None = None,
-    tools: list[Action],
+    resolved: ResolvedTurn,
 ) -> tuple[GenerateActionOptions, ModelResponse | None, Message | None]:
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
@@ -2335,19 +2351,19 @@ async def resolve_resume_options(
     indexed_requests = [
         (index, part) for index, part in enumerate(last_message.content) if part.tool_request is not None
     ]
-    resolved = await asyncio.gather(*[
+    resolved_tools = await asyncio.gather(*[
         resolve_resumed_tool(
             options=options,
             tool_request_part=part,
             mw_pipeline=mw_pipeline,
-            tools=tools,
+            tools=resolved.tools,
         )
         for _, part in indexed_requests
     ])
 
     tool_responses = []
     has_interrupts = False
-    for (index, _orig_part), (resumed_request, resumed_response) in zip(indexed_requests, resolved, strict=True):
+    for (index, _orig_part), (resumed_request, resumed_response) in zip(indexed_requests, resolved_tools, strict=True):
         updated_content[index] = resumed_request
         if resumed_response is None:
             has_interrupts = True
@@ -2355,7 +2371,7 @@ async def resolve_resume_options(
         tool_responses.append(resumed_response)
 
     if has_interrupts:
-        for (index, _orig), (resumed_request, resumed_response) in zip(indexed_requests, resolved, strict=True):
+        for (index, _orig), (resumed_request, resumed_response) in zip(indexed_requests, resolved_tools, strict=True):
             if resumed_response is None:
                 continue
             updated_content[index] = to_pending_response(resumed_request, resumed_response)
@@ -2367,7 +2383,7 @@ async def resolve_resume_options(
                 content=updated_content,
                 metadata=last_message.metadata,
             ),
-            request=ModelRequest(messages=list(messages[:-1])),
+            request=await paused_request(options=options, resolved=resolved, messages=messages[:-1]),
         )
         return (options, interrupted, None)
 

@@ -36,6 +36,7 @@ from genkit._core._typing import (
     GenerationUsage,
     Resource1,
     Role,
+    ToolChoice,
     ToolRequest,
 )
 from genkit.middleware import (
@@ -4371,6 +4372,53 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
+
+
+@pytest.mark.asyncio
+async def test_generate_on_chunk_failure_echoes_full_request() -> None:
+    """A dead sink kills the turn outside generate, so it copies the turn's request."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='testTool')
+    async def _test_tool() -> object:
+        """description"""  # noqa: D403, D415
+        return 'tool called'
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+
+    def on_chunk(_: ModelResponseChunk) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            docs=[Document(content=[Part.from_text('doc content 1')])],
+            config={'temperature': 0.5},
+            tools=['testTool'],
+            tool_choice=ToolChoice.REQUIRED,
+            output=GenerateActionOutputConfig(format='json'),
+        ),
+        on_chunk=on_chunk,
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    request = response.request
+    assert request is not None
+    assert request.docs, 'docs dropped from echoed request'
+    assert request.config == {'temperature': 0.5}, 'config dropped from echoed request'
+    assert request.tools, 'tools dropped from echoed request'
+    assert request.tool_choice == ToolChoice.REQUIRED, 'tool_choice dropped from echoed request'
+    assert request.output is not None
+    assert request.output.format == 'json', 'output dropped from echoed request'
 
 
 @pytest.mark.asyncio
