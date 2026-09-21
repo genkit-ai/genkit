@@ -6729,25 +6729,185 @@ async def test_generate_output_returns_none_on_plain_text_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_json_format_no_schema_unparseable_records_invalid_output() -> None:
-    """format='json' without schema marks INVALID_OUTPUT when model emits unparseable prose."""
+async def test_generate_four_output_scenarios_with_schema() -> None:
+    """Validate all four output scenarios when output_schema is provided:
+    1. Returns text only -> dead-turn with INVALID_OUTPUT
+    2. Returns text + unparseable output -> dead-turn with INVALID_OUTPUT
+    3. Returns text + parseable output -> extracts structured output, error is None
+    4. Returns parseable output only -> extracts structured output, error is None
+    """
+
+    class Dish(BaseModel):
+        dish: str
+
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
+
+    raw_text_only = 'Sorry, I cannot help with that.'
+    raw_text_unparseable = 'Here is your recipe:\n```json\n{dish: bad_json\n```\nHope you like it!'
+    raw_text_parseable = 'Here is your recipe:\n```json\n{"dish": "Smoked Salmon Tartine"}\n```\nHope you like it!'
+    raw_parseable_only = '{"dish": "Smoked Salmon Tartine"}'
+
+    # 1. returns text only
+    pm.reset()
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Sorry, I cannot do that.')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_only)]),
         )
     ]
+    r1 = await ai.generate(prompt='give me dish', output_schema=Dish)
+    assert r1.finish_reason == FinishReason.STOP
+    assert r1.text == raw_text_only
+    assert r1.output is None
+    assert r1.finish_message is None
+    assert r1.error is not None
+    assert r1.error.status == 'INTERNAL'
+    assert r1.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r1.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid JSON' in r1.error.message
+    assert r1.messages[-1].text == raw_text_only
 
-    response = await ai.generate(prompt='give me json', output_format='json')
-    assert response.finish_reason == FinishReason.STOP
-    assert response.text == 'Sorry, I cannot do that.'
-    assert response.output is None
-    assert response.error is not None
-    assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
-    assert 'not valid JSON' in response.error.message
+    # 2. returns text + unparseable output
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_unparseable)]),
+        )
+    ]
+    r2 = await ai.generate(prompt='give me dish', output_schema=Dish)
+    assert r2.finish_reason == FinishReason.STOP
+    assert r2.text == raw_text_unparseable
+    assert r2.output is None
+    assert r2.finish_message is None
+    assert r2.error is not None
+    assert r2.error.status == 'INTERNAL'
+    assert r2.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r2.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid JSON' in r2.error.message
+    assert r2.messages[-1].text == raw_text_unparseable
+
+    # 3. returns text + parseable output
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_parseable)]),
+        )
+    ]
+    r3 = await ai.generate(prompt='give me dish', output_schema=Dish)
+    assert r3.finish_reason == FinishReason.STOP
+    assert r3.text == raw_text_parseable
+    assert r3.output == Dish(dish='Smoked Salmon Tartine')
+    assert r3.finish_message is None
+    assert r3.error is None
+    assert r3.messages[-1].text == raw_text_parseable
+
+    # 4. returns parseable output only
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_parseable_only)]),
+        )
+    ]
+    r4 = await ai.generate(prompt='give me dish', output_schema=Dish)
+    assert r4.finish_reason == FinishReason.STOP
+    assert r4.text == raw_parseable_only
+    assert r4.output == Dish(dish='Smoked Salmon Tartine')
+    assert r4.finish_message is None
+    assert r4.error is None
+    assert r4.messages[-1].text == raw_parseable_only
+
+
+@pytest.mark.asyncio
+async def test_generate_four_output_scenarios_with_format_json_no_schema() -> None:
+    """Validate all four output scenarios when format='json' is requested without schema:
+    1. Returns text only -> dead-turn with INVALID_OUTPUT
+    2. Returns text + unparseable output -> dead-turn with INVALID_OUTPUT
+    3. Returns text + parseable output -> extracts dict, error is None
+    4. Returns parseable output only -> extracts dict, error is None
+    """
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    raw_text_only = 'Sorry, I cannot help with that.'
+    raw_text_unparseable = 'Here is your recipe:\n```json\n{dish: bad_json\n```\nHope you like it!'
+    raw_text_parseable = 'Here is your recipe:\n```json\n{"dish": "Smoked Salmon Tartine"}\n```\nHope you like it!'
+    raw_parseable_only = '{"dish": "Smoked Salmon Tartine"}'
+
+    # 1. returns text only
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_only)]),
+        )
+    ]
+    r1 = await ai.generate(prompt='give me dish', output_format='json')
+    assert r1.finish_reason == FinishReason.STOP
+    assert r1.text == raw_text_only
+    assert r1.output is None
+    assert r1.finish_message is None
+    assert r1.error is not None
+    assert r1.error.status == 'INTERNAL'
+    assert r1.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r1.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid JSON' in r1.error.message
+    assert r1.messages[-1].text == raw_text_only
+
+    # 2. returns text + unparseable output
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_unparseable)]),
+        )
+    ]
+    r2 = await ai.generate(prompt='give me dish', output_format='json')
+    assert r2.finish_reason == FinishReason.STOP
+    assert r2.text == raw_text_unparseable
+    assert r2.output is None
+    assert r2.finish_message is None
+    assert r2.error is not None
+    assert r2.error.status == 'INTERNAL'
+    assert r2.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r2.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid JSON' in r2.error.message
+    assert r2.messages[-1].text == raw_text_unparseable
+
+    # 3. returns text + parseable output
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_text_parseable)]),
+        )
+    ]
+    r3 = await ai.generate(prompt='give me dish', output_format='json')
+    assert r3.finish_reason == FinishReason.STOP
+    assert r3.text == raw_text_parseable
+    assert r3.output == {'dish': 'Smoked Salmon Tartine'}
+    assert r3.finish_message is None
+    assert r3.error is None
+    assert r3.messages[-1].text == raw_text_parseable
+
+    # 4. returns parseable output only
+    pm.reset()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(raw_parseable_only)]),
+        )
+    ]
+    r4 = await ai.generate(prompt='give me dish', output_format='json')
+    assert r4.finish_reason == FinishReason.STOP
+    assert r4.text == raw_parseable_only
+    assert r4.output == {'dish': 'Smoked Salmon Tartine'}
+    assert r4.finish_message is None
+    assert r4.error is None
+    assert r4.messages[-1].text == raw_parseable_only
 
 
 @pytest.mark.asyncio
@@ -6766,28 +6926,12 @@ async def test_generate_array_format_no_schema_unparseable_records_invalid_outpu
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'Sorry, I cannot do that.'
     assert response.output is None
+    assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
-
-
-@pytest.mark.asyncio
-async def test_generate_json_format_no_schema_valid_returns_dict() -> None:
-    """format='json' without schema parses dict cleanly with no error."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
-    pm.responses = [
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('{"dish": "Tartine"}')]),
-        )
-    ]
-
-    response = await ai.generate(prompt='give me json', output_format='json')
-    assert response.finish_reason == FinishReason.STOP
-    assert response.text == '{"dish": "Tartine"}'
-    assert response.output == {'dish': 'Tartine'}
-    assert response.error is None
+    assert response.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert response.messages[-1].text == 'Sorry, I cannot do that.'
 
 
 @pytest.mark.asyncio
@@ -6806,9 +6950,13 @@ async def test_generate_array_format_object_reply_records_invalid_output() -> No
     assert response.finish_reason == FinishReason.STOP
     assert response.text == '{"dish": "Tartine"}'
     assert response.output is None
+    assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.details == {'reason': 'INVALID_OUTPUT'}
+    assert 'not valid for the requested format' in response.error.message
+    assert response.messages[-1].text == '{"dish": "Tartine"}'
 
 
 @pytest.mark.asyncio
@@ -6826,7 +6974,7 @@ async def test_generate_json_format_blocked_preserves_blocked_reason() -> None:
     response = await ai.generate(prompt='sensitive', output_format='json')
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.output is None
-    assert (response.error.reason if response.error else None) is not RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error is None
 
 
 @pytest.mark.asyncio
@@ -6853,5 +7001,7 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
         tools=['lookup'],
     )
     assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message is None
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
+    assert response.messages[-1].text == '{"result": "special ingredient"}'
