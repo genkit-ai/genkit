@@ -19,8 +19,10 @@
 
 import base64
 import sys
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -46,7 +48,7 @@ from genkit_google_genai.models.gemini import (
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 from pytest_mock import MockerFixture
 
 from genkit import (
@@ -1049,12 +1051,28 @@ def test_gemini_model__convert_schema_property_rejects_bad_keyword_value(
     keyword: str,
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """A keyword value that cannot be coerced raises INVALID_ARGUMENT naming the keyword."""
+    """In strict mode a keyword value that cannot be coerced raises INVALID_ARGUMENT naming the keyword."""
     with pytest.raises(GenkitError) as exc_info:
-        gemini_model_instance._convert_schema_property(input_schema)
+        gemini_model_instance._convert_schema_property(input_schema, strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert keyword in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        ({'type': 'integer', 'minimum': 'zero'}, genai_types.Schema(type=genai_types.Type.INTEGER)),
+        ({'type': 'object', 'propertyOrdering': 'ab'}, genai_types.Schema(type=genai_types.Type.OBJECT, properties={})),
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_bad_keyword_value(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Without strict, a keyword value that cannot be coerced is left out."""
+    assert gemini_model_instance._convert_schema_property(input_schema) == expected
 
 
 @pytest.mark.parametrize('raw_type', ['bogus', None, 123])
@@ -1123,20 +1141,77 @@ def test_gemini_model__convert_schema_property_non_string_const_keeps_type(gemin
     )
 
 
+def test_gemini_model__convert_schema_property_keeps_only_string_enums(gemini_model_instance: GeminiModel) -> None:
+    """Non-string or mixed members leave a bare type; a typeless string enum with null is a nullable STRING enum."""
+
+    class Pick(BaseModel):
+        tag: Literal['a', None]
+
+    convert = gemini_model_instance._convert_schema_property
+
+    assert convert({'type': 'integer', 'enum': [1, 2]}) == genai_types.Schema(type=genai_types.Type.INTEGER)
+    assert convert({'type': 'string', 'enum': ['a', 1]}) == genai_types.Schema(type=genai_types.Type.STRING)
+    pick = convert(to_json_schema(Pick), strict=True)
+    assert pick is not None and pick.properties is not None
+    assert pick.properties['tag'] == genai_types.Schema(
+        type=genai_types.Type.STRING, nullable=True, enum=['a'], title='Tag'
+    )
+
+
+def test_gemini_model__convert_schema_property_keeps_pydantic_string_formats(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """The format pydantic emits for datetime, date, UUID and HttpUrl fields is carried through."""
+
+    class Stamps(BaseModel):
+        at: datetime
+        day: date
+        ident: UUID
+        link: HttpUrl
+
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(Stamps))
+
+    assert schema is not None and schema.properties is not None
+    assert {name: prop.format for name, prop in schema.properties.items()} == {
+        'at': 'date-time',
+        'day': 'date',
+        'ident': 'uuid',
+        'link': 'uri',
+    }
+    assert all(prop.type == genai_types.Type.STRING for prop in schema.properties.values())
+
+
 def test_gemini_model__convert_schema_property_rejects_required_untyped_property(
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """A required property with no type cannot be left out, so it raises naming the property."""
+    """In strict mode a required property with no type cannot be left out, so it raises naming the property."""
 
     class Payload(BaseModel):
         data: Any
         note: Any = None
 
     with pytest.raises(GenkitError) as exc_info:
-        gemini_model_instance._convert_schema_property(to_json_schema(Payload))
+        gemini_model_instance._convert_schema_property(to_json_schema(Payload), strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'data' in exc_info.value.original_message
+
+
+def test_gemini_model__create_tool_leaves_out_untyped_param(gemini_model_instance: GeminiModel) -> None:
+    """A tool parameter with no type is left out of the declaration instead of failing the request."""
+
+    class Args(BaseModel):
+        value: Any
+        count: int
+
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(Args))
+
+    declarations = gemini_model_instance._create_tool(tool).function_declarations
+
+    assert declarations is not None
+    params = declarations[0].parameters
+    assert params is not None and params.type == genai_types.Type.OBJECT
+    assert list(params.properties or {}) == ['count']
 
 
 @pytest.mark.parametrize(
@@ -1151,12 +1226,32 @@ def test_gemini_model__convert_schema_property_rejects_untyped_constraint(
     input_schema: dict[str, object],
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """A node that constrains without a type raises instead of dropping out of its parent."""
+    """In strict mode a node that constrains without a type raises instead of dropping out of its parent."""
     with pytest.raises(GenkitError) as exc_info:
-        gemini_model_instance._convert_schema_property(input_schema)
+        gemini_model_instance._convert_schema_property(input_schema, strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'no type' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        ({'allOf': [{'type': 'string'}]}, None),
+        (
+            {'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}},
+            genai_types.Schema(type=genai_types.Type.OBJECT, properties={}),
+        ),
+        ({'type': 'array', 'items': {'not': {'type': 'null'}}}, genai_types.Schema(type=genai_types.Type.ARRAY)),
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_untyped_constraint(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema | None,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Without strict, a node that constrains without a type is left out of its parent."""
+    assert gemini_model_instance._convert_schema_property(input_schema) == expected
 
 
 @pytest.mark.asyncio
@@ -1430,16 +1525,24 @@ async def test_gemini_model__legacy_response_schema_sends_converted_schema() -> 
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__legacy_untyped_output_schema_raises() -> None:
-    """A schema with no type cannot be sent as response_schema and fails loudly."""
+@pytest.mark.parametrize(
+    'json_schema, needle',
+    [
+        ({'description': 'anything'}, 'response_schema'),
+        ({'type': 'object', 'required': ['data'], 'properties': {'data': {'title': 'Data'}}}, 'data'),
+        ({'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}}, 'no type'),
+    ],
+)
+async def test_gemini_model__legacy_untyped_output_schema_raises(json_schema: dict[str, Any], needle: str) -> None:
+    """A schema that response_schema cannot hold fails loudly instead of going out unconstrained."""
     model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
-    request = _output_request(format='json', json_schema={'description': 'anything'}, constrained=True)
+    request = _output_request(format='json', json_schema=json_schema, constrained=True)
 
     with pytest.raises(GenkitError) as exc_info:
         await model._genkit_to_googleai_cfg(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'response_schema' in exc_info.value.original_message
+    assert needle in exc_info.value.original_message
 
 
 @pytest.mark.asyncio
