@@ -30,6 +30,8 @@ _STATUS_NAMES: frozenset[str] = frozenset(get_args(StatusName)) - {'OK'}
 
 _RETRY_INFO_TYPE = 'google.rpc.RetryInfo'
 
+_MAX_MESSAGE_CHARS = 500
+
 
 def status_for_api_error(error: APIError) -> StatusName | None:
     """Status for an SDK error, or None when it carries neither a status name nor a failing HTTP code.
@@ -38,9 +40,9 @@ def status_for_api_error(error: APIError) -> StatusName | None:
     HTTP code. A non-JSON body leaves the HTTP reason phrase in ``status``,
     which is not a status name, so the code decides.
     """
-    status = error.status
-    if isinstance(status, str) and status in _STATUS_NAMES:
-        return cast(StatusName, status)
+    status = _status_name(error)
+    if status is not None:
+        return status
     code = http_code(error.code)
     if code is None or code < 400:
         return None
@@ -64,6 +66,9 @@ def from_api_error(error: APIError) -> GenkitError:
 
     Raises the original error when it carries neither a status name nor a
     failing HTTP code, so it stays unclassified rather than claiming a status.
+    When the service named no status the message can be a whole non-JSON
+    body, such as an HTML error page, and is cut to 500 characters. The
+    cause keeps the full text.
     """
     status = status_for_api_error(error)
     if status is None:
@@ -72,12 +77,23 @@ def from_api_error(error: APIError) -> GenkitError:
     ms = retry_delay_ms(error)
     if ms is not None:
         response_metadata = {'retry_after_ms': ms}
+    message = error.message or str(error)
+    if _status_name(error) is None and len(message) > _MAX_MESSAGE_CHARS:
+        message = message[:_MAX_MESSAGE_CHARS] + '...'
     return GenkitError(
         status=status,
-        message=error.message or str(error),
+        message=message,
         cause=error,
         response_metadata=response_metadata,
     )
+
+
+def _status_name(error: APIError) -> StatusName | None:
+    """The canonical status name the service reported in the error body, if any."""
+    status = error.status
+    if isinstance(status, str) and status in _STATUS_NAMES:
+        return cast(StatusName, status)
+    return None
 
 
 def _retry_info_ms(details: Any) -> float | None:  # noqa: ANN401

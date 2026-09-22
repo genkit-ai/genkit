@@ -208,6 +208,33 @@ def test_from_api_error_message_falls_back_to_the_error_text() -> None:
     assert from_api_error(error).original_message == str(error)
 
 
+def test_from_api_error_bounds_a_non_json_body() -> None:
+    """A non-JSON body in the message is cut to 500 characters; the cause keeps all of it."""
+    body = '<html>' + 'x' * 20_000 + '</html>'
+    error = ServerError(502, {'message': body, 'status': 'Bad Gateway'})
+    wrapped = from_api_error(error)
+    assert wrapped.status == 'INTERNAL'
+    assert wrapped.original_message == body[:500] + '...'
+    assert wrapped.cause is error
+    assert error.message == body
+
+
+def test_from_api_error_keeps_a_non_json_body_at_the_limit() -> None:
+    """A non-JSON body of exactly 500 characters is passed through unchanged."""
+    body = '<html>' + 'x' * 487 + '</html>'
+    assert len(body) == 500
+    error = ServerError(502, {'message': body, 'status': 'Bad Gateway'})
+    assert from_api_error(error).original_message == body
+
+
+def test_from_api_error_keeps_a_long_service_message() -> None:
+    """A message from a body that names a status is passed through whole, however long."""
+    message = '* GenerateContentRequest.contents: contents is not specified\n' * 20
+    error = _api_error(400, status='INVALID_ARGUMENT', message=message)
+    assert len(message) > 500
+    assert from_api_error(error).original_message == message
+
+
 def test_from_api_error_attaches_retry_delay() -> None:
     """Retry information is exposed through response_metadata."""
     error = _api_error(429, details=[_retry_info('58s')])
