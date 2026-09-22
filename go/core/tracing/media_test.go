@@ -66,7 +66,35 @@ func TestMediaDataIsPreservedInDevEnvironment(t *testing.T) {
 	}
 }
 
+func TestMediaDataRedactionCoversInitAndOutput(t *testing.T) {
+	attributes := runMediaSpan(t, "prod")
+	for _, key := range []string{"genkit:input", "genkit:init", "genkit:output"} {
+		attribute := attributes[key]
+		if strings.Contains(attribute, "secret-") {
+			t.Errorf("%s contains inline media data: %s", key, attribute)
+		}
+		if !strings.Contains(attribute, `"data:image/png;base64,[redacted]"`) {
+			t.Errorf("%s lost the redacted media URI: %s", key, attribute)
+		}
+	}
+}
+
+func TestMediaDataIsPreservedInDevForInitAndOutput(t *testing.T) {
+	attributes := runMediaSpan(t, "dev")
+	for _, key := range []string{"genkit:input", "genkit:init", "genkit:output"} {
+		attribute := attributes[key]
+		if !strings.Contains(attribute, "secret-") {
+			t.Errorf("%s lost inline media data in dev: %s", key, attribute)
+		}
+	}
+}
+
 func runMediaInputSpan(t *testing.T, environment string) string {
+	t.Helper()
+	return runMediaSpan(t, environment)["genkit:input"]
+}
+
+func runMediaSpan(t *testing.T, environment string) map[string]string {
 	t.Helper()
 	t.Setenv("GENKIT_ENV", environment)
 
@@ -87,11 +115,17 @@ func runMediaInputSpan(t *testing.T, environment string) string {
 			),
 		},
 	}
+	init := map[string]string{
+		"url": "data:image/png;base64,secret-init-bytes",
+	}
+	output := map[string]string{
+		"url": "data:image/png;base64,secret-output-bytes",
+	}
 	_, err := tracing.RunInNewSpan(
 		context.Background(),
-		&tracing.SpanMetadata{Name: "generate", Type: "action"},
+		&tracing.SpanMetadata{Name: "generate", Type: "action", Init: init},
 		input,
-		func(context.Context, *ai.ModelRequest) (any, error) { return nil, nil },
+		func(context.Context, *ai.ModelRequest) (map[string]string, error) { return output, nil },
 	)
 	if err != nil {
 		t.Fatalf("RunInNewSpan: %v", err)
@@ -100,14 +134,14 @@ func runMediaInputSpan(t *testing.T, environment string) string {
 		t.Fatalf("exported %d spans, want 1", len(exporter.spans))
 	}
 
-	var inputAttribute string
+	attributes := make(map[string]string)
 	for _, attribute := range exporter.spans[0].Attributes() {
-		if string(attribute.Key) == "genkit:input" {
-			inputAttribute = attribute.Value.AsString()
-			break
+		switch string(attribute.Key) {
+		case "genkit:input", "genkit:init", "genkit:output":
+			attributes[string(attribute.Key)] = attribute.Value.AsString()
 		}
 	}
-	return inputAttribute
+	return attributes
 }
 
 func TestMediaLikeTextIsNotTreatedAsInlineMedia(t *testing.T) {
