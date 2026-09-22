@@ -1680,15 +1680,28 @@ async def test_streaming_generate_exposes_prompt_feedback_without_block(mocker: 
 @pytest.mark.asyncio
 @patch('genkit_google_genai.models.gemini.generate_cache_key', new_callable=MagicMock)
 @patch('genkit_google_genai.models.gemini.validate_context_cache_request', new_callable=MagicMock)
+@pytest.mark.parametrize('failing_call', ['list', 'create', 'update'])
 async def test_gemini_model__retrieve_cached_content_classifies_api_errors(
-    mock_generate_cache_key: MagicMock,
     mock_validate_context_cache_request: MagicMock,
+    mock_generate_cache_key: MagicMock,
+    failing_call: str,
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """API errors from the cache service are classified like generation errors."""
+    """API errors from each cache service call are classified like generation errors."""
     error = _server_error()
+    mock_generate_cache_key.return_value = 'key1'
+
+    async def pages() -> Any:  # noqa: ANN401
+        if failing_call == 'update':
+            yield genai_types.CachedContent(name='cachedContents/1', display_name='key1')
+
     mock_client = MagicMock()
-    mock_client.aio.caches.list = AsyncMock(side_effect=error)
+    if failing_call == 'list':
+        mock_client.aio.caches.list = AsyncMock(side_effect=error)
+    else:
+        mock_client.aio.caches.list = AsyncMock(return_value=pages())
+    mock_client.aio.caches.create = AsyncMock(side_effect=error)
+    mock_client.aio.caches.update = AsyncMock(side_effect=error)
     gemini_model_instance._client = mock_client
 
     with pytest.raises(GenkitError) as raised:
@@ -1700,3 +1713,4 @@ async def test_gemini_model__retrieve_cached_content_classifies_api_errors(
         )
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is error
+    getattr(mock_client.aio.caches, failing_call).assert_awaited_once()

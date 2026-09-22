@@ -117,6 +117,16 @@ def test_neither_status_nor_code_is_unclassified() -> None:
     assert status_for_api_error(error) is None
 
 
+@pytest.mark.parametrize('code', [204, 302])
+def test_non_failing_http_code_is_unclassified(code: int) -> None:
+    """An error carrying a 2xx or 3xx code has no status and is raised as-is."""
+    error = APIError(code, {'message': 'Found', 'status': 'Found'})
+    assert status_for_api_error(error) is None
+    with pytest.raises(APIError) as raised:
+        from_api_error(error)
+    assert raised.value is error
+
+
 def test_non_dict_body() -> None:
     """A body the SDK could not parse still maps by code and carries no retry delay."""
     error = ClientError(400, 'not json')
