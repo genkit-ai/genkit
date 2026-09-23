@@ -46,7 +46,7 @@ capability means adding it there and to the table below. Known capabilities:
 
 | Capability | Meaning |
 |------------|---------|
-| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go. |
+| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go, JS. |
 | `resumable-aborts` | An aborted invocation persists the state through the last turn that committed, rolling back the one that did not finish, and resume accepts that snapshot. Gates an `aborted` snapshot carrying state, one as a resume target, and the `customAgentAbortable` fixture. Implemented by: Go. |
 
 ### Step Types

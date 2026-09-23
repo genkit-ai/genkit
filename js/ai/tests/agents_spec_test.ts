@@ -23,7 +23,7 @@
  * harness requirements.
  */
 
-import { stripUndefinedProps, z } from '@genkit-ai/core';
+import { GenkitError, stripUndefinedProps, z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -344,6 +344,24 @@ function setupHarness(
     }
   );
 
+  // flakyTool fails its first call and succeeds after, so a spec case can
+  // fail a turn mid tool round and re-attempt it. The counter is per harness,
+  // and setupHarness runs per test, so each test's first call fails.
+  let flakyCalls = 0;
+  defineTool(
+    registry,
+    { name: 'flakyTool', description: 'A tool that fails its first call' },
+    async () => {
+      if (++flakyCalls === 1) {
+        throw new GenkitError({
+          status: 'UNAVAILABLE',
+          message: 'flaky tool failed',
+        });
+      }
+      return 'tool recovered';
+    }
+  );
+
   // --- Agents ---
 
   // promptAgent: client-managed, no tools
@@ -385,6 +403,16 @@ function setupHarness(
     model: 'programmableModel',
     config: { temperature: 1 },
     tools: ['restartTool'],
+    store: new InMemorySessionStore(),
+  });
+
+  // promptAgentWithToolsAndStore: server-managed, with testTool and flakyTool.
+  // Used for the resumable-failures tests.
+  const promptAgentWithToolsAndStore = defineAgent(registry, {
+    name: 'promptAgentWithToolsAndStore',
+    model: 'programmableModel',
+    config: { temperature: 1 },
+    tools: ['testTool', 'flakyTool'],
     store: new InMemorySessionStore(),
   });
 
@@ -551,6 +579,7 @@ function setupHarness(
     promptAgentWithTools,
     promptAgentWithInterrupt,
     promptAgentWithRestartTool,
+    promptAgentWithToolsAndStore,
     customAgentBlocking,
     customAgentFailing,
     customAgentWithArtifacts,
@@ -573,7 +602,9 @@ async function executeSendInvocation(
 ): Promise<void> {
   const resolvedInvocation = resolveTemplates(invocation, captures);
 
-  // Program the model
+  // Program the model. An entry may be a response, or `error: {status,
+  // message}` to fail that call with a classified error (how a spec case
+  // makes a turn fail mid loop).
   if (resolvedInvocation.modelResponses || resolvedInvocation.streamChunks) {
     let reqCounter = 0;
     pm.handleResponse = async (req, sc) => {
@@ -582,7 +613,14 @@ async function executeSendInvocation(
           sc(chunk);
         }
       }
-      return resolvedInvocation.modelResponses?.[reqCounter++]!;
+      const entry = resolvedInvocation.modelResponses?.[reqCounter++];
+      if (entry?.error) {
+        const { status, message } = entry.error;
+        throw status
+          ? new GenkitError({ status, message })
+          : new Error(message);
+      }
+      return entry!;
     };
   }
 
@@ -997,7 +1035,7 @@ describe('Agent conformance spec', () => {
   // Gated spec capabilities this runtime implements; a test whose `requires`
   // names anything absent here is skipped, so the shared spec can carry
   // cases for features this SDK has not adopted yet.
-  const SUPPORTED_REQUIRES = new Set<string>();
+  const SUPPORTED_REQUIRES = new Set<string>(['resumable-failures']);
   const KNOWN_REQUIRES = new Set(spec.capabilities);
 
   for (const test of spec.tests) {
