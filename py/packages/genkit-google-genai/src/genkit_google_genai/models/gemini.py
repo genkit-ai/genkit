@@ -1683,7 +1683,7 @@ class GeminiModel:
         except APIError as e:
             raise from_api_error(e) from e
 
-        # An empty 2xx body ends the SDK's stream without a chunk or an error.
+        # An empty 200 body ends the SDK's stream without a chunk or an error.
         if not saw_chunk:
             raise GenkitError(status='UNAVAILABLE', message='Model stream returned no responses.')
         if not saw_candidates:
