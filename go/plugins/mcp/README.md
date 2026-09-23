@@ -49,6 +49,39 @@ func main() {
 }
 ```
 
+## Show MCP tools in the Genkit Dev UI
+
+A connected MCP client can be passed to `genkit.WithPlugins` before calling
+`genkit.Init`. Genkit then lists the server's tools as dynamic actions in the
+Dev UI and resolves each tool on first use:
+
+```go
+client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
+    Name: "filesystem",
+    Stdio: &mcp.StdioConfig{
+        Command: "npx",
+        Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Disconnect()
+
+g := genkit.Init(ctx, genkit.WithPlugins(client))
+tool := genkit.LookupTool(g, "filesystem/read_file")
+```
+
+Dynamic tool names use `client-name/tool-name`. The existing `GetActiveTools`
+method still returns detached tools with underscore-prefixed names for callers
+that want to choose when to register them. Reserved characters in client names
+are escaped in the Genkit provider name (for example, `team/filesystem` becomes
+`team%2Ffilesystem`).
+
+Genkit caches a tool after its first lookup. If the MCP server changes its tool
+names or schemas, create a new Genkit instance to refresh those cached actions.
+`Restart` reconnects the client to a server with the same tool catalog.
+
 ## GenkitMCPManager - Multiple Server Management
 
 Manage connections to multiple MCP servers:

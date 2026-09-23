@@ -24,6 +24,11 @@ import (
 
 func main() {
 	g := genkit.Init(context.Background())
+	genkit.DefineTool(g, "echo", "Echo text", func(_ *ai.ToolContext, input struct {
+		Text string `json:"text"`
+	}) (string, error) {
+		return input.Text, nil
+	})
 	genkit.DefineResource(g, "test-docs", &ai.ResourceOptions{
 		Template: "file://test/{filename}",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {

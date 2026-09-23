@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/firebase/genkit/go/core/logger"
@@ -89,6 +91,7 @@ type ServerRef struct {
 
 // GenkitMCPClient represents a client for interacting with MCP servers.
 type GenkitMCPClient struct {
+	mu      sync.RWMutex // protects server and options.Disabled during requests and reconnects
 	options MCPClientOptions
 	server  *ServerRef
 }
@@ -117,12 +120,20 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 
 // connect establishes a connection to an MCP server
 func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectLocked(options)
+}
+
+// connectLocked requires mu to be held for writing.
+func (c *GenkitMCPClient) connectLocked(options MCPClientOptions) error {
 	// Close existing connection if any
 	if c.server != nil {
 		if err := c.server.Client.Close(); err != nil {
 			ctx := context.Background()
 			logger.Warn(ctx, "error closing previous MCP transport", "client", c.options.Name, "error", err)
 		}
+		c.server = nil
 	}
 
 	// Create and configure transport
@@ -225,42 +236,74 @@ func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *clien
 	return ""
 }
 
-// Name returns the client name
+// Name returns the client name as a Genkit provider identifier. Escaping
+// reserved characters keeps a name containing '/' within one provider segment.
 func (c *GenkitMCPClient) Name() string {
-	return c.options.Name
+	return url.PathEscape(c.options.Name)
 }
 
 // IsEnabled returns whether the client is enabled
 func (c *GenkitMCPClient) IsEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return !c.options.Disabled
+}
+
+// clientForRequest snapshots the current connection. A reconnect may close it
+// while a request is in flight, which lets restart recover a stalled request.
+func (c *GenkitMCPClient) clientForRequest() *client.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.options.Disabled || c.server == nil {
+		return nil
+	}
+	return c.server.Client
+}
+
+func (c *GenkitMCPClient) isConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.options.Disabled && c.server != nil
 }
 
 // Disable temporarily disables the client by closing the connection
 func (c *GenkitMCPClient) Disable() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.options.Disabled {
 		c.options.Disabled = true
-		c.Disconnect()
+		_ = c.disconnectLocked()
 	}
 }
 
 // Reenable re-enables a previously disabled client by reconnecting
 func (c *GenkitMCPClient) Reenable() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.options.Disabled {
 		c.options.Disabled = false
-		c.connect(c.options)
+		_ = c.connectLocked(c.options)
 	}
 }
 
 // Restart restarts the transport connection
 func (c *GenkitMCPClient) Restart(ctx context.Context) error {
-	if err := c.Disconnect(); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.disconnectLocked(); err != nil {
 		logger.Warn(ctx, "error closing MCP transport during restart", "client", c.options.Name, "error", err)
 	}
-	return c.connect(c.options)
+	return c.connectLocked(c.options)
 }
 
 // Disconnect closes the connection to the MCP server
 func (c *GenkitMCPClient) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.disconnectLocked()
+}
+
+func (c *GenkitMCPClient) disconnectLocked() error {
 	if c.server != nil {
 		err := c.server.Client.Close()
 		c.server = nil
