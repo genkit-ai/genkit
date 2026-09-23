@@ -117,6 +117,19 @@ func (Dept) Criteria() map[Dept]string {
 	}
 }
 
+// Guidance adds structure where a string is not enough. The wire format
+// takes an object per option; this one says what billing does not cover,
+// since a question about a delivery mentions an order and reads as billing
+// otherwise. The criteria string above becomes its "what".
+func (Dept) Guidance() map[Dept]any {
+	return map[Dept]any{
+		Billing: map[string]any{
+			"not_for":  "Where an order is, or when it arrives",
+			"examples": []string{"I was charged twice for one order.", "My invoice shows a plan I never picked."},
+		},
+	}
+}
+
 // Frustration is the rubric of a score, lowest level first. The answer is
 // the expected level, so it falls between two when the model is split.
 type Frustration int
