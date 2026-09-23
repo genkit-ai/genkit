@@ -293,7 +293,10 @@ func (c *client) do(ctx context.Context, method, url string, body any) ([]byte, 
 		if err == nil {
 			return data, nil
 		}
-		if attempt >= maxRetries || !retry || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return nil, stopped(ctx, err)
+		}
+		if attempt >= maxRetries || !retry {
 			return nil, err
 		}
 		delay := backoff(attempt)
@@ -302,10 +305,19 @@ func (c *client) do(ctx context.Context, method, url string, body any) ([]byte, 
 		}
 		select {
 		case <-ctx.Done():
-			return nil, err
+			return nil, stopped(ctx, err)
 		case <-time.After(delay):
 		}
 	}
+}
+
+// stopped is the error for a request whose context ended: the context's
+// cause, so the caller sees a cancellation or a deadline rather than the
+// retryable failure it interrupted. The last attempt's failure is kept as
+// text only, since wrapping its status would make the call read as worth
+// retrying.
+func stopped(ctx context.Context, last error) error {
+	return fmt.Errorf("%w (last attempt: %v)", context.Cause(ctx), last)
 }
 
 // once sends one attempt. It reports whether a failure is worth a retry,

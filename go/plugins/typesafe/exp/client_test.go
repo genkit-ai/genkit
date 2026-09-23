@@ -17,6 +17,7 @@
 package exp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -236,6 +237,32 @@ func TestRetriesOverloadAndHonorsRetryAfter(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
 		t.Errorf("Retry-After: 0 was not honored; the retry waited %v", elapsed)
+	}
+}
+
+func TestCancelDuringBackoffReportsTheCancellation(t *testing.T) {
+	// The server asks for a long wait; the caller gives up during it. The
+	// error is the cancellation, not the 503 it interrupted.
+	rec := &recorder{respond: func(w http.ResponseWriter, call int) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}}
+	c := newClient(t, rec, Direct())
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	_, err := c.decide(ctx, "jev-latest", &request{State: "hi", Questions: triageQuestions})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	if errors.Is(err, status.ErrUnavailable) {
+		t.Errorf("error = %v still reads as unavailable, which a caller would retry", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the wait ran on for %v after the cancellation", elapsed)
+	}
+	if rec.calls() != 1 {
+		t.Errorf("calls = %d, want 1", rec.calls())
 	}
 }
 
