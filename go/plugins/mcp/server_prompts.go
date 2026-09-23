@@ -42,7 +42,7 @@ func (s *GenkitMCPServer) registerPromptWithMCP(desc api.ActionDesc) {
 	}, func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		prompt := genkit.LookupPrompt(s.genkit, desc.Name)
 		if prompt == nil {
-			return nil, fmt.Errorf("Genkit prompt %q is no longer registered", desc.Name)
+			return nil, fmt.Errorf("genkit prompt %q is no longer registered", desc.Name)
 		}
 
 		for _, arg := range arguments {
@@ -72,7 +72,7 @@ func (s *GenkitMCPServer) registerPromptWithMCP(desc api.ActionDesc) {
 			return nil, fmt.Errorf("render Genkit prompt %q: %w", desc.Name, err)
 		}
 		if rendered == nil {
-			return nil, fmt.Errorf("Genkit prompt %q rendered no request", desc.Name)
+			return nil, fmt.Errorf("genkit prompt %q rendered no request", desc.Name)
 		}
 
 		promptMessages := rendered.Messages
@@ -93,7 +93,7 @@ func (s *GenkitMCPServer) registerPromptWithMCP(desc api.ActionDesc) {
 		}
 		messages = append(docs, messages...)
 		if len(messages) == 0 {
-			return nil, fmt.Errorf("Genkit prompt %q rendered no messages", desc.Name)
+			return nil, fmt.Errorf("genkit prompt %q rendered no messages", desc.Name)
 		}
 		return &mcp.GetPromptResult{Description: description, Messages: messages}, nil
 	})
