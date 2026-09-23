@@ -51,6 +51,9 @@ type runtimeFileData struct {
 	Timestamp                string `json:"timestamp"`
 	GenkitVersion            string `json:"genkitVersion"`
 	ReflectionApiSpecVersion int    `json:"reflectionApiSpecVersion"`
+	// ReflectionSecret lets a CLI process that did not spawn this runtime
+	// still authenticate to it. Dev only, and the file is mode 0600.
+	ReflectionSecret string `json:"reflectionSecret,omitempty"`
 }
 
 // reflectionServer encapsulates everything needed to serve the Reflection API.
@@ -107,10 +110,11 @@ func (s *reflectionServer) runtimeID() string {
 	return fmt.Sprintf("%d-%s", os.Getpid(), port)
 }
 
-// findAvailablePort finds the next available port starting from the given port number.
-func findAvailablePort(startPort int) (string, error) {
-	for port := startPort; port < startPort+100; port++ {
-		addr := fmt.Sprintf("127.0.0.1:%d", port)
+// findAvailablePort finds the next available port on host starting from the
+// given port number.
+func findAvailablePort(host string, startPort int) (string, error) {
+	for port := startPort; port < startPort+100 && port <= 65535; port++ {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
 			listener.Close()
@@ -120,27 +124,24 @@ func findAvailablePort(startPort int) (string, error) {
 	return "", fmt.Errorf("no available port found in range %d-%d", startPort, startPort+99)
 }
 
-// startReflectionServer starts the Reflection API server listening at the
-// value of the environment variable GENKIT_REFLECTION_PORT for the port,
-// or finds the next available port starting at 3100 if it is empty.
-func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, serverStartCh chan<- struct{}) *reflectionServer {
+// startReflectionServer starts the Reflection API server using cfg, which the
+// caller resolved from the environment. A pinned port is bound exactly; when
+// it is not pinned the next available port starting at cfg.port is used.
+func startReflectionServer(ctx context.Context, g *Genkit, cfg reflectionConfig, errCh chan<- error, serverStartCh chan<- struct{}) *reflectionServer {
 	if g == nil {
 		errCh <- fmt.Errorf("nil Genkit provided")
 		return nil
 	}
 
 	var addr string
-	if envPort := os.Getenv("GENKIT_REFLECTION_PORT"); envPort != "" {
-		// Validate that the user-provided port is a valid integer.
-		_, err := strconv.Atoi(envPort)
-		if err != nil {
-			errCh <- fmt.Errorf("invalid GENKIT_REFLECTION_PORT: %w", err)
-			return nil
-		}
-		addr = net.JoinHostPort("127.0.0.1", envPort)
+	if cfg.pinned {
+		// A pinned port is a contract with whoever published it: bind exactly
+		// that port or fail. Shifting to the next free one would leave them
+		// talking to a dead port.
+		addr = net.JoinHostPort(cfg.host, strconv.Itoa(cfg.port))
 	} else {
 		var err error
-		addr, err = findAvailablePort(3100)
+		addr, err = findAvailablePort(cfg.host, cfg.port)
 		if err != nil {
 			errCh <- fmt.Errorf("failed to find available port: %w", err)
 			return nil
@@ -153,13 +154,22 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 		},
 		activeActions: newActiveActionsMap(),
 	}
-	s.Handler = serveMux(g, s)
+	s.Handler = requireReflectionSecret(cfg.secret, serveMux(g, s))
+	if cfg.secret == "" && !isLoopbackHost(cfg.host) {
+		slog.Warn("reflection API is listening without authentication; anyone who can reach this port can run any registered action. Set GENKIT_REFLECTION_SECRET_TOKEN, or front it with your own auth",
+			"host", cfg.host)
+	}
 
 	slog.Debug("starting reflection server", "addr", s.Addr)
 
-	if err := s.writeRuntimeFile(s.Addr); err != nil {
-		errCh <- fmt.Errorf("failed to write runtime file: %w", err)
-		return nil
+	// Dev only: the file exists so a local CLI watching the same filesystem can
+	// discover this runtime. Nothing is watching in a container, the working
+	// directory is frequently read-only, and the failure here is fatal.
+	if api.CurrentEnvironment() == api.EnvironmentDev {
+		if err := s.writeRuntimeFile(s.Addr, cfg.secret); err != nil {
+			errCh <- fmt.Errorf("failed to write runtime file: %w", err)
+			return nil
+		}
 	}
 
 	serverCtx, cancel := context.WithCancel(context.Background())
@@ -206,7 +216,9 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 }
 
 // writeRuntimeFile writes a file describing the runtime to the project root.
-func (s *reflectionServer) writeRuntimeFile(url string) error {
+// The secret, when set, is advertised so any local CLI process can reach this
+// runtime, not just the one that spawned it.
+func (s *reflectionServer) writeRuntimeFile(url, secret string) error {
 	projectRoot, err := findProjectRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find project root: %w", err)
@@ -237,6 +249,7 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 		Timestamp:                timestamp,
 		GenkitVersion:            "go/" + internal.Version,
 		ReflectionApiSpecVersion: internal.GENKIT_REFLECTION_API_SPEC_VERSION,
+		ReflectionSecret:         secret,
 	}
 
 	fileContent, err := json.MarshalIndent(data, "", "  ")
@@ -244,7 +257,8 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 		return fmt.Errorf("failed to marshal runtime data: %w", err)
 	}
 
-	if err := os.WriteFile(s.RuntimeFilePath, fileContent, 0644); err != nil {
+	// 0600: the file carries the reflection secret.
+	if err := os.WriteFile(s.RuntimeFilePath, fileContent, 0600); err != nil {
 		return fmt.Errorf("failed to write runtime file: %w", err)
 	}
 
