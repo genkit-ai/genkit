@@ -170,6 +170,7 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
     assert response.message is not None
     assert response.message.content[0].text == response_text
     on_chunk_mock.assert_called_once()
+    assert on_chunk_mock.call_args.args[0].content[0].text == response_text
 
 
 @pytest.mark.asyncio
