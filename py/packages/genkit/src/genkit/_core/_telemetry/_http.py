@@ -38,6 +38,7 @@ from urllib.parse import urljoin, urlparse
 from .._environment import is_dev_environment
 from .._error import GenkitError, Interrupt
 from .._logger import get_logger
+from .._reflection_config import resolve_reflection_config
 from ._attrs import Attr, State, metadata_key
 from ._instrumentation import (
     Instrumentation,
@@ -354,8 +355,13 @@ def connect_developer_ui_collector(*, url: str) -> None:
 
 
 def maybe_inject_dev_instrumentation() -> None:
-    """``Genkit()`` in dev installs the poster once when a collector URL is set."""
-    if not is_dev_environment():
+    """``Genkit()`` installs the poster once when a collector URL is set.
+
+    Keyed on reflection being on rather than GENKIT_ENV alone, so a non-dev
+    runtime with reflection enabled still posts traces to the server it was
+    given.
+    """
+    if not is_dev_environment() and not resolve_reflection_config().enabled:
         return
     if is_instrumented_by(DevUIInstrumentation):
         return
