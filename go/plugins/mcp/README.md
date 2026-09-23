@@ -49,6 +49,33 @@ func main() {
 }
 ```
 
+### Dynamic MCP prompts
+
+`GetPrompt` fetches a prompt once and keeps its messages as a snapshot.
+`GetDynamicPrompt` registers a prompt that calls the MCP server's `prompts/get`
+each time you render or execute it. Supply that call's MCP arguments as strings:
+
+```go
+prompt, err := client.GetDynamicPrompt(ctx, g, "complex-prompt")
+if err != nil {
+    log.Fatal(err)
+}
+rendered, err := prompt.Render(ctx, map[string]string{
+    "temperature": "0.5",
+    "style": "concise",
+})
+if err != nil {
+    log.Fatal(err)
+}
+for _, message := range rendered.Messages {
+    log.Println(message.Text())
+}
+```
+
+The client lists prompts once when registering the dynamic prompt, then fetches
+its content on every render. A snapshot and a dynamic prompt from the same MCP
+client use the same Genkit name, so register only one mode for each prompt.
+
 ## GenkitMCPManager - Multiple Server Management
 
 Manage connections to multiple MCP servers:
