@@ -344,7 +344,10 @@ export class GenkitMcpServer {
     if (!transport) {
       transport = new StdioServerTransport();
     }
-    if (transport instanceof StdioServerTransport) {
+    if (
+      transport instanceof StdioServerTransport ||
+      transport.constructor?.name === 'StdioServerTransport'
+    ) {
       // Stdout carries MCP messages, including during setup and shutdown.
       logger.setDefaultLogOutput('stderr');
     }
