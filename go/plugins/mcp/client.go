@@ -119,7 +119,9 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	// Close existing connection if any
 	if c.server != nil {
-		if err := c.server.Client.Close(); err != nil {
+		previous := c.server
+		c.server = nil
+		if err := previous.Client.Close(); err != nil {
 			ctx := context.Background()
 			logger.Warn(ctx, "error closing previous MCP transport", "client", c.options.Name, "error", err)
 		}
@@ -141,15 +143,18 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	mcpClient := client.NewClient(transport)
 
 	// Initialize the client if not disabled
-	var serverError string
 	if !options.Disabled {
-		serverError = c.initializeClient(ctx, mcpClient, options.Version)
+		if err := c.initializeClient(ctx, mcpClient, options.Version); err != nil {
+			if closeErr := mcpClient.Close(); closeErr != nil {
+				logger.Warn(ctx, "error closing MCP transport after initialization failure", "client", c.options.Name, "error", closeErr)
+			}
+			return fmt.Errorf("MCP handshake failed: %w", err)
+		}
 	}
 
 	c.server = &ServerRef{
 		Client:    mcpClient,
 		Transport: transport,
-		Error:     serverError,
 	}
 
 	return nil
@@ -205,7 +210,7 @@ func (c *GenkitMCPClient) createTransport(options MCPClientOptions) (transport.I
 }
 
 // initializeClient initializes the MCP client connection
-func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *client.Client, version string) string {
+func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *client.Client, version string) error {
 	initReq := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
@@ -218,11 +223,7 @@ func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *clien
 	}
 
 	_, err := mcpClient.Initialize(ctx, initReq)
-	if err != nil {
-		return err.Error()
-	}
-
-	return ""
+	return err
 }
 
 // Name returns the client name
@@ -247,7 +248,10 @@ func (c *GenkitMCPClient) Disable() {
 func (c *GenkitMCPClient) Reenable() {
 	if c.options.Disabled {
 		c.options.Disabled = false
-		c.connect(c.options)
+		if err := c.connect(c.options); err != nil {
+			c.options.Disabled = true
+			logger.Error(context.Background(), "failed to reenable MCP client", "client", c.options.Name, "error", err)
+		}
 	}
 }
 
