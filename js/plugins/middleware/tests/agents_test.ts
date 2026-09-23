@@ -1654,6 +1654,40 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(out.timedOut, undefined);
   });
 
+  it('fails a cancelled wait without re-reading its tasks', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened);
+    const task = await researcher.chat().detach('dig');
+
+    // Count the middleware's plain reads; the follow itself waits in the
+    // store and does not go through this action.
+    let reads = 0;
+    const readAction = researcher.getSnapshotDataAction;
+    const run = readAction.run.bind(readAction);
+    readAction.run = ((...args: Parameters<typeof run>) => {
+      reads++;
+      return run(...args);
+    }) as typeof run;
+
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
+    const controller = new AbortController();
+    const waiting = waitTool(
+      { taskIds: [`researcher:${task.snapshotId}`] },
+      { abortSignal: controller.signal }
+    );
+    setTimeout(() => controller.abort(), 20);
+    await assert.rejects(waiting);
+    // The call fails as a whole, so a report refreshed for it is discarded.
+    assert.strictEqual(reads, 0, 'a cancelled wait must not re-read its tasks');
+    gate.release();
+  });
+
   it('says when an abort cannot reach the worker', async () => {
     const ai = genkit({});
     const gate = makeGate();

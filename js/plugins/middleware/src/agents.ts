@@ -1265,11 +1265,13 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        * the failure itself, not from the signal alone: a handle that never
        * resolved is not the signal's doing and keeps its error however the
        * wait ended, or the model would be told to keep re-checking an ID that
-       * can never settle.
+       * can never settle. When `toolSignal` ended the wait, the tool call
+       * fails as a whole, so there is no report to refresh and no re-read.
        */
       async function awaitTask(
         taskId: string,
-        signal: AbortSignal
+        signal: AbortSignal,
+        toolSignal?: AbortSignal
       ): Promise<BackgroundTaskReport> {
         const { report, error } = await reportTask(
           taskId,
@@ -1278,6 +1280,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         );
         if (error === undefined || !signal.aborted || !isAbortError(error)) {
           return report;
+        }
+        if (toolSignal?.aborted) {
+          return { ...report, status: 'pending', error: undefined };
         }
         const current = await reportTask(taskId, readSnapshotOnce);
         if (current.error === undefined) return current.report;
@@ -1344,7 +1349,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         let reports: BackgroundTaskReport[];
         try {
           reports = await collectReports(taskIds, async (taskId) => {
-            const report = await awaitTask(taskId, signal);
+            const report = await awaitTask(taskId, signal, toolSignal);
             if (first && isSettled(report.status)) {
               controller.abort(
                 new DOMException('first task settled', 'AbortError')
