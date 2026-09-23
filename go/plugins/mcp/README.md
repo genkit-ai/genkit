@@ -49,6 +49,58 @@ func main() {
 }
 ```
 
+## Use MCP tools in DotPrompt
+
+`GetActiveTools` returns `[]ai.Tool`. When a prompt is defined in Go code,
+each tool already implements `ai.ToolRef`, so it can be passed to `ai.WithTools`.
+Go slices cannot be passed as a different slice type; copy the tools into a
+`[]ai.ToolRef` if you want to pass the entire list:
+
+```go
+toolRefs := make([]ai.ToolRef, 0, len(tools))
+for _, tool := range tools {
+    toolRefs = append(toolRefs, tool)
+}
+// Use ai.WithTools(toolRefs...) when defining or executing a prompt in Go.
+```
+
+For a `.prompt` file, the `tools:` frontmatter contains names, not Go values.
+Register the returned MCP tools with Genkit before executing the prompt.
+Genkit loads `.prompt` files from its configured prompt directory during
+`Init` (the default is `prompts/`):
+
+```go
+tools, err := client.GetActiveTools(ctx, g)
+if err != nil {
+    log.Fatal(err)
+}
+for _, tool := range tools {
+    genkit.RegisterAction(g, tool)
+}
+prompt := genkit.LookupPrompt(g, "encode")
+if prompt == nil {
+    log.Fatal("could not find encode.prompt")
+}
+response, err := prompt.Execute(ctx, ai.WithInput(map[string]any{"text": "Hello World"}))
+```
+
+MCP tool names are prefixed with the client's `Name` and an underscore. For
+example, a client named `demo` exposes a server tool named `text_encode` as
+`demo_text_encode`, which the DotPrompt can reference directly:
+
+```yaml
+---
+model: googleai/gemini-flash-latest
+tools:
+  - demo_text_encode
+---
+Use demo_text_encode to encode the user's text.
+```
+
+See the [runnable DotPrompt client](../../samples/mcp-server/dotprompt-client/main.go)
+and its [prompt file](../../samples/mcp-server/dotprompt-client/prompts/encode.prompt)
+for the complete connection, registration, and execution flow.
+
 ## GenkitMCPManager - Multiple Server Management
 
 Manage connections to multiple MCP servers:
