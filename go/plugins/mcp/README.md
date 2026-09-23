@@ -82,6 +82,10 @@ if prompt == nil {
     log.Fatal("could not find encode.prompt")
 }
 response, err := prompt.Execute(ctx, ai.WithInput(map[string]any{"text": "Hello World"}))
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(response.Text())
 ```
 
 MCP tool names are prefixed with the client's `Name` and an underscore. For
