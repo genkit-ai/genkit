@@ -15,10 +15,7 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type {
-  CallToolResult,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js' with { 'resolution-mode': 'import' };
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import {
   JSONSchema7,
   tool as genkitTool,
