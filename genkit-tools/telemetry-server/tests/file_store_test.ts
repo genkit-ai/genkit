@@ -464,6 +464,39 @@ describe('index', () => {
     ]);
   });
 
+  it('filters same-named MCP tool traces by dynamic action key', () => {
+    const hostAKey = '/dynamic-action-provider/host-a:tool/search';
+    const hostBKey = '/dynamic-action-provider/host-b:tool/search';
+    for (const [traceId, spanId, key] of [
+      [TRACE_ID_1, SPAN_A, hostAKey],
+      [TRACE_ID_2, SPAN_B, hostBKey],
+    ]) {
+      const rootSpan = span(traceId, spanId, 100, 100);
+      rootSpan.displayName = 'search';
+      rootSpan.attributes['genkit:metadata:subtype'] = 'tool';
+      rootSpan.attributes['genkit:key'] = key;
+      index.add({
+        traceId,
+        spans: { [spanId]: rootSpan },
+      } as TraceData);
+    }
+
+    assert.deepStrictEqual(
+      index.search({ limit: 5, filter: { eq: { key: hostAKey } } }).data,
+      [
+        {
+          id: TRACE_ID_1,
+          type: 'tool',
+          name: 'search',
+          key: hostAKey,
+          start: 1,
+          end: 2,
+          status: 0,
+        },
+      ]
+    );
+  });
+
   it('should apply search filters', () => {
     const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
     spanA.displayName = 'flowA';
