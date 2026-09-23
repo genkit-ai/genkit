@@ -34,10 +34,9 @@ from genkit._core._dap import (
     DapMetadata,
     DapValue,
     DynamicActionProvider,
-    define_dynamic_action_provider,
     is_dynamic_action_provider,
 )
-from genkit._core._registry import Registry
+from genkit._core._registry import Registry, define_dynamic_action_provider
 from genkit._core._typing import ActionMetadata
 
 

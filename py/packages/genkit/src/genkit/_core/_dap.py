@@ -23,12 +23,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from genkit._core._action import (
-    GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
     create_action_key,
 )
-from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
 
 ActionMetadataLike = Mapping[str, object]
@@ -186,34 +184,3 @@ def is_dynamic_action_provider(obj: object) -> bool:
         return True
     metadata = getattr(obj, 'metadata', None)
     return isinstance(metadata, dict) and metadata.get('type') == 'dynamic-action-provider'
-
-
-def define_dynamic_action_provider(
-    registry: Registry,
-    name: str,
-    fn: DapFn,
-    *,
-    description: str | None = None,
-    cache_ttl_millis: int | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> DynamicActionProvider:
-    """Define and register a Dynamic Action Provider for lazy action resolution."""
-
-    async def dap_action(input: DapMetadata) -> DapMetadata:
-        return input
-
-    action = registry.register_action(
-        name=name,
-        kind=ActionKind.DYNAMIC_ACTION_PROVIDER,
-        description=description,
-        fn=dap_action,
-        metadata={**(metadata or {}), 'type': 'dynamic-action-provider'},
-    )
-
-    dap = DynamicActionProvider(action, fn, cache_ttl_millis)
-    # Attach the provider to the registered Action so anyone holding the
-    # Action (e.g. ``Registry.resolve_action_by_key`` for a DAP-qualified key,
-    # or ``Registry.list_actions`` expanding children for reflection) can
-    # recover the cache and helpers via ``getattr(action, ATTR, None)``.
-    setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, dap)
-    return dap

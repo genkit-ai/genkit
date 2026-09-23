@@ -86,11 +86,7 @@ from genkit._core._background import (
     missing_operation_error,
 )
 from genkit._core._channel import Channel, run_loop
-from genkit._core._dap import (
-    DapFn,
-    DynamicActionProvider,
-    define_dynamic_action_provider as define_dap_block,
-)
+from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._logger import configure_logging, get_logger, resolve_level
@@ -104,7 +100,7 @@ from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
-from genkit._core._registry import Registry
+from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,

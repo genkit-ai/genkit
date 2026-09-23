@@ -36,9 +36,10 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._core._action import Action, ActionKind
-from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware

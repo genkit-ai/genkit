@@ -22,7 +22,7 @@ import asyncio
 import threading
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, cast
+from typing import Any, cast
 
 from dotpromptz.dotprompt import Dotprompt
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     set_action_name,
 )
+from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -56,9 +57,6 @@ from genkit._core._typing import (
     EvalResponse,
     Operation,
 )
-
-if TYPE_CHECKING:
-    from genkit._core._dap import DynamicActionProvider
 
 logger = get_logger(__name__)
 
@@ -904,3 +902,34 @@ class Registry:
         if action is None:
             return None
         return cast(Action[EvalRequest, EvalResponse, Never], action)
+
+
+def define_dynamic_action_provider(
+    registry: Registry,
+    name: str,
+    fn: DapFn,
+    *,
+    description: str | None = None,
+    cache_ttl_millis: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> DynamicActionProvider:
+    """Define and register a Dynamic Action Provider for lazy action resolution."""
+
+    async def dap_action(input: DapMetadata) -> DapMetadata:
+        return input
+
+    action = registry.register_action(
+        name=name,
+        kind=ActionKind.DYNAMIC_ACTION_PROVIDER,
+        description=description,
+        fn=dap_action,
+        metadata={**(metadata or {}), 'type': 'dynamic-action-provider'},
+    )
+
+    dap = DynamicActionProvider(action, fn, cache_ttl_millis)
+    # Attach the provider to the registered Action so anyone holding the
+    # Action (e.g. ``Registry.resolve_action_by_key`` for a DAP-qualified key,
+    # or ``Registry.list_actions`` expanding children for reflection) can
+    # recover the cache and helpers via ``getattr(action, ATTR, None)``.
+    setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, dap)
+    return dap
