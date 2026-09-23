@@ -313,12 +313,37 @@ export const CandidateErrorSchema = z.object({
 export type CandidateError = z.infer<typeof CandidateErrorSchema>;
 
 /**
+ * Schema for the canonical Genkit error wire shape (`{status, message,
+ * details}`). This is the form runtimes use when an error travels as data
+ * inside another value (e.g. a model response that accompanies an error,
+ * agent outputs, and session snapshots).
+ */
+export const RuntimeErrorSchema = z.object({
+  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
+  status: z.string().optional(),
+  /** Human-readable error message. */
+  message: z.string(),
+  /** Optional structured details describing the failure. */
+  details: z.any().optional(),
+});
+/** Structured error carried as data inside responses, outputs, and snapshots. */
+export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
+
+/**
  * Zod schema of a model response.
  */
 export const ModelResponseSchema = z.object({
   message: MessageSchema.optional(),
   finishReason: FinishReasonSchema,
   finishMessage: z.string().optional(),
+  /**
+   * Structured failure information for a response that accompanies an
+   * error, set whenever `finishReason` is `failed` or `aborted`. It is the
+   * classified form of `finishMessage`, so a caller reading a response that
+   * travelled as data (a trace, a persisted turn) can branch on
+   * `error.status` instead of matching a string.
+   */
+  error: RuntimeErrorSchema.optional(),
   latencyMs: z.number().optional(),
   usage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */
