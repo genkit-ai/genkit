@@ -40,10 +40,17 @@ import {
 } from './types.js';
 
 export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
+  const isParameterless =
+    tool.inputSchema?.type === 'object' &&
+    tool.inputSchema.properties &&
+    Object.keys(tool.inputSchema.properties).length === 0 &&
+    !tool.inputSchema.additionalProperties;
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: isParameterless
+      ? undefined
+      : toGeminiSchemaProperty(tool.inputSchema),
   };
   return declaration;
 }
