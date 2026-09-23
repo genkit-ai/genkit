@@ -2567,6 +2567,34 @@ describe('Agent', () => {
       assert.strictEqual(snap?.status, 'aborted');
     });
 
+    it('keeps waiting on an aborting row until its finalize lands', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitAborting', store);
+      const now = new Date().toISOString();
+      const snapshotId = (await store.saveSnapshot(undefined, () => ({
+        createdAt: now,
+        heartbeatAt: now,
+        status: 'aborting',
+        state: { sessionId: 'sess-aborting' },
+      })))!;
+
+      // A live worker is still winding the row down, so it is not settled.
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId,
+          abortSignal: AbortSignal.timeout(30),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      await store.saveSnapshot(snapshotId, (current) => ({
+        ...current!,
+        status: 'aborted',
+      }));
+      assert.strictEqual((await waiting)?.status, 'aborted');
+    });
+
     it('polls a store that cannot push status changes', async () => {
       const base = new InMemorySessionStore<S>();
       // The same store minus `onSnapshotStateChange`: the wait has to notice
@@ -2772,10 +2800,12 @@ describe('Agent', () => {
     });
 
     it('falls back to polling when the transport cannot wait server-side', async () => {
+      // An aborting row is still in flight: the poll goes on until the
+      // finalize settles it.
       const statuses: SessionSnapshot['status'][] = [
         'pending',
-        'pending',
-        'completed',
+        'aborting',
+        'aborted',
       ];
       let reads = 0;
       const snapshot = (
@@ -2800,7 +2830,7 @@ describe('Agent', () => {
 
       const api = createAgentAPI(transport);
       const snap = await api.waitForSnapshot('x', { intervalMs: 1 });
-      assert.strictEqual(snap?.status, 'completed');
+      assert.strictEqual(snap?.status, 'aborted');
       assert.strictEqual(reads, 3);
 
       // A missing snapshot resolves undefined rather than polling forever.
