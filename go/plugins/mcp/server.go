@@ -44,6 +44,7 @@ type GenkitMCPServer struct {
 	// Discovered actions from Genkit registry
 	toolActions     []ai.Tool
 	resourceActions []api.Action
+	promptDescs     []api.ActionDesc
 	actionsResolved bool
 }
 
@@ -85,6 +86,7 @@ func (s *GenkitMCPServer) setup() error {
 	// Store discovered actions
 	s.toolActions = toolActions
 	s.resourceActions = resourceActions
+	s.promptDescs = genkit.ListPromptDescriptors(s.genkit)
 
 	// Register tools with the MCP server
 	for _, tool := range toolActions {
@@ -99,11 +101,17 @@ func (s *GenkitMCPServer) setup() error {
 		}
 	}
 
+	// Register prompts for discovery and on-demand rendering by MCP clients.
+	for _, desc := range s.promptDescs {
+		s.registerPromptWithMCP(desc)
+	}
+
 	s.actionsResolved = true
 	slog.Info("MCP Server setup complete",
 		"name", s.options.Name,
 		"tools", len(s.toolActions),
-		"resources", len(s.resourceActions))
+		"resources", len(s.resourceActions),
+		"prompts", len(s.promptDescs))
 	return nil
 }
 
@@ -306,4 +314,13 @@ func (s *GenkitMCPServer) ListRegisteredResources() []string {
 		resourceNames = append(resourceNames, resourceName)
 	}
 	return resourceNames
+}
+
+// ListRegisteredPrompts returns the names of all discovered prompts.
+func (s *GenkitMCPServer) ListRegisteredPrompts() []string {
+	var names []string
+	for _, desc := range s.promptDescs {
+		names = append(names, desc.Name)
+	}
+	return names
 }

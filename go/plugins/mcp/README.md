@@ -195,6 +195,48 @@ func main() {
 
 ```
 
+### Expose Genkit prompts
+
+`NewMCPServer` also exposes prompts registered before the server starts. This
+includes `genkit.DefinePrompt` calls and `.prompt` files loaded by `genkit.Init`.
+For example, after creating `g`:
+
+```go
+genkit.DefinePrompt(g, "greet",
+    ai.WithDescription("Greet a person"),
+    ai.WithInputSchema(map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "name": map[string]any{"type": "string", "description": "Person to greet"},
+        },
+        "required": []string{"name"},
+    }),
+    ai.WithPrompt("Hello {{name}}"),
+)
+server := mcp.NewMCPServer(g, mcp.MCPServerOptions{Name: "my-server"})
+if err := server.ServeStdio(); err != nil {
+    log.Fatal(err)
+}
+```
+
+Import `github.com/firebase/genkit/go/ai` for the prompt options. MCP clients
+can discover `greet` with `prompts/list` and render it with `prompts/get` and a
+`name` argument. Input schema properties become MCP prompt arguments; string
+arguments are converted to numbers, booleans, or JSON values when the schema
+requires them. Prompts with a scalar input schema use one argument named
+`input`. Omitted arguments use the prompt's default input when available;
+supplied fields override matching defaults. Rendering does not call a model.
+Rendered context documents and output format instructions are included in the
+returned MCP messages.
+
+For prompts without declared input properties, pass a JSON object string in
+`inputJson` (for example, `{"name":"Ada"}`). Inline base64 image and audio
+parts are supported; `prompts/get` returns an error for remote media that
+cannot be embedded in an MCP prompt.
+
+MCP prompt messages support user and assistant roles. Genkit system messages
+are returned as user messages prefixed with `System instructions:`.
+
 ## Testing Your Server
 
 ```bash
