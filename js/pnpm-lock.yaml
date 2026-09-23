@@ -845,7 +845,7 @@ importers:
     dependencies:
       '@langchain/community':
         specifier: ^0.0.53
-        version: 0.0.53(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+        version: 0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
       '@langchain/core':
         specifier: ^0.1.61
         version: 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
@@ -857,7 +857,7 @@ importers:
         version: link:../../genkit
       langchain:
         specifier: ^0.1.36
-        version: 0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+        version: 0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
     devDependencies:
       '@types/node':
         specifier: ^20.11.16
@@ -1028,8 +1028,8 @@ importers:
   plugins/pinecone:
     dependencies:
       '@pinecone-database/pinecone':
-        specifier: ^2.0.1
-        version: 2.2.2
+        specifier: ^8.2.0
+        version: 8.2.0
       genkit:
         specifier: workspace:^
         version: link:../../genkit
@@ -4110,6 +4110,7 @@ packages:
   '@google-cloud/opentelemetry-cloud-monitoring-exporter@0.19.0':
     resolution: {integrity: sha512-5SOPXwC6RET4ZvXxw5D97dp8fWpqWEunHrzrUUGXhG4UAeedQe1KvYV8CK+fnaAbN2l2ha6QDYspT6z40TVY0g==}
     engines: {node: '>=14'}
+    deprecated: Google Cloud Platform now supports native OpenTelemetry Protocol (OTLP) endpoints via the Telemetry API. Please follow https://github.com/GoogleCloudPlatform/opentelemetry-operations-js/blob/main/MIGRATION.md
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
       '@opentelemetry/core': ^1.0.0
@@ -4119,6 +4120,7 @@ packages:
   '@google-cloud/opentelemetry-cloud-trace-exporter@2.4.1':
     resolution: {integrity: sha512-Dq2IyAyA9PCjbjLOn86i2byjkYPC59b5ic8k/L4q5bBWH0Jro8lzMs8C0G5pJfqh2druj8HF+oAIAlSdWQ+Z9Q==}
     engines: {node: '>=14'}
+    deprecated: Google Cloud Platform now supports native OpenTelemetry Protocol (OTLP) endpoints via the Telemetry API. Please follow https://github.com/GoogleCloudPlatform/opentelemetry-operations-js/blob/main/MIGRATION.md
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
       '@opentelemetry/core': ^1.0.0
@@ -4128,6 +4130,7 @@ packages:
   '@google-cloud/opentelemetry-resource-util@2.4.0':
     resolution: {integrity: sha512-/7ujlMoKtDtrbQlJihCjQnm31n2s2RTlvJqcSbt2jV3OkCzPAdo3u31Q13HNugqtIRUSk7bUoLx6AzhURkhW4w==}
     engines: {node: '>=14'}
+    deprecated: Google Cloud Platform now supports native OpenTelemetry Protocol (OTLP) endpoints via the Telemetry API. Please follow https://github.com/GoogleCloudPlatform/opentelemetry-operations-js/blob/main/MIGRATION.md
     peerDependencies:
       '@opentelemetry/resources': ^1.0.0
 
@@ -5712,6 +5715,7 @@ packages:
   '@opentelemetry/propagation-utils@0.30.16':
     resolution: {integrity: sha512-ZVQ3Z/PQ+2GQlrBfbMMMT0U7MzvYZLCPP800+ooyaBqm4hMvuQHfP028gB9/db0mwkmyEAMad9houukUVxhwcw==}
     engines: {node: '>=14'}
+    deprecated: The use of process spans has been removed from Messaging Semantic Conventions. It is now recommended to connect pub/sub spans via Span Links. See https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/ for details.
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
 
@@ -5913,9 +5917,9 @@ packages:
   '@pdf-lib/upng@1.0.1':
     resolution: {integrity: sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==}
 
-  '@pinecone-database/pinecone@2.2.2':
-    resolution: {integrity: sha512-gbe/4SowHc64pHIm0kBdgY9hVdzsQnnnpcWviwYMB33gOmsL8brvE8fUSpl1dLDvdyXzKcQkzdBsjCDlqgpdMA==}
-    engines: {node: '>=14.0.0'}
+  '@pinecone-database/pinecone@8.2.0':
+    resolution: {integrity: sha512-4Lzn+Ph4Lmf8ZEm2Ky1WGgPJJtoMtjSCmsT6bdHpd8nhkUnCQqk/NsbPYglx7irWYJpb2zBE+wehNBfoCeJ6Qw==}
+    engines: {node: '>=20.0.0'}
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -7065,9 +7069,6 @@ packages:
 
   '@sinclair/typebox@0.27.10':
     resolution: {integrity: sha512-MTBk/3jGLNB2tVxv6uLlFh1iu64iYOQ2PbdOSK3NW8JZsmlaOh2q6sdtKowBhfw8QFLmYNzTW4/oK4uATIi6ZA==}
-
-  '@sinclair/typebox@0.29.6':
-    resolution: {integrity: sha512-aX5IFYWlMa7tQ8xZr3b2gtVReCvg7f3LEhjir/JAjX2bJCMVJA5tIPv30wTD4KDfcwMd7DDYY3hFDeGmOgtrZQ==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -8652,9 +8653,6 @@ packages:
     engines: {node: '>=10.14', npm: '>=6', yarn: '>=1'}
     hasBin: true
 
-  cross-fetch@3.2.0:
-    resolution: {integrity: sha512-Q+xVJLoGOeIMXZmbUK4HYk+69cQH6LudR0Vu/pRm2YlU/hDV9CiS0gKUMaWY5f2NeUH9C1nV3bsTlCo0FsTV1Q==}
-
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -9378,6 +9376,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -16929,7 +16928,7 @@ snapshots:
     dependencies:
       jsep: 1.4.0
 
-  '@langchain/community@0.0.53(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)':
+  '@langchain/community@0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)':
     dependencies:
       '@langchain/core': 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       '@langchain/openai': 0.0.34(encoding@0.1.13)(ws@8.20.1)
@@ -16940,7 +16939,7 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
-      '@pinecone-database/pinecone': 2.2.2
+      '@pinecone-database/pinecone': 8.2.0
       chromadb: 1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       jsonwebtoken: 9.0.3
       lodash: 4.17.23
@@ -18109,12 +18108,7 @@ snapshots:
     dependencies:
       pako: 1.0.11
 
-  '@pinecone-database/pinecone@2.2.2':
-    dependencies:
-      '@sinclair/typebox': 0.29.6
-      ajv: 8.18.0
-      cross-fetch: 3.2.0(encoding@0.1.13)
-      encoding: 0.1.13
+  '@pinecone-database/pinecone@8.2.0': {}
 
   '@pinojs/redact@0.4.0': {}
 
@@ -19255,8 +19249,6 @@ snapshots:
       '@sigstore/protobuf-specs': 0.5.1
 
   '@sinclair/typebox@0.27.10': {}
-
-  '@sinclair/typebox@0.29.6': {}
 
   '@sindresorhus/is@4.6.0': {}
 
@@ -21007,12 +20999,6 @@ snapshots:
     dependencies:
       cross-spawn: 7.0.6
 
-  cross-fetch@3.2.0(encoding@0.1.13):
-    dependencies:
-      node-fetch: 2.7.0(encoding@0.1.13)
-    transitivePeerDependencies:
-      - encoding
-
   cross-spawn@7.0.6:
     dependencies:
       path-key: 3.1.1
@@ -21483,6 +21469,7 @@ snapshots:
   encoding@0.1.13:
     dependencies:
       iconv-lite: 0.6.3
+    optional: true
 
   end-of-stream@1.4.5:
     dependencies:
@@ -21764,7 +21751,7 @@ snapshots:
       eslint: 9.39.4(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
       eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.4(jiti@2.7.0))
@@ -21797,7 +21784,7 @@ snapshots:
       tinyglobby: 0.2.15
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
@@ -21812,7 +21799,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -24135,10 +24122,10 @@ snapshots:
 
   kuler@2.0.0: {}
 
-  langchain@0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1):
+  langchain@0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1):
     dependencies:
       '@anthropic-ai/sdk': 0.9.1(encoding@0.1.13)
-      '@langchain/community': 0.0.53(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+      '@langchain/community': 0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
       '@langchain/core': 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       '@langchain/openai': 0.0.34(encoding@0.1.13)(ws@8.20.1)
       '@langchain/textsplitters': 0.0.3(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
@@ -24157,7 +24144,7 @@ snapshots:
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
       '@google-cloud/storage': 7.19.0(encoding@0.1.13)
-      '@pinecone-database/pinecone': 2.2.2
+      '@pinecone-database/pinecone': 8.2.0
       chromadb: 1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       fast-xml-parser: 5.5.3
       handlebars: 4.7.8

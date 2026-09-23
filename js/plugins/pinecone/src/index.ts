@@ -169,7 +169,7 @@ export function configurePineconeRetriever<
   const pineconeConfig = params.clientParams ?? getDefaultConfig();
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
-  const index = pinecone.index(indexId);
+  const index = pinecone.index({ name: indexId });
 
   return ai.defineRetriever(
     {
@@ -250,7 +250,7 @@ export function configurePineconeIndexer<
   const pineconeConfig = params.clientParams ?? getDefaultConfig();
   const contentKey = params.contentKey ?? params.textKey ?? CONTENT_KEY;
   const pinecone = new Pinecone(pineconeConfig);
-  const index = pinecone.index(indexId);
+  const index = pinecone.index({ name: indexId });
 
   return ai.defineIndexer(
     {
@@ -271,8 +271,8 @@ export function configurePineconeIndexer<
           })
         )
       );
-      await scopedIndex.upsert(
-        embeddings
+      await scopedIndex.upsert({
+        records: embeddings
           .map((value, i) => {
             const doc = docs[i];
             // The array of embeddings for this document
@@ -299,8 +299,8 @@ export function configurePineconeIndexer<
           })
           .reduce((acc, val) => {
             return acc.concat(val);
-          }, [])
-      );
+          }, []),
+      });
     }
   );
 }
