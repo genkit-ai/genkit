@@ -52,6 +52,7 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
+from genkit._core._reflection_config import REFLECTION_AUTH_ERROR_CODE
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._trace._log_exporter import enable_log_export
@@ -128,10 +129,13 @@ class ReflectionServerV2:
         ws_url: str,
         *,
         app_name: str | None = None,
+        secret: str | None = None,
     ) -> None:
         self.registry = registry
         self.ws_url = ws_url
         self.app_name = app_name
+        #: Presented in register. The CLI rejects the connection on a mismatch.
+        self.secret = secret
         self.ws: Any = None
         self.write_lock = asyncio.Lock()
         self.pending: dict[str, asyncio.Future[JsonValue]] = {}
@@ -272,12 +276,19 @@ class ReflectionServerV2:
             genkit_version='py/' + GENKIT_VERSION,
             reflection_api_spec_version=float(GENKIT_REFLECTION_API_SPEC_VERSION),
             envs=['dev'],
+            secret=self.secret,
         ).model_dump(by_alias=True, exclude_none=True)
         try:
             result = await self.send_request('register', params)
             if isinstance(result, dict) and (telemetry_url := result.get('telemetryServerUrl')):
                 self.apply_handshake_telemetry(str(telemetry_url))
         except JsonRpcCallError as e:
+            # Auth failures are terminal: the secret will not change, so
+            # retrying just loops against a CLI that keeps refusing.
+            if e.code == REFLECTION_AUTH_ERROR_CODE:
+                logger.error('reflection API rejected this runtime; not reconnecting', message=e.message)
+                self.stop()
+                return
             logger.error('reflection V2: register failed', code=e.code, message=e.message)
         except Exception as e:
             logger.error('reflection V2: register failed', err=e)
