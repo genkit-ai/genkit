@@ -122,7 +122,47 @@ const ai = genkit({
 The `createMcpClient` function takes an `McpClientOptions` object:
 -   **`name`**: (required, string) A unique name for this client instance. This name will be used as the namespace for its tools and prompts.
 -   **`version`**: (optional, string) Version for this client instance. Defaults to "1.0.0".
--   Additionally, it supports all options from `McpServerConfig` (e.g., `disabled`, `rawToolResponses`, and transport configurations), as detailed in the `createMcpHost` options section.
+-   **`mcpServer`**: (required, object) The server connection configuration. For HTTP, provide `url` and optionally `requestInit` for headers. It also accepts the stdio and custom transport configurations described under `createMcpHost`.
+-   **`rawToolResponses`**: (optional, boolean) Return raw MCP tool responses instead of Genkit's processed result.
+
+### HTTP authorization per request
+
+If each application request has a different access token, create an MCP client with that token and pass its tools to a shared Genkit instance. The HTTP transport sends `requestInit.headers` during connection and tool calls, so the token must be available when the client is created. Do not share one connected client across users with different credentials.
+
+```ts
+import { googleAI } from '@genkit-ai/google-genai';
+import { createMcpClient } from '@genkit-ai/mcp';
+import { genkit } from 'genkit';
+
+const ai = genkit({ plugins: [googleAI()] });
+
+async function generateWithMcpToken(accessToken: string, prompt: string) {
+  const client = createMcpClient({
+    name: 'slides',
+    mcpServer: {
+      url: 'https://example.com/mcp',
+      requestInit: {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    },
+  });
+
+  try {
+    await client.ready();
+    if (!client.isEnabled()) throw new Error('MCP connection failed');
+
+    return await ai.generate({
+      model: googleAI.model('gemini-2.0-flash'),
+      prompt,
+      tools: await client.getActiveTools(ai),
+    });
+  } finally {
+    await client.disable();
+  }
+}
+```
+
+This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends.
 
 ### Using MCP Actions (Tools, Prompts)
 
