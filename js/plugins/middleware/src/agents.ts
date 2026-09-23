@@ -197,13 +197,20 @@ function carriesResult(reason?: AgentFinishReason): boolean {
 
 /**
  * Whether a snapshot or task-report status can no longer change on its own,
- * which is the rule the wait tool counts by. `pending` is the only status
- * that can; an absent status is the `completed` default, and the report-only
- * `unknown` is settled too (see {@link TASK_STATUS_UNKNOWN}).
+ * which is the rule the wait tool counts by. `pending` and `aborting` (a
+ * stopped task winding down toward its finalize) are the two still in flight;
+ * an absent status is the `completed` default, and the report-only `unknown`
+ * is settled too (see {@link TASK_STATUS_UNKNOWN}).
  */
 function isSettled(status: string | undefined): boolean {
-  return status !== 'pending';
+  return status !== 'pending' && status !== 'aborting';
 }
+
+/**
+ * How a task settles once an abort reaches it, in the words the abort tool's
+ * description and the aborting report share.
+ */
+const STOPPED_TASK_SETTLES = 'settles as "aborted" with the progress it saved';
 
 /** Joins a message's non-empty text parts with newlines. */
 function messageText(message?: MessageData): string {
@@ -466,8 +473,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // generate call: completed, failed, and aborted rows never change, so
         // a re-check skips the snapshot fetch and artifact re-merge (and cannot
         // clobber a merged artifact the orchestrator has since edited).
-        // Pending, expired, and unresolvable reports can still change and are
-        // never cached.
+        // Pending, aborting, expired, and unresolvable reports can still change
+        // and are never cached.
         settledReports: new Map<string, BackgroundTaskReport>(),
       };
 
@@ -642,7 +649,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         status: z
           .string()
           .describe(
-            'The task\'s lifecycle state: "pending", "completed", "failed", "aborted", "expired" (worker presumed dead), or "unknown" (the ID could not be resolved; see error). "completed" always carries a response.'
+            `The task's lifecycle state: "pending", "completed", "failed", "aborted", "expired" (worker presumed dead), "aborting" (the stop was delivered and the task is winding down; it ${STOPPED_TASK_SETTLES}), or "unknown" (the ID could not be resolved; see error). "completed" always carries a response.`
           ),
         response: z
           .string()
@@ -1009,8 +1016,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
 
       // The abort reads before it stops anything, because there are rows an
       // abort must not touch. Expiry is decided on read, not stored: a worker
-      // that stopped heartbeating leaves a row that is still pending in the
-      // store and reads as expired, and aborting it would overwrite the one
+      // that stopped heartbeating leaves a row that is still pending or
+      // aborting in the store and reads as expired, and aborting it would overwrite the one
       // signal telling the model the work is gone. A task that already
       // settled needs no abort at all and is answered from the row alone.
       const abortSnapshot: SnapshotFetch = async (agent, snapshotId) => {
@@ -1020,13 +1027,16 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         }
         const { result } = await agent.abortAgentAction.run({ snapshotId });
         // The abort action answers with the status the row had before the
-        // attempt: `pending` means the flip landed, so the row just read is
-        // handed back restamped rather than re-read (a re-read could fail on
-        // its own and turn a delivered stop into "unknown"). Anything else
-        // means the task settled between the read and the abort, and a re-read
-        // fetches the answer it now carries.
-        if (result.status === 'pending') {
-          return { ...current, status: 'aborted' };
+        // attempt: `pending` means the flip to `aborting` landed, and
+        // `aborting` means an earlier one had. Either way the stop is durable,
+        // so the row just read is handed back restamped rather than re-read (a
+        // re-read could fail on its own and turn a delivered stop into
+        // "unknown"), and the report says the task is winding down. The abort
+        // never waits for the finalize; the wait tool is the one that waits.
+        // Anything else means the task settled between the read and the
+        // abort, and a re-read fetches the answer it now carries.
+        if (result.status === 'pending' || result.status === 'aborting') {
+          return { ...current, status: 'aborting' };
         }
         return readSnapshotOnce(agent, snapshotId);
       };
@@ -1185,16 +1195,28 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               lastModelMessage(snapshot)
             );
             break;
-          case 'aborted':
+          case 'aborting':
             // The runtime stops a worker through its store's change feed.
-            // Where the store has none, the flip still lands and the run's
-            // result is discarded, but the worker itself is not reached; say
-            // so, or a model that aborted to save cost would assume it did.
+            // Where the store has none, the flip still lands but the worker
+            // is not reached, so the row settles only once the work runs to
+            // its end; say so, or a model that aborted to save cost would
+            // assume it had.
             report.error =
               abortableOf(agent) === false
-                ? 'The task was marked aborted and its result is discarded, ' +
-                  "but this agent's store cannot signal its worker, so the " +
-                  'work may run to completion.'
+                ? "The task is marked for abort, but this agent's store " +
+                  'cannot signal its worker, so the work runs to completion ' +
+                  `and then ${STOPPED_TASK_SETTLES}. `
+                : `The stop signal reached the task and it is winding down; it ${STOPPED_TASK_SETTLES}. `;
+            report.error +=
+              `No further action is needed to stop it; collect the settled ` +
+              `state with ${taskTools.wait} if you need it.`;
+            break;
+          case 'aborted':
+            report.error =
+              abortableOf(agent) === false
+                ? "The task was aborted, but this agent's store cannot " +
+                  'signal its worker, so the work may have run to completion ' +
+                  'first.'
                 : 'The task was aborted before it finished.';
             break;
           case 'expired':
@@ -1435,8 +1457,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           tool(
             {
               name: taskTools.abort,
-              description:
-                'Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A task that had already finished is unaffected and reports its result.',
+              description: `Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A live task reports "aborting" while it winds down and ${STOPPED_TASK_SETTLES}; a task that had already finished is unaffected and reports its result.`,
               inputSchema: backgroundTasksInputSchema,
               outputSchema: backgroundTasksResultSchema,
             },
