@@ -1793,6 +1793,52 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 }
 
+// TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID verifies that a
+// failed turn that committed tags its own turn span with the snapshot it
+// persisted, as a successful turn does, and not the root agent span it ran
+// under.
+func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
+
+	const agentName = "committedFailureSpanFlow"
+	af := defineCommittingFailureAgent(reg, agentName, WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("committed failure wrote no snapshot")
+	}
+
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
+	}
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
+	}
+	if got != out.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the failed turn's snapshot)", snapshotIDSpanAttrKey, got, out.SnapshotID)
+	}
+	// The turn span still records the failure.
+	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
+		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
+	}
+
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	if v, ok := spanAttr(root, snapshotIDSpanAttrKey); ok {
+		t.Errorf("root span %q: unexpected %s = %q (want it on the turn span only)", agentName, snapshotIDSpanAttrKey, v)
+	}
+}
+
 // TestAgent_CustomPatchWholeDocumentReplace verifies the server emits the first
 // custom-state mutation of a turn as a whole-document replace: a single RFC 6902
 // replace at the root pointer, which re-bases a client that may not share the
