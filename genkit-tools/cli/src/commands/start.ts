@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import {
+  REFLECTION_SECRET_ENV,
+  type BaseRuntimeManager,
+} from '@genkit-ai/tools-common/manager';
 import { startServer } from '@genkit-ai/tools-common/server';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
@@ -22,12 +25,15 @@ import fs from 'fs';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import {
+  NO_AUTH_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
   startManager,
 } from '../utils/manager-utils';
 
 interface RunOptions {
+  /** False with --no-auth. */
+  auth?: boolean;
   noui?: boolean;
   port?: string;
   host?: string;
@@ -65,6 +71,7 @@ export const start = new Command('start')
     '--write-env-file <file>',
     'write environment variables in .env format to the provided file'
   )
+  .option('--no-auth', NO_AUTH_OPTION_HELP)
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -78,6 +85,7 @@ export const start = new Command('start')
       disableRealtimeTelemetry: options.disableRealtimeTelemetry,
       corsOrigin: options.corsOrigin,
       experimentalReflectionV2: options.experimentalReflectionV2,
+      auth: options.auth,
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
 
@@ -104,6 +112,7 @@ export const start = new Command('start')
           envVars,
           telemetryServerUrl,
           reflectionV2Port,
+          auth: options.auth,
         }
       );
       manager = result.manager;
@@ -116,6 +125,10 @@ export const start = new Command('start')
         experimentalReflectionV2: options.experimentalReflectionV2,
         reflectionV2Port,
         telemetryServerUrl,
+        auth: options.auth,
+        // Without a spawned runtime there is nothing to hand a generated
+        // secret to, so reuse the one getDevEnvVars resolved for this run.
+        reflectionSecret: envVars[REFLECTION_SECRET_ENV],
       });
       processPromise = new Promise(() => {});
     }

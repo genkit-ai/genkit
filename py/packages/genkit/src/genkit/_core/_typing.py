@@ -781,6 +781,7 @@ class ReflectionRegisterParams(GenkitModel):
     genkit_version: str | None = None
     reflection_api_spec_version: float | None = None
     envs: list[str] | None = None
+    secret: str | None = None
 
 
 class ReflectionRunActionParams(GenkitModel):

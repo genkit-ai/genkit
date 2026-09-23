@@ -21,8 +21,11 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { startMcpServer } from '../mcp/server';
+import { NO_AUTH_OPTION_HELP } from '../utils/manager-utils';
 
 interface McpOptions {
+  /** False with --no-auth. */
+  auth?: boolean;
   projectRoot?: string;
   debug?: boolean | string;
   explicitProjectRoot?: boolean;
@@ -43,6 +46,7 @@ export const mcp = new Command('mcp')
     false
   )
   .description('run MCP stdio server (EXPERIMENTAL, subject to change)')
+  .option('--no-auth', NO_AUTH_OPTION_HELP)
   .action(async (options: McpOptions) => {
     forceStderr();
     if (options.debug) {
@@ -54,5 +58,6 @@ export const mcp = new Command('mcp')
       projectRoot: options.projectRoot ?? (await findProjectRoot()),
       explicitProjectRoot: options.explicitProjectRoot ?? false,
       timeout: options.timeout ? parseInt(options.timeout, 10) : undefined,
+      auth: options.auth,
     });
   });
