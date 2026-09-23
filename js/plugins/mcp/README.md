@@ -150,13 +150,13 @@ You can also expose all of the tools and prompts from a Genkit instance as an MC
 ```ts
 import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpServer } from '@genkit-ai/mcp';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { genkit, z } from 'genkit/beta';
 
 const ai = genkit({
   plugins: [googleAI()],
 });
 
+// MCP tool inputs can use numbers and other JSON Schema types.
 ai.defineTool(
   {
     name: 'add',
@@ -169,6 +169,7 @@ ai.defineTool(
   }
 );
 
+// MCP prompt arguments are strings, so prompt inputs must be string-valued.
 ai.definePrompt(
   {
     name: 'happy',
@@ -219,12 +220,8 @@ const server = createMcpServer(ai, {
   name: 'example_server',
   version: '0.0.1',
 });
-// Setup (async) then starts with stdio transport by default
-server.setup().then(async () => {
-  await server.start();
-  const transport = new StdioServerTransport();
-  await server!.server?.connect(transport);
-});
+// Starts with the stdio transport by default.
+server.start().catch(console.error);
 ```
 
 The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start()` method on this instance will start an MCP server (using the stdio transport by default) that exposes all registered Genkit tools and prompts. To start the server with a different MCP transport, you can pass the transport instance to the `start()` method (e.g., `server.start(customMcpTransport)`).
@@ -235,7 +232,7 @@ The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start(
 
 ### Known Limitations
 
-- MCP prompts are only able to take string parameters, so inputs to schemas must be objects with only string property values.
+- MCP prompt arguments are strings, so prompt input schemas must be objects with string-valued properties. This applies to `ai.definePrompt` only. MCP tool input schemas may use other JSON Schema types, such as the numeric inputs in the `add` tool above.
 - MCP prompts only support `user` and `model` messages. `system` messages are not supported.
 - MCP prompts only support a single "type" within a message so you can't mix media and text in the same message.
 
