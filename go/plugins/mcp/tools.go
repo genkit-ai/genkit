@@ -26,8 +26,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// GetActiveTools retrieves all tools available from the MCP server
-func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
+// ActiveTools retrieves detached tools available from the MCP server.
+func (c *GenkitMCPClient) ActiveTools(ctx context.Context) ([]ai.Tool, error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, nil
 	}
@@ -40,6 +40,13 @@ func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) 
 
 	// Create tools from MCP server
 	return c.createTools(mcpTools)
+}
+
+// GetActiveTools retrieves detached tools available from the MCP server.
+//
+// Deprecated: Use [GenkitMCPClient.ActiveTools]. The Genkit argument is ignored.
+func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, _ *genkit.Genkit) ([]ai.Tool, error) {
+	return c.ActiveTools(ctx)
 }
 
 // createTools creates Genkit tools from MCP tools
