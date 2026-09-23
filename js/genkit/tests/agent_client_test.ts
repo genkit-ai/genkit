@@ -26,6 +26,7 @@ interface RecordedRequest {
   url: string;
   body: any;
   headers: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 /** Builds a streaming (SSE) Response from a list of chunk objects. */
@@ -57,10 +58,14 @@ function jsonResponse(obj: any): Response {
 /** A scriptable fetch mock. */
 class FetchMock {
   requests: RecordedRequest[] = [];
-  private handlers: Array<(req: RecordedRequest) => Response> = [];
+  private handlers: Array<
+    (req: RecordedRequest) => Response | Promise<Response>
+  > = [];
 
   /** Queues a response for the next matching request. */
-  onNext(handler: (req: RecordedRequest) => Response): void {
+  onNext(
+    handler: (req: RecordedRequest) => Response | Promise<Response>
+  ): void {
     this.handlers.push(handler);
   }
 
@@ -70,6 +75,7 @@ class FetchMock {
         url: String(url),
         body: init?.body ? JSON.parse(init.body) : undefined,
         headers: init?.headers ?? {},
+        signal: init?.signal,
       };
       this.requests.push(req);
       const handler = this.handlers.shift();
@@ -468,19 +474,81 @@ describe('remoteAgent', () => {
     const task = await chat.detach('long job');
     assert.equal(task.snapshotId, 'bg-1');
 
-    // wait() polls /getSnapshot until terminal.
-    mock.onNext(() =>
-      jsonResponse({
+    // wait() is one request to /waitForSnapshot, which answers once the
+    // snapshot settles; the client never polls /getSnapshot.
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      assert.deepEqual(req.body.data, { snapshotId: 'bg-1' });
+      return jsonResponse({
         result: {
           snapshotId: 'bg-1',
           createdAt: '2026',
           state: {},
           status: 'completed',
         },
-      })
-    );
-    const snap = await task.wait({ intervalMs: 1 });
+      });
+    });
+    const snap = await task.wait();
     assert.equal(snap.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
+  it('waitForSnapshot posts to the waitForSnapshot endpoint', async () => {
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      assert.deepEqual(req.body.data, { snapshotId: 'snap-1' });
+      return jsonResponse({
+        result: {
+          snapshotId: 'snap-1',
+          createdAt: '2026',
+          state: {},
+          status: 'failed',
+          error: { message: 'boom' },
+        },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    // A settled-but-failed snapshot is a result, not an error.
+    const snap = await agent.waitForSnapshot('snap-1');
+    assert.equal(snap?.status, 'failed');
+    assert.equal(snap?.error?.message, 'boom');
+  });
+
+  it('honors a custom waitForSnapshotUrl and forwards the abort signal', async () => {
+    mock.onNext((req) => {
+      assert.equal(req.url, '/wait-here');
+      return jsonResponse({
+        result: {
+          snapshotId: 'snap-1',
+          createdAt: '2026',
+          state: {},
+          status: 'completed',
+        },
+      });
+    });
+    const agent = remoteAgent({
+      url: '/api/a',
+      waitForSnapshotUrl: '/wait-here',
+    });
+    const snap = await agent.waitForSnapshot('snap-1', {
+      abortSignal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(snap?.status, 'completed');
+  });
+
+  it('rejects a wait whose abort signal fires before the server answers', async () => {
+    mock.onNext(async (req) => {
+      // Behave like fetch: reject with the signal's reason once it aborts.
+      await new Promise((_, reject) =>
+        req.signal?.addEventListener('abort', () => reject(req.signal!.reason))
+      );
+      throw new Error('unreachable');
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    await assert.rejects(
+      agent.waitForSnapshot('snap-1', { abortSignal: AbortSignal.timeout(10) }),
+      (e: any) => e?.name === 'TimeoutError'
+    );
   });
 
   it('applies static and async headers', async () => {
