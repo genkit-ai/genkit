@@ -96,6 +96,27 @@ func TestOpenRouterLive(t *testing.T) {
 		}
 	})
 
+	t.Run("guidance", func(t *testing.T) {
+		// Object criteria on an option, a level, and a side: the gateway
+		// takes them, and the legend keeps the rubric's strings.
+		out, resp, err := genkit.GenerateData[guidedTriage](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithPromptParts(ai.NewDataPart(map[string]any{
+				"ticket": "THIS IS THE THIRD TIME. I was charged twice and I want my money back TODAY.",
+			})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answers: %s", base.JSONString(out))
+		t.Logf("custom: %s", base.JSONString(resp.Custom))
+		if out.Department.Choice != "billing" {
+			t.Errorf("department = %q, want billing", out.Department.Choice)
+		}
+		if out.Frustration.Legend["2"] != "Very angry" {
+			t.Errorf("legend = %v, want the rubric strings", out.Frustration.Legend)
+		}
+	})
+
 	t.Run("enum", func(t *testing.T) {
 		resp, err := genkit.Generate(t.Context(), g,
 			ai.WithModelName(model),

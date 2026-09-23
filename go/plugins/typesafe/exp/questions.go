@@ -42,6 +42,10 @@ const (
 	// criteria, which [NoulOf] emits from its type parameter.
 	trueKeyword  = "x-true"
 	falseKeyword = "x-false"
+	// guidanceKeyword carries a question's structured guidance from the
+	// Guided companions, keyed as on the wire: by option, by level index,
+	// or by "true" and "false".
+	guidanceKeyword = "x-guidance"
 )
 
 // The question types, as the API names them.
@@ -104,7 +108,11 @@ func (Choice[T]) JSONSchema() *jsonschema.Schema {
 	props.Set("choice", &jsonschema.Schema{Type: "string", OneOf: options})
 	props.Set("probabilities", probabilitiesSchema())
 	props.Set("confidence", &jsonschema.Schema{Type: "number"})
-	return answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
+	s := answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
+	if g, ok := any(zero).(GuidedOption[T]); ok {
+		setGuidance(s, g.Guidance(), func(key T) string { return string(key) })
+	}
+	return s
 }
 
 // Ranked is the options from most to least likely, ties broken by name. It
@@ -146,6 +154,43 @@ type NoCriteria struct{}
 // Criteria implements [YesNo] with no criteria.
 func (NoCriteria) Criteria() (yes, no string) { return "", "" }
 
+// GuidedOption is an optional companion to [Option] for the structured
+// form of a description the wire format takes: any JSON value, most often
+// an object with labeled parts, such as what, not_for, and examples for an
+// option. The strings of Criteria stay required, and the schema and the
+// answers show them; guidance replaces a string on the wire only.
+//
+// A value that encodes as a JSON object with no "what" key gets the
+// string as its "what", so guidance adds to the description rather than
+// replacing it. Any other value is sent as it is. An option that is
+// absent, or whose value is nil, keeps its string.
+//
+//	func (Dept) Guidance() map[Dept]any {
+//		return map[Dept]any{
+//			"billing": map[string]any{
+//				"not_for":  "Progress of a refund already issued",
+//				"examples": []string{"I was charged twice for one order."},
+//			},
+//		}
+//	}
+type GuidedOption[T ~string] interface {
+	Guidance() map[T]any
+}
+
+// GuidedRubric is the [GuidedOption] of a [Rubric]: guidance keyed by
+// level index, lowest level 0, such as summary and signals for a level.
+// [Score.Legend] and [Score.Label] keep the strings of Levels.
+type GuidedRubric interface {
+	Guidance() map[int]any
+}
+
+// GuidedYesNo is the [GuidedOption] of a [YesNo]: guidance for the yes
+// side and the no side, such as what and examples. The pair rule holds
+// across both: each side needs a string or guidance, or neither does.
+type GuidedYesNo interface {
+	Guidance() (yes, no any)
+}
+
 // NoulOf is the answer to a yes/no question whose criteria come from C:
 // the probability that the statement is true. A value near 0.5 means the
 // model could not tell, not that the answer is "somewhat". There is no
@@ -170,6 +215,10 @@ func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
 		s.Extras[trueKeyword] = yes
 		s.Extras[falseKeyword] = no
 	}
+	if g, ok := any(zero).(GuidedYesNo); ok {
+		yes, no := g.Guidance()
+		setGuidance(s, map[bool]any{true: yes, false: no}, strconv.FormatBool)
+	}
 	return s
 }
 
@@ -177,7 +226,8 @@ func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
 // from the probability of each level, so it falls between levels when the
 // model is split. Probabilities is that distribution, keyed by level
 // number; Confidence, from 0 to 1, is how concentrated it is; Legend maps
-// each level number back to its description.
+// each level number back to its description, the string from L even when
+// the level was sent with guidance.
 type Score[L Rubric] struct {
 	Score         float64            `json:"score"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
@@ -201,6 +251,9 @@ func (Score[L]) JSONSchema() *jsonschema.Schema {
 	props.Set("legend", &jsonschema.Schema{Type: "object", AdditionalProperties: &jsonschema.Schema{Type: "string"}})
 	s := answerSchema(kindScore, &jsonschema.Schema{Properties: props}, "score")
 	s.Extras[levelsKeyword] = levels
+	if g, ok := any(zero).(GuidedRubric); ok {
+		setGuidance(s, g.Guidance(), strconv.Itoa)
+	}
 	return s
 }
 
@@ -229,6 +282,20 @@ func probabilitiesSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "object", AdditionalProperties: &jsonschema.Schema{Type: "number"}}
 }
 
+// setGuidance puts the non-nil guidance values on the schema's
+// x-guidance keyword, keyed as on the wire.
+func setGuidance[K comparable](s *jsonschema.Schema, guidance map[K]any, key func(K) string) {
+	wire := make(map[string]any, len(guidance))
+	for k, v := range guidance {
+		if v != nil {
+			wire[key(k)] = v
+		}
+	}
+	if len(wire) > 0 {
+		s.Extras[guidanceKeyword] = wire
+	}
+}
+
 // answerSchema completes the object schema shared by the answer types. It
 // is closed: answersText projects a wire answer onto exactly these fields
 // before the generate loop validates it.
@@ -246,8 +313,22 @@ type question struct {
 	Instructions string `json:"instructions"`
 	// Criteria is a map of option to description for choice and noul
 	// questions and an ordered list of level descriptions for score
-	// questions.
+	// questions. A description is a string, or the guidance that replaces
+	// it on the wire.
 	Criteria any `json:"criteria,omitempty"`
+
+	// labels are a score question's level strings, which the legend is
+	// built from whatever form the levels take on the wire.
+	labels []string
+}
+
+// legend maps each level number to its label, the shape of [Score.Legend].
+func (q question) legend() map[string]any {
+	legend := make(map[string]any, len(q.labels))
+	for i, label := range q.labels {
+		legend[strconv.Itoa(i)] = label
+	}
+	return legend
 }
 
 // compileQuestions reads the questions an output schema encodes: one per
@@ -277,12 +358,12 @@ func compileQuestions(schema map[string]any, preamble string) (map[string]questi
 		case kindChoice:
 			q.Criteria, err = choiceCriteria(id, prop)
 		case kindScore:
-			q.Criteria, err = scoreCriteria(id, prop)
+			q.Criteria, q.labels, err = scoreCriteria(id, prop)
 		case kindNoul:
 			// Assigned only when present: a typed nil map inside the any
 			// would marshal as null, which the gateways reject, where an
 			// absent field is the documented way to give no criteria.
-			var criteria map[string]string
+			var criteria map[string]any
 			if criteria, err = noulCriteria(id, prop); criteria != nil {
 				q.Criteria = criteria
 			}
@@ -297,18 +378,19 @@ func compileQuestions(schema map[string]any, preamble string) (map[string]questi
 	return questions, nil
 }
 
-// choiceCriteria reads the options back out of the oneOf a [Choice] emits.
-// An option without a description is described by its own name, since the
-// wire format takes a description per option and some gateways reject a
-// null one.
-func choiceCriteria(id string, prop map[string]any) (map[string]string, error) {
+// choiceCriteria reads the options back out of the oneOf a [Choice] emits,
+// with the guidance of a [GuidedOption] in place of an option's string. An
+// option with neither is described by its own name, since the wire format
+// takes a description per option and some gateways reject a null one.
+func choiceCriteria(id string, prop map[string]any) (map[string]any, error) {
 	props, _ := prop["properties"].(map[string]any)
 	choice, _ := props["choice"].(map[string]any)
 	oneOf, _ := choice["oneOf"].([]any)
 	if len(oneOf) == 0 {
 		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q lists no options", id)
 	}
-	criteria := make(map[string]string, len(oneOf))
+	guidance, _ := prop[guidanceKeyword].(map[string]any)
+	criteria := make(map[string]any, len(oneOf))
 	for _, raw := range oneOf {
 		option, _ := raw.(map[string]any)
 		key, _ := option["const"].(string)
@@ -316,41 +398,88 @@ func choiceCriteria(id string, prop map[string]any) (map[string]string, error) {
 			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q has an option without a const", id)
 		}
 		description, _ := option["description"].(string)
-		if description == "" {
-			description = key
+		value := withWhat(guidance[key], description)
+		if value == "" {
+			value = key
 		}
-		criteria[key] = description
+		criteria[key] = value
+	}
+	for _, key := range slices.Sorted(maps.Keys(guidance)) {
+		if _, ok := criteria[key]; !ok {
+			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q has guidance for %q, which is not one of its options", id, key)
+		}
 	}
 	return criteria, nil
 }
 
-// scoreCriteria reads the ordered levels off the x-levels keyword. The API
-// takes two to ten levels; the lower bound is checked here because one
-// level is not a scale, the upper bound is the API's to enforce.
-func scoreCriteria(id string, prop map[string]any) ([]string, error) {
+// scoreCriteria reads the ordered levels off the x-levels keyword, with
+// the guidance of a [GuidedRubric] in place of a level's string, and
+// returns the strings too for the legend. The API takes two to ten levels;
+// the lower bound is checked here because one level is not a scale, the
+// upper bound is the API's to enforce.
+func scoreCriteria(id string, prop map[string]any) ([]any, []string, error) {
 	levels, ok := stringList(prop[levelsKeyword])
 	if !ok {
-		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: score question %q has a level that is not a string", id)
+		return nil, nil, status.Errorf(status.ErrInvalidSchema, "typesafe: score question %q has a level that is not a string", id)
 	}
 	if len(levels) < 2 {
-		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: score question %q needs at least two levels", id)
+		return nil, nil, status.Errorf(status.ErrInvalidSchema, "typesafe: score question %q needs at least two levels", id)
 	}
-	return levels, nil
+	criteria := make([]any, len(levels))
+	for i, level := range levels {
+		criteria[i] = level
+	}
+	guidance, _ := prop[guidanceKeyword].(map[string]any)
+	for _, key := range slices.Sorted(maps.Keys(guidance)) {
+		i, err := strconv.Atoi(key)
+		if err != nil || i < 0 || i >= len(levels) {
+			return nil, nil, status.Errorf(status.ErrInvalidSchema, "typesafe: score question %q has guidance for level %s, which its rubric does not have", id, key)
+		}
+		criteria[i] = withWhat(guidance[key], levels[i])
+	}
+	return criteria, levels, nil
 }
 
 // noulCriteria reads the optional true and false criteria a [NoulOf]
-// emits. They are sent as a pair or not at all: the API describes the
+// emits, with the guidance of a [GuidedYesNo] in place of a side's
+// string. They are sent as a pair or not at all: the API describes the
 // pair, and one side alone would leave the other implied.
-func noulCriteria(id string, prop map[string]any) (map[string]string, error) {
-	yes, _ := prop[trueKeyword].(string)
-	no, _ := prop[falseKeyword].(string)
-	switch {
-	case yes == "" && no == "":
-		return nil, nil
-	case yes == "" || no == "":
-		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: noul question %q says what only one side means; Criteria must return both yes and no", id)
+func noulCriteria(id string, prop map[string]any) (map[string]any, error) {
+	guidance, _ := prop[guidanceKeyword].(map[string]any)
+	criteria := make(map[string]any, 2)
+	for side, keyword := range map[string]string{"true": trueKeyword, "false": falseKeyword} {
+		text, _ := prop[keyword].(string)
+		if value := withWhat(guidance[side], text); value != "" {
+			criteria[side] = value
+		}
 	}
-	return map[string]string{"true": yes, "false": no}, nil
+	switch len(criteria) {
+	case 0:
+		return nil, nil
+	case 1:
+		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: noul question %q says what only one side means; give both yes and no, in Criteria or Guidance", id)
+	}
+	return criteria, nil
+}
+
+// withWhat is a description as it goes on the wire: the guidance when
+// there is some, the string otherwise. An object with no "what" gets the
+// string as its what, so guidance adds to the description rather than
+// replacing it; any other guidance is sent as it is.
+func withWhat(guidance any, description string) any {
+	switch g := guidance.(type) {
+	case nil:
+		return description
+	case map[string]any:
+		if _, ok := g["what"]; ok || description == "" {
+			return g
+		}
+		g = maps.Clone(g)
+		g["what"] = description
+		return g
+	default:
+		return g
+	}
 }
 
 // enumQuestionID names the one question an enum-format request asks.

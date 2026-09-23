@@ -48,6 +48,10 @@
 //		// route to a human
 //	}
 //
+// Criteria and levels are strings on their types. [GuidedOption],
+// [GuidedRubric], and [GuidedYesNo] add the structured form the wire
+// format also takes, such as examples per option.
+//
 // The state is built from the user and model messages: one message is sent
 // as its value, a string for a text part or the JSON of a data part;
 // several messages are sent as an array of {role, content} records; with
@@ -321,7 +325,9 @@ var answerFields = map[string][]string{
 // answersText renders the answers as the message text: for the enum
 // format the chosen option itself, otherwise a JSON object keyed by
 // question ID whose values are the answers projected onto the fields the
-// output type declares.
+// output type declares. A score's legend is rebuilt from the rubric's
+// strings: for a level sent with guidance the API echoes the guidance,
+// which the legend's strings cannot hold.
 func answersText(resp *response, questions map[string]question, enum bool) (string, error) {
 	answers := make(map[string]map[string]any, len(questions))
 	for _, id := range questionIDs(questions) {
@@ -335,6 +341,9 @@ func answersText(resp *response, questions map[string]question, enum bool) (stri
 			if v, ok := answer[field]; ok {
 				projected[field] = v
 			}
+		}
+		if q := questions[id]; q.labels != nil {
+			projected["legend"] = q.legend()
 		}
 		answers[id] = projected
 	}

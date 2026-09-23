@@ -98,9 +98,27 @@ func (Urgent) Criteria() (yes, no string) {
 IsUrgent typesafex.NoulOf[Urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 ```
 
-Descriptions, criteria, and levels are strings. The wire format also takes
-an object with named parts, such as examples per option or per level; put
-that detail in the string instead.
+Criteria and levels are strings, and the schema and the answers show those
+strings. The wire format also takes a structured description, most often an
+object with labeled parts. A type adds one with `Guidance()`, the optional
+companion of its interface: `GuidedOption` keyed by option, `GuidedRubric`
+by level index, and `GuidedYesNo` by side.
+
+```go
+func (Dept) Guidance() map[Dept]any {
+	return map[Dept]any{
+		"billing": map[string]any{
+			"not_for":  "Where an order is, or when it arrives",
+			"examples": []string{"I was charged twice for one order."},
+		},
+	}
+}
+```
+
+An object with no `what` gets the string as its `what`, so guidance adds to
+the description. Any other value goes out as it is. A score's legend keeps
+the rubric's strings, and the guidance the API echoes back is on
+`resp.Custom["answers"]`.
 
 The built-in `enum` output format also works, with no decision type: the enum
 values are the options of one choice question, the system message is the
@@ -195,13 +213,14 @@ builds one.
 
 - No per-item questions. Score a list of passages with one call per passage.
 - No nested decision types: a question is a top-level field.
-- Instructions, criteria, and levels are strings; the wire format's object
-  form, with named parts such as examples, is not expressible.
+- Instructions are strings, since a field's description is a tag. Data a
+  question compares against goes in the state, under a name the question
+  can refer to.
 - Text only, English mostly, 32k tokens of state per request.
 - No streaming; the answer arrives whole.
 
 ## Tests
 
 `go test ./plugins/typesafe/...` runs against a fake endpoint. With
-`OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the decision, enum, and
-history paths against jev through OpenRouter.
+`OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the decision, guidance,
+enum, and history paths against jev through OpenRouter.
