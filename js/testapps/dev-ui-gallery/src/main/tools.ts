@@ -46,10 +46,10 @@ ai.defineTool(
     name: 'getTime',
     description: 'Get the current time',
     inputSchema: z.object({
-      city: z.string().min(16),
+      city: z.string().optional(),
       state: z.string().optional(),
-      hours: z.number().multipleOf(12).min(12).max(24),
-      timezone: z.string().default('EST'),
+      hours: z.number().optional(),
+      timezone: z.string().default('EST').optional(),
     }),
     outputSchema: z.object({ time: z.number() }),
   },

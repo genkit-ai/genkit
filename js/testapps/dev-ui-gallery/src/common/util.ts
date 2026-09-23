@@ -32,3 +32,30 @@ export function generateString(length: number) {
   }
   return str.substring(0, length);
 }
+
+/**
+ * Returns a sorted, deduplicated list of registered tool names from a Genkit instance.
+ */
+export function getRegisteredToolNames(ai?: { registry?: unknown }): string[] {
+  const actionsById: Record<string, unknown> =
+    (ai?.registry as any)?.actionsById ?? {};
+  return Array.from(
+    new Set(
+      Object.keys(actionsById)
+        .filter(
+          (key) => key.startsWith('/tool/') || key.startsWith('/tool.v2/')
+        )
+        .map((key) => key.replace(/^\/tool(?:\.v2)?\//, ''))
+    )
+  ).sort();
+}
+
+/**
+ * Returns an array reference whose `toJSON()` hook resolves the registered
+ * tool names lazily when serialized by the reflection server for the Dev UI.
+ */
+export function lazyToolNames(getAi: () => { registry?: unknown }): string[] {
+  return Object.assign([] as string[], {
+    toJSON: () => getRegisteredToolNames(getAi()),
+  });
+}

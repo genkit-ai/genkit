@@ -1,12 +1,9 @@
 ---
-model: vertexai/imagen3-fast
+model: googleai/imagen-4.0-fast-generate-001
 config:
-  temperature: 0.6
-  candidates: 2
-  addWatermark: true
-  personGeneration: "adults_only"
+  numberOfImages: 2
+  personGeneration: "allow_adult"
   aspectRatio: "16:9"
-  safetySetting: "block_some"
 input:
   schema:
     prompt: string
