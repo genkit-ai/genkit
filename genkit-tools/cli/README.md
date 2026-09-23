@@ -72,6 +72,7 @@ project if the client's working directory may be elsewhere:
 
 Without `--project-root`, the CLI searches upward from its working directory
 for a project and otherwise uses that working directory. Trace files are stored
-under `<projectRoot>/.genkit/traces`; launching from `/` can therefore cause an
-attempt to write to `/.genkit/traces`. `GENKIT_HOME` does not configure this
+under `<projectRoot>/.genkit/traces` (or the equivalent Windows path). Launching
+from a filesystem root can therefore attempt to write to `/.genkit/traces` on
+Unix or `C:\.genkit\traces` on Windows. `GENKIT_HOME` does not configure this
 path. Use `--project-root` or launch the MCP server from the project directory.
