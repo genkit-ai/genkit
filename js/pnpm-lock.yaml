@@ -6,6 +6,8 @@ settings:
 
 overrides:
   cross-spawn: ^7.0.5
+  '@langchain/community>@pinecone-database/pinecone': ^2.0.1
+  langchain>@pinecone-database/pinecone: ^2.0.1
 
 importers:
 
@@ -845,7 +847,7 @@ importers:
     dependencies:
       '@langchain/community':
         specifier: ^0.0.53
-        version: 0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+        version: 0.0.53(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
       '@langchain/core':
         specifier: ^0.1.61
         version: 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
@@ -857,8 +859,11 @@ importers:
         version: link:../../genkit
       langchain:
         specifier: ^0.1.36
-        version: 0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+        version: 0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
     devDependencies:
+      '@pinecone-database/pinecone':
+        specifier: ^2.2.2
+        version: 2.2.2
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
@@ -4693,7 +4698,7 @@ packages:
       '@mozilla/readability': '*'
       '@neondatabase/serverless': '*'
       '@opensearch-project/opensearch': '*'
-      '@pinecone-database/pinecone': '*'
+      '@pinecone-database/pinecone': ^2.0.1
       '@planetscale/database': ^1.8.0
       '@premai/prem-sdk': ^0.3.25
       '@qdrant/js-client-rest': ^1.8.2
@@ -5917,6 +5922,10 @@ packages:
   '@pdf-lib/upng@1.0.1':
     resolution: {integrity: sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==}
 
+  '@pinecone-database/pinecone@2.2.2':
+    resolution: {integrity: sha512-gbe/4SowHc64pHIm0kBdgY9hVdzsQnnnpcWviwYMB33gOmsL8brvE8fUSpl1dLDvdyXzKcQkzdBsjCDlqgpdMA==}
+    engines: {node: '>=14.0.0'}
+
   '@pinecone-database/pinecone@8.2.0':
     resolution: {integrity: sha512-4Lzn+Ph4Lmf8ZEm2Ky1WGgPJJtoMtjSCmsT6bdHpd8nhkUnCQqk/NsbPYglx7irWYJpb2zBE+wehNBfoCeJ6Qw==}
     engines: {node: '>=20.0.0'}
@@ -7069,6 +7078,9 @@ packages:
 
   '@sinclair/typebox@0.27.10':
     resolution: {integrity: sha512-MTBk/3jGLNB2tVxv6uLlFh1iu64iYOQ2PbdOSK3NW8JZsmlaOh2q6sdtKowBhfw8QFLmYNzTW4/oK4uATIi6ZA==}
+
+  '@sinclair/typebox@0.29.8':
+    resolution: {integrity: sha512-+SgVBeOzRkm+h+9YB7Z0jZK9crjph3rQHJWkwUYLBcUomkIcxDaABw9baQCLXy0G1wvunSO+z8ftmHNZkMGFPg==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -8652,6 +8664,9 @@ packages:
     resolution: {integrity: sha512-+/HKd6EgcQCJGh2PSjZuUitQBQynKor4wrFbRg4DtAgS1aWO+gU52xpH7M9ScGgXSYmAVS9bIJ8EzuaGw0oNAw==}
     engines: {node: '>=10.14', npm: '>=6', yarn: '>=1'}
     hasBin: true
+
+  cross-fetch@3.2.0:
+    resolution: {integrity: sha512-Q+xVJLoGOeIMXZmbUK4HYk+69cQH6LudR0Vu/pRm2YlU/hDV9CiS0gKUMaWY5f2NeUH9C1nV3bsTlCo0FsTV1Q==}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -10965,7 +10980,7 @@ packages:
       '@google-cloud/storage': ^6.10.1 || ^7.7.0
       '@mendable/firecrawl-js': ^0.0.13
       '@notionhq/client': ^2.2.10
-      '@pinecone-database/pinecone': '*'
+      '@pinecone-database/pinecone': ^2.0.1
       '@supabase/supabase-js': ^2.10.0
       '@vercel/kv': ^0.2.3
       '@xata.io/client': ^0.28.0
@@ -16928,7 +16943,7 @@ snapshots:
     dependencies:
       jsep: 1.4.0
 
-  '@langchain/community@0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)':
+  '@langchain/community@0.0.53(@pinecone-database/pinecone@2.2.2)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)':
     dependencies:
       '@langchain/core': 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       '@langchain/openai': 0.0.34(encoding@0.1.13)(ws@8.20.1)
@@ -16939,7 +16954,27 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
-      '@pinecone-database/pinecone': 8.2.0
+      '@pinecone-database/pinecone': 2.2.2
+      chromadb: 1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
+      jsonwebtoken: 9.0.3
+      lodash: 4.17.23
+      pg: 8.20.0
+      ws: 8.20.1
+    transitivePeerDependencies:
+      - encoding
+      - openai
+
+  '@langchain/community@0.0.53(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)':
+    dependencies:
+      '@langchain/core': 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
+      '@langchain/openai': 0.0.34(encoding@0.1.13)(ws@8.20.1)
+      expr-eval: 2.0.2
+      flat: 5.0.2
+      langsmith: 0.1.68(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
+      uuid: 9.0.1
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+    optionalDependencies:
       chromadb: 1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       jsonwebtoken: 9.0.3
       lodash: 4.17.23
@@ -18108,6 +18143,13 @@ snapshots:
     dependencies:
       pako: 1.0.11
 
+  '@pinecone-database/pinecone@2.2.2':
+    dependencies:
+      '@sinclair/typebox': 0.29.8
+      ajv: 8.18.0
+      cross-fetch: 3.2.0(encoding@0.1.13)
+      encoding: 0.1.13
+
   '@pinecone-database/pinecone@8.2.0': {}
 
   '@pinojs/redact@0.4.0': {}
@@ -19249,6 +19291,8 @@ snapshots:
       '@sigstore/protobuf-specs': 0.5.1
 
   '@sinclair/typebox@0.27.10': {}
+
+  '@sinclair/typebox@0.29.8': {}
 
   '@sindresorhus/is@4.6.0': {}
 
@@ -20999,6 +21043,12 @@ snapshots:
     dependencies:
       cross-spawn: 7.0.6
 
+  cross-fetch@3.2.0(encoding@0.1.13):
+    dependencies:
+      node-fetch: 2.7.0(encoding@0.1.13)
+    transitivePeerDependencies:
+      - encoding
+
   cross-spawn@7.0.6:
     dependencies:
       path-key: 3.1.1
@@ -21469,7 +21519,6 @@ snapshots:
   encoding@0.1.13:
     dependencies:
       iconv-lite: 0.6.3
-    optional: true
 
   end-of-stream@1.4.5:
     dependencies:
@@ -24122,10 +24171,10 @@ snapshots:
 
   kuler@2.0.0: {}
 
-  langchain@0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1):
+  langchain@0.1.37(@google-cloud/storage@7.19.0(encoding@0.1.13))(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(fast-xml-parser@5.5.3)(handlebars@4.7.8)(ignore@5.3.2)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1):
     dependencies:
       '@anthropic-ai/sdk': 0.9.1(encoding@0.1.13)
-      '@langchain/community': 0.0.53(@pinecone-database/pinecone@8.2.0)(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
+      '@langchain/community': 0.0.53(chromadb@1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)))(encoding@0.1.13)(jsonwebtoken@9.0.3)(lodash@4.17.23)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))(pg@8.20.0)(ws@8.20.1)
       '@langchain/core': 0.1.63(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       '@langchain/openai': 0.0.34(encoding@0.1.13)(ws@8.20.1)
       '@langchain/textsplitters': 0.0.3(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
@@ -24144,7 +24193,6 @@ snapshots:
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
       '@google-cloud/storage': 7.19.0(encoding@0.1.13)
-      '@pinecone-database/pinecone': 8.2.0
       chromadb: 1.8.1(encoding@0.1.13)(openai@4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76))
       fast-xml-parser: 5.5.3
       handlebars: 4.7.8

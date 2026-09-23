@@ -32,7 +32,9 @@
   },
   "pnpm": {
     "overrides": {
-      "cross-spawn": "^7.0.5"
+      "cross-spawn": "^7.0.5",
+      "@langchain/community>@pinecone-database/pinecone": "^2.0.1",
+      "langchain>@pinecone-database/pinecone": "^2.0.1"
     },
     "onlyBuiltDependencies": [
       "@firebase/util",
