@@ -23,6 +23,7 @@ from opentelemetry import trace as trace_api
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
+from genkit._core._reflection_config import resolve_reflection_config
 
 GENKIT_OTEL_ENABLE_LOGS = 'GENKIT_OTEL_ENABLE_LOGS'
 GENKIT_TELEMETRY_SERVER = 'GENKIT_TELEMETRY_SERVER'
@@ -84,9 +85,16 @@ def log_export_is_enabled() -> bool:
 
 
 def enable_log_export(*, url: str) -> None:
-    """Start (or retarget) log export. No-op when opted out, empty, or not dev."""
+    """Start (or retarget) log export.
+
+    No-op when opted out, given no URL, or when nothing is watching. Keyed on
+    reflection being on rather than GENKIT_ENV alone, so a non-dev runtime with
+    reflection enabled still streams logs to the server it was given.
+    """
     global _exporter
-    if not url or logs_opted_out() or not is_dev_environment():
+    if not url or logs_opted_out():
+        return
+    if not is_dev_environment() and not resolve_reflection_config().enabled:
         return
     # Late import: _default_exporter pulls get_logger, and get_logger tees here.
     from genkit._core._trace._default_exporter import resolve_telemetry_server_url

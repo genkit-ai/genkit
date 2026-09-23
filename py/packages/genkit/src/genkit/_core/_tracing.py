@@ -36,6 +36,7 @@ from ._base import GenkitModel
 from ._environment import is_dev_environment
 from ._error import GenkitError, GenkitInterrupt
 from ._logger import get_logger
+from ._reflection_config import resolve_reflection_config
 from ._trace._attrs import Attr, State, metadata_key
 from ._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
 from ._trace._path import build_path
@@ -134,7 +135,10 @@ def add_custom_exporter(exporter: SpanExporter | None, name: str = 'last') -> No
         logger.exception('Failed to add custom exporter')
 
 
-if is_dev_environment():
+# Registered when a Dev UI may be watching: dev, or any runtime with the
+# reflection API enabled. init_telemetry_server_exporter itself returns None
+# unless GENKIT_TELEMETRY_SERVER names a destination.
+if is_dev_environment() or resolve_reflection_config().enabled:
     add_custom_exporter(init_telemetry_server_exporter(), 'local_telemetry_server')
 
 

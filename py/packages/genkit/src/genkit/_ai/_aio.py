@@ -22,7 +22,6 @@ import asyncio
 import inspect
 import json
 import logging
-import os
 import signal
 import socket
 import threading
@@ -99,6 +98,7 @@ from genkit._core._model import Document, EmbedRequest, ModelConfigDict, ModelRe
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
+from genkit._core._reflection_config import is_loopback_host, resolve_reflection_config
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -163,15 +163,21 @@ class Genkit:
         configure_logging()
         self.registry: Registry = Registry()
         self._reflection_server_spec: ServerSpec | None = reflection_server_spec
+        # The reflection API is no longer tied to GENKIT_ENV=dev: it also runs
+        # when GENKIT_REFLECTION_HOST/PORT or a v2 server URL is set. Resolving
+        # here keeps an invalid port a constructor-time error.
+        self._reflection_config = resolve_reflection_config(
+            port=reflection_server_spec.port if reflection_server_spec else None
+        )
         self._reflection_ready = threading.Event()
         self._initialize_registry(model, plugins)
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
-        # In dev mode, start the reflection server immediately in a background
+        # When reflection is on, start the server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
-        if is_dev_environment():
+        if self._reflection_config.enabled:
             # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
             # run_main wait loop is stolen by anyio (clean exit → atexit);
             # elsewhere SIGTERM also goes through handle_signal. Both paths
@@ -821,6 +827,22 @@ class Genkit:
     # Server infrastructure methods
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _bind_probing(sock: socket.socket, host: str, start_port: int) -> None:
+        """Bind the next free port at or above start_port.
+
+        Raises:
+            OSError: If no port in the probe range is free.
+        """
+        last: OSError | None = None
+        for port in range(start_port, min(start_port + 100, 65536)):
+            try:
+                sock.bind((host, port))
+                return
+            except OSError as e:
+                last = e
+        raise last or OSError(f'no available port in range {start_port}-{start_port + 99}')
+
     def _start_reflection_background(self) -> None:
         """Start the Dev UI reflection server in a background daemon thread.
 
@@ -828,29 +850,41 @@ class Genkit:
         v2 mode and provides a WebSocket URL), run the v2 JSON-RPC client.
         Otherwise start the v1 HTTP server.
         """
+        config = self._reflection_config
 
         async def _run_server() -> None:
-            v2_url = os.environ.get('GENKIT_REFLECTION_V2_SERVER')
-            if v2_url:
-                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
-                server_v2 = ReflectionServerV2(self.registry, v2_url)
+            if config.mode == 'v2':
+                assert config.v2_url is not None
+                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
+                server_v2 = ReflectionServerV2(self.registry, config.v2_url, secret=config.secret)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
                 return
 
-            sockets: list[socket.socket] | None = None
-            spec = self._reflection_server_spec
-            if spec is None:
-                # Bind to port 0 to let OS choose available port, pass socket to uvicorn
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(('127.0.0.1', 0))
-                sock.listen(2048)
-                host, port = sock.getsockname()
-                spec = ServerSpec(scheme='http', host=host, port=port)
-                self._reflection_server_spec = spec
-                sockets = [sock]
+            # A pinned port is a contract with whoever published it: bind
+            # exactly that port or fail. Otherwise probe upward, which matches
+            # the other runtimes and keeps the Dev UI's 3100 convention.
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if config.pinned:
+                sock.bind((config.host, config.port))
+            else:
+                self._bind_probing(sock, config.host, config.port)
+            sock.listen(2048)
+            host, port = sock.getsockname()[:2]
+            spec = ServerSpec(scheme='http', host=host, port=port)
+            self._reflection_server_spec = spec
+            sockets = [sock]
 
-            app = create_reflection_asgi_app(registry=self.registry)
+            if not config.secret and not is_loopback_host(config.host):
+                logger.warning(
+                    'Reflection API is listening on %s without authentication. Anyone who can reach '
+                    'this port can run any registered action. Set GENKIT_REFLECTION_SECRET_TOKEN, '
+                    'or front it with your own auth.',
+                    config.host,
+                )
+
+            app = create_reflection_asgi_app(registry=self.registry, secret=config.secret)
             level = resolve_level()
             is_debug = level <= logging.DEBUG
             if level <= logging.DEBUG:
@@ -863,7 +897,7 @@ class Genkit:
                 log_level = 'critical'
 
             # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
-            config = uvicorn.Config(
+            uvicorn_config = uvicorn.Config(
                 app,
                 host=spec.host,
                 port=spec.port,
@@ -871,8 +905,21 @@ class Genkit:
                 access_log=is_debug,
                 log_level=log_level,
             )
-            server = ReflectionServer(config, ready=self._reflection_ready)
-            async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
+            server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
+            # Dev only: the runtime file exists so a local CLI watching the
+            # same filesystem can discover this runtime. Nothing is watching in
+            # a container, and the working directory is frequently read-only.
+            if not is_dev_environment():
+                server_task = asyncio.create_task(server.serve(sockets=sockets))
+                await asyncio.to_thread(self._reflection_ready.wait)
+                if server.should_exit:
+                    logger.warning(f'Reflection server at {spec.url} failed to start.')
+                    return
+                await logger.adebug(f'Genkit reflection server running at {spec.url}')
+                await server_task
+                return
+
+            async with RuntimeManager(spec, lazy_write=True, secret=config.secret) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))
                 await asyncio.to_thread(self._reflection_ready.wait)
 
@@ -915,8 +962,12 @@ class Genkit:
                 self.registry.register_value('middleware', desc.name, desc)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
-        """Run the user's main coroutine, blocking in dev mode for the reflection server."""
-        if not is_dev_environment():
+        """Run the user's main coroutine, blocking while the reflection server runs.
+
+        Blocks whenever reflection is on, not only under GENKIT_ENV=dev: the
+        server lives on a daemon thread, so returning here would kill it.
+        """
+        if not self._reflection_config.enabled:
             return run_loop(coro)
 
         async def dev_runner() -> T | None:
