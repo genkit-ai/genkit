@@ -29,8 +29,10 @@ export async function startMcpServer(params: {
   projectRoot: string;
   explicitProjectRoot: boolean;
   timeout?: number;
+  /** `false` disables reflection auth (`--no-auth`). */
+  auth?: boolean;
 }) {
-  const { projectRoot, explicitProjectRoot, timeout } = params;
+  const { projectRoot, explicitProjectRoot, timeout, auth } = params;
   logger.info(`Starting MCP server in: ${projectRoot}`);
 
   const server = new McpServer({
@@ -42,7 +44,7 @@ export async function startMcpServer(params: {
   await defineUsageGuideTool(server);
   defineInitPrompt(server);
 
-  const manager = new McpRuntimeManager();
+  const manager = new McpRuntimeManager(auth);
   const options: McpToolOptions = {
     projectRoot,
     explicitProjectRoot,

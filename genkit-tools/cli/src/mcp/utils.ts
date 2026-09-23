@@ -65,6 +65,9 @@ export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
 
+  /** @param auth `false` disables reflection auth (`--no-auth`). */
+  constructor(private readonly auth?: boolean) {}
+
   async getManager(projectRoot: string) {
     if (this.manager && this.currentProjectRoot === projectRoot) {
       return this.manager;
@@ -75,6 +78,7 @@ export class McpRuntimeManager {
     this.manager = await startManager({
       projectRoot,
       manageHealth: true,
+      auth: this.auth,
     });
     this.currentProjectRoot = projectRoot;
     return this.manager;
@@ -100,6 +104,7 @@ export class McpRuntimeManager {
         healthCheck: timeout !== 0,
         timeout,
         cwd: explicitProjectRoot ? projectRoot : undefined,
+        auth: this.auth,
       }
     );
     this.manager = devManager.manager;

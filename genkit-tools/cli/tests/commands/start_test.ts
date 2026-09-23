@@ -104,6 +104,8 @@ describe('start command', () => {
       experimentalReflectionV2: undefined,
       reflectionV2Port: 3200,
       telemetryServerUrl: 'http://localhost:4033',
+      auth: true,
+      reflectionSecret: undefined,
     });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
     expect(startServerSpy).toHaveBeenCalled();

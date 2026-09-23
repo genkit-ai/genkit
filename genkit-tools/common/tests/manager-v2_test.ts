@@ -24,6 +24,7 @@ import {
 } from '@jest/globals';
 import WebSocket from 'ws';
 import { RuntimeManagerV2 } from '../src/manager/manager-v2';
+import { REFLECTION_AUTH_ERROR_CODE } from '../src/manager/reflection-auth';
 import { RuntimeEvent } from '../src/manager/types';
 
 describe('RuntimeManagerV2', () => {
@@ -517,5 +518,126 @@ describe('RuntimeManagerV2', () => {
 
     expect(capturedTraceId).toBe('early-trace-id');
     expect(response.result).toBe('Hello World');
+  });
+});
+
+describe('RuntimeManagerV2 reflection auth', () => {
+  const SECRET = 'test-secret';
+  let manager: RuntimeManagerV2;
+  let wsClient: WebSocket | undefined;
+
+  /** Registers with the given params and resolves with the server's reply. */
+  function register(port: number, params: Record<string, unknown>) {
+    return new Promise<{ message: any; closeCode: number | undefined }>(
+      (resolve) => {
+        const client = new WebSocket(`ws://127.0.0.1:${port}`);
+        wsClient = client;
+        let message: any;
+        client.on('open', () => {
+          client.send(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'register',
+              params,
+              id: '1',
+            })
+          );
+        });
+        client.on('message', (data) => {
+          message = JSON.parse(data.toString());
+        });
+        client.on('close', (code) => resolve({ message, closeCode: code }));
+        // A successful register keeps the socket open, so stop waiting for it.
+        setTimeout(() => resolve({ message, closeCode: undefined }), 300);
+      }
+    );
+  }
+
+  afterEach(async () => {
+    wsClient?.close();
+    wsClient = undefined;
+    await manager.stop();
+  });
+
+  it('binds loopback only', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    expect(manager.boundHost).toBe('127.0.0.1');
+  });
+
+  it('accepts a register carrying the right secret', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message } = await register(manager.port!, {
+      id: 'rt-ok',
+      pid: 1,
+      secret: SECRET,
+    });
+    expect(message.error).toBeUndefined();
+    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-ok']);
+  });
+
+  it('rejects a register with no secret and does not add the runtime', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message, closeCode } = await register(manager.port!, {
+      id: 'rt-missing',
+      pid: 2,
+    });
+    expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(message.error.message).toContain('--no-auth');
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('rejects a register with a wrong secret', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message, closeCode } = await register(manager.port!, {
+      id: 'rt-wrong',
+      pid: 3,
+      secret: 'nope',
+    });
+    expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('accepts a register without a secret when the manager has none', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    const { message } = await register(manager.port!, {
+      id: 'rt-no-auth',
+      pid: 4,
+    });
+    expect(message.error).toBeUndefined();
+    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-no-auth']);
+  });
+
+  it('closes a connection whose first message is not register', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const closeCode = await new Promise<number>((resolve) => {
+      const client = new WebSocket(`ws://127.0.0.1:${manager.port}`);
+      wsClient = client;
+      client.on('open', () => {
+        client.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'streamChunk',
+            params: { requestId: '1', chunk: 'x' },
+          })
+        );
+      });
+      client.on('close', (code) => resolve(code));
+    });
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
   });
 });

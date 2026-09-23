@@ -29,10 +29,12 @@ import {
 import * as clc from 'colorette';
 import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import { NO_AUTH_OPTION_HELP, runWithManager } from '../utils/manager-utils';
 import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalDatasetOptions {
+  /** False with --no-auth. */
+  auth?: boolean;
   output?: string;
   maxRows: number;
   label?: string;
@@ -59,6 +61,7 @@ export const evalExtractData = new Command('eval:extract-data')
       .hideHelp()
   )
   .option('--label <label>', 'only extract traces with this batchRun label')
+  .option('--no-auth', NO_AUTH_OPTION_HELP)
   .action(async (flowName: string, options: EvalDatasetOptions) => {
     const { maxRows } = options;
     const dashDashIndex = process.argv.indexOf('--');
@@ -134,7 +137,10 @@ export const evalExtractData = new Command('eval:extract-data')
       }
     };
 
-    await runWithManager(projectRoot, runAction, { runtimeCommand });
+    await runWithManager(projectRoot, runAction, {
+      runtimeCommand,
+      auth: options.auth,
+    });
   });
 
 function toArray(input: any) {

@@ -19,10 +19,16 @@ import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
-import { getDevEnvVars, startDevProcessManager } from '../utils/manager-utils';
+import {
+  NO_AUTH_OPTION_HELP,
+  getDevEnvVars,
+  startDevProcessManager,
+} from '../utils/manager-utils';
 import { parsePort } from '../utils/option-parsers';
 
 interface FlutterRunOptions {
+  /** False with --no-auth. */
+  auth?: boolean;
   port?: number;
   open?: boolean;
   corsOrigin?: string;
@@ -44,6 +50,7 @@ export const startFlutter = new Command('start:flutter')
     '--cors-origin <origin>',
     'specify the allowed origin for CORS requests'
   )
+  .option('--no-auth', NO_AUTH_OPTION_HELP)
   .action(async (options: FlutterRunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
