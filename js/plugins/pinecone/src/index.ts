@@ -297,9 +297,7 @@ export function configurePineconeIndexer<
               };
             });
           })
-          .reduce((acc, val) => {
-            return acc.concat(val);
-          }, []),
+          .flat(),
       });
     }
   );
