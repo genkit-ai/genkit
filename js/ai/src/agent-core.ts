@@ -100,7 +100,10 @@ export interface AgentChat<State = unknown> {
    * {@link sendStream}.
    *
    * A failed turn rejects with an {@link AgentError} naming the resume point,
-   * which the chat has already adopted. An input with neither a message nor
+   * which the chat has already adopted. A turn the caller stopped resolves
+   * with `finishReason: 'aborted'` and the same kind of resume point: the
+   * chat keeps the message when the turn committed it and rolls it back when
+   * it did not. An input with neither a message nor
    * `resume` (`send({})`) runs the turn again on the conversation as it
    * stands, which re-attempts a failed turn without repeating the tool calls
    * it completed; a new message continues from that point like any other.
@@ -232,10 +235,18 @@ export interface AgentInterrupt<Input = unknown, Output = unknown> {
 export interface DetachedTask<State = unknown> {
   readonly snapshotId: string;
 
-  /** Yields status until a terminal state. */
+  /**
+   * Yields the snapshot on every poll until it settles: a terminal status.
+   * An aborted task passes through `aborting` while its worker winds down,
+   * and settles as `aborted` once the state the run kept is recorded.
+   */
   poll(opts?: { intervalMs?: number }): AsyncIterable<SessionSnapshot<State>>;
 
-  /** Resolves when the task reaches a terminal state. */
+  /**
+   * Resolves with the settled snapshot: completed, failed, expired, or
+   * aborted, which carries the turns the run finished, so the row it
+   * resolves with is the one to resume from.
+   */
   wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>>;
 
   /** Aborts the task. */
@@ -318,6 +329,16 @@ const TERMINAL_STATUSES = new Set([
   'aborted',
   'expired',
 ]);
+
+/**
+ * Whether a snapshot has settled into a state the client can act on. An
+ * `aborting` row is not settled: its finalize has yet to stamp the state
+ * the run committed, which is what makes the settled `aborted` row a resume
+ * point.
+ */
+function isSettled(snap: SessionSnapshot<unknown>): boolean {
+  return !!snap.status && TERMINAL_STATUSES.has(snap.status);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -628,7 +649,7 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
 
       if (snap) {
         yield snap;
-        if (snap.status && TERMINAL_STATUSES.has(snap.status)) {
+        if (isSettled(snap)) {
           return;
         }
       }
@@ -761,28 +782,36 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   /**
    * Wires an optional external abort signal to a fresh {@link AbortController}
-   * and returns it alongside a getter for whether the turn was aborted.
+   * and returns it alongside a getter for whether the turn was aborted, and
+   * `release`, which unhooks the caller's signal once the turn has settled so
+   * a signal reused across turns does not keep every turn's controller alive.
    */
   private setupAbort(opts?: { abortSignal?: AbortSignal }): {
     controller: AbortController;
     isAborted: () => boolean;
+    release: () => void;
   } {
     const controller = new AbortController();
     let aborted = false;
-    if (opts?.abortSignal) {
-      if (opts.abortSignal.aborted) {
+    let release = () => {};
+    const signal = opts?.abortSignal;
+    if (signal) {
+      if (signal.aborted) {
         controller.abort();
         aborted = true;
       } else {
-        opts.abortSignal.addEventListener('abort', () => {
+        const onAbort = () => {
           aborted = true;
           controller.abort();
-        });
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        release = () => signal.removeEventListener('abort', onAbort);
       }
     }
     return {
       controller,
       isAborted: () => aborted || controller.signal.aborted,
+      release,
     };
   }
 
@@ -922,13 +951,14 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     }
     const init = this.buildInit();
 
-    const { controller, isAborted } = this.setupAbort(opts);
+    const { controller, isAborted, release } = this.setupAbort(opts);
 
     const { stream: rawStream, output } = this.transport.runTurn(
       agentInput,
       init,
       { abortSignal: controller.signal }
     );
+    output.then(release, release);
 
     // The transport's stream is drained eagerly into the queue the turn's
     // stream reads from, so what it carried is known whether or not the

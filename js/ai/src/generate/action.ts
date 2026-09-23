@@ -176,7 +176,7 @@ export async function generateHelper(
         // conversation it completed alongside its error. Record it so the
         // span shows what the call produced and not only that it stopped.
         const partial = partialResponseOf(e, registry);
-        if (partial) metadata.output = JSON.stringify(partial.toJSON());
+        if (partial) metadata.output = serializedPartial(e as object, partial);
         throw e;
       }
     }
@@ -671,8 +671,13 @@ async function generateActionTurn(
     return response.toJSON();
   }
 
-  // Throw an error if the response is not usable.
-  response.assertValid();
+  // Throw an error if the response is not usable. The response rides back on
+  // the error with the model's own finish reason and the classified failure.
+  try {
+    response.assertValid();
+  } catch (e) {
+    throw invalidOutputError(response, e);
+  }
   const generatedMessage = response.message!; // would have thrown if no message
 
   const toolRequests = generatedMessage.content.filter(
@@ -808,6 +813,25 @@ function ownedBy<R extends GenerateResponse>(
 }
 
 /**
+ * The serialized form of a partial for span metadata, keyed by the error
+ * that carries it. A failure unwinds through one `generateHelper` span per
+ * turn, each recording the same partial, so the text is built once per
+ * error; `restorePartial` wraps a changed error in a new one. Keying by the
+ * error rather than the response lets the text go when the error does,
+ * although a caller may keep the response.
+ */
+const serializedPartials = new WeakMap<object, string>();
+
+function serializedPartial(error: object, partial: GenerateResponse): string {
+  let text = serializedPartials.get(error);
+  if (text === undefined) {
+    text = JSON.stringify(partial.toJSON());
+    serializedPartials.set(error, text);
+  }
+  return text;
+}
+
+/**
  * The partial response an error carries, when it is this loop's own. The
  * check is by identity rather than shape: an error from a nested `generate`
  * a hook ran carries that loop's response, not this one's partial.
@@ -876,9 +900,10 @@ function ownError(cause: unknown): unknown {
  * one. Those report `finishReason` `aborted`; everything else reports
  * `failed`. It reads the signal and the error's identity, never its status: a
  * provider answering 409 or 504 lands on ABORTED or DEADLINE_EXCEEDED, and a
- * provider stopping the request is not the caller stopping the run.
+ * provider stopping the request is not the caller stopping the run. The agent
+ * runner reads its turns by the same rule.
  */
-function callerStopped(
+export function callerStopped(
   abortSignal: AbortSignal | undefined,
   cause: unknown
 ): boolean {
@@ -887,13 +912,20 @@ function callerStopped(
   return name === 'AbortError' || name === 'TimeoutError';
 }
 
-/** The error an explicit abort check reports: the signal's reason when it is one. */
-function abortReason(abortSignal: AbortSignal): unknown {
+/**
+ * The error a stop observed at the signal reports: the signal's reason when
+ * it is one, else a CANCELLED error carrying it, or `message` when the signal
+ * carries no reason.
+ */
+export function abortReason(
+  abortSignal: AbortSignal,
+  message = 'generation aborted'
+): unknown {
   const reason = abortSignal.reason;
   if (reason instanceof Error) return reason;
   return new GenkitError({
     status: 'CANCELLED',
-    message: reason === undefined ? 'generation aborted' : String(reason),
+    message: reason === undefined ? message : String(reason),
   });
 }
 
@@ -901,7 +933,10 @@ function abortReason(abortSignal: AbortSignal): unknown {
  * Classifies a failure's cause as a status: a GenkitError's own, the status a
  * cancellation or timeout implies, otherwise INTERNAL.
  */
-function statusOf(cause: unknown, abortSignal?: AbortSignal): StatusName {
+export function statusOf(
+  cause: unknown,
+  abortSignal?: AbortSignal
+): StatusName {
   if (cause instanceof GenkitError) return cause.status;
   const c = cause as { name?: unknown; status?: unknown } | undefined;
   if (
@@ -1020,11 +1055,25 @@ function failureError(
     parser?: MessageParser<any>;
   }
 ): GenerationResponseError {
-  const aborted = callerStopped(opts.abortSignal, cause);
   const partial = failurePartial(request, cause, {
     ...opts,
-    finishReason: aborted ? 'aborted' : 'failed',
+    finishReason: callerStopped(opts.abortSignal, cause) ? 'aborted' : 'failed',
   });
+  return wrapPartial(partial, cause);
+}
+
+/**
+ * The error the loop throws for `partial`, a response that reports `cause`
+ * on its `error`: a {@link GenerationAbortedError} when the partial says the
+ * caller stopped the loop, a {@link GenerationResponseError} otherwise. What
+ * `generate` throws for it by default is the cause's own form (see
+ * `thrownForms`).
+ */
+function wrapPartial(
+  partial: GenerateResponse,
+  cause: unknown
+): GenerationResponseError {
+  const aborted = partial.finishReason === 'aborted';
   const Ctor = aborted ? GenerationAbortedError : GenerationResponseError;
   return withThrownForm(
     new Ctor(
@@ -1039,26 +1088,18 @@ function failureError(
 }
 
 /**
- * The error for a completed response that post-processing rejected: the
- * response keeps the model's own message and finish reason and gains the
- * classified error, since the raw output is usually what the caller needs to
- * see. Not a loop stop.
+ * The error for a completed response that post-processing rejected (blocked,
+ * without a message, or output off the schema): the response keeps the
+ * model's own message and finish reason and gains the classified error,
+ * since the raw output is usually what the caller needs to see. Not a loop
+ * stop.
  */
 function invalidOutputError(
   response: GenerateResponse,
   cause: unknown
 ): GenerationResponseError {
   response.error = runtimeErrorOf(cause);
-  return withThrownForm(
-    new GenerationResponseError(
-      response,
-      response.error.message,
-      response.error.status as StatusName,
-      undefined,
-      { cause, publicMessage: publicMessageOf(cause, false) }
-    ),
-    cause
-  );
+  return wrapPartial(response, cause);
 }
 
 /**
@@ -1080,24 +1121,16 @@ function restorePartial(
 ): unknown {
   if (turnState.partial) {
     const partial = turnState.partial;
-    const aborted = partial.finishReason === 'aborted';
     partial.error = runtimeErrorOf(cause, abortSignal);
     // A loop stop's finish message is its error's text; a response the model
     // completed keeps the model's own.
-    if (partial.finishReason === 'failed' || aborted) {
+    if (
+      partial.finishReason === 'failed' ||
+      partial.finishReason === 'aborted'
+    ) {
       partial.finishMessage = partial.error.message;
     }
-    const Ctor = aborted ? GenerationAbortedError : GenerationResponseError;
-    return withThrownForm(
-      new Ctor(
-        partial,
-        partial.error.message,
-        partial.error.status as StatusName,
-        undefined,
-        { cause, publicMessage: publicMessageOf(cause, aborted) }
-      ),
-      ownError(cause)
-    );
+    return wrapPartial(partial, cause);
   }
   if (turnState.request) {
     return failureError(turnState.request, cause, { abortSignal, registry });
