@@ -102,8 +102,8 @@ import {
   defineSchema,
   isAction,
   isBackgroundAction,
-  isDevEnv,
   registerBackgroundAction,
+  resolveReflectionConfig,
   setClientHeader,
   type Action,
   type ActionContext,
@@ -157,6 +157,11 @@ export interface GenkitOptions {
   name?: string;
   /** Additional attribution information to include in the x-goog-api-client header. */
   clientHeader?: string;
+  /**
+   * First port the reflection API tries, probing upward from there. Defaults to
+   * 3100. `GENKIT_REFLECTION_PORT` overrides this and is bound exactly.
+   */
+  reflectionPort?: number;
 }
 
 /**
@@ -188,12 +193,35 @@ export class Genkit extends GenkitAI implements HasRegistry {
       this.registry.context = this.options.context;
     }
     this.configure();
-    if (isDevEnv() && !disableReflectionApi) {
+    // The reflection API is no longer tied to GENKIT_ENV=dev: it also runs when
+    // GENKIT_REFLECTION_HOST/PORT or a v2 server URL is configured. Resolving
+    // here (rather than only inside the server) keeps an invalid port a
+    // constructor-time error.
+    const reflectionConfig = resolveReflectionConfig(process.env, {
+      port: this.options.reflectionPort,
+    });
+    const reflectionRequested =
+      reflectionConfig.kind === 'v1' || reflectionConfig.kind === 'v2';
+    if (reflectionRequested && !disableReflectionApi) {
       this.reflectionServer = new ReflectionServer(this.registry, {
         configuredEnvs: ['dev'],
         name: this.options.name,
+        port: this.options.reflectionPort,
       });
-      this.reflectionServer.start().catch((e) => logger.error);
+      this.reflectionServer.start().catch((e) => {
+        // A pinned port is a deployment contract, so failing to bind it is
+        // fatal rather than a degraded start nobody notices.
+        if (
+          reflectionConfig.kind === 'v1' &&
+          reflectionConfig.port.kind === 'pinned'
+        ) {
+          logger.error(
+            `Failed to bind GENKIT_REFLECTION_PORT=${reflectionConfig.port.port}: ${e}`
+          );
+          process.exit(1);
+        }
+        logger.error(`Failed to start reflection server: ${e}`);
+      });
     }
     if (options?.clientHeader) {
       setClientHeader(options?.clientHeader);
