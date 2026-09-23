@@ -1706,10 +1706,26 @@ describe('agents middleware (async)', () => {
       pluginConfig: undefined,
     });
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
-    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
-    assert.strictEqual(out.tasks[0].status, 'aborted');
+    const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
+    const taskIds = [`researcher:${task.snapshotId}`];
+    const out = await abortTool({ taskIds });
+    assert.strictEqual(out.tasks[0].status, 'aborting');
     assert.match(out.tasks[0].error, /cannot signal its worker/);
+
+    // The worker runs to its end, and only then does the row settle.
     gate.release();
+    const settled = await waitTool({ taskIds });
+    assert.strictEqual(settled.tasks[0].status, 'aborted');
+    assert.match(settled.tasks[0].error, /cannot signal its worker/);
+    const row = await researcher.getSnapshotData({
+      snapshotId: task.snapshotId,
+    });
+    const messages = row?.state?.messages ?? [];
+    assert.strictEqual(
+      messages[messages.length - 1]?.content[0].text,
+      'research complete',
+      'the settled row must keep the work the run finished'
+    );
   });
 
   it('does not advertise task handles on a synchronous instance', async () => {
@@ -1914,7 +1930,7 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(wait.tasks, undefined);
   });
 
-  it('aborts a running background task and reports it aborted afterwards', async () => {
+  it('aborts a running background task, which winds down and settles as aborted', async () => {
     const ai = genkit({});
     const gate = makeGate();
     let stopped = false;
@@ -1937,8 +1953,8 @@ describe('agents middleware (async)', () => {
         if (toolOutputs(req.messages, ABORT_TOOL).length === 0) {
           return toolRequest(ABORT_TOOL, { taskIds: [launches[0].taskId] });
         }
-        if (toolOutputs(req.messages, CHECK_TOOL).length === 0) {
-          return toolRequest(CHECK_TOOL, { taskIds: [launches[0].taskId] });
+        if (toolOutputs(req.messages, WAIT_TOOL).length === 0) {
+          return toolRequest(WAIT_TOOL, { taskIds: [launches[0].taskId] });
         }
         return textResponse('done');
       }
@@ -1949,14 +1965,17 @@ describe('agents middleware (async)', () => {
       maxTurns: 10,
       use: [agents({ agents: ['researcher'], async: true })],
     });
-    const [aborted] = toolOutputs(result.messages, ABORT_TOOL);
-    assert.strictEqual(aborted.tasks[0].status, 'aborted');
-    assert.ok(aborted.tasks[0].error);
-    // The row said aborted; the runtime observes that flip and cancels the
+    // The abort answers once the stop is durable, without waiting for the
+    // finalize: the task is winding down.
+    const [aborting] = toolOutputs(result.messages, ABORT_TOOL);
+    assert.strictEqual(aborting.tasks[0].status, 'aborting');
+    assert.match(aborting.tasks[0].error, /winding down/);
+    // The row said aborting; the runtime observes that flip and cancels the
     // work, which is the half a status write alone would not prove.
     assert.strictEqual(stopped, true, 'the sub-agent was never cancelled');
-    const [checked] = toolOutputs(result.messages, CHECK_TOOL);
-    assert.strictEqual(checked.tasks[0].status, 'aborted');
+    // A wait follows the wind-down to the settled row.
+    const [settled] = toolOutputs(result.messages, WAIT_TOOL);
+    assert.strictEqual(settled.tasks[0].status, 'aborted');
   });
 
   it('reports the result when aborting a task that had already finished', async () => {
