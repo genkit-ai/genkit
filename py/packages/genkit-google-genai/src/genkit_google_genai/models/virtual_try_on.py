@@ -55,7 +55,7 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.model import ModelInfo, ModelRequest, Supports, get_basic_usage_stats
+from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, get_basic_usage_stats
 from genkit.plugin_api import wrap_http_error
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai.models._sdk_config import (
@@ -149,7 +149,8 @@ DEFAULT_VIRTUAL_TRY_ON_SUPPORT = Supports(
     media=True,
     multiturn=False,
     tools=False,
-    system_role=True,
+    system_role=False,
+    constrained=Constrained.NONE,
     output=['media'],
 )
 
