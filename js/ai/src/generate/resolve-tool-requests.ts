@@ -17,6 +17,7 @@
 import {
   ActionRunOptions,
   GenkitError,
+  getErrorMessage,
   stripUndefinedProps,
   z,
 } from '@genkit-ai/core';
@@ -68,23 +69,105 @@ export function assertValidToolNames(tools: ToolAction[]) {
   }
 }
 
-function toRunOptions(part: ToolRequestPart): ToolRunOptions {
+/** Options the loop passes to a tool: the request's metadata and the call's abort signal. */
+export interface ToolResolveOptions {
+  /** The generate call's abort signal, handed to every tool it runs. */
+  abortSignal?: AbortSignal;
+}
+
+function toRunOptions(
+  part: ToolRequestPart,
+  options?: ToolResolveOptions
+): ToolRunOptions {
   const out: ToolRunOptions = { metadata: part.metadata };
   if (part.metadata?.resumed) out.resumed = part.metadata.resumed;
+  if (options?.abortSignal) out.abortSignal = options.abortSignal;
   return out;
 }
 
+/**
+ * Classifies a tool's error for the loop. A tool that failed on its own terms
+ * is an INTERNAL failure of the generation, since a tool's failure is not a
+ * failure of the caller's request, and the tool's own error is the `cause`. A
+ * tool that stopped because the call's abort signal fired is not a tool
+ * failure at all: that error carries CANCELLED, so the partial response
+ * reports `aborted` rather than blaming the tool for a stop the caller asked
+ * for. The check keys on the call's signal, so a tool that throws an abort
+ * error on its own terms is still a tool failure.
+ *
+ * The tool's own text stays in-process unless it is already a GenkitError: an
+ * HTTP handler sends a GenkitError's message to the client, and a tool's
+ * arbitrary exception is not written for one.
+ */
+function toolFailureError(
+  name: string,
+  cause: unknown,
+  abortSignal?: AbortSignal
+): GenkitError {
+  const stopped = !!abortSignal?.aborted;
+  const verb = stopped ? 'stopped' : 'failed';
+  const isGenkit = cause instanceof GenkitError;
+  const text = isGenkit ? cause.originalMessage : getErrorMessage(cause);
+  return new ToolFailureError({
+    status: stopped ? 'CANCELLED' : 'INTERNAL',
+    message: `tool "${name}" ${verb}: ${text}`,
+    detail: errorDetailsOf(cause),
+    cause,
+    publicMessage: isGenkit
+      ? cause.publicMessage && `tool "${name}" ${verb}: ${cause.publicMessage}`
+      : `tool "${name}" ${verb}`,
+  });
+}
+
+/**
+ * A tool's failure as the loop classifies it (see `toolFailureError`). The
+ * tool's own error is the `cause`, which is what `generate` throws for it by
+ * default: the classification is for the partial response and the wire, not
+ * for a caller that was catching the tool's error before the loop classified
+ * it.
+ */
+export class ToolFailureError extends GenkitError {}
+
+/**
+ * The structured details a cause contributes to the error that wraps it: a
+ * GenkitError's own `detail`, without the request or response payloads a
+ * generation error carries, which would otherwise repeat a conversation (or
+ * nest one per agent depth) inside the wrapper's details.
+ */
+export function errorDetailsOf(cause: unknown): unknown {
+  if (!(cause instanceof GenkitError)) return undefined;
+  const detail = cause.detail;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+    return detail;
+  }
+  const { request: _request, response: _response, ...rest } = detail;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+/**
+ * Records a resolved tool call's response on its request part so a later
+ * resume replays it instead of running the tool again (see
+ * `resolveResumedToolRequest`). The response's multipart content and its
+ * metadata ride under their own keys; `pendingOutput` itself stays
+ * output-only for cross-SDK parity.
+ */
 export function toPendingOutput(
   part: ToolRequestPart,
   response: ToolResponsePart
 ): ToolRequestPart {
-  return {
-    ...part,
-    metadata: {
-      ...part.metadata,
-      pendingOutput: response.toolResponse.output,
-    },
+  const metadata: Record<string, any> = {
+    ...part.metadata,
+    // A void output is stashed as null: it must survive a session store's
+    // JSON, which drops a key holding undefined.
+    pendingOutput: response.toolResponse.output ?? null,
   };
+  if (response.toolResponse.content?.length) {
+    metadata.pendingContent = response.toolResponse.content;
+  }
+  if (response.metadata && Object.keys(response.metadata).length > 0) {
+    metadata.pendingMetadata = response.metadata;
+  }
+  return { ...part, metadata };
 }
 
 export async function resolveToolRequest(
@@ -175,7 +258,7 @@ export async function resolveToolRequest(
         },
       };
     }
-    throw e;
+    throw toolFailureError(part.toolRequest.name, e, initialCtx.abortSignal);
   }
 }
 
@@ -187,14 +270,18 @@ export async function resolveToolRequests(
   rawRequest: GenerateActionOptions,
   generatedMessage: MessageData,
   tools: ToolAction[],
-  middleware: GenerateMiddlewareDef[] = []
+  middleware: GenerateMiddlewareDef[] = [],
+  options?: ToolResolveOptions
 ): Promise<{
   revisedModelMessage?: MessageData;
   toolMessage?: MessageData;
 }> {
   const toolMap = toToolMap(tools);
 
-  const responseParts: ToolResponsePart[] = [];
+  // Tools run concurrently and finish in any order. Responses are keyed by
+  // their request's position in the model message and emitted in that order
+  // below, so the tool message is deterministic across runs.
+  const responseByIndex = new Map<number, ToolResponsePart>();
   let hasInterrupts = false;
 
   const revisedModelMessage = {
@@ -210,20 +297,17 @@ export async function resolveToolRequests(
         rawRequest,
         part as ToolRequestPart,
         toolMap,
-        middleware
+        middleware,
+        toRunOptions(part as ToolRequestPart, options)
       );
 
       if (response) {
-        responseParts.push(response!);
-        revisedModelMessage.content.splice(
-          i,
-          1,
-          toPendingOutput(part, response)
-        );
+        responseByIndex.set(i, response);
+        revisedModelMessage.content[i] = toPendingOutput(part, response);
       }
 
       if (interrupt) {
-        revisedModelMessage.content.splice(i, 1, interrupt);
+        revisedModelMessage.content[i] = interrupt;
         hasInterrupts = true;
       }
     })
@@ -233,13 +317,22 @@ export async function resolveToolRequests(
     return { revisedModelMessage };
   }
 
-  if (responseParts.length === 0) {
+  if (responseByIndex.size === 0) {
     return {};
   }
 
   return {
-    toolMessage: { role: 'tool', content: responseParts },
+    toolMessage: { role: 'tool', content: inRequestOrder(responseByIndex) },
   };
+}
+
+/** Returns the collected tool responses ordered by their request's position. */
+function inRequestOrder(
+  responseByIndex: Map<number, ToolResponsePart>
+): ToolResponsePart[] {
+  return [...responseByIndex.keys()]
+    .sort((a, b) => a - b)
+    .map((i) => responseByIndex.get(i)!);
 }
 
 function findCorrespondingToolRequest(
@@ -270,24 +363,39 @@ async function resolveResumedToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
   toolMap: Record<string, ToolAction>,
-  middleware: GenerateMiddlewareDef[] = []
+  middleware: GenerateMiddlewareDef[] = [],
+  options?: ToolResolveOptions
 ): Promise<{
   toolRequest?: ToolRequestPart;
   toolResponse?: ToolResponsePart;
   interrupt?: ToolRequestPart;
 }> {
-  if (part.metadata?.pendingOutput) {
-    const { pendingOutput, ...metadata } = part.metadata;
-    const toolResponse = {
+  // Key presence, not truthiness: a tool that legitimately returned a falsy
+  // output still completed, and its outcome is what the replay restores.
+  if (part.metadata && 'pendingOutput' in part.metadata) {
+    const { pendingOutput, pendingContent, pendingMetadata, ...metadata } =
+      part.metadata;
+    // Restore the multipart content and the response metadata the original
+    // call carried, stashed next to pendingOutput by `toPendingOutput`. Both
+    // may have been through a JSON round-trip, so they are taken as-is.
+    const toolResponse: ToolResponsePart = {
       toolResponse: {
         name: part.toolRequest.name,
         ref: part.toolRequest.ref,
         output: pendingOutput,
+        ...(Array.isArray(pendingContent) &&
+          pendingContent.length > 0 && { content: pendingContent }),
       },
-      metadata: { ...metadata, source: 'pending' },
+      metadata: {
+        ...metadata,
+        source: 'pending',
+        ...(pendingMetadata && typeof pendingMetadata === 'object'
+          ? pendingMetadata
+          : {}),
+      },
     };
 
-    // strip pendingOutput from metadata when returning
+    // strip the pending keys from metadata when returning
     return stripUndefinedProps({
       toolResponse,
       toolRequest: { ...part, metadata },
@@ -323,7 +431,8 @@ async function resolveResumedToolRequest(
       rawRequest,
       restartRequest,
       toolMap,
-      middleware
+      middleware,
+      toRunOptions(restartRequest, options)
     );
 
     // if there's a new interrupt, return it
@@ -355,7 +464,8 @@ export async function resolveResumeOption(
   registry: Registry,
   rawRequest: GenerateActionOptions,
   tools: ToolAction[],
-  middleware: GenerateMiddlewareDef[] = []
+  middleware: GenerateMiddlewareDef[] = [],
+  options?: ToolResolveOptions
 ): Promise<{
   revisedRequest?: GenerateActionOptions;
   interruptedResponse?: GenerateResponseData;
@@ -378,30 +488,45 @@ export async function resolveResumeOption(
     });
   }
 
-  const toolResponses: ToolResponsePart[] = [];
+  // Directives resolve concurrently; responses are keyed by their request's
+  // position so the resumed tool message is emitted in request order, matching
+  // a first-run tool message.
+  const responseByIndex = new Map<number, ToolResponsePart>();
   let interrupted = false;
 
-  lastMessage.content = await Promise.all(
-    lastMessage.content.map(async (part) => {
+  const newContent = await Promise.all(
+    lastMessage.content.map(async (part, i) => {
       if (!isToolRequest(part)) return part;
       const resolved = await resolveResumedToolRequest(
         rawRequest,
         part,
         toolMap,
-        middleware
+        middleware,
+        options
       );
       if (resolved.interrupt) {
         interrupted = true;
         return resolved.interrupt;
       }
 
-      toolResponses.push(resolved.toolResponse!);
+      responseByIndex.set(i, resolved.toolResponse!);
       return resolved.toolRequest!;
     })
   );
 
   if (interrupted) {
-    // TODO: figure out how to make this trigger an interrupt response.
+    // Siblings resolved in this resume (restarted runs, supplied responses,
+    // replayed pending outputs) are preserved as pendingOutput on their
+    // request parts, the way a first-run interrupt preserves completed
+    // siblings, so the next resume replays their outcomes instead of
+    // demanding new directives.
+    for (const [i, response] of responseByIndex) {
+      newContent[i] = toPendingOutput(
+        newContent[i] as ToolRequestPart,
+        response
+      );
+    }
+    lastMessage.content = newContent;
     return {
       interruptedResponse: {
         finishReason: 'interrupted',
@@ -411,21 +536,25 @@ export async function resolveResumeOption(
       },
     };
   }
+  lastMessage.content = newContent;
 
   const numToolRequests = lastMessage.content.filter(
     (p) => !!p.toolRequest
   ).length;
-  if (toolResponses.length !== numToolRequests) {
+  if (responseByIndex.size !== numToolRequests) {
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
-      message: `Expected ${numToolRequests} tool responses but resolved to ${toolResponses.length}.`,
-      detail: { toolResponses, message: lastMessage },
+      message: `Expected ${numToolRequests} tool responses but resolved to ${responseByIndex.size}.`,
+      detail: {
+        toolResponses: inRequestOrder(responseByIndex),
+        message: lastMessage,
+      },
     });
   }
 
   const toolMessage: MessageData = {
     role: 'tool',
-    content: toolResponses,
+    content: inRequestOrder(responseByIndex),
     metadata: {
       resumed: rawRequest.resume.metadata || true,
     },
@@ -444,7 +573,8 @@ export async function resolveResumeOption(
 export async function resolveRestartedTools(
   registry: Registry,
   rawRequest: GenerateActionOptions,
-  middleware: GenerateMiddlewareDef[] = []
+  middleware: GenerateMiddlewareDef[] = [],
+  options?: ToolResolveOptions
 ): Promise<ToolRequestPart[]> {
   const tools = await resolveTools(registry, rawRequest.tools);
   // rawRequest.tools only holds user-provided tools (treated as immutable). We must
@@ -465,7 +595,8 @@ export async function resolveRestartedTools(
         rawRequest,
         p,
         toolMap,
-        middleware
+        middleware,
+        toRunOptions(p, options)
       );
 
       // this means that it interrupted *again* after the restart

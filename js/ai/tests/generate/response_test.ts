@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { GenkitError, z } from '@genkit-ai/core';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 import {
   GenerateResponse,
+  GenerationAbortedError,
   GenerationBlockedError,
   GenerationResponseError,
 } from '../../src/generate.js';
@@ -279,5 +280,149 @@ describe('GenerateResponse', () => {
         output: { contentType: 'application/json', format: 'json' },
       },
     });
+  });
+});
+
+describe('GenerateResponse partials', () => {
+  const request: GenerateRequest = {
+    messages: [
+      { role: 'user', content: [{ text: 'hi' }] },
+      { role: 'model', content: [{ toolRequest: { name: 't', input: {} } }] },
+      { role: 'tool', content: [{ toolResponse: { name: 't', output: 1 } }] },
+    ],
+  };
+
+  it('returns the request messages as history when there is no message', () => {
+    const response = new GenerateResponse(
+      { finishReason: 'failed', finishMessage: 'model melted' },
+      { request }
+    );
+    assert.deepStrictEqual(response.messages, request.messages);
+    assert.notStrictEqual(response.messages, request.messages);
+  });
+
+  it('still requires a request to build history', () => {
+    const response = new GenerateResponse({ finishReason: 'failed' });
+    assert.throws(() => response.messages, /without request reference/);
+  });
+
+  it('round-trips the classified error through toJSON', () => {
+    const error = { status: 'UNAVAILABLE', message: 'model melted' };
+    const response = new GenerateResponse({
+      finishReason: 'failed',
+      finishMessage: 'model melted',
+      error,
+    });
+    assert.deepStrictEqual(response.error, error);
+    assert.deepStrictEqual(response.toJSON().error, error);
+    assert.strictEqual(
+      'error' in new GenerateResponse({ finishReason: 'stop' }).toJSON(),
+      false
+    );
+  });
+
+  it('stamps the error on the response assertValid rejects', () => {
+    const blocked = new GenerateResponse({
+      finishReason: 'blocked',
+      finishMessage: 'unsafe',
+    });
+    assert.throws(() => blocked.assertValid(), GenerationBlockedError);
+    assert.deepStrictEqual(blocked.error, {
+      status: 'FAILED_PRECONDITION',
+      message: 'Generation blocked: unsafe',
+    });
+
+    const empty = new GenerateResponse({ finishReason: 'length' });
+    assert.throws(() => empty.assertValid(), GenerationResponseError);
+    assert.strictEqual(empty.error?.status, 'FAILED_PRECONDITION');
+  });
+
+  it('leaves the response unchanged after isValid', () => {
+    const blocked = new GenerateResponse({ finishReason: 'blocked' });
+    assert.strictEqual(blocked.isValid(), false);
+    assert.strictEqual(blocked.error, undefined);
+    assert.strictEqual('error' in blocked.toJSON(), false);
+  });
+});
+
+describe('GenerationResponseError', () => {
+  const partial = new GenerateResponse(
+    {
+      finishReason: 'failed',
+      finishMessage: 'model melted',
+      error: { status: 'UNAVAILABLE', message: 'model melted' },
+    },
+    {
+      request: { messages: [{ role: 'user', content: [{ text: 'secret' }] }] },
+    }
+  );
+
+  it('keeps the response in-process and off the wire', () => {
+    const err = new GenerationResponseError(
+      partial,
+      'model melted',
+      'UNAVAILABLE',
+      { attempt: 2 }
+    );
+    assert.strictEqual(err.detail.response, partial);
+    assert.strictEqual(err.detail.attempt, 2);
+    assert.deepStrictEqual(err.toJSON(), {
+      status: 'UNAVAILABLE',
+      message: 'model melted',
+      details: {
+        attempt: 2,
+        finishReason: 'failed',
+        finishMessage: 'model melted',
+      },
+    });
+    assert.strictEqual(JSON.stringify(err).includes('secret'), false);
+  });
+
+  it('wraps a cause losslessly', () => {
+    const cause = new GenkitError({
+      status: 'UNAVAILABLE',
+      message: 'model melted',
+      detail: { provider: 'x' },
+      source: 'provider',
+      responseMetadata: { retryAfterMs: 5 },
+    });
+    const err = new GenerationResponseError(
+      partial,
+      'model melted',
+      'UNAVAILABLE',
+      undefined,
+      { cause }
+    );
+    assert.strictEqual(err.cause, cause);
+    assert.strictEqual(err.detail.provider, 'x');
+    assert.strictEqual(err.source, 'provider');
+    assert.strictEqual(err.responseMetadata?.retryAfterMs, 5);
+    assert.strictEqual(err.message, 'provider: UNAVAILABLE: model melted');
+  });
+
+  it('sends the public message when the cause text is not for a client', () => {
+    const err = new GenerationResponseError(
+      partial,
+      'db password rejected',
+      'INTERNAL',
+      undefined,
+      {
+        cause: new Error('db password rejected'),
+        publicMessage: 'generation failed',
+      }
+    );
+    assert.strictEqual(err.toJSON().message, 'generation failed');
+    assert.strictEqual(err.originalMessage, 'db password rejected');
+  });
+
+  it('is the base of GenerationAbortedError and GenerationBlockedError', () => {
+    assert.ok(
+      new GenerationAbortedError(partial, 'stopped', 'CANCELLED') instanceof
+        GenerationResponseError
+    );
+    assert.ok(
+      new GenerationBlockedError(partial, 'blocked') instanceof
+        GenerationResponseError
+    );
   });
 });

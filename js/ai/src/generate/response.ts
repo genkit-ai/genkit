@@ -27,12 +27,21 @@ import type {
   GenerationUsage,
   MessageData,
   ModelResponseData,
+  RuntimeError,
   ToolRequestPart,
 } from '../model.js';
 
 /**
  * GenerateResponse is the result from a `generate()` call and contains one or
  * more generated candidate messages.
+ *
+ * A response can also be the partial result of a generation that failed: the
+ * generate loop attaches one to the {@link GenerationResponseError} it throws
+ * once the request has resolved. Such a partial has no `message`, reports
+ * `finishReason` `failed` (something broke) or `aborted` (the caller stopped
+ * the loop), carries the cause on `finishMessage` and, classified, on
+ * `error`, and its {@link messages} end at a turn seam: the conversation the
+ * failing turn started from, which can be sent again.
  */
 export class GenerateResponse<O = unknown> implements ModelResponseData {
   /** The generated message. */
@@ -41,6 +50,13 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
   finishReason: ModelResponseData['finishReason'];
   /** Additional information about why the model stopped generating, if any. */
   finishMessage?: string;
+  /**
+   * Structured failure information for a response that accompanies an error:
+   * the classified form of `finishMessage`, set whenever `finishReason` is
+   * `failed` or `aborted`, so a response read back as data can branch on
+   * `error.status` rather than matching a string.
+   */
+  error?: RuntimeError;
   /** Usage information. */
   usage: GenerationUsage;
   /** Provider-specific response data. */
@@ -89,6 +105,7 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
       response.finishReason || response.candidates?.[0]?.finishReason!;
     this.finishMessage =
       response.finishMessage || response.candidates?.[0]?.finishMessage;
+    this.error = response.error;
     this.usage = response.usage || {};
     this.custom = response.custom || {};
     this.raw = response.raw || this.custom;
@@ -97,21 +114,21 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
   }
 
   /**
-   * Throws an error if the response does not contain valid output.
+   * Throws an error if the response does not contain valid output. The
+   * thrown error carries this response, which then also reports the failure
+   * on {@link error}.
    */
   assertValid(): void {
     if (this.finishReason === 'blocked') {
-      throw new GenerationBlockedError(
-        this,
-        `Generation blocked${this.finishMessage ? `: ${this.finishMessage}` : '.'}`
-      );
+      const message = `Generation blocked${this.finishMessage ? `: ${this.finishMessage}` : '.'}`;
+      this.error = { status: 'FAILED_PRECONDITION', message };
+      throw new GenerationBlockedError(this, message);
     }
 
     if (!this.message && !this.operation) {
-      throw new GenerationResponseError(
-        this,
-        `Model did not generate a message. Finish reason: '${this.finishReason}': ${this.finishMessage}`
-      );
+      const message = `Model did not generate a message. Finish reason: '${this.finishReason}': ${this.finishMessage}`;
+      this.error = { status: 'FAILED_PRECONDITION', message };
+      throw new GenerationResponseError(this, message);
     }
   }
 
@@ -128,12 +145,17 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
   }
 
   isValid(request?: GenerateRequest): boolean {
+    // A read-only check: the error assertValid stamps on a rejected response
+    // is restored afterwards.
+    const error = this.error;
     try {
       this.assertValid();
       this.assertValidSchema(request);
       return true;
     } catch (e) {
       return false;
+    } finally {
+      this.error = error;
     }
   }
 
@@ -201,6 +223,10 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
    * Returns the message history for the request by concatenating the model
    * response to the list of messages from the request. The result of this
    * method can be safely serialized to JSON for persistence in a database.
+   *
+   * A response without a generated message (the partial a failed generation
+   * carries) returns the request's messages alone: the conversation as it
+   * stood when the failing turn began, which can be sent again.
    * @returns A serializable list of messages compatible with `generate({history})`.
    */
   get messages(): MessageData[] {
@@ -208,11 +234,8 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
       throw new Error(
         "Can't construct history for response without request reference."
       );
-    if (!this.message)
-      throw new Error(
-        "Can't construct history for response without generated message."
-      );
-    return [...this.request?.messages, this.message.toJSON()];
+    if (!this.message) return [...this.request.messages];
+    return [...this.request.messages, this.message.toJSON()];
   }
 
   toJSON(): ModelResponseData {
@@ -220,12 +243,14 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
       message: this.message?.toJSON(),
       finishReason: this.finishReason,
       finishMessage: this.finishMessage,
+      error: this.error,
       usage: this.usage,
       custom: (this.custom as { toJSON?: () => any }).toJSON?.() || this.custom,
       request: this.request,
       operation: this.operation,
     };
     if (!out.finishMessage) delete out.finishMessage;
+    if (!out.error) delete out.error;
     if (!out.request) delete out.request;
     if (!out.operation) delete out.operation;
     return out;
