@@ -130,13 +130,11 @@ import (
   "context"
   "log"
 
-  "github.com/firebase/genkit/go/genkit"
   "github.com/firebase/genkit/go/plugins/mcp"
 )
 
 func main() {
   ctx := context.Background()
-  g := genkit.Init(ctx)
 
   // Create a host with multiple servers
   host, err := mcp.NewHost(mcp.MCPHostOptions{
@@ -196,9 +194,9 @@ func main() {
 
 ```
 
-`ActiveTools` returns detached tools; it does not register them with `g`.
-Register a tool explicitly with `genkit.RegisterAction(g, tool)` when you want
-it available by name in that Genkit instance.
+`ActiveTools` returns detached tools; it does not register them with a Genkit
+instance. After initializing `g`, register a tool with
+`genkit.RegisterAction(g, tool)` when you want it available by name.
 
 ## Testing Your Server
 
