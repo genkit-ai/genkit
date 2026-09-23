@@ -27,6 +27,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+const defaultMCPVersion = "1.0.0"
+
 // StdioConfig holds configuration for a stdio-based MCP server process.
 type StdioConfig struct {
 	Command string
@@ -101,7 +103,7 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 		options.Name = "unnamed"
 	}
 	if options.Version == "" {
-		options.Version = "1.0.0"
+		options.Version = defaultMCPVersion
 	}
 
 	client := &GenkitMCPClient{
