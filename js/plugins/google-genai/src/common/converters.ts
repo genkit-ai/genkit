@@ -42,8 +42,7 @@ import {
 export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const isParameterless =
     tool.inputSchema?.type === 'object' &&
-    tool.inputSchema.properties &&
-    Object.keys(tool.inputSchema.properties).length === 0 &&
+    Object.keys(tool.inputSchema.properties ?? {}).length === 0 &&
     !tool.inputSchema.additionalProperties;
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
