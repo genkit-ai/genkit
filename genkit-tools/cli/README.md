@@ -48,4 +48,30 @@ Available commands:
 
   set development environment configuration
 
+- `mcp [options]`
+
+  run the experimental MCP server over stdio
+
 - `help`
+
+## MCP project root
+
+When an MCP client launches `genkit mcp`, pass the absolute path to your Genkit
+project if the client's working directory may be elsewhere:
+
+```json
+{
+  "mcpServers": {
+    "genkit": {
+      "command": "genkit",
+      "args": ["mcp", "--project-root", "/absolute/path/to/your/project"]
+    }
+  }
+}
+```
+
+Without `--project-root`, the CLI searches upward from its working directory
+for a project and otherwise uses that working directory. Trace files are stored
+under `<projectRoot>/.genkit/traces`; launching from `/` can therefore cause an
+attempt to write to `/.genkit/traces`. `GENKIT_HOME` does not configure this
+path. Use `--project-root` or launch the MCP server from the project directory.
