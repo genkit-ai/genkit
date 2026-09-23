@@ -81,6 +81,7 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic](samples/basic/main.go) | Simple text generation with streaming |
 | [basic‑structured](samples/basic-structured/main.go) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic‑formats](samples/basic-formats/main.go) | Output formats and what each one makes a streamed chunk mean |
+| [basic‑decisions](samples/basic-decisions/main.go) | Decisions with TypeSafe jev: the output type is the question set, the answers carry calibrated probabilities, and the routing policy stays in code |
 | [basic‑media](samples/basic-media) | Reading, drawing, and redrawing pictures, plus generating video with a polled background model |
 | [basic‑prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files, shared partials and helpers, and prompts embedded in the binary |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content computed from your data, with media and retrieved docs |
@@ -1357,6 +1358,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
 | **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
+| **TypeSafe** *(preview)* | `typesafex.TypeSafe` | jev, a decision model: typed questions about a state, calibrated answers back; see the [plugin README](plugins/typesafe/exp/README.md) |
 
 ```go
 // Google AI
