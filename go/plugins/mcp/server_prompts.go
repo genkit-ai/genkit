@@ -487,7 +487,8 @@ func genkitPartToMCP(part *ai.Part) (mcp.Content, error) {
 		}
 		return mcp.NewTextContent(part.Resource.Uri), nil
 	case ai.PartMedia:
-		if strings.HasPrefix(part.Text, "http://") || strings.HasPrefix(part.Text, "https://") || strings.HasPrefix(part.Text, "gs://") {
+		if scheme, _, found := strings.Cut(part.Text, "://"); found &&
+			(strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "https") || strings.EqualFold(scheme, "gs")) {
 			return nil, fmt.Errorf("remote prompt media %q cannot be embedded in an MCP prompt", part.Text)
 		}
 		mimeType, data := part.ContentType, part.Text

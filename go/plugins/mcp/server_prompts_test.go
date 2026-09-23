@@ -455,4 +455,7 @@ func TestMCPPromptConvertsToolTurnsAndRejectsRemoteMedia(t *testing.T) {
 	if _, err := genkitPartToMCP(ai.NewMediaPart("image/png", "https://example.com/image.png")); err == nil {
 		t.Fatal("remote media was silently converted to text")
 	}
+	if _, err := genkitPartToMCP(ai.NewMediaPart("image/png", "HTTPS://example.com/image.png")); err == nil || !strings.Contains(err.Error(), "remote prompt media") {
+		t.Fatalf("uppercase remote media error = %v, want descriptive remote media error", err)
+	}
 }
