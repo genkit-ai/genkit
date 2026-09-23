@@ -204,21 +204,9 @@ async def test_get_openai_config_model_field_overrides_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test__generate(sample_request: ModelRequest) -> None:
+async def test__generate(sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]) -> None:
     """Test generate method calls OpenAI API and returns ModelResponse."""
-    mock_message = MagicMock()
-    mock_message.content = 'Hello, user!'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = None
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _mock_completion(make_completion())
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     response = await model._generate(sample_request)
@@ -434,21 +422,11 @@ def _mock_stream(chunks: list[ChatCompletionChunk]) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
+async def test__generate_reports_usage(
+    sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+) -> None:
     """A non-streaming response's token usage reaches the ModelResponse."""
-    mock_message = MagicMock()
-    mock_message.content = 'Hello, user!'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = CompletionUsage.model_validate(_USAGE_PAYLOAD)
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _mock_completion(make_completion(usage=_USAGE_PAYLOAD))
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     sample_request.config = OpenAIConfig(stream_options={'include_usage': False})
@@ -460,35 +438,26 @@ async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
 
 
 @pytest.mark.asyncio
-async def test__generate_reports_extra_token_counts() -> None:
+async def test__generate_reports_extra_token_counts(make_completion: Callable[..., ChatCompletion]) -> None:
     """Counts Genkit has no field for land in usage.custom; zeroes are dropped."""
-    mock_message = MagicMock()
-    mock_message.content = 'hi'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = CompletionUsage.model_validate({
-        'prompt_tokens': 3,
-        'completion_tokens': 2,
-        'total_tokens': 5,
-        'prompt_tokens_details': {'cached_tokens': 0, 'image_tokens': 9},
-        'completion_tokens_details': {
-            'audio_tokens': 4,
-            'accepted_prediction_tokens': 0,
-            'rejected_prediction_tokens': 2,
-            'reasoning_tokens': 0,
+    completion = make_completion(
+        content='hi',
+        usage={
+            'prompt_tokens': 3,
+            'completion_tokens': 2,
+            'total_tokens': 5,
+            'prompt_tokens_details': {'cached_tokens': 0, 'image_tokens': 9},
+            'completion_tokens_details': {
+                'audio_tokens': 4,
+                'accepted_prediction_tokens': 0,
+                'rejected_prediction_tokens': 2,
+                'reasoning_tokens': 0,
+            },
+            'num_sources_used': 8,
         },
-        'num_sources_used': 8,
-    })
+    )
 
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-
-    model = OpenAIModel(model='gpt-4', client=mock_client)
+    model = OpenAIModel(model='gpt-4', client=_mock_completion(completion))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     response = await model._generate(request)
 
@@ -1620,17 +1589,15 @@ class TestResponseMetadata:
     async def test_generate_reports_ids_and_fingerprint(
         self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
     ) -> None:
-        """The fingerprint, model and id reach both custom and raw."""
+        """The fingerprint, model and id reach custom."""
         model = OpenAIModel(model='gpt-4o', client=_client(make_completion(system_fingerprint='fp_44709d6fcb')))
         response = await model._generate(sample_request)
 
-        expected = {
+        assert response.custom == {
             'systemFingerprint': 'fp_44709d6fcb',
             'model': 'gpt-4o-2024-08-06',
             'id': 'chatcmpl-abc',
         }
-        assert response.custom == expected
-        assert response.raw == expected
 
     @pytest.mark.asyncio
     async def test_generate_reports_citations_without_a_fingerprint(
@@ -1641,10 +1608,10 @@ class TestResponseMetadata:
         model = OpenAIModel(model='grok-4', client=_client(make_completion(citations=citations)))
         response = await model._generate(sample_request)
 
-        assert response.raw is not None
-        assert response.raw['citations'] == citations
-        assert response.raw['id'] == 'chatcmpl-abc'
-        assert 'systemFingerprint' not in response.raw
+        assert response.custom is not None
+        assert response.custom['citations'] == citations
+        assert response.custom['id'] == 'chatcmpl-abc'
+        assert 'systemFingerprint' not in response.custom
 
     @pytest.mark.asyncio
     async def test_generate_reports_the_choice_error_object(
@@ -1656,8 +1623,8 @@ class TestResponseMetadata:
         model = OpenAIModel(model='gpt-4o', client=_client(completion))
         response = await model._generate(sample_request)
 
-        assert response.raw is not None
-        assert response.raw['error'] == failure
+        assert response.custom is not None
+        assert response.custom['error'] == failure
 
     @pytest.mark.asyncio
     async def test_generate_omits_absent_fields(
@@ -1667,7 +1634,39 @@ class TestResponseMetadata:
         model = OpenAIModel(model='gpt-4o', client=_client(make_completion()))
         response = await model._generate(sample_request)
 
-        assert response.raw == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc'}
+        assert response.custom == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc'}
+
+    @pytest.mark.asyncio
+    async def test_generate_reports_the_whole_completion_as_raw(self, sample_request: ModelRequest) -> None:
+        """Raw holds the completion as sent, unmodeled and null fields included."""
+        payload: dict[str, Any] = {
+            'id': 'chatcmpl-abc',
+            'created': 1700000000,
+            'model': 'grok-4',
+            'object': 'chat.completion',
+            'system_fingerprint': None,
+            'citations': ['https://a.example'],
+            'choices': [
+                {
+                    'index': 0,
+                    'finish_reason': 'error',
+                    'error': {'message': 'upstream gave up'},
+                    'logprobs': None,
+                    'message': {'role': 'assistant', 'content': 'Hello', 'reasoning_content': 'Thinking'},
+                }
+            ],
+            'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5, 'cost': 0.0004},
+        }
+        model = OpenAIModel(model='grok-4', client=_client(ChatCompletion.construct(**payload)))
+        response = await model._generate(sample_request)
+
+        assert response.raw == payload
+        assert response.custom == {
+            'model': 'grok-4',
+            'id': 'chatcmpl-abc',
+            'citations': ['https://a.example'],
+            'error': {'message': 'upstream gave up'},
+        }
 
     @pytest.mark.asyncio
     async def test_generate_stream_reports_chunk_metadata(
@@ -1703,20 +1702,19 @@ class TestResponseMetadata:
 
     @pytest.mark.asyncio
     async def test_cleaned_json_response_keeps_metadata(self, make_completion: Callable[..., ChatCompletion]) -> None:
-        """Stripping markdown fences does not drop the metadata."""
+        """Stripping markdown fences cleans the message and keeps the metadata and raw completion."""
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part.from_text('Generate')])],
             output=OutputConfig(format='json'),
         )
-        completion = make_completion(
-            content='```json\n{"name": "John", "level": 5}\n```',
-            system_fingerprint='fp_deepseek',
-        )
+        fenced = '```json\n{"name": "John", "level": 5}\n```'
+        completion = make_completion(content=fenced, system_fingerprint='fp_deepseek')
         model = OpenAIModel(model='deepseek-chat', client=_client(completion))
         response = await model._generate(request)
 
         assert response.message is not None
         assert response.message.content[0].text == '{"name": "John", "level": 5}'
+        assert response.custom is not None
+        assert response.custom['systemFingerprint'] == 'fp_deepseek'
         assert response.raw is not None
-        assert response.raw['systemFingerprint'] == 'fp_deepseek'
-        assert response.custom == response.raw
+        assert response.raw['choices'][0]['message']['content'] == fenced

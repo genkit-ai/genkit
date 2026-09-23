@@ -17,46 +17,42 @@
 """Test tool calling."""
 
 import json
+from collections.abc import Callable
 from functools import reduce
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from genkit_openai.models import OpenAIModel
+from openai.types.chat import ChatCompletion
 
 from genkit import ModelRequest, ModelResponseChunk
 
 
 @pytest.mark.asyncio
-async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequest) -> None:
+async def test_generate_with_tool_calls_executes_tools(
+    sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+) -> None:
     """Test generate with tool calls executes tools."""
-    mock_tool_call = MagicMock()
-    mock_tool_call.id = 'tool123'
-    mock_tool_call.function.name = 'tool_fn'
-    mock_tool_call.function.arguments = '{"a": 1}'
-
     # First call triggers tool execution
-    first_message = MagicMock()
-    first_message.role = 'assistant'
-    first_message.tool_calls = [mock_tool_call]
-    first_message.content = None
-    first_message.reasoning_content = None
-    first_message.refusal = None
-
-    first_response = MagicMock()
-    first_response.choices = [MagicMock(finish_reason='tool_calls', message=first_message)]
-    first_response.usage = None
+    first_response = make_completion(
+        choice={
+            'finish_reason': 'tool_calls',
+            'message': {
+                'role': 'assistant',
+                'content': None,
+                'tool_calls': [
+                    {
+                        'id': 'tool123',
+                        'type': 'function',
+                        'function': {'name': 'tool_fn', 'arguments': '{"a": 1}'},
+                    }
+                ],
+            },
+        }
+    )
 
     # Second call is the model response
-    second_message = MagicMock()
-    second_message.role = 'model'
-    second_message.tool_calls = None
-    second_message.content = 'final response'
-    second_message.reasoning_content = None
-    second_message.refusal = None
-
-    second_response = MagicMock()
-    second_response.choices = [MagicMock(finish_reason='stop', message=second_message)]
-    second_response.usage = None
+    second_response = make_completion(content='final response')
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(

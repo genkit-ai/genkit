@@ -515,7 +515,7 @@ class OpenAIModel:
             finish_message=finish_message,
             usage=_usage_from_completion(response.usage),
             custom=metadata or None,
-            raw=metadata or None,
+            raw=response.to_dict(),
         )
         return self._clean_json_response(result, request)
 
