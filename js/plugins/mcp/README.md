@@ -145,7 +145,7 @@ MCP tools return a `content` array as opposed to a structured response like most
 
 ## MCP Server
 
-You can also expose all of the tools and prompts from a Genkit instance as an MCP server using the `createMcpServer` function.
+You can also expose the tools, flows, and prompts from a Genkit instance as an MCP server using the `createMcpServer` function.
 
 ```ts
 import { googleAI } from '@genkit-ai/google-genai';
@@ -227,11 +227,15 @@ server.setup().then(async () => {
 });
 ```
 
-The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start()` method on this instance will start an MCP server (using the stdio transport by default) that exposes all registered Genkit tools and prompts. To start the server with a different MCP transport, you can pass the transport instance to the `start()` method (e.g., `server.start(customMcpTransport)`).
+The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start()` method on this instance will start an MCP server (using the stdio transport by default) that exposes registered Genkit tools, flows, and prompts. To start the server with a different MCP transport, you can pass the transport instance to the `start()` method (e.g., `server.start(customMcpTransport)`).
 
 ### `createMcpServer()` Options
 - **`name`**: (required, string) The name you want to give your server for MCP inspection.
 - **`version`**: (optional, string) The version your server will advertise to clients. Defaults to "1.0.0".
+
+### Flows as MCP tools
+
+Flows registered with `ai.defineFlow` are also listed as MCP tools. Their names have a `flow_` prefix: a flow named `forecast` is exposed as `flow_forecast`. For object inputs, MCP tool arguments become the flow input. Other input types are passed in an `input` argument, and flows with no input take an empty argument object. The flow result is returned as text. If two actions would have the same MCP tool name, server setup reports an error instead of exposing an ambiguous tool.
 
 ### Known Limitations
 
