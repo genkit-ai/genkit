@@ -164,7 +164,8 @@ export class GenkitMcpServer {
     }
     const mcpToolActions = new Map<string, ToolAction | Flow>();
     for (const action of [...toolList, ...flowList]) {
-      const name = toToolDefinition(action).name;
+      const actionName = action.__action.name;
+      const name = actionName.substring(actionName.lastIndexOf('/') + 1);
       const mcpName =
         action.__action.actionType === 'flow' ? `flow_${name}` : name;
       if (mcpToolActions.has(mcpName)) {
