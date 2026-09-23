@@ -2690,6 +2690,29 @@ describe('Agent', () => {
       assert.strictEqual(settled?.status, 'completed');
     });
 
+    it('ends the wait on abort without sitting out a hung read', async () => {
+      const store: SessionStore<S> = {
+        getSnapshot: () => new Promise(() => {}),
+        async saveSnapshot() {
+          throw new Error('unused');
+        },
+      };
+      const { agent } = defineGatedAgent('waitHungRead', store);
+
+      const started = Date.now();
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId: 'row',
+          abortSignal: AbortSignal.timeout(20),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+      assert.ok(
+        Date.now() - started < 5_000,
+        'the abort must not wait for the read timeout'
+      );
+    });
+
     it('rides out transient read failures and surfaces dead ends at once', async () => {
       const base = new InMemorySessionStore<S>();
       let failures: unknown[] = [];
@@ -2788,6 +2811,16 @@ describe('Agent', () => {
         },
       });
       assert.strictEqual(await missing.waitForSnapshot('gone'), undefined);
+
+      // An absent status is the `completed` default, so it settles the wait.
+      const statusless = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return snapshot(undefined);
+        },
+      });
+      const legacy = await statusless.waitForSnapshot('x', { intervalMs: 1 });
+      assert.strictEqual(legacy?.status, undefined);
 
       // The abort signal ends a polling wait too.
       const stuck = createAgentAPI({

@@ -225,27 +225,39 @@ function isDeadEndReadError(e: unknown): boolean {
 }
 
 /**
- * Rejects with `DEADLINE_EXCEEDED` when `promise` has not settled within `ms`.
+ * Rejects with `DEADLINE_EXCEEDED` when `promise` has not settled within `ms`,
+ * and with the signal's reason when `signal` aborts first, so an aborted wait
+ * does not sit out a hung read.
  */
-function withReadTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withReadTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  signal?: AbortSignal
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () =>
-        reject(
-          new GenkitError({
-            status: 'DEADLINE_EXCEEDED',
-            message: `Snapshot read did not complete within ${ms}ms.`,
-          })
-        ),
-      ms
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(
+        new GenkitError({
+          status: 'DEADLINE_EXCEEDED',
+          message: `Snapshot read did not complete within ${ms}ms.`,
+        })
+      );
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
     promise.then(
       (value) => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         resolve(value);
       },
       (e) => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         reject(e);
       }
     );
@@ -302,10 +314,15 @@ async function waitForSnapshotInStore<S>(
     SessionSnapshot | undefined | typeof RETRY
   > => {
     try {
-      const snap = await withReadTimeout(read(), SNAPSHOT_WAIT_READ_TIMEOUT_MS);
+      const snap = await withReadTimeout(
+        read(),
+        SNAPSHOT_WAIT_READ_TIMEOUT_MS,
+        abortSignal
+      );
       readFailures = 0;
       return snap;
     } catch (e) {
+      abortSignal?.throwIfAborted();
       if (isDeadEndReadError(e) || readFailures >= SNAPSHOT_WAIT_READ_RETRIES) {
         throw e;
       }
@@ -349,11 +366,11 @@ async function waitForSnapshotInStore<S>(
       return first;
     }
 
-    // The next re-read comes soon after a transient failure, or after a
-    // notification that raced the write's visibility: a subscribed wait's
-    // terminal notification fires once and has been consumed, so the re-read
-    // is the only path left to the settled row and must not be a liveness
-    // beat away.
+    // After a transient failure, or after a notification that raced the
+    // write's visibility, the wait drops to the poll cadence for the rest of
+    // its life: a subscribed wait's terminal notification fires once and has
+    // been consumed, so the re-read is the only path left to the settled row
+    // and must not be a liveness beat away.
     let intervalMs =
       first === RETRY || !subscribable ? pollIntervalMs : livenessIntervalMs;
     while (true) {
@@ -379,10 +396,9 @@ async function waitForSnapshotInStore<S>(
       if (cur !== RETRY && (!cur || isTerminalSnapshotStatus(cur.status))) {
         return cur;
       }
-      intervalMs =
-        cur === RETRY || wokenByNotification || !subscribable
-          ? pollIntervalMs
-          : livenessIntervalMs;
+      if (cur === RETRY || wokenByNotification) {
+        intervalMs = pollIntervalMs;
+      }
     }
   } finally {
     abortSignal?.removeEventListener('abort', onAbort);
