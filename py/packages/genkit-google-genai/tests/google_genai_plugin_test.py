@@ -708,20 +708,31 @@ async def test_vertexai_init_registers_veo_as_background(
 @patch('genkit_google_genai.google.genai.client.Client')
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
-async def test_list_actions_advertises_veo_as_background(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Both plugins list Veo with the kind that resolve() actually serves."""
+@pytest.mark.parametrize(
+    ('backend', 'veo_id'),
+    [
+        ('googleai', 'veo-3.1-generate-preview'),
+        ('vertexai', 'veo-3.1-generate-001'),
+    ],
+)
+async def test_list_actions_advertises_veo_as_background(
+    mock_list_models: MagicMock, mock_client: MagicMock, backend: str, veo_id: str
+) -> None:
+    """Each plugin lists its own Veo id with the kind that resolve() actually serves."""
     models = GenaiModels()
-    models.veo = ['veo-3.1-generate-001']
+    models.veo = [veo_id]
     mock_list_models.return_value = models
 
-    googleai_actions = await GoogleAI(api_key='test-key').list_actions()
-    vertexai_actions = await VertexAI(project='test-project').list_actions()
+    if backend == 'googleai':
+        plugin: GoogleAI | VertexAI = GoogleAI(api_key='test-key')
+    else:
+        plugin = VertexAI(project='test-project')
+    actions = await plugin.list_actions()
 
-    for actions, plugin_name in ((googleai_actions, 'googleai'), (vertexai_actions, 'vertexai')):
-        veo_entries = [a for a in actions if 'veo' in a.name]
-        assert len(veo_entries) == 1
-        assert veo_entries[0].name == f'{plugin_name}/veo-3.1-generate-001'
-        assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
+    veo_entries = [a for a in actions if 'veo' in a.name]
+    assert len(veo_entries) == 1
+    assert veo_entries[0].name == f'{backend}/{veo_id}'
+    assert veo_entries[0].action_type == ActionKind.BACKGROUND_MODEL
 
 
 @pytest.mark.asyncio
