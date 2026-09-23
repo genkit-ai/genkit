@@ -218,6 +218,14 @@ def test_from_api_error_message_falls_back_to_the_error_text() -> None:
     assert from_api_error(error).original_message == str(error)
 
 
+def test_from_api_error_stringifies_a_non_string_message() -> None:
+    """A message field holding a non-string value falls back to the error text."""
+    error = ClientError(429, {'message': 123})
+    wrapped = from_api_error(error)
+    assert wrapped.status == 'RESOURCE_EXHAUSTED'
+    assert wrapped.original_message == str(error)
+
+
 def test_from_api_error_bounds_a_non_json_body() -> None:
     """A non-JSON body in the message is cut to 500 characters; the cause keeps all of it."""
     body = '<html>' + 'x' * 20_000 + '</html>'
@@ -227,6 +235,12 @@ def test_from_api_error_bounds_a_non_json_body() -> None:
     assert wrapped.original_message == body[:500] + '...'
     assert wrapped.cause is error
     assert error.message == body
+
+
+def test_from_api_error_bounds_a_body_without_a_status() -> None:
+    """A JSON body that names no status is cut too."""
+    wrapped = from_api_error(_api_error(429, message='x' * 600))
+    assert wrapped.original_message == 'x' * 500 + '...'
 
 
 def test_from_api_error_keeps_a_non_json_body_at_the_limit() -> None:

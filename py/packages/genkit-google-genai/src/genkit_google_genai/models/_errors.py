@@ -77,7 +77,7 @@ def from_api_error(error: APIError) -> GenkitError:
     ms = retry_delay_ms(error)
     if ms is not None:
         response_metadata = {'retry_after_ms': ms}
-    message = error.message or str(error)
+    message = error.message if isinstance(error.message, str) and error.message else str(error)
     if _status_name(error) is None and len(message) > _MAX_MESSAGE_CHARS:
         message = message[:_MAX_MESSAGE_CHARS] + '...'
     return GenkitError(
