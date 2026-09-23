@@ -52,6 +52,7 @@ export {
   type DetachedTask,
   type JsonPatch,
   type RemoteAgentOptions,
+  type WaitForSnapshotOptions,
 } from './agent.js';
 
 export { runFlow, streamFlow } from './client.js';
