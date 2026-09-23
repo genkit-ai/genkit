@@ -362,21 +362,14 @@ describe('expressHandler', async () => {
       });
     });
 
-    // TODO: This test is flaky, skipping until fixed.
-    it.skip('should abort a flow with auth', async () => {
+    it('should abort a flow when the client hangs up', async () => {
       const controller = new AbortController();
-      const response = fetch(`http://localhost:${port}/abortableFlow`, {
-        method: 'POST',
-        signal: controller.signal,
-      });
-      // TODO: make this work instead of direct fetch. For some reason doesn't work in a test,
-      // even though appears to be doing exactly the same thing.
-      /*
+      // A JSON body matters: the request stream closes once body parsing has
+      // read it, so only the response can report the client going away.
       const response = runFlow({
         url: `http://localhost:${port}/abortableFlow`,
         abortSignal: controller.signal,
       });
-      */
 
       setTimeout(() => controller.abort(), 10);
 
