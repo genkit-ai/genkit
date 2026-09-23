@@ -626,7 +626,7 @@ class TestVeoContextClient:
         plugin = MagicMock()
         plugin.vertexai = False
         plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
-        veo = VeoModel('veo-3.1-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+        veo = VeoModel('veo-3.1-generate-preview', plugin, client_kwargs={'api_key': 'plugin-key'})
 
         with patch('genkit_google_genai.models.veo.genai.Client') as ctor:
             await veo.start(
@@ -736,7 +736,7 @@ class TestVeoContextClient:
         plugin.vertexai = False
         override = MagicMock()
         override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
-        veo = VeoModel('veo-3.1-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+        veo = VeoModel('veo-3.1-generate-preview', plugin, client_kwargs={'api_key': 'plugin-key'})
 
         with patch('genkit_google_genai.models.veo.genai.Client', return_value=override) as ctor:
             await veo.start(
@@ -783,7 +783,7 @@ class TestVeoContextClient:
     async def test_client_ctor_failure_is_invalid_argument(self) -> None:
         plugin = MagicMock()
         plugin.vertexai = False
-        veo = VeoModel('veo-3.1-generate-001', plugin, client_kwargs={'api_key': 'plugin-key'})
+        veo = VeoModel('veo-3.1-generate-preview', plugin, client_kwargs={'api_key': 'plugin-key'})
 
         with (
             patch(
