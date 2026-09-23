@@ -28,11 +28,11 @@ import {
 import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
-import { isDevEnv } from '../utils.js';
 import {
   LogServerExporter,
   TraceServerExporter,
   setTelemetryServerUrl,
+  telemetryServerUrl,
 } from './exporter.js';
 import { RealtimeSpanProcessor } from './realtime-span-processor.js';
 
@@ -80,8 +80,10 @@ async function enableTelemetry(
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
   const logExporter = new LogServerExporter();
+  // Export eagerly when a telemetry server is known (the Dev UI wants logs as
+  // they happen), not merely because GENKIT_ENV=dev.
   const defaultLogProcessor: LogRecordProcessor =
-    isDevEnv() || enableRealTimeTelemetry
+    telemetryServerUrl || enableRealTimeTelemetry
       ? new SimpleLogRecordProcessor(logExporter)
       : new BatchLogRecordProcessor(logExporter);
 
@@ -118,12 +120,13 @@ async function cleanUpTracing(): Promise<void> {
  */
 function createTelemetryServerProcessor(): SpanProcessor {
   const exporter = new TraceServerExporter();
-  // Use RealtimeSpanProcessor in dev environment (unless disabled), or when explicitly enabled
+  // Keyed on a known telemetry server rather than GENKIT_ENV, so a reflection
+  // runtime that learned the URL from the CLI handshake still streams spans.
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  if (isDevEnv() && enableRealTimeTelemetry) {
+  if (telemetryServerUrl && enableRealTimeTelemetry) {
     return new RealtimeSpanProcessor(exporter);
-  } else if (isDevEnv()) {
+  } else if (telemetryServerUrl) {
     return new SimpleSpanProcessor(exporter);
   }
   return new BatchSpanProcessor(exporter);
