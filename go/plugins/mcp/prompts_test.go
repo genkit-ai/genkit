@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 	protocol "github.com/mark3labs/mcp-go/mcp"
@@ -39,10 +40,12 @@ func testPromptClient(t *testing.T, handler server.PromptHandlerFunc) *GenkitMCP
 		t.Fatalf("start MCP server: %v", err)
 	}
 	t.Cleanup(srv.Close)
-	return &GenkitMCPClient{
+	client := &GenkitMCPClient{
 		options: MCPClientOptions{Name: "demo"},
 		server:  &ServerRef{Client: srv.Client()},
 	}
+	client.promptClient.Store(srv.Client())
+	return client
 }
 
 func TestGetDynamicPromptFetchesOnEveryRender(t *testing.T) {
@@ -103,6 +106,7 @@ func TestGetDynamicPromptWithoutArguments(t *testing.T) {
 	}
 	t.Cleanup(srv.Close)
 	client := &GenkitMCPClient{options: MCPClientOptions{Name: "demo"}, server: &ServerRef{Client: srv.Client()}}
+	client.promptClient.Store(srv.Client())
 	ctx := context.Background()
 	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "clock")
 	if err != nil {
@@ -150,5 +154,75 @@ func TestGetDynamicPromptRejectsInvalidInputAndCollisions(t *testing.T) {
 	}
 	if _, err := client.GetDynamicPrompt(ctx, staticRegistry, "greeting"); err == nil || !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("GetDynamicPrompt after snapshot error = %v, want collision", err)
+	}
+}
+
+func TestGetDynamicPromptAfterDisconnect(t *testing.T) {
+	client := testPromptClient(t, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
+			Role:    protocol.RoleUser,
+			Content: protocol.TextContent{Type: "text", Text: "Hello"},
+		}}}, nil
+	})
+	ctx := context.Background()
+	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
+	if err != nil {
+		t.Fatalf("GetDynamicPrompt: %v", err)
+	}
+	if err := client.Disconnect(); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	if _, err := prompt.Render(ctx, map[string]any{"name": "Ada"}); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("Render after disconnect error = %v, want disconnected error", err)
+	}
+}
+
+func TestGetDynamicPromptDisconnectDuringRender(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	client := testPromptClient(t, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+		entered <- struct{}{}
+		<-release
+		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
+			Role:    protocol.RoleUser,
+			Content: protocol.TextContent{Type: "text", Text: "Hello"},
+		}}}, nil
+	})
+	ctx := context.Background()
+	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
+	if err != nil {
+		t.Fatalf("GetDynamicPrompt: %v", err)
+	}
+
+	renderDone := make(chan error, 1)
+	go func() {
+		_, err := prompt.Render(ctx, map[string]any{"name": "Ada"})
+		renderDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("MCP prompt handler was not reached")
+	}
+
+	disconnectDone := make(chan error, 1)
+	go func() { disconnectDone <- client.Disconnect() }()
+	close(release)
+	select {
+	case <-renderDone: // The in-flight request may finish or be interrupted.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Render did not finish after disconnect")
+	}
+	select {
+	case err := <-disconnectDone:
+		if err != nil {
+			t.Fatalf("Disconnect: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Disconnect did not finish")
+	}
+	if _, err := prompt.Render(ctx, map[string]any{"name": "Grace"}); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("Render after disconnect error = %v, want disconnected error", err)
 	}
 }

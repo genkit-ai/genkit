@@ -22,6 +22,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -58,7 +59,8 @@ func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promp
 // Unlike GetPrompt, it does not reuse a prompt already registered under the
 // same namespaced name.
 func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit, promptName string) (ai.Prompt, error) {
-	if !c.IsEnabled() || c.server == nil {
+	mcpClient := c.promptClient.Load()
+	if mcpClient == nil {
 		return nil, fmt.Errorf("mcp client is disabled or not connected")
 	}
 	if promptName == "" {
@@ -70,7 +72,7 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 		return nil, fmt.Errorf("prompt %q is already registered", namespacedPromptName)
 	}
 
-	prompts, err := c.getPrompts(ctx)
+	prompts, err := getPrompts(ctx, mcpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +91,8 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 		ai.WithDescription(selected.Description),
 		ai.WithMetadata(map[string]any{dynamicPromptMetadataKey: true}),
 		ai.WithMessagesFn(func(renderCtx context.Context, input map[string]any) ([]*ai.Message, error) {
-			if !c.IsEnabled() || c.server == nil {
+			mcpClient := c.promptClient.Load()
+			if mcpClient == nil {
 				return nil, fmt.Errorf("mcp client is disabled or not connected")
 			}
 			var args map[string]string
@@ -103,7 +106,7 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 					args[name] = arg
 				}
 			}
-			result, err := c.fetchMCPPrompt(renderCtx, promptName, args)
+			result, err := fetchMCPPromptFromClient(renderCtx, mcpClient, promptName, args)
 			if err != nil {
 				return nil, err
 			}
@@ -135,6 +138,10 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 
 // fetchMCPPrompt retrieves a prompt from the MCP server
 func (c *GenkitMCPClient) fetchMCPPrompt(ctx context.Context, promptName string, args map[string]string) (*mcp.GetPromptResult, error) {
+	return fetchMCPPromptFromClient(ctx, c.server.Client, promptName, args)
+}
+
+func fetchMCPPromptFromClient(ctx context.Context, mcpClient *client.Client, promptName string, args map[string]string) (*mcp.GetPromptResult, error) {
 	req := mcp.GetPromptRequest{
 		Params: mcp.GetPromptParams{
 			Name:      promptName,
@@ -142,7 +149,7 @@ func (c *GenkitMCPClient) fetchMCPPrompt(ctx context.Context, promptName string,
 		},
 	}
 
-	result, err := c.server.Client.GetPrompt(ctx, req)
+	result, err := mcpClient.GetPrompt(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get prompt %s: %w", promptName, err)
 	}
@@ -200,13 +207,17 @@ func (c *GenkitMCPClient) GetActivePrompts(ctx context.Context) ([]mcp.Prompt, e
 
 // getPrompts retrieves all prompts from the MCP server by paginating through results
 func (c *GenkitMCPClient) getPrompts(ctx context.Context) ([]mcp.Prompt, error) {
+	return getPrompts(ctx, c.server.Client)
+}
+
+func getPrompts(ctx context.Context, mcpClient *client.Client) ([]mcp.Prompt, error) {
 	var allMcpPrompts []mcp.Prompt
 	var cursor mcp.Cursor
 
 	// Paginate through all available prompts from the MCP server
 	for {
 		// Fetch a page of prompts
-		mcpPrompts, nextCursor, err := c.fetchPromptsPage(ctx, cursor)
+		mcpPrompts, nextCursor, err := fetchPromptsPage(ctx, mcpClient, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -224,7 +235,7 @@ func (c *GenkitMCPClient) getPrompts(ctx context.Context) ([]mcp.Prompt, error) 
 }
 
 // fetchPromptsPage retrieves a single page of prompts from the MCP server
-func (c *GenkitMCPClient) fetchPromptsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Prompt, mcp.Cursor, error) {
+func fetchPromptsPage(ctx context.Context, mcpClient *client.Client, cursor mcp.Cursor) ([]mcp.Prompt, mcp.Cursor, error) {
 	listReq := mcp.ListPromptsRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
 			Params: mcp.PaginatedParams{
@@ -233,7 +244,7 @@ func (c *GenkitMCPClient) fetchPromptsPage(ctx context.Context, cursor mcp.Curso
 		},
 	}
 
-	result, err := c.server.Client.ListPrompts(ctx, listReq)
+	result, err := mcpClient.ListPrompts(ctx, listReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to list prompts: %w", err)
 	}
