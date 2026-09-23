@@ -56,24 +56,24 @@ from genkit_google_genai.models._sdk_config import (
 from genkit_google_genai.models._secrets import context_api_key, misplaced_key_error
 
 
-class VeoVersion(StrEnum):
-    """Supported Veo video generation models.
+class VertexAIVeoVersion(StrEnum):
+    """Vertex AI Veo model IDs."""
 
-    Note: Models are discovered dynamically. This enum provides convenience
-    constants for commonly used Veo models. Google AI serves Veo 3.1 as the
-    ``-preview`` ids; Vertex AI serves it as the ``-001`` ids.
-    """
-
-    VEO_3_1_PREVIEW = 'veo-3.1-generate-preview'
-    VEO_3_1_FAST_PREVIEW = 'veo-3.1-fast-generate-preview'
-    VEO_3_1_LITE_PREVIEW = 'veo-3.1-lite-generate-preview'
     VEO_3_1 = 'veo-3.1-generate-001'
     VEO_3_1_FAST = 'veo-3.1-fast-generate-001'
     VEO_3_1_LITE = 'veo-3.1-lite-generate-001'
 
 
-# Quote autocomplete needs a Literal. The enum above is the catalog; a test
-# requires these members and the enum values to be the same set.
+class GoogleAIVeoVersion(StrEnum):
+    """Google AI Veo model IDs."""
+
+    VEO_3_1_PREVIEW = 'veo-3.1-generate-preview'
+    VEO_3_1_FAST_PREVIEW = 'veo-3.1-fast-generate-preview'
+    VEO_3_1_LITE_PREVIEW = 'veo-3.1-lite-generate-preview'
+
+
+# Quote autocomplete needs a Literal. The version enums above are the catalog;
+# a test requires these members and the enum values to be the same set.
 KnownVeo: TypeAlias = Literal[
     'veo-3.1-generate-preview',
     'veo-3.1-fast-generate-preview',

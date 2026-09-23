@@ -45,7 +45,7 @@ from genkit_google_genai.models.gemini import (
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.veo import VeoConfig, VeoVersion, is_veo_model
+from genkit_google_genai.models.veo import GoogleAIVeoVersion, VeoConfig, VertexAIVeoVersion, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -68,10 +68,14 @@ class TestHappyPaths:
     def test_enum_names_still_work(self) -> None:
         """The existing version enums remain valid constructor input."""
         assert GoogleAI.gemini_model(GoogleAIGeminiVersion.GEMINI_2_5_FLASH).name == 'googleai/gemini-2.5-flash'
-        assert GoogleAI.veo_model(VeoVersion.VEO_3_1_FAST_PREVIEW).name == 'googleai/veo-3.1-fast-generate-preview'
-        assert VertexAI.veo_model(VeoVersion.VEO_3_1).name == 'vertexai/veo-3.1-generate-001'
-        assert GoogleAI.veo_model(VeoVersion.VEO_3_1_LITE_PREVIEW).name == 'googleai/veo-3.1-lite-generate-preview'
-        assert VertexAI.veo_model(VeoVersion.VEO_3_1_LITE).name == 'vertexai/veo-3.1-lite-generate-001'
+        assert (
+            GoogleAI.veo_model(GoogleAIVeoVersion.VEO_3_1_FAST_PREVIEW).name == 'googleai/veo-3.1-fast-generate-preview'
+        )
+        assert VertexAI.veo_model(VertexAIVeoVersion.VEO_3_1).name == 'vertexai/veo-3.1-generate-001'
+        assert (
+            GoogleAI.veo_model(GoogleAIVeoVersion.VEO_3_1_LITE_PREVIEW).name == 'googleai/veo-3.1-lite-generate-preview'
+        )
+        assert VertexAI.veo_model(VertexAIVeoVersion.VEO_3_1_LITE).name == 'vertexai/veo-3.1-lite-generate-001'
 
     def test_family_constructors_type_their_config(self) -> None:
         """Each family constructor carries its own config schema."""
@@ -272,15 +276,17 @@ class TestKnownIdLiterals:
         assert set(get_args(KnownGeminiTts)) == _family_catalog(is_tts_model)
         assert set(get_args(KnownGeminiImage)) == _family_catalog(is_image_model)
         assert set(get_args(KnownGemma)) == _family_catalog(is_gemma_model)
-        assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
+        assert set(get_args(KnownVeo)) == _enum_ids(GoogleAIVeoVersion, VertexAIVeoVersion)
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
 
     def test_veo_catalog_is_the_3_1_family(self) -> None:
-        """The Veo catalog is the 3.1 family only: preview ids on Google AI, 001 ids on Vertex AI."""
-        assert {str(member.value) for member in VeoVersion} == {
+        """Google AI serves Veo 3.1 as -preview ids; Vertex AI serves it as -001 ids."""
+        assert _enum_ids(GoogleAIVeoVersion) == {
             'veo-3.1-generate-preview',
             'veo-3.1-fast-generate-preview',
             'veo-3.1-lite-generate-preview',
+        }
+        assert _enum_ids(VertexAIVeoVersion) == {
             'veo-3.1-generate-001',
             'veo-3.1-fast-generate-001',
             'veo-3.1-lite-generate-001',
