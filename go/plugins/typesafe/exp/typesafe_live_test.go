@@ -17,11 +17,14 @@
 package exp
 
 import (
+	"errors"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -149,6 +152,123 @@ func TestOpenRouterLive(t *testing.T) {
 		t.Logf("wants_human: %v", out.WantsHuman.Probability)
 		if out.WantsHuman.Probability < 0.5 {
 			t.Errorf("wants_human = %v, want over 0.5", out.WantsHuman.Probability)
+		}
+	})
+
+	t.Run("pinned minor version", func(t *testing.T) {
+		_, resp, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName("typesafe/jev-1.13"),
+			ai.WithPrompt("I was charged twice for one order."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		custom, _ := resp.Custom.(map[string]any)
+		t.Logf("jev-1.13 resolved to %v", custom["model"])
+	})
+
+	t.Run("patch version refused", func(t *testing.T) {
+		_, _, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName("typesafe/jev-1.13.0"),
+			ai.WithPrompt("I was charged twice for one order."))
+		if !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("error = %v, want invalid argument", err)
+		}
+	})
+
+	t.Run("preview alias", func(t *testing.T) {
+		// The alias is forwarded rather than served as latest, so the
+		// gateway says whether it has a preview channel.
+		_, resp, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName("typesafe/jev-preview"),
+			ai.WithPrompt("I was charged twice for one order."))
+		if err != nil {
+			if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "jev-preview") {
+				t.Errorf("error = %v, want the gateway's refusal of jev-preview", err)
+			}
+			t.Logf("no preview channel: %v", err)
+			return
+		}
+		custom, _ := resp.Custom.(map[string]any)
+		t.Logf("jev-preview resolved to %v", custom["model"])
+	})
+
+	t.Run("runtime questions", func(t *testing.T) {
+		// Options from data, in the order given, with guidance on one;
+		// structured instructions beside a system message.
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithSystem("The state is a request a user made to an assistant."),
+			ai.WithOutputSchema(Schema(map[string]Question{
+				"tool": ChoiceQuestion{
+					Instructions: "Which tool serves the request?",
+					Options: []ChoiceOption{
+						{Name: "web_search", Criteria: "Look up facts, news, or prices on the web"},
+						{Name: "calendar", Criteria: "Read or change the user's own calendar", Guidance: map[string]any{
+							"examples": []string{"What meetings do I have on Friday?", "Move my 3pm to 4pm."},
+						}},
+						{Name: "none", Criteria: "No tool fits the request"},
+					},
+				},
+				"effort": ScoreQuestion{
+					Instructions: map[string]any{
+						"question": "How much work does fulfilling the request take?",
+						"field":    map[string]any{"name": "request", "description": "What the user asked for"},
+					},
+					Levels: []string{"A single lookup", "A few steps", "A multi-step project"},
+				},
+				"personal": NoulQuestion{
+					Instructions: "Does the request involve the user's own data?",
+					Yes:          "Names the user's files, mail, or calendar",
+					No:           "Asks about the world at large",
+				},
+			})),
+			ai.WithPromptParts(ai.NewDataPart(map[string]any{"request": "What is on my calendar tomorrow morning?"})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answers map[string]Answer
+		if err := resp.Output(&answers); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answers: %s", base.JSONString(answers))
+		if a := answers["tool"]; a.Choice != "calendar" {
+			t.Errorf("tool = %+v, want calendar", a)
+		}
+		if a := answers["personal"]; a.Probability < 0.5 {
+			t.Errorf("personal = %+v, want over 0.5", a)
+		}
+		if a := answers["effort"]; a.Score < 0 || a.Score > 2 || a.Legend["0"] != "A single lookup" {
+			t.Errorf("effort = %+v", a)
+		}
+	})
+
+	t.Run("stateJSON with a large number", func(t *testing.T) {
+		out, _, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithConfig(&Config{StateJSON: true}),
+			ai.WithPrompt(`{"order_id": 9007199254740993, "ticket": "I was charged twice for this order."}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Department.Choice != "billing" {
+			t.Errorf("department = %q, want billing", out.Department.Choice)
+		}
+	})
+
+	t.Run("document with data", func(t *testing.T) {
+		type stock struct {
+			InStock Noul `json:"in_stock" jsonschema_description:"Does the context show the item the user asks about as in stock?"`
+		}
+		out, _, err := genkit.GenerateData[stock](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithPrompt("Is the blue kettle available?"),
+			ai.WithDocs(&ai.Document{Content: []*ai.Part{ai.NewDataPart(map[string]any{"item": "blue kettle", "stock": 12})}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("in_stock: %v", out.InStock.Probability)
+		if out.InStock.Probability < 0.5 {
+			t.Errorf("in_stock = %v, want over 0.5: the data document did not reach the state", out.InStock.Probability)
 		}
 	})
 }

@@ -270,4 +270,5 @@ builds one.
 
 `go test ./plugins/typesafe/...` runs against a fake endpoint. With
 `OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the decision, guidance,
-enum, and history paths against jev through OpenRouter.
+enum, history, runtime-question, document, and model-version paths against jev
+through OpenRouter.
