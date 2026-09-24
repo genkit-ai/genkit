@@ -1,24 +1,23 @@
-# Genkit OpenTelemetry sample (Jaeger, no Docker)
+# Genkit OpenTelemetry sample (Jaeger)
 
 Demonstrates `genkit-otel`: OpenTelemetry GenAI semantic-conventions
 instrumentation for Genkit. Traces go to Jaeger, metrics (token usage and
 operation duration) go to a local collector's debug log.
 
-The telemetry stack runs from downloaded release binaries, so no Docker is
-required.
+The telemetry stack runs from downloaded release binaries.
 
 ## What it wires up
 
 ```
 python src/main.py --OTLP:4318--> otelcol-contrib --OTLP:14317--> Jaeger (UI :16686)
-                                         \--debug--> .otel/collector.log (metrics + logs)
+                                         \--debug--> .otel/collector.log (metrics)
 ```
 
 The collector receives OTLP over both HTTP (`:4318`, the SDK's zero-config
 default) and gRPC (`:4317`).
 
 Jaeger v2's binary is itself an OTel collector (it ingests OTLP directly); the
-separate `otelcol-contrib` also debug-logs metrics and logs so you can watch
+separate `otelcol-contrib` also debug-logs metrics so you can watch
 `gen_ai.client.token.usage` and `gen_ai.client.operation.duration`. Jaeger's own
 OTLP receiver is moved to `14317`/`14318` so the collector can own the
 app-facing `4317`/`4318`.
@@ -72,13 +71,13 @@ export OTEL_COLLECTOR_VERSION=v0.140.0
 
 ```python
 from genkit.telemetry import configure_instrumentation
-from genkit_otel import ContentCapturingMode, GenAiInstrumentation
+from genkit_otel import GenAiInstrumentation
 
 # Own the OpenTelemetry SDK, then:
 configure_instrumentation(
     GenAiInstrumentation(
         # SPAN_ONLY is easiest to read in Jaeger; may contain PII.
-        content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        content_capturing_mode='SPAN_ONLY',
     ),
 )
 ```
