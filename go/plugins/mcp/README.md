@@ -49,6 +49,46 @@ func main() {
 }
 ```
 
+## Use MCP tools in DotPrompt
+
+`GetActiveTools` returns `[]ai.Tool`. Each tool implements `ai.ToolRef`, so you
+can pass one directly to `ai.WithTools`. To pass the whole slice, copy it to
+`[]ai.ToolRef` because Go does not convert between these slice types:
+
+```go
+toolRefs := make([]ai.ToolRef, 0, len(tools))
+for _, tool := range tools {
+    toolRefs = append(toolRefs, tool)
+}
+// Pass ai.WithTools(toolRefs...) when defining or executing a prompt in Go.
+```
+
+For a `.prompt` file, the `tools:` frontmatter contains tool names. Register
+the MCP tools with Genkit so the prompt can resolve them:
+
+```go
+for _, tool := range tools {
+    genkit.RegisterAction(g, tool)
+}
+```
+
+MCP tool names are prefixed with the client's `Name` and an underscore. If the
+client is named `demo`, a server tool named `text_encode` appears as
+`demo_text_encode` in the prompt:
+
+```yaml
+---
+model: googleai/gemini-flash-latest
+tools:
+  - demo_text_encode
+---
+Use demo_text_encode to encode the user's text.
+```
+
+The [DotPrompt client](../../samples/mcp-server/dotprompt-client/main.go) uses
+the [existing MCP demo server](../../samples/mcp-server/server.go) to show the
+complete connection, registration, and execution flow.
+
 ## GenkitMCPManager - Multiple Server Management
 
 Manage connections to multiple MCP servers:
