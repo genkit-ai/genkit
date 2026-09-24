@@ -1517,7 +1517,10 @@ describe('contextCompression middleware', () => {
             role: 'model',
             content: [
               {
-                toolRequest: { name: 'search', input: { query: 'first-query' } },
+                toolRequest: {
+                  name: 'search',
+                  input: { query: 'first-query' },
+                },
               },
             ],
           },
