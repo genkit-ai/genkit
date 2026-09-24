@@ -28,8 +28,9 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
-from genkit.agent import (
+from genkit import ActionRunContext, GenkitError, Message, Part, TextPart
+from genkit.exp import Genkit
+from genkit.exp.agent import (
     AgentError,
     AgentFinishReason,
     AgentInput,

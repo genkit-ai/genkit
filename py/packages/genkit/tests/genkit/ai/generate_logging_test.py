@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the debug-log payload built by genkit._ai._generate."""
+"""Unit tests for the debug-log records emitted by genkit._ai._generate."""
 
 from collections.abc import Iterator
 
@@ -10,17 +10,25 @@ import structlog
 from structlog.testing import capture_logs
 
 from genkit import Genkit, Message, ModelResponse
-from genkit._ai._generate import (
-    _MAX_LOGGED_LIST_LEN,
-    _MAX_LOGGED_STR_LEN,
-    _PROVIDER_STR_LEN,
-    _loggable_response,
-    _redact_large_values,
-)
+from genkit._ai._generate import generate_action
+from genkit._ai._model import resolve_model_arg
 from genkit._ai._testing import define_programmable_model
+from genkit._ai._tools import Interrupt, restart_tool
 from genkit._core._environment import GENKIT_ENV
+from genkit._core._error import GenkitError
 from genkit._core._logger import GENKIT_LOG, get_logger
-from genkit._core._typing import CustomPart, GenerationUsage, Media, MediaPart, Role, TextPart
+from genkit._core._model import GenerateActionOptions
+from genkit._core._registry import Registry
+from genkit._core._typing import (
+    FinishReason,
+    GenerateActionOutputConfig,
+    Part,
+    Resume,
+    Role,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+)
 
 BLOB = 'A' * 1_000_000
 
@@ -43,112 +51,6 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(GENKIT_ENV, raising=False)
 
 
-def test_short_values_pass_through() -> None:
-    """Values under the limits are untouched."""
-    payload = {'text': 'hello', 'items': [1, None, True, 'short'], 'nested': {'k': 'v'}}
-
-    assert _redact_large_values(payload) == payload
-
-
-def test_data_uris_keep_their_media_type() -> None:
-    """Data URIs report the dropped payload size and keep the media type."""
-    uri = 'data:audio/L16;codec=pcm;rate=24000;base64,' + 'B' * 500
-
-    assert _redact_large_values(uri) == 'data:audio/L16;codec=pcm;rate=24000;base64,...<500 chars>'
-
-
-def test_bare_long_strings_are_truncated() -> None:
-    """A long string with no data URI prefix keeps its leading characters."""
-    blob = 'C' * (_MAX_LOGGED_STR_LEN + 4096)
-
-    redacted = _redact_large_values(blob)
-
-    assert redacted.startswith('C' * _MAX_LOGGED_STR_LEN)
-    assert redacted.endswith('...<4096 chars>')
-
-
-def test_binary_values_collapse_to_their_size() -> None:
-    """bytes survive model_dump in python mode, so they are reported by length."""
-    assert _redact_large_values(b'\x00' * 200_000) == '<200000 bytes>'
-    assert _redact_large_values(bytearray(b'ab')) == '<2 bytes>'
-    assert _redact_large_values(memoryview(b'abc')) == '<3 bytes>'
-
-
-def test_long_lists_are_truncated() -> None:
-    """An over-long list keeps its leading items and reports the remainder."""
-    redacted = _redact_large_values(list(range(_MAX_LOGGED_LIST_LEN + 250)))
-
-    assert len(redacted) == _MAX_LOGGED_LIST_LEN + 1
-    assert redacted[:3] == [0, 1, 2]
-    assert redacted[-1] == '...<250 more items>'
-
-
-def test_redaction_recurses_into_containers() -> None:
-    """Oversized values nested in dicts and lists are shrunk too."""
-    blob = 'D' * (_MAX_LOGGED_STR_LEN + 1)
-
-    redacted = _redact_large_values({'a': [{'b': blob, 'c': b'xy'}]})
-
-    assert redacted == {'a': [{'b': 'D' * _MAX_LOGGED_STR_LEN + '...<1 chars>', 'c': '<2 bytes>'}]}
-
-
-def test_loggable_response_keeps_provider_payloads_bounded() -> None:
-    """raw and custom stay in the log for provider debugging, but bounded in size."""
-    response = ModelResponse(
-        message=Message(role=Role.MODEL, content=[TextPart(text='hi')]),
-        custom={'audio': BLOB},
-        raw={'audio': BLOB},
-        usage=GenerationUsage(input_tokens=1, output_tokens=2),
-    )
-
-    logged = _loggable_response(response)
-
-    assert logged['message']['content'][0]['text'] == 'hi'
-    assert logged['usage']['inputTokens'] == 1
-    assert logged['raw']['audio'].endswith(f'...<{1_000_000 - _PROVIDER_STR_LEN} chars>')
-    assert logged['custom']['audio'] == logged['raw']['audio']
-    assert len(str(logged)) < len(str(response.model_dump())) / 100
-
-
-def test_loggable_response_truncates_nested_part_payloads() -> None:
-    """Oversized values on a part, not just on the response, are shrunk."""
-    response = ModelResponse(
-        message=Message(role=Role.MODEL, content=[CustomPart(custom={'blob': BLOB})]),
-    )
-
-    logged = _loggable_response(response)
-
-    assert logged['message']['content'][0]['custom']['blob'].endswith(f'...<{1_000_000 - _PROVIDER_STR_LEN} chars>')
-
-
-def test_model_output_gets_a_longer_limit_than_provider_payloads() -> None:
-    """Model text survives to _MAX_LOGGED_STR_LEN while raw is held to _PROVIDER_STR_LEN."""
-    prose = 'W' * (_MAX_LOGGED_STR_LEN * 2)
-    response = ModelResponse(
-        message=Message(role=Role.MODEL, content=[TextPart(text=prose)]),
-        raw={'echo': prose},
-    )
-
-    logged = _loggable_response(response)
-
-    assert logged['message']['content'][0]['text'].endswith(f'...<{_MAX_LOGGED_STR_LEN} chars>')
-    assert logged['raw']['echo'].endswith(f'...<{_MAX_LOGGED_STR_LEN * 2 - _PROVIDER_STR_LEN} chars>')
-
-
-def test_loggable_response_truncates_media_in_message() -> None:
-    """Inline media that survives into the message is truncated rather than dumped."""
-    response = ModelResponse(
-        message=Message(
-            role=Role.MODEL,
-            content=[MediaPart(media=Media(content_type='image/png', url='data:image/png;base64,' + 'E' * 900))],
-        ),
-    )
-
-    logged = _loggable_response(response)
-
-    assert logged['message']['content'][0]['media']['url'] == 'data:image/png;base64,...<900 chars>'
-
-
 async def _generate_once() -> None:
     """Run one generate call against a model returning a blob in raw and custom."""
     ai = Genkit(model='programmableModel')
@@ -165,7 +67,7 @@ async def _generate_once() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_logs_nothing_at_default_level() -> None:
-    """A generate call under the default configuration emits no response dump."""
+    """A generate call under the default configuration emits no named records."""
     structlog.reset_defaults()
 
     with capture_logs() as entries:
@@ -178,17 +80,72 @@ async def test_generate_logs_nothing_at_default_level() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_logs_bounded_response_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With debug on, the response is logged but the blob is truncated."""
+async def test_generate_logs_named_records_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With debug on, generate emits the named request/turn records."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
     with capture_logs() as entries:
         await _generate_once()
 
-    logged = [entry for entry in entries if entry['event'] == 'generate response']
-    assert len(logged) == 1
-    assert len(str(logged[0]['response'])) < 3 * _MAX_LOGGED_STR_LEN
+    events = [entry['event'] for entry in entries]
+    assert 'generate request resolved' in events
+    assert 'calling model' in events
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['tool_requests'] == 0
+    assert 'response' not in responded[0]
+
+
+@pytest.mark.asyncio
+async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal still gets a model-responded record so the log panel shows why."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await ai.generate(prompt='hi')
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.text == 'nope'
+
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.BLOCKED
+    assert 'response' not in responded[0]
+
+
+@pytest.mark.asyncio
+async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The breadcrumb uses the stamped finish, not the model's original stop."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await ai.generate(prompt='hi', output_schema={'type': 'object'})
+    assert response.finish_reason == FinishReason.FAILED
+
+    responded = [entry for entry in entries if entry['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.FAILED
 
 
 @pytest.mark.asyncio
@@ -207,3 +164,239 @@ async def test_response_is_not_serialized_when_debug_is_off(monkeypatch: pytest.
     await _generate_once()
 
     assert calls == []
+
+
+def test_default_model_fallback_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting model= leaves a breadcrumb with the constructor default name."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    registry = Registry()
+    registry.register_value('defaultModel', 'defaultModel', 'echo-model')
+
+    with capture_logs() as entries:
+        resolve_model_arg(model=None, registry=registry)
+
+    events = [entry for entry in entries if entry['event'] == 'no model specified, using default model']
+    assert len(events) == 1
+    assert events[0]['model'] == 'echo-model'
+
+
+@pytest.mark.asyncio
+async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked model with a formatter warns instead of parsing."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+    assert response.finish_reason == FinishReason.BLOCKED
+
+    warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
+    assert len(warned) == 1
+    assert warned[0]['finishReason'] == FinishReason.BLOCKED
+    assert warned[0]['finishMessage'] == 'safety'
+    assert 'model output does not match the expected schema' not in [e['event'] for e in entries]
+
+
+@pytest.mark.asyncio
+async def test_other_finish_does_not_warn_as_abnormal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTHER is an unmapped stop reason, not a refusal — do not warn at info."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'info')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='{"ok": true}')]),
+            finish_reason=FinishReason.OTHER,
+        )
+    ]
+
+    with capture_logs() as entries:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+
+    warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
+    assert warned == []
+
+
+@pytest.mark.asyncio
+async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unparseable JSON is a debug breadcrumb; generate still returns."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                output=GenerateActionOutputConfig(format='json'),
+            ),
+        )
+
+    assert response.message is not None
+    mismatched = [e for e in entries if e['event'] == 'model output does not match the expected schema']
+    assert len(mismatched) == 1
+    assert mismatched[0]['model'] == 'programmableModel'
+
+
+@pytest.mark.asyncio
+async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupting tool is named on the debug record."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                tools=['hold'],
+            ),
+        )
+    assert response.finish_reason == FinishReason.INTERRUPTED
+
+    interrupted = [e for e in entries if e['event'] == 'tool triggered an interrupt']
+    assert len(interrupted) == 1
+    assert interrupted[0]['tool'] == 'hold'
+    assert 'generation paused by tool interrupts' in [e['event'] for e in entries]
+    responded = [e for e in entries if e['event'] == 'model responded']
+    assert len(responded) == 1
+    assert responded[0]['finish_reason'] == FinishReason.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool that interrupts again on restart leaves the same breadcrumb Go does."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+    first = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            tools=['hold'],
+        ),
+    )
+
+    with capture_logs() as entries, pytest.raises(GenkitError, match='interrupted again'):
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=list(first.messages),
+                tools=['hold'],
+                resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
+            ),
+        )
+
+    restarted = [e for e in entries if e['event'] == 'restarted tool triggered an interrupt']
+    assert len(restarted) == 1
+    assert restarted[0]['tool'] == 'hold'
+
+
+@pytest.mark.asyncio
+async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sinking callback fails generate the same way a model-chunk sink does."""
+    structlog.reset_defaults()
+    monkeypatch.setenv(GENKIT_LOG, 'debug')
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='echo')
+    async def echo(_: dict) -> str:  # noqa: ARG001
+        return 'ok'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='echo', input={}, ref='1')))],
+            ),
+            finish_reason=FinishReason.STOP,
+        ),
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='done')]),
+            finish_reason=FinishReason.STOP,
+        ),
+    ]
+
+    def on_chunk(chunk: object) -> None:
+        if getattr(chunk, 'role', None) == Role.TOOL:
+            raise RuntimeError('sink closed')
+
+    with pytest.raises(RuntimeError, match='sink closed'):
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                tools=['echo'],
+            ),
+            on_chunk=on_chunk,
+        )

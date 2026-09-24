@@ -47,6 +47,8 @@ def ai_and_seen() -> tuple[Genkit, dict]:
     async def conforming(request: ModelRequest[ConformingCfg], ctx: ActionRunContext) -> ModelResponse:
         seen['config'] = request.config
         seen['request'] = request
+        if request.output_format == 'json':
+            return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{}'))]))
         return OK
 
     async def strict(request: ModelRequest[StrictCfg], ctx: ActionRunContext) -> ModelResponse:

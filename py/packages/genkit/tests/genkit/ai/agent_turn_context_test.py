@@ -35,7 +35,7 @@ from genkit._core._typing import (
     Part,
     TextPart,
 )
-from genkit.agent import AgentFinishReason, InMemorySessionStore
+from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
 
 
 def test_reserve_snapshot_id_is_unique_uuid() -> None:

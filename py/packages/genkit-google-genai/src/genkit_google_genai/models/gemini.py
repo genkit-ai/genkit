@@ -27,6 +27,7 @@ from genkit_google_genai.models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
+from genkit_google_genai.models._secrets import context_api_key, reject_request_config_api_key
 from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
 from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
@@ -42,7 +43,7 @@ from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
-from google.genai.errors import ClientError
+from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema
 
 from genkit import (
@@ -64,7 +65,7 @@ from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
     ModelConfig,
-    StatusName,
+    wrap_http_error,
 )
 
 
@@ -89,9 +90,18 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'LANGUAGE',
         'MALICIOUS',
         'IMAGE_SAFETY',
+        'IMAGE_PROHIBITED_CONTENT',
+        'IMAGE_RECITATION',
     ):
         return FinishReason.BLOCKED
-    if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+        'UNEXPECTED_TOOL_CALL',
+    ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN
 
@@ -243,9 +253,6 @@ class GeminiConfigSchema(ModelConfig):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
 
-    api_key: str | None = Field(  # pyright: ignore[reportGeneralTypeIssues]
-        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
-    )
     base_url: str | None = Field(
         None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
     )
@@ -724,8 +731,9 @@ GENERIC_TTS_MODEL = ModelInfo(
         media=False,
         tools=False,
         tool_choice=False,
-        system_role=True,
-        constrained=Constrained.ALL,
+        system_role=False,
+        constrained=Constrained.NONE,
+        output=['media'],
     ),
 )
 
@@ -1144,8 +1152,8 @@ class GeminiModel:
             version: Gemini version
             client: Google AI client
             client_kwargs: The plugin-level kwargs the client was constructed
-                from. Required for per-request config overrides (api_key,
-                api_version, base_url, location).
+                from. Required for a per-request tenant key or client knobs
+                (api_version, base_url, location).
             base_url_pinned: Whether the plugin caller explicitly pinned a
                 base URL (as opposed to one derived from the location).
         """
@@ -1360,7 +1368,7 @@ class GeminiModel:
         # Resolve the client before building messages so context-cache
         # operations run against the same (possibly overridden) region as the
         # generate call.
-        client = await self._resolve_request_client(request)
+        client = await self._resolve_request_client(request, context=ctx.context)
 
         request_contents, cached_content = await self._build_messages(
             request=request, model_name=model_name, client=client
@@ -1388,27 +1396,30 @@ class GeminiModel:
 
         return response
 
-    async def _resolve_request_client(self, request: ModelRequest) -> genai.Client:
+    async def _resolve_request_client(
+        self, request: ModelRequest, context: dict[str, Any] | None = None
+    ) -> genai.Client:
         """Resolve the client to use for a request.
 
-        If the request config overrides api_key, base_url, api_version, or
-        location, a temporary client is created with those settings; otherwise
-        the plugin-configured client is returned.
+        A tenant key lives in ``context.secrets``. ``request.config`` is
+        client knobs (``base_url``, ``api_version``, ``location``), not
+        the key. Any of those rebuilds a request-scoped client; otherwise
+        the plugin client is reused.
         """
+        reject_request_config_api_key(request.config)
         api_version = None
-        api_key_override = None
         base_url_override = None
         location_override = None
+        bag = context if isinstance(context, dict) else {}
+        secret_key = context_api_key(bag)
 
         if request.config:
             if isinstance(request.config, dict):
                 api_version = request.config.get('api_version')
-                api_key_override = request.config.get('api_key')
                 base_url_override = request.config.get('base_url')
                 location_override = request.config.get('location')
             else:
                 api_version = getattr(request.config, 'api_version', None)
-                api_key_override = getattr(request.config, 'api_key', None)
                 base_url_override = getattr(request.config, 'base_url', None)
                 location_override = getattr(request.config, 'location', None)
 
@@ -1416,7 +1427,7 @@ class GeminiModel:
             # Location is a Vertex AI concept; ignore it for the Gemini API backend.
             location_override = None
 
-        if not (api_version or api_key_override or base_url_override or location_override):
+        if not (api_version or secret_key or base_url_override or location_override):
             return self._client
 
         if self._client_kwargs is None:
@@ -1445,10 +1456,16 @@ class GeminiModel:
                     opts.base_url = None
         if base_url_override:
             opts.base_url = base_url_override
-        if api_key_override and not self._client.vertexai:
-            kwargs['api_key'] = api_key_override
-            # The SDK rejects credentials and api_key together.
+        if secret_key:
+            # Express / tenant keys are not a regional Vertex host. Drop
+            # project, location, and the plugin base_url unless this call
+            # set one.
+            kwargs['api_key'] = secret_key
             kwargs['credentials'] = None
+            kwargs.pop('project', None)
+            kwargs.pop('location', None)
+            if not base_url_override:
+                opts.base_url = None
         kwargs['http_options'] = opts
 
         # The plugin's kwargs may carry project=None when the project comes
@@ -1507,27 +1524,11 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
         except Exception as e:
-            # Catch any other exceptions and provide a clear error message
-            # This helps debug issues like authentication errors that might not be ClientError
+            # Auth and other SDK failures are not APIError — still fail the
+            # generate so the caller is not left with a partial reply.
             import logging
 
             logger = logging.getLogger(__name__)
@@ -1607,56 +1608,42 @@ class GeminiModel:
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
-        except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
-            raise GenkitError(
-                status=status,
-                message=e.message or 'Unknown error',
-                cause=e,
-            ) from e
-
-        accumulated_content: list[Part] = []
-        finish_reason = FinishReason.UNKNOWN
-        usage_metadata: Any = None
-        async for response_chunk in generator:
-            content = await self._contents_from_response(response_chunk)
-            if content:  # Only process if we have content
-                accumulated_content.extend(content)
-                ctx.send_chunk(
-                    chunk=ModelResponseChunk(
-                        content=content,
-                        role=Role.MODEL,
+            # The HTTP call happens on the first iteration, not on the
+            # await that created the generator, so classify has to cover
+            # the async for as well.
+            accumulated_content: list[Part] = []
+            finish_reason = FinishReason.UNKNOWN
+            usage_metadata: Any = None
+            async for response_chunk in generator:
+                content = await self._contents_from_response(response_chunk)
+                if content:  # Only process if we have content
+                    accumulated_content.extend(content)
+                    ctx.send_chunk(
+                        chunk=ModelResponseChunk(
+                            content=content,
+                            role=Role.MODEL,
+                        )
                     )
-                )
-            # The terminating reason and cumulative token usage ride on the trailing
-            # chunks, so hold onto the latest values we see as the stream drains —
-            # otherwise a streamed turn reports no finish reason and no usage at all.
-            if response_chunk.candidates and response_chunk.candidates[0] is not None:
-                fr = response_chunk.candidates[0].finish_reason
-                if fr:
-                    finish_reason = _to_finish_reason(fr)
-            if response_chunk.usage_metadata is not None:
-                usage_metadata = response_chunk.usage_metadata
+                # The terminating reason and cumulative token usage ride on the trailing
+                # chunks, so hold onto the latest values we see as the stream drains —
+                # otherwise a streamed turn reports no finish reason and no usage at all.
+                if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    fr = response_chunk.candidates[0].finish_reason
+                    if fr:
+                        finish_reason = _to_finish_reason(fr)
+                if response_chunk.usage_metadata is not None:
+                    usage_metadata = response_chunk.usage_metadata
 
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=accumulated_content,
-            ),
-            finish_reason=finish_reason,
-            usage=_usage_from_metadata(usage_metadata),
-        )
+            return ModelResponse(
+                message=Message(
+                    role=Role.MODEL,
+                    content=accumulated_content,
+                ),
+                finish_reason=finish_reason,
+                usage=_usage_from_metadata(usage_metadata),
+            )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
 
     @cached_property
     def metadata(self) -> dict:

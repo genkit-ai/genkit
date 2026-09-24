@@ -285,6 +285,7 @@ export const FinishReasonSchema = z.enum([
   'length',
   'blocked',
   'aborted',
+  'failed',
   'interrupted',
   'other',
   'unknown',

@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,281 +14,47 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Anthropic generation samples, including stable/beta API selection."""
+"""Claude through the same generate() as Gemini."""
 
 from genkit_anthropic import Anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, ModelResponse, ReasoningPart
+from genkit import Genkit
 
-# Beta is the plugin-wide default. Individual requests can still select the
-# stable surface with config.apiVersion.
-ai = Genkit(plugins=[Anthropic(api_version='beta')], model='anthropic/claude-opus-4-8')
-
-LIVE_TEST_MODEL = 'anthropic/claude-haiku-4-5'
-
-
-class TopicInput(BaseModel):
-    """Input for a plain-text generation."""
-
-    topic: str = Field(default='coding', description='Topic for the haiku')
-
-
-class CatInput(BaseModel):
-    """Input for a structured generation."""
-
-    name: str = Field(default='Mittens', description='Name of the cat to invent')
+ai = Genkit(
+    plugins=[Anthropic()],
+    model=Anthropic.claude_model('claude-sonnet-4-6'),
+)
 
 
 class Cat(BaseModel):
-    """Structured cat profile — proves output=['text','json'] + constrained."""
-
     name: str
     breed: str
     age: int
     personality: str
 
 
-class WeatherInput(BaseModel):
-    """Input for the weather tool and thinking round-trip flow."""
-
-    city: str = Field(default='Reykjavik', description='City to look up')
-
-
-@ai.tool()
-async def current_weather(input: WeatherInput) -> str:
-    """Return mocked weather data for tool-calling demos."""
-    return f'The weather in {input.city} is 3C, windy, and clear.'
-
-
-def _thinking_summary(response: ModelResponse) -> dict[str, object]:
-    """Summarize reasoning parts across the full generate transcript."""
-    reasoning_parts: list[str] = []
-    signature_present: list[bool] = []
-    content_types: list[str] = []
-
-    for message in response.messages:
-        for part in message.content:
-            root = part.root
-            if root.text is not None:
-                content_types.append('text')
-            elif root.tool_request is not None:
-                content_types.append('tool_request')
-            elif root.tool_response is not None:
-                content_types.append('tool_response')
-            elif isinstance(root, ReasoningPart):
-                content_types.append('reasoning')
-                reasoning_parts.append(root.reasoning)
-                signature_present.append(bool(root.metadata and root.metadata.get('thoughtSignature')))
-            elif root.custom is not None:
-                content_types.append('custom')
-            else:
-                content_types.append(type(root).__name__)
-
-    return {
-        'content_types': content_types,
-        'reasoning_parts': len(reasoning_parts),
-        'reasoning_preview': ''.join(reasoning_parts)[:1000],
-        'thinking_signatures_present': signature_present,
-    }
-
-
-# --- stable/beta API selection ---------------------------------------------
-
-
-@ai.flow()
-async def beta_plugin_default(data: TopicInput) -> str:
-    """Use the plugin-wide beta default and its default beta headers."""
-    response = await ai.generate(
-        model=LIVE_TEST_MODEL,
-        prompt=f'Write a one-line fact about {data.topic}.',
-        config={'maxOutputTokens': 64},
-    )
-    return response.text
-
-
-@ai.flow()
-async def stable_request_override(data: TopicInput) -> str:
-    """Override the plugin-wide beta default for one stable API request."""
-    response = await ai.generate(
-        model=LIVE_TEST_MODEL,
-        prompt=f'Write a one-line fact about {data.topic}.',
-        config={'apiVersion': 'stable', 'maxOutputTokens': 64},
-    )
-    return response.text
-
-
-@ai.flow()
-async def beta_without_default_headers(data: TopicInput) -> str:
-    """Use the beta API while opting out of the plugin's default beta headers."""
-    response = await ai.generate(
-        model=LIVE_TEST_MODEL,
-        prompt=f'Write a one-line fact about {data.topic}.',
-        config={'apiVersion': 'beta', 'betas': [], 'maxOutputTokens': 64},
-    )
-    return response.text
-
-
-@ai.flow()
-async def beta_plugin_default_stream(data: TopicInput, ctx: ActionRunContext) -> str:
-    """Stream through the beta API selected by the plugin-wide default."""
-    stream_response = ai.generate_stream(
-        model=LIVE_TEST_MODEL,
-        prompt=f'Write a short poem about {data.topic}.',
-        config={'maxOutputTokens': 64},
-    )
-    chunks: list[str] = []
-    async for chunk in stream_response.stream:
-        if chunk.text:
-            ctx.send_chunk(chunk.text)
-            chunks.append(chunk.text)
-
-    await stream_response.response
-    return ''.join(chunks)
-
-
-# --- claude-opus-4-7 -------------------------------------------------------
-
-
-@ai.flow()
-async def haiku_opus_4_7(data: TopicInput) -> str:
-    """Plain-text generate against claude-opus-4-7."""
-    response = await ai.generate(
-        model='anthropic/claude-opus-4-7',
-        prompt=f'Write a haiku about {data.topic}.',
-        config={'apiVersion': 'stable'},
-    )
-    return response.text
-
-
-@ai.flow()
-async def cat_opus_4_7(data: CatInput) -> Cat:
-    """Structured/JSON generate against claude-opus-4-7."""
-    response = await ai.generate(
-        model='anthropic/claude-opus-4-7',
-        prompt=f'Invent a cat named {data.name}.',
-        config={'apiVersion': 'stable'},
-        output_format='json',
-        output_schema=Cat,
-    )
-    return response.output
-
-
-# --- claude-opus-4-8 -------------------------------------------------------
-
-
-@ai.flow()
-async def haiku_opus_4_8(data: TopicInput) -> str:
-    """Plain-text generate against claude-opus-4-8."""
-    response = await ai.generate(
-        model='anthropic/claude-opus-4-8',
-        prompt=f'Write a haiku about {data.topic}.',
-        config={'apiVersion': 'stable'},
-    )
-    return response.text
-
-
-@ai.flow()
-async def cat_opus_4_8(data: CatInput) -> Cat:
-    """Structured/JSON generate against claude-opus-4-8."""
-    response = await ai.generate(
-        model='anthropic/claude-opus-4-8',
-        prompt=f'Invent a cat named {data.name}.',
-        config={'apiVersion': 'stable'},
-        output_format='json',
-        output_schema=Cat,
-    )
-    return response.output
-
-
-@ai.flow(name='thinking_tool_round_trip')
-async def thinking_tool_round_trip(data: WeatherInput, ctx: ActionRunContext) -> dict[str, object]:
-    """Dev UI check for Anthropic thinking streaming and signature round-trip."""
-    # Opus 4.7+ accept only adaptive thinking; older models use type=enabled with a budget.
-    stream_response = ai.generate_stream(
-        model='anthropic/claude-opus-4-8',
-        prompt=(
-            f'You must call the current_weather tool exactly once for {data.city}. '
-            'Think through the request before and after the tool call, then answer in one concise sentence.'
-        ),
-        tools=['current_weather'],
-        config={
-            'apiVersion': 'stable',
-            'thinking': {'type': 'adaptive', 'display': 'summarized'},
-            'max_tokens': 4096,
-        },
-        max_turns=3,
-    )
-
-    streamed_reasoning: list[str] = []
-    streamed_text: list[str] = []
-    async for chunk in stream_response.stream:
-        for part in chunk.content:
-            root = part.root
-            if isinstance(root, ReasoningPart):
-                streamed_reasoning.append(root.reasoning)
-                ctx.send_chunk(f'[thinking] {root.reasoning}')
-        if chunk.text:
-            streamed_text.append(chunk.text)
-            ctx.send_chunk(chunk.text)
-
-    response = await stream_response.response
-    summary = _thinking_summary(response)
-    return {
-        **summary,
-        'final_text': response.text,
-        'streamed_reasoning_chunks': len(streamed_reasoning),
-        'streamed_reasoning_preview': ''.join(streamed_reasoning)[:1000],
-        'streamed_text': ''.join(streamed_text),
-    }
-
-
-# --- claude-haiku-4-5 (manual thinking budget) ------------------------------
-
-
-@ai.flow(name='thinking_budget_story')
-async def thinking_budget_story(data: TopicInput, ctx: ActionRunContext) -> dict[str, object]:
-    """Streams a story using a manual thinking budget on a pre-4.7 model."""
-    stream_response = ai.generate_stream(
-        model='anthropic/claude-haiku-4-5',
-        prompt=f'Tell me a very short story about {data.topic}.',
-        config={
-            'thinking': {'enabled': True, 'budgetTokens': 1024},
-            'maxOutputTokens': 2048,
-        },
-    )
-
-    streamed_reasoning: list[str] = []
-    streamed_text: list[str] = []
-    async for chunk in stream_response.stream:
-        for part in chunk.content:
-            root = part.root
-            if isinstance(root, ReasoningPart):
-                streamed_reasoning.append(root.reasoning)
-                ctx.send_chunk(f'[thinking] {root.reasoning}')
-        if chunk.text:
-            streamed_text.append(chunk.text)
-            ctx.send_chunk(chunk.text)
-
-    response = await stream_response.response
-    summary = _thinking_summary(response)
-    return {
-        **summary,
-        'final_text': response.text,
-        'streamed_reasoning_chunks': len(streamed_reasoning),
-        'streamed_text': ''.join(streamed_text),
-    }
-
-
 async def main() -> None:
-    """Run the lightweight flows once from the CLI."""
-    try:
-        print(await haiku_opus_4_7(TopicInput()))  # noqa: T201
-        print(await cat_opus_4_7(CatInput()))  # noqa: T201
-        print(await haiku_opus_4_8(TopicInput()))  # noqa: T201
-        print(await cat_opus_4_8(CatInput()))  # noqa: T201
-    except Exception as error:
-        print(f'Set ANTHROPIC_API_KEY to a valid value before running this sample.\n{error}')  # noqa: T201
+    haiku = await ai.generate(prompt='Write a haiku about coding.')
+    print(haiku.text)
+
+    # output_schema is the Pydantic model you get back on response.output.
+    cat = await ai.generate(
+        prompt='Invent a cat named Mittens.',
+        output_schema=Cat,
+    )
+    print(cat.output)
+
+    # thinking= is how you see the model's reasoning stream.
+    stream = ai.generate_stream(
+        prompt='What is 17 * 23? Think it through, then state the answer.',
+        config={'thinking': {'enabled': True, 'budgetTokens': 1024}},
+    )
+    async for chunk in stream.stream:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    await stream.response
 
 
 if __name__ == '__main__':

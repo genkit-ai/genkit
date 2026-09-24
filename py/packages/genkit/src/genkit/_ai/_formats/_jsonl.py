@@ -99,15 +99,15 @@ class JsonlFormat(FormatDef):
                     ),
                 )
 
-        def message_parser(msg: Message) -> list[object]:
+        def message_parser(msg: Message) -> list[object] | None:
             """Parses a complete message into a list of objects."""
             lines = [line.strip() for line in msg.text.split('\n') if line.strip().startswith('{')]
             items = []
             for line in lines:
                 extracted = extract_json(line, throw_on_bad_json=False)
-                if extracted:
+                if extracted is not None:
                     items.append(extracted)
-            return items
+            return items or None
 
         def chunk_parser(chunk: ModelResponseChunk) -> list[object]:
             """Parses a streaming chunk into a list of objects found in that chunk."""

@@ -35,6 +35,7 @@ from genkit._core._typing import (
     TextPart,
     ToolRequest,
     ToolRequestPart,
+    ToolResponsePart,
 )
 from genkit.middleware import (
     BaseMiddleware,
@@ -2425,3 +2426,461 @@ async def test_wrap_generate_middleware_injects_dynamic_tool() -> None:
     )
     assert response.text == '[ECHO] user: "hi" tools=dynamic_mw_tool'
     assert captured_tool_names == [['dynamic_mw_tool']]
+
+
+@pytest.mark.asyncio
+async def test_generate_requires_at_least_one_message(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """ai.generate() rejects an empty conversation before calling the model."""
+    ai, _pm = setup_test
+
+    with pytest.raises(GenkitError, match='at least one message is required') as exc_info:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[],
+            ),
+        )
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_on_blocked_finish() -> None:
+    """Blocked is a refusal that still returns so the leftover is on the response."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='nope'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
+    assert response.text == 'nope'
+    assert response.output is None
+    assert response.message is not None
+    assert response.message.text == 'nope'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'hi'
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_keeps_prior_history_and_truncates_blocked_message() -> None:
+    """A provider can block without returning refusal content."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'hi'
+
+
+@pytest.mark.asyncio
+async def test_generate_aborted_with_content_preserves_terminal_message() -> None:
+    """A model response aborted with partial content retains that model message."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.ABORTED,
+            finish_message='interrupted by provider',
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='partial text'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'interrupted by provider'
+    assert response.text == 'partial text'
+    assert response.message is not None
+    assert response.message.text == 'partial text'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_aborted_without_content_preserves_prior_history() -> None:
+    """A model response aborted with no content preserves prior history and sets message=None."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.ABORTED,
+            finish_message='interrupted by provider',
+        )
+    ]
+
+    response = await ai.generate(prompt='hi')
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'interrupted by provider'
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'hi'
+
+
+@pytest.mark.asyncio
+async def test_generate_schema_failure_preserves_history() -> None:
+    """A schema parsing failure preserves the prompt and the raw terminal model reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='not json'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == 'not json'
+    assert response.output is None
+    assert response.finish_message is not None
+    assert 'not valid JSON' in response.finish_message
+    assert response.message is not None
+    assert response.message.text == 'not json'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
+    assert response.messages[0].text == 'give me a recipe'
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_after_tool_turn_keeps_prior_history() -> None:
+    """A blocked model response without content after a tool turn preserves completed tool rounds."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+        ),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1].role == Role.TOOL
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_with_content_after_tool_turn_preserves_refusal() -> None:
+    """A blocked model response with refusal content after a tool turn includes the terminal model reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='cannot continue'))]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'safety'
+    assert response.text == 'cannot continue'
+    assert response.message is not None
+    assert response.message.text == 'cannot continue'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1] == response.message
+
+
+def _model_calls_tool(*, name: str, ref: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name=name, input={}, ref=ref)))],
+        ),
+    )
+
+
+def _tool_output(message: Message) -> object:
+    part = message.content[0].root
+    assert isinstance(part, ToolResponsePart)
+    assert part.tool_response is not None
+    return part.tool_response.output
+
+
+@pytest.mark.asyncio
+async def test_generate_successful_tool_turn_preserves_full_history() -> None:
+    """A completed tool turn followed by a successful reply contains all 4 messages."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='the weather is 72F'))]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='weather?', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'the weather is 72F'
+    assert response.message is not None
+    assert response.message.text == 'the weather is 72F'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.messages[0].text == 'weather?'
+    assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_completes_within_max_turns_and_preserves_all_rounds() -> None:
+    """Multi-round tool execution completing within max_turns returns all message rounds."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step_one')
+    async def step_one() -> str:
+        return 'done 1'
+
+    @ai.tool(name='step_two')
+    async def step_two() -> str:
+        return 'done 2'
+
+    pm.responses = [
+        _model_calls_tool(name='step_one', ref='r1'),
+        _model_calls_tool(name='step_two', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='all finished'))]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='run both', tools=['step_one', 'step_two'], max_turns=3)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'all finished'
+    assert response.message is not None
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.MODEL,
+        Role.TOOL,
+        Role.MODEL,
+    ]
+    assert response.messages[0].text == 'run both'
+    assert response.messages[1].tool_requests[0].tool_request.name == 'step_one'
+    assert _tool_output(response.messages[2]) == 'done 1'
+    assert response.messages[3].tool_requests[0].tool_request.name == 'step_two'
+    assert _tool_output(response.messages[4]) == 'done 2'
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_generate_schema_failure_after_tool_turn_preserves_history() -> None:
+    """Output schema failure after a tool turn preserves completed tool rounds and terminal reply."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='not json'))]),
+        ),
+    ]
+
+    response = await ai.generate(
+        prompt='give me a recipe',
+        output_schema=Recipe,
+        output_instructions=False,
+        tools=['lookup'],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == 'not json'
+    assert response.output is None
+    assert response.message is not None
+    assert response.message.text == 'not json'
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.messages[1].tool_requests[0].tool_request.name == 'lookup'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_max_turns_after_tool_turn_drops_unanswered_request() -> None:
+    """Hitting max tool turns keeps closed rounds and drops the unanswered call."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        _model_calls_tool(name='lookup', ref='r2'),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'], max_turns=1)
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message is not None
+    assert 'maximum tool call iterations' in response.finish_message
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1].role == Role.TOOL
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_after_tool_turn_drops_unanswered_request() -> None:
+    """An unknown tool drops the unanswered request and keeps closed rounds."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        _model_calls_tool(name='ghost', ref='r2'),
+    ]
+
+    response = await ai.generate(prompt='keep going', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'Tool ghost not found'
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+    assert response.messages[1].tool_requests[0].tool_request.ref == 'r1'
+    assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1].role == Role.TOOL
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_typed_output_when_schema_matches() -> None:
+    """Matching JSON is parsed and handed back as the schema type."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class Recipe(BaseModel):
+        title: str
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='{"title": "Soup"}'))]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output.title == 'Soup'
+
+
+@pytest.mark.asyncio
+async def test_generate_enum_off_list_is_error_finish() -> None:
+    """An enum reply that is not one of the listed values is a leftover."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='MAYBE'))]),
+        )
+    ]
+
+    response = await ai.generate(
+        prompt='classify',
+        output_format='enum',
+        output_schema={'type': 'string', 'enum': ['POSITIVE', 'NEGATIVE', 'NEUTRAL']},
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.output is None
+    assert response.text == 'MAYBE'
+
+
+@pytest.mark.asyncio
+async def test_generate_array_of_scalars() -> None:
+    """A JSON array of strings is the output, not a parse miss."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='["a", "b"]'))]),
+        )
+    ]
+
+    response = await ai.generate(
+        prompt='list',
+        output_format='array',
+        output_schema={'type': 'array', 'items': {'type': 'string'}},
+    )
+    assert response.finish_reason == FinishReason.STOP
+    assert response.output == ['a', 'b']
+
+
+@pytest.mark.asyncio
+async def test_generate_unknown_format_is_invalid_argument() -> None:
+    """An unresolved output format fails before the model is called."""
+    ai = Genkit(model='programmableModel')
+    define_programmable_model(ai)
+
+    with pytest.raises(GenkitError, match='Unable to resolve format') as raised:
+        await ai.generate(prompt='hi', output_format='no-such-format')
+    assert raised.value.status == 'INVALID_ARGUMENT'

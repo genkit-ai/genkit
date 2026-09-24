@@ -18,16 +18,22 @@ from pydantic.alias_generators import to_camel
 from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
+    assert_correct_config_class,
+    config_schema_at_define,
     fold_config_aliases,
     get_request_api_key,
+    model,
     normalize_config,
     overlay_config,
     resolve_call_model,
+    resolve_for_generate,
     resolve_model_arg,
     resolve_model_name,
     resolve_model_ref,
 )
+from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
+from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit.model import model_ref
 
@@ -269,6 +275,7 @@ def test_resolve_call_model_merges_constructor_model_ref() -> None:
     resolved = resolve_call_model(model=None, config={}, registry=registry)
     assert resolved.name == 'echo-model'
     assert resolved.config == {'version': '001', 'temperature': 0.7}
+    assert resolved.config_schema is ModelConfig
 
 
 def test_resolve_call_model_call_time_config_wins() -> None:
@@ -379,6 +386,59 @@ def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None
     resolved = resolve_call_model(model='openai/gpt', config={'temperature': 0.2}, registry=registry)
     assert resolved.name == 'openai/gpt'
     assert resolved.config == {'temperature': 0.2}
+    assert resolved.config_schema is None
+
+
+async def _unused_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    raise AssertionError('model fn should not run')
+
+
+@pytest.mark.asyncio
+async def test_resolve_for_generate_string_reads_action_class() -> None:
+    """A string name picks up the class the action registered."""
+    registry = Registry()
+    registry.register_action_from_instance(model('flash', _unused_model_fn, config_schema=CustomConfig))
+    resolved = await resolve_for_generate(model='flash', config={}, registry=registry)
+    assert resolved.config_schema is CustomConfig
+
+
+@pytest.mark.asyncio
+async def test_resolve_for_generate_string_without_action_has_no_class() -> None:
+    """No registered model means no class to check against."""
+    registry = Registry()
+    resolved = await resolve_for_generate(model='flash', config={}, registry=registry)
+    assert resolved.config_schema is None
+
+
+def test_config_schema_at_define_reads_ref_and_registered_action() -> None:
+    """Define-time lookup is sync: ModelRef or an already-registered model."""
+    registry = Registry()
+    ref = model_ref('flash', config_schema=CustomConfig)
+    assert config_schema_at_define(model=ref, registry=registry) == ('flash', CustomConfig)
+
+    assert config_schema_at_define(model='flash', registry=registry) == ('flash', None)
+    registry.register_action_from_instance(model('flash', _unused_model_fn, config_schema=CustomConfig))
+    assert config_schema_at_define(model='flash', registry=registry) == ('flash', CustomConfig)
+
+    empty = Registry()
+    assert config_schema_at_define(model=None, registry=empty) == (None, None)
+    assert config_schema_at_define(model='', registry=empty) == (None, None)
+    empty.register_value('defaultModel', 'defaultModel', '')
+    assert config_schema_at_define(model=None, registry=empty) == (None, None)
+    empty2 = Registry()
+    empty2.register_value('defaultModel', 'defaultModel', ref)
+    assert config_schema_at_define(model=None, registry=empty2) == ('flash', CustomConfig)
+
+
+def test_assert_correct_config_class_uses_schema_only() -> None:
+    """Reject does not look anything up. It just compares the instance."""
+    assert_correct_config_class(config=CustomConfig(temperature=0.4), schema=CustomConfig)
+
+    class OtherFamilyConfig(BaseModel):
+        frequency_penalty: float | None = None
+
+    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+        assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
 
 
 def test_resolve_model_ref_keeps_other_family_keys() -> None:

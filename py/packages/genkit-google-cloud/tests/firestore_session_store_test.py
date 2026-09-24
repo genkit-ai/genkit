@@ -26,13 +26,24 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_google_cloud import FirestoreSessionStore
+from genkit_google_cloud.exp import FirestoreSessionStore
 from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import ReadAfterWriteError
 
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SessionState, SnapshotStatus
+
+
+def test_from_genkit_google_cloud_import_has_no_firestore_session_store() -> None:
+    """from genkit_google_cloud import FirestoreSessionStore is ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_cloud import FirestoreSessionStore as _  # noqa: F401  # ty: ignore[unresolved-import]
+
+
+def test_from_genkit_google_cloud_exp_import_firestore_session_store() -> None:
+    """from genkit_google_cloud.exp import FirestoreSessionStore is the store class."""
+    assert FirestoreSessionStore is not None
 
 
 def _doc(

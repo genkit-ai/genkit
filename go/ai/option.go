@@ -337,6 +337,7 @@ func WithStepName(name string) GenerateOption {
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.
 // A tool call happens when tools are provided in the request and a model decides to call one or more as a response.
 // Each round trip, including multiple tools in parallel, counts as one turn.
+// Defaults to 50.
 func WithMaxTurns(maxTurns int) CommonGenOption {
 	return &commonGenOptions{MaxTurns: maxTurns}
 }

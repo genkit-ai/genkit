@@ -31,7 +31,7 @@ from genkit._core._typing import (
     SnapshotStatus,
     TextPart,
 )
-from genkit.agent import (
+from genkit.exp.agent import (
     FileSessionStore,
     InMemorySessionStore,
     SessionStore,

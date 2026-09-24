@@ -33,7 +33,7 @@ from _ai import LITE_MODEL, ai
 from pydantic import BaseModel
 
 from genkit import ActionRunContext
-from genkit.agent import (
+from genkit.exp.agent import (
     AgentFinishReason,
     AgentInput,
     AgentResult,

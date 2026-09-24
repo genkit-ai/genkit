@@ -38,7 +38,7 @@ from _ai import LITE_MODEL, ai
 from pydantic import BaseModel
 
 from genkit import ActionRunContext
-from genkit.agent import FileSessionStore
+from genkit.exp.agent import FileSessionStore
 
 STORE_DIR = './.snapshots-filestore'
 PRUNING_STORE_DIR = './.snapshots-pruning'

@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prompts - load `.prompt` files, helpers, variants, and streaming."""
+"""Copy lives in prompts/*.prompt. Change the wording there, not here."""
 
 from pathlib import Path
 
@@ -22,18 +22,17 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit._core._action import ActionRunContext
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 
 
 def list_helper(data: object, *args: object, **kwargs: object) -> str:
-    """Format a list as bullet points for prompt templates."""
-
+    # recipe.prompt writes `{{list ingredients}}` — the helper is how a
+    # bullet list gets into the prompt without Python string-joining.
     if not isinstance(data, list):
         return ''
     return '\n'.join(f'- {item}' for item in data)
@@ -43,76 +42,45 @@ ai.define_helper('list', list_helper)
 
 
 class Ingredient(BaseModel):
-    """An ingredient in a recipe."""
-
     name: str
     quantity: str
 
 
 class Recipe(BaseModel):
-    """A recipe."""
-
-    title: str = Field(..., description='recipe title')
+    title: str
     ingredients: list[Ingredient]
-    steps: list[str] = Field(..., description='the steps required to complete the recipe')
+    steps: list[str]
 
 
+# The .prompt file names this schema; define_schema is what wires it up.
 ai.define_schema('Recipe', Recipe)
 
 
 class ChefInput(BaseModel):
-    """Input for the chef flow."""
-
-    food: str = Field(default='banana bread', description='The food to create a recipe for')
-
-
-@ai.flow(name='generate_recipe')
-async def chef_flow(input: ChefInput) -> Recipe:
-    """Call the default `recipe.prompt` template."""
-
-    response = await ai.prompt('recipe')(input={'food': input.food})
-    if not response.output:
-        raise ValueError('Model did not return a recipe.')
-    return Recipe.model_validate(response.output)
+    food: str = 'banana bread'
+    ingredients: list[str] | None = Field(default=None)
 
 
-@ai.flow(name='generate_robot_recipe')
-async def robot_chef_flow(input: ChefInput) -> Recipe:
-    """Call the `robot` variant of the same prompt."""
-
-    response = await ai.prompt('recipe', variant='robot')(input={'food': input.food})
-    if not response.output:
-        raise ValueError('Model did not return a recipe.')
-    return Recipe.model_validate(response.output)
-
-
-class StoryInput(BaseModel):
-    """Input for the story flow."""
-
-    subject: str = Field(default='a brave little toaster', description='The subject of the story')
-    personality: str | None = Field(default='courageous', description='Optional personality trait')
-
-
-@ai.flow(name='tell_story')
-async def tell_story(input: StoryInput, ctx: ActionRunContext) -> str:
-    """Stream a prompt result chunk by chunk."""
-
-    result = ai.prompt('story').stream(input={'subject': input.subject, 'personality': input.personality})
-    full_text = ''
-    async for chunk in result.stream:
-        if chunk.text:
-            ctx.send_chunk(chunk.text)
-            full_text += chunk.text
-    return full_text
+recipe = ai.prompt('recipe', input_schema=ChefInput, output_schema=Recipe)
+# Same name, different file: prompts/recipe.robot.prompt. Swap the voice
+# without touching the call site.
+robot_recipe = ai.prompt('recipe', variant='robot', input_schema=ChefInput, output_schema=Recipe)
+story = ai.prompt('story')
 
 
 async def main() -> None:
-    """Run the prompt demos once."""
-    try:
-        print(await chef_flow(ChefInput()))  # noqa: T201
-        print(await robot_chef_flow(ChefInput()))  # noqa: T201
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+    pantry = ChefInput(ingredients=['ripe bananas', 'walnuts'])
+    print((await recipe(input=pantry)).output)
+    print((await robot_recipe(input=ChefInput())).output)
+
+    # story.prompt includes the _style.prompt partial. stream() is the
+    # same object as generate_stream — chunks first, then the full text.
+    streamed = story.stream(input={'subject': 'a brave little toaster'})
+    async for chunk in streamed.stream:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    await streamed.response
 
 
 if __name__ == '__main__':

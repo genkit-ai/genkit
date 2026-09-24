@@ -27,15 +27,15 @@ from __future__ import annotations
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Artifacts, Middleware
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='workspaceAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     use=[Artifacts()],
     store=store,
 )

@@ -26,28 +26,26 @@ Example:
     ```python
     from fastapi import FastAPI
     from genkit import Genkit
-    from genkit_fastapi import genkit_fastapi_handler
+    from genkit_fastapi import serve_flow
     from genkit_google_genai import GoogleAI
 
-    # 1. Initialize Genkit and FastAPI app
-    ai = Genkit(plugins=[GoogleAI()])
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
     app = FastAPI()
 
 
-    # 2. Define flow and expose as FastAPI endpoint in one clean decorator stack
-    @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def chat_flow(prompt: str) -> str:
-        res = await ai.generate(
-            model='googleai/gemini-flash-latest',
-            prompt=f'Answer concisely: {prompt}',
-        )
+        res = await ai.generate(prompt=prompt)
         return res.text
 
 
-    # POST /chat {"data": "Why is the sky blue?"}
-    # => {"result": "The sky appears blue due to Rayleigh scattering..."}
+    # Mount flow endpoint at POST /api/chat_flow
+    app.include_router(serve_flow(chat_flow), prefix='/api')
+
+    # serve_agent(agent) mounts the same JSON protocol for an agent, plus
+    # /getSnapshot and /abort when session storage is enabled.
+
+    # For a custom route, decorate with @genkit_fastapi_handler(ai) over @ai.flow().
     ```
 
 Running:

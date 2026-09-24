@@ -452,7 +452,8 @@ const GENERIC_TTS_MODEL = commonRef(
       tools: false,
       toolChoice: false,
       systemRole: false,
-      constrained: 'all',
+      constrained: 'none',
+      output: ['media'],
     },
   },
   GeminiTtsConfigSchema

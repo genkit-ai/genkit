@@ -107,6 +107,22 @@ func TestGoogleAIInit_HTTPOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleAIInit_DefaultHTTPClient(t *testing.T) {
+	ga := &googlegenai.GoogleAI{
+		APIKey: "test-api-key",
+	}
+	ga.Init(context.Background())
+
+	client, err := ga.Client()
+	if err != nil {
+		t.Fatalf("Client: %v", err)
+	}
+	cc := client.ClientConfig()
+	if cc.HTTPClient != http.DefaultClient {
+		t.Errorf("HTTPClient = %v, want http.DefaultClient", cc.HTTPClient)
+	}
+}
+
 // clearVertexEnv blanks every environment variable that Vertex AI
 // initialization consults, so a test starts from a known state regardless of
 // what the developer or CI has exported.
@@ -154,6 +170,9 @@ func TestVertexAIInit_ExpressMode(t *testing.T) {
 	}
 	if cc.APIKey != "express-key" {
 		t.Errorf("APIKey = %q, want the express key", cc.APIKey)
+	}
+	if cc.HTTPClient != http.DefaultClient {
+		t.Errorf("HTTPClient = %v, want http.DefaultClient", cc.HTTPClient)
 	}
 }
 

@@ -23,14 +23,6 @@ import {
   type Part,
 } from 'genkit';
 import { logger } from 'genkit/logging';
-import { AsyncLocalStorage } from 'node:async_hooks';
-
-interface CompressionExecutionState {
-  lastInputTokens?: number;
-  latestCompressionMeta?: Record<string, unknown> | null;
-}
-
-const compressionStorage = new AsyncLocalStorage<CompressionExecutionState>();
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -39,7 +31,7 @@ const compressionStorage = new AsyncLocalStorage<CompressionExecutionState>();
 export const ToolResponsesOptionsSchema = z.object({
   /**
    * Maximum character length for each tool response content.
-   * Responses exceeding this will be truncated with a `…[truncated]` marker.
+   * Responses exceeding this will be truncated with a `[TRUNCATED: ...]` marker.
    */
   maxChars: z
     .number()
@@ -78,9 +70,7 @@ export const DeduplicateToolResponsesOptionsSchema = z.object({
   keepRecent: z
     .number()
     .optional()
-    .describe(
-      'Number of recent duplicates to keep untouched. Default: 1.'
-    ),
+    .describe('Number of recent duplicates to keep untouched. Default: 1.'),
 
   /**
    * Replacement text for deduplicated tool responses.
@@ -118,113 +108,118 @@ export const SummarizeOptionsSchema = z.object({
     .describe('Custom summarization prompt. Use {conversation} placeholder.'),
 });
 
-export const ContextCompressionOptionsSchema = z
-  .object({
-    /**
-     * Compression triggers when the previous turn's `inputTokens` exceeds
-     * this threshold. On turn 0, token count is estimated from messages.
-     */
-    maxInputTokens: z
-      .number()
-      .describe('Compress when token count exceeds this threshold.'),
+export const ContextCompressionOptionsSchema = z.object({
+  /**
+   * Compression triggers when the previous turn's `inputTokens` exceeds
+   * this threshold. On turn 0, token count is estimated from messages.
+   */
+  maxInputTokens: z
+    .number()
+    .optional()
+    .describe('Compress when token count exceeds this threshold.'),
 
-    /**
-     * Number of most recent messages to never compress or drop.
-     * @default 4
-     */
-    preserveRecent: z
-      .number()
-      .optional()
-      .describe('Number of recent messages to always keep intact. Default: 4.'),
+  /**
+   * Number of most recent non-system messages to preserve untouched during
+   * dynamic overshoot adjustment.
+   * @default 4
+   */
+  preserveRecent: z
+    .number()
+    .optional()
+    .describe('Number of recent messages to preserve. Default: 4.'),
 
-    /**
-     * Always keep system/instructions messages.
-     * @default true
-     */
-    preserveSystem: z
-      .boolean()
-      .optional()
-      .describe('Always keep system messages. Default: true.'),
+  /**
+   * Always keep system/instructions messages.
+   * @default true
+   */
+  preserveSystem: z
+    .boolean()
+    .optional()
+    .describe('Always keep system messages. Default: true.'),
 
-    /**
-     * Hard cap on individual tool response size in characters.
-     * Applied regardless of other toolResponses config as a safety net.
-     * Set to `Infinity` to disable.
-     * @default 400000
-     */
-    maxToolResponseChars: z
-      .number()
-      .optional()
-      .describe(
-        'Hard cap on any single tool response size. Default: 400000 chars.'
-      ),
-
-    /**
-     * Deduplicate repeated tool calls with the same arguments.
-     * Replaces older duplicate outputs with a short notice.
-     */
-    deduplicateToolResponses:
-      DeduplicateToolResponsesOptionsSchema.optional().describe(
-        'Deduplicate repeated tool calls with same arguments.'
-      ),
-
-    /**
-     * Truncate tool response content that exceeds a character limit.
-     * This is a cheap strategy that requires no LLM call.
-     */
-    toolResponses: ToolResponsesOptionsSchema.optional().describe(
-      'Truncate verbose tool response content.'
+  /**
+   * Hard cap on individual tool response size in characters.
+   * Applied regardless of other toolResponses config as a safety net.
+   * Set to `Infinity` to disable.
+   * @default 400000
+   */
+  maxToolResponseChars: z
+    .number()
+    .optional()
+    .describe(
+      'Hard cap on any single tool response size. Default: 400000 chars.'
     ),
 
-    /**
-     * Hard cap on message count. Messages beyond this (oldest first) are
-     * dropped, preserving system messages and recent messages.
-     */
-    maxMessages: z
-      .number()
-      .optional()
-      .describe('Hard cap on message count. Drop oldest beyond this.'),
-
-    /**
-     * Use an LLM to summarize older messages into a condensed form.
-     * The summary replaces the original messages, preserving recent context.
-     */
-    summarize: SummarizeOptionsSchema.optional().describe(
-      'Summarize older messages using an LLM.'
+  /**
+   * Deduplicate repeated tool calls with the same arguments.
+   * Replaces older duplicate outputs with a short notice.
+   */
+  deduplicateToolResponses:
+    DeduplicateToolResponsesOptionsSchema.optional().describe(
+      'Deduplicate repeated tool calls with same arguments.'
     ),
 
-    /**
-     * If cheap strategies (deduplication + tool truncation) reduce estimated
-     * context by at least this fraction, skip the LLM summarization step.
-     * Set to `0` to always summarize when configured.
-     * @default undefined (always summarize when configured)
-     */
-    skipSummarizationThreshold: z
-      .number()
-      .optional()
-      .describe(
-        'Skip summarization if cheap strategies save at least this fraction of context. E.g. 0.3 = 30%.'
-      ),
+  /**
+   * Truncate tool response content that exceeds a character limit.
+   * This is a cheap strategy that requires no LLM call.
+   */
+  toolResponses: ToolResponsesOptionsSchema.optional().describe(
+    'Truncate verbose tool response content.'
+  ),
 
-    /**
-     * Insert a notice message when messages are dropped during message
-     * truncation, so the model knows context was removed.
-     * @default true
-     */
-    insertTruncationNotice: z
-      .boolean()
-      .optional()
-      .describe('Insert a notice when messages are dropped. Default: true.'),
+  /**
+   * Maximum message count target. Messages beyond this (oldest first) are
+   * dropped while preserving system messages. Any leading tool or model messages
+   * at the truncation cutoff are also discarded to satisfy LLM API requirements
+   * (ensuring history begins with a user turn and avoiding orphaned tool responses).
+   * The final message count will be at most `maxMessages`.
+   */
+  maxMessages: z
+    .number()
+    .optional()
+    .describe(
+      'Maximum message count target. Drops older non-system messages, ensuring history begins with a user turn.'
+    ),
 
-    /**
-     * Custom truncation notice text. Used when messages are dropped.
-     */
-    truncationNotice: z
-      .string()
-      .optional()
-      .describe('Custom notice text for when messages are dropped.'),
-  })
-  .passthrough();
+  /**
+   * Use an LLM to summarize older messages into a condensed form.
+   * The summary replaces the original messages, preserving recent context.
+   */
+  summarize: SummarizeOptionsSchema.optional().describe(
+    'Summarize older messages using an LLM.'
+  ),
+
+  /**
+   * If cheap strategies (deduplication + tool truncation) reduce estimated
+   * context by at least this fraction, skip the LLM summarization step.
+   * Set to `0` to always summarize when configured.
+   * @default undefined (always summarize when configured)
+   */
+  skipSummarizationThreshold: z
+    .number()
+    .optional()
+    .describe(
+      'Skip summarization if cheap strategies save at least this fraction of context. E.g. 0.3 = 30%.'
+    ),
+
+  /**
+   * Insert a notice message when messages are dropped during message
+   * truncation, so the model knows context was removed.
+   * @default true
+   */
+  insertTruncationNotice: z
+    .boolean()
+    .optional()
+    .describe('Insert a notice when messages are dropped. Default: true.'),
+
+  /**
+   * Custom truncation notice text. Used when messages are dropped.
+   */
+  truncationNotice: z
+    .string()
+    .optional()
+    .describe('Custom notice text for when messages are dropped.'),
+});
 
 export type ContextCompressionOptions = z.infer<
   typeof ContextCompressionOptionsSchema
@@ -254,6 +249,18 @@ const DEFAULT_TRUNCATION_NOTICE =
   'context limits. The most recent messages are preserved. Pay close attention to the ' +
   'latest messages and any conversation summary above.';
 
+/**
+ * Average character-to-token ratio heuristic across natural language and code payloads (~3.5-4 chars/token).
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 3.5;
+
+/**
+ * Multimodal LLMs (e.g. Gemini) tokenize images at a fixed rate (~258 tokens)
+ * regardless of base64 payload size. 1000 chars / 3.5 ≈ 285 tokens prevents
+ * multi-megabyte inline data URIs from causing phantom token spikes on turn 0.
+ */
+const DATA_URI_APPROX_CHARS = 1000;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -262,7 +269,36 @@ const DEFAULT_TRUNCATION_NOTICE =
  * Stringify tool output, avoiding re-stringifying if already a string.
  */
 function stringifyOutput(output: unknown): string {
-  return typeof output === 'string' ? output : JSON.stringify(output ?? '');
+  if (typeof output === 'string') return output;
+  try {
+    return JSON.stringify(output ?? '');
+  } catch {
+    return String(output);
+  }
+}
+
+function hasCompressionFlag(
+  msg: MessageData,
+  flag: 'truncated' | 'capped' | 'deduplicated' | 'notice'
+): boolean {
+  const ccMeta = msg.metadata?.contextCompression as
+    | Record<string, unknown>
+    | undefined;
+  return Boolean(ccMeta?.[flag]);
+}
+
+function withCompressionMetadata(
+  target: { metadata?: Record<string, unknown> },
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...target.metadata,
+    contextCompression: {
+      ...((target.metadata?.contextCompression as Record<string, unknown>) ??
+        {}),
+      ...fields,
+    },
+  };
 }
 
 /**
@@ -362,18 +398,33 @@ function adjustForOvershoot(
  * Estimate the total character count across all message content.
  */
 function estimateMessageChars(messages: MessageData[]): number {
-  return messages.reduce(
-    (sum, m) =>
+  return messages.reduce((sum, m) => {
+    return (
       sum +
       m.content.reduce((pSum, p) => {
         if (p.text) return pSum + p.text.length;
-        if (p.media?.url) return pSum + p.media.url.length;
-        if (p.toolRequest) return pSum + JSON.stringify(p.toolRequest).length;
-        if (p.toolResponse) return pSum + JSON.stringify(p.toolResponse).length;
+        if (p.reasoning) return pSum + p.reasoning.length;
+        if ('data' in p && p.data !== undefined) {
+          return pSum + stringifyOutput(p.data).length;
+        }
+        if ('custom' in p && p.custom) {
+          return pSum + stringifyOutput(p.custom).length;
+        }
+        if (p.media?.url) {
+          // Use a fixed character approximation for inline base64 data URIs
+          // to reflect fixed image token billing rather than raw string length.
+          const urlLen = p.media.url.startsWith('data:')
+            ? DATA_URI_APPROX_CHARS
+            : p.media.url.length;
+          return pSum + urlLen;
+        }
+        if (p.toolRequest) return pSum + stringifyOutput(p.toolRequest).length;
+        if (p.toolResponse)
+          return pSum + stringifyOutput(p.toolResponse).length;
         return pSum;
-      }, 0),
-    0
-  );
+      }, 0)
+    );
+  }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +443,8 @@ export const contextCompression: GenerateMiddleware<
   },
   ({ config, ai }) => {
     const maxInputTokens = config?.maxInputTokens ?? Infinity;
-    const basePreserveRecent = config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
+    const basePreserveRecent =
+      config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
     const preserveSystem = config?.preserveSystem !== false;
     const maxToolResponseChars =
       config?.maxToolResponseChars ?? DEFAULT_MAX_TOOL_RESPONSE_CHARS;
@@ -409,6 +461,9 @@ export const contextCompression: GenerateMiddleware<
       toolResponseConfig?.preserveRecent ??
       DEFAULT_TOOL_RESPONSE_PRESERVE_RECENT;
 
+    let lastInputTokens: number | undefined;
+    let latestCompressionMeta: Record<string, unknown> | null = null;
+
     const maxMessages = config?.maxMessages;
     const insertTruncationNotice = config?.insertTruncationNotice !== false;
     const truncationNoticeText =
@@ -421,42 +476,6 @@ export const contextCompression: GenerateMiddleware<
     const summaryPromptTemplate =
       summarizeConfig?.prompt ?? DEFAULT_SUMMARIZE_PROMPT;
     const summaryModelRef = summarizeConfig?.model;
-
-    function applyToolResponseSafetyCap(messages: MessageData[]): {
-      messages: MessageData[];
-      capped: number;
-    } {
-      if (maxToolResponseChars === Infinity) return { messages, capped: 0 };
-
-      let cappedCount = 0;
-      const result = messages.map((msg) => {
-        if (msg.role !== 'tool') return msg;
-
-        let changed = false;
-        const newContent = msg.content.map((part): Part => {
-          if (part.toolResponse) {
-            const outputStr = stringifyOutput(part.toolResponse.output);
-            if (outputStr.length > maxToolResponseChars) {
-              cappedCount++;
-              changed = true;
-              return {
-                toolResponse: {
-                  ...part.toolResponse,
-                  output:
-                    outputStr.slice(0, maxToolResponseChars) +
-                    `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-                    `but only first ${maxToolResponseChars} are shown.]`,
-                },
-              };
-            }
-          }
-          return part;
-        });
-        return changed ? { ...msg, content: newContent } : msg;
-      });
-
-      return { messages: result, capped: cappedCount };
-    }
 
     function applyToolResponseDeduplication(messages: MessageData[]): {
       messages: MessageData[];
@@ -531,6 +550,7 @@ export const contextCompression: GenerateMiddleware<
       let deduplicatedCount = 0;
       const result = messages.map((msg, idx) => {
         if (!indicesToReplace.has(idx)) return msg;
+        if (hasCompressionFlag(msg, 'deduplicated')) return msg;
 
         const newContent = msg.content.map((part): Part => {
           if (part.toolResponse) {
@@ -544,60 +564,125 @@ export const contextCompression: GenerateMiddleware<
           }
           return part;
         });
-        return { ...msg, content: newContent };
+        return {
+          ...msg,
+          metadata: withCompressionMetadata(msg, { deduplicated: true }),
+          content: newContent,
+        };
       });
 
       return { messages: result, deduplicated: deduplicatedCount };
     }
 
-    function applyToolResponseTruncation(messages: MessageData[]): {
+    function applyToolLimits(messages: MessageData[]): {
       messages: MessageData[];
+      capped: number;
       truncated: number;
     } {
-      if (!toolMaxChars) return { messages, truncated: 0 };
-
-      const toolIndices: number[] = [];
-      for (let i = 0; i < messages.length; i++) {
-        if (messages[i].role === 'tool') {
-          toolIndices.push(i);
+      const toolParts: { msgIdx: number; partIdx: number }[] = [];
+      messages.forEach((msg, mIdx) => {
+        if (msg.role === 'tool') {
+          msg.content.forEach((p, pIdx) => {
+            if (p.toolResponse) toolParts.push({ msgIdx: mIdx, partIdx: pIdx });
+          });
         }
-      }
-
-      const numToPreserve = Math.min(toolPreserveRecent, toolIndices.length);
-      const truncatableIndices = new Set(
-        toolIndices.slice(0, toolIndices.length - numToPreserve)
-      );
-
-      let truncatedCount = 0;
-      const result = messages.map((msg, idx) => {
-        if (!truncatableIndices.has(idx)) return msg;
-
-        let changed = false;
-        const newContent = msg.content.map((part): Part => {
-          if (part.toolResponse) {
-            const outputStr = stringifyOutput(part.toolResponse.output);
-            if (outputStr.length > toolMaxChars) {
-              truncatedCount++;
-              changed = true;
-              return {
-                toolResponse: {
-                  ...part.toolResponse,
-                  output:
-                    outputStr.slice(0, toolMaxChars) +
-                    `\n\n---\n\n[TRUNCATED: Tool response was ${outputStr.length} characters long, ` +
-                    `only the first ${toolMaxChars} characters are shown above. ` +
-                    `Call this tool again if you need the full output.]`,
-                },
-              };
-            }
-          }
-          return part;
-        });
-
-        return changed ? { ...msg, content: newContent } : msg;
       });
 
-      return { messages: result, truncated: truncatedCount };
+      const numPreserved = Math.min(toolPreserveRecent, toolParts.length);
+      const truncatableParts = new Set(
+        toolParts
+          .slice(0, toolParts.length - numPreserved)
+          .map((tp) => `${tp.msgIdx}:${tp.partIdx}`)
+      );
+
+      let capped = 0;
+      let truncated = 0;
+
+      const result = messages.map((msg, mIdx) => {
+        if (msg.role !== 'tool') return msg;
+
+        // Skip if already compressed to the lowest limit (toolResponses.maxChars) or deduplicated
+        if (
+          hasCompressionFlag(msg, 'truncated') ||
+          hasCompressionFlag(msg, 'deduplicated')
+        ) {
+          return msg;
+        }
+
+        let msgTruncated = false;
+        let msgCapped = false;
+        let changed = false;
+
+        const newContent = msg.content.map((part, pIdx): Part => {
+          if (!part.toolResponse) {
+            return part;
+          }
+
+          const isTruncatable = truncatableParts.has(`${mIdx}:${pIdx}`);
+          const limit =
+            isTruncatable && toolMaxChars
+              ? Math.min(maxToolResponseChars, toolMaxChars)
+              : maxToolResponseChars;
+
+          if (limit === Infinity) return part;
+          // Skip if already capped by safety ceiling and still within the safety-cap zone
+          if (
+            limit === maxToolResponseChars &&
+            hasCompressionFlag(msg, 'capped')
+          ) {
+            return part;
+          }
+
+          const outputStr = stringifyOutput(part.toolResponse.output);
+          if (outputStr.length <= limit) return part;
+
+          changed = true;
+
+          // If truncatable and clamped to toolMaxChars, it's context-compression truncation.
+          // Otherwise, it was clamped by maxToolResponseChars (the hard safety cap).
+          if (isTruncatable && limit === toolMaxChars) {
+            truncated++;
+            msgTruncated = true;
+            return {
+              ...part,
+              toolResponse: {
+                ...part.toolResponse,
+                output:
+                  outputStr.slice(0, limit) +
+                  `\n\n---\n\n[TRUNCATED: Tool response was ${outputStr.length} characters long, ` +
+                  `only the first ${limit} characters are shown above. ` +
+                  `Call this tool again if you need the full output.]`,
+              },
+            };
+          } else {
+            capped++;
+            msgCapped = true;
+            return {
+              ...part,
+              toolResponse: {
+                ...part.toolResponse,
+                output:
+                  outputStr.slice(0, limit) +
+                  `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
+                  `but only first ${limit} are shown.]`,
+              },
+            };
+          }
+        });
+
+        if (!changed) return msg;
+
+        return {
+          ...msg,
+          metadata: withCompressionMetadata(msg, {
+            ...(msgTruncated ? { truncated: true } : {}),
+            ...(msgCapped ? { capped: true } : {}),
+          }),
+          content: newContent,
+        };
+      });
+
+      return { messages: result, capped, truncated };
     }
 
     function applyMessageTruncation(
@@ -619,26 +704,65 @@ export const contextCompression: GenerateMiddleware<
         preserveSystem
       );
 
+      const noticeConsumesSlot =
+        insertTruncationNotice && systemMessages.length === 0;
       const keepCount = Math.max(
         0,
-        cap - systemMessages.length - (insertTruncationNotice ? 1 : 0)
+        cap - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
       );
-      const kept = nonSystemMessages.slice(-keepCount);
+      let kept = keepCount === 0 ? [] : nonSystemMessages.slice(-keepCount);
+
+      // Prevent orphaned tool messages and dangling model turns
+      while (
+        kept.length > 0 &&
+        (kept[0].role === 'tool' || kept[0].role === 'model')
+      ) {
+        kept.shift();
+      }
+
       const dropped = nonSystemMessages.length - kept.length;
 
       let noticeInserted = false;
       if (dropped > 0 && insertTruncationNotice) {
-        const notice: MessageData = {
-          role: 'model',
-          content: [{ text: truncationNoticeText }],
-        };
         noticeInserted = true;
-        return {
-          messages: [...systemMessages, notice, ...kept],
-          dropped,
-          noticeInserted,
-          tailCount: kept.length,
-        };
+        if (systemMessages.length > 0) {
+          const alreadyHasNotice = systemMessages.some((m) =>
+            hasCompressionFlag(m, 'notice')
+          );
+          const lastIdx = systemMessages.length - 1;
+          const updatedSystemMessages = alreadyHasNotice
+            ? systemMessages
+            : systemMessages.map((msg, idx) =>
+                idx === lastIdx
+                  ? {
+                      ...msg,
+                      metadata: withCompressionMetadata(msg, { notice: true }),
+                      content: [
+                        ...msg.content,
+                        { text: `\n\n${truncationNoticeText}` },
+                      ],
+                    }
+                  : msg
+              );
+          return {
+            messages: [...updatedSystemMessages, ...kept],
+            dropped,
+            noticeInserted,
+            tailCount: kept.length,
+          };
+        } else {
+          const notice: MessageData = {
+            role: 'system',
+            metadata: withCompressionMetadata({}, { notice: true }),
+            content: [{ text: truncationNoticeText }],
+          };
+          return {
+            messages: [notice, ...kept],
+            dropped,
+            noticeInserted,
+            tailCount: kept.length,
+          };
+        }
       }
 
       return {
@@ -657,7 +781,8 @@ export const contextCompression: GenerateMiddleware<
       summarized: boolean;
       tailCount: number;
     }> {
-      if (!summaryModelRef) return { messages, summarized: false, tailCount: 0 };
+      if (!summaryModelRef)
+        return { messages, summarized: false, tailCount: 0 };
 
       const summaryPreserveRecent =
         effectiveSummaryPreserveRecent ?? baseSummaryPreserveRecent;
@@ -685,7 +810,7 @@ export const contextCompression: GenerateMiddleware<
         );
 
         const response = await ai.generate({
-          model: (summaryModelRef as any),
+          model: summaryModelRef as any,
           config: summaryModelRef?.config,
           prompt,
         });
@@ -714,229 +839,197 @@ export const contextCompression: GenerateMiddleware<
     return {
       model: async (req, ctx, next) => {
         const result = await next(req, ctx);
-        const store = compressionStorage.getStore();
-        if (store && result.usage?.inputTokens !== undefined) {
-          store.lastInputTokens = result.usage.inputTokens;
+        if (result.usage?.inputTokens !== undefined) {
+          lastInputTokens = result.usage.inputTokens;
         }
         return result;
       },
 
       generate: async (envelope, ctx, next) => {
-        const currentTurn = (envelope as any).currentTurn ?? 0;
+        const currentTurn = envelope.currentTurn ?? 0;
         const isTopLevel = currentTurn === 0;
 
-        const executeTurn = async () => {
-          const store = compressionStorage.getStore();
-          if (isTopLevel && store) {
-            store.latestCompressionMeta = null;
-            store.lastInputTokens = undefined;
+        if (isTopLevel) {
+          latestCompressionMeta = null;
+          lastInputTokens = undefined;
+        }
+
+        const rawMessages = envelope.request.messages || [];
+        const estimatedTokens = Math.ceil(
+          estimateMessageChars(rawMessages) / CHARS_PER_TOKEN_ESTIMATE
+        );
+        const effectiveTokens = Math.max(lastInputTokens ?? 0, estimatedTokens);
+
+        const shouldCompress =
+          effectiveTokens > maxInputTokens ||
+          (maxMessages !== undefined && rawMessages.length > maxMessages);
+
+        if (!shouldCompress) {
+          const response = await next(envelope, ctx);
+          if (isTopLevel && latestCompressionMeta) {
+            return {
+              ...response,
+              custom: {
+                ...((response.custom as Record<string, unknown>) ?? {}),
+                contextCompression: latestCompressionMeta,
+              },
+            };
+          }
+          return response;
+        }
+
+        const charsBefore = estimateMessageChars(rawMessages);
+        const originalCount = rawMessages.length;
+
+        const overshootRatio =
+          maxInputTokens !== Infinity && maxInputTokens > 0
+            ? effectiveTokens / maxInputTokens
+            : 1;
+
+        const { adjustedPreserveRecent, adjustedSummaryPreserveRecent } =
+          adjustForOvershoot(
+            overshootRatio,
+            basePreserveRecent,
+            baseSummaryPreserveRecent
+          );
+
+        const {
+          messages: compressedMessages,
+          toolResponsesSafetyCapped,
+          toolResponsesDeduplicated,
+          toolResponsesTruncated,
+          truncationNoticeInserted,
+          summarized,
+          summarizationSkipped,
+        } = await ai.run('contextCompression', rawMessages, async () => {
+          let messages = [...rawMessages];
+          let capped = 0;
+          let deduplicated = 0;
+          let truncated = 0;
+          let noticeInserted = false;
+          let isSummarized = false;
+          let skippedSummary = false;
+
+          // 1. Tool response deduplication
+          if (dedupConfig) {
+            const dedupResult = applyToolResponseDeduplication(messages);
+            messages = dedupResult.messages;
+            deduplicated = dedupResult.deduplicated;
           }
 
-          const rawMessages = envelope.request.messages || [];
-          const estimatedTokens = Math.ceil(
-            estimateMessageChars(rawMessages) / 3.5
-          );
-          const effectiveTokens = Math.max(
-            store?.lastInputTokens ?? 0,
-            estimatedTokens
-          );
+          // 2. Tool response limits (Safety cap & Truncation in a single pass)
+          const toolResult = applyToolLimits(messages);
+          messages = toolResult.messages;
+          capped = toolResult.capped;
+          truncated = toolResult.truncated;
 
-          const shouldCompress =
-            effectiveTokens > maxInputTokens ||
-            (maxMessages !== undefined && rawMessages.length > maxMessages);
+          // 3. Check if cheap strategies saved enough to skip summarization
+          const charsAfterCheap = estimateMessageChars(messages);
+          const charsSaved = charsBefore - charsAfterCheap;
+          const savingsRatio = charsBefore > 0 ? charsSaved / charsBefore : 0;
 
-          if (!shouldCompress) {
-            const response = await next(envelope, ctx);
-            if (
-              response.custom &&
-              typeof response.custom === 'object' &&
-              'contextCompression' in response.custom
-            ) {
-              const { contextCompression, ...restCustom } =
-                response.custom as Record<string, unknown>;
-              return { ...response, custom: restCustom };
-            }
-            return response;
-          }
+          const shouldSkipSummarization =
+            skipSummarizationThreshold !== undefined &&
+            savingsRatio >= skipSummarizationThreshold;
 
-          const charsBefore = estimateMessageChars(rawMessages);
-          const originalCount = rawMessages.length;
+          // 4. Message truncation
+          const effectiveMaxMessages = maxMessages
+            ? Math.min(
+                maxMessages,
+                Math.max(
+                  1,
+                  maxMessages - (basePreserveRecent - adjustedPreserveRecent)
+                )
+              )
+            : undefined;
 
-          const overshootRatio =
-            maxInputTokens !== Infinity && maxInputTokens > 0
-              ? effectiveTokens / maxInputTokens
-              : 1;
-
-          const { adjustedPreserveRecent, adjustedSummaryPreserveRecent } =
-            adjustForOvershoot(
-              overshootRatio,
-              basePreserveRecent,
-              baseSummaryPreserveRecent
+          if (
+            effectiveMaxMessages &&
+            messages.length > effectiveMaxMessages
+          ) {
+            const msgResult = applyMessageTruncation(
+              messages,
+              effectiveMaxMessages
             );
+            messages = msgResult.messages;
+            noticeInserted = msgResult.noticeInserted;
+          }
 
-          const {
-            messages: compressedMessages,
+          // 5. Summarization
+          if (summaryModelRef) {
+            if (shouldSkipSummarization) {
+              skippedSummary = true;
+            } else {
+              const sumResult = await applySummarization(
+                messages,
+                adjustedSummaryPreserveRecent
+              );
+              messages = sumResult.messages;
+              isSummarized = sumResult.summarized;
+            }
+          }
+
+          return {
+            messages,
+            toolResponsesSafetyCapped: capped,
+            toolResponsesDeduplicated: deduplicated,
+            toolResponsesTruncated: truncated,
+            truncationNoticeInserted: noticeInserted,
+            summarized: isSummarized,
+            summarizationSkipped: skippedSummary,
+          };
+        });
+
+        const compressedCount = compressedMessages.length;
+        const wasCompressed =
+          toolResponsesSafetyCapped > 0 ||
+          toolResponsesDeduplicated > 0 ||
+          toolResponsesTruncated > 0 ||
+          summarized ||
+          compressedCount < originalCount ||
+          truncationNoticeInserted;
+
+        let turnCompressionMeta: Record<string, unknown> | null = null;
+        if (wasCompressed) {
+          turnCompressionMeta = {
+            triggered: true,
+            inputTokensBefore: effectiveTokens,
+            messagesOriginal: originalCount,
+            messagesAfter: compressedCount,
             toolResponsesSafetyCapped,
             toolResponsesDeduplicated,
             toolResponsesTruncated,
             truncationNoticeInserted,
             summarized,
             summarizationSkipped,
-          } = await ai.run('contextCompression', rawMessages, async () => {
-            let messages = [...rawMessages];
-            let capped = 0;
-            let deduplicated = 0;
-            let truncated = 0;
-            let noticeInserted = false;
-            let isSummarized = false;
-            let skippedSummary = false;
-
-            // 1. Safety cap on oversized tool responses
-            if (maxToolResponseChars !== Infinity) {
-              const capResult = applyToolResponseSafetyCap(messages);
-              messages = capResult.messages;
-              capped = capResult.capped;
-            }
-
-            // 2. Tool response deduplication
-            if (dedupConfig) {
-              const dedupResult = applyToolResponseDeduplication(messages);
-              messages = dedupResult.messages;
-              deduplicated = dedupResult.deduplicated;
-            }
-
-            // 3. Tool response truncation
-            if (toolMaxChars) {
-              const truncResult = applyToolResponseTruncation(messages);
-              messages = truncResult.messages;
-              truncated = truncResult.truncated;
-            }
-
-            // 4. Check if cheap strategies saved enough to skip summarization
-            const charsAfterCheap = estimateMessageChars(messages);
-            const charsSaved = charsBefore - charsAfterCheap;
-            const savingsRatio = charsBefore > 0 ? charsSaved / charsBefore : 0;
-
-            const shouldSkipSummarization =
-              skipSummarizationThreshold !== undefined &&
-              savingsRatio >= skipSummarizationThreshold;
-
-            // 5. Message truncation
-            const effectiveMaxMessages = maxMessages
-              ? Math.min(
-                  maxMessages,
-                  Math.max(
-                    1,
-                    maxMessages - (basePreserveRecent - adjustedPreserveRecent)
-                  )
-                )
-              : undefined;
-
-            if (
-              effectiveMaxMessages &&
-              messages.length > effectiveMaxMessages
-            ) {
-              const msgResult = applyMessageTruncation(
-                messages,
-                effectiveMaxMessages
-              );
-              messages = msgResult.messages;
-              noticeInserted = msgResult.noticeInserted;
-            }
-
-            // 6. Summarization
-            if (summaryModelRef) {
-              if (shouldSkipSummarization) {
-                skippedSummary = true;
-              } else {
-                const sumResult = await applySummarization(
-                  messages,
-                  adjustedSummaryPreserveRecent
-                );
-                messages = sumResult.messages;
-                isSummarized = sumResult.summarized;
-              }
-            }
-
-            return {
-              messages,
-              toolResponsesSafetyCapped: capped,
-              toolResponsesDeduplicated: deduplicated,
-              toolResponsesTruncated: truncated,
-              truncationNoticeInserted: noticeInserted,
-              summarized: isSummarized,
-              summarizationSkipped: skippedSummary,
-            };
-          });
-
-          const compressedCount = compressedMessages.length;
-          const wasCompressed =
-            toolResponsesSafetyCapped > 0 ||
-            toolResponsesDeduplicated > 0 ||
-            toolResponsesTruncated > 0 ||
-            summarized ||
-            compressedCount < originalCount ||
-            truncationNoticeInserted;
-
-          let turnCompressionMeta: Record<string, unknown> | null = null;
-          if (wasCompressed) {
-            turnCompressionMeta = {
-              triggered: true,
-              inputTokensBefore: effectiveTokens,
-              messagesOriginal: originalCount,
-              messagesAfter: compressedCount,
-              toolResponsesSafetyCapped,
-              toolResponsesDeduplicated,
-              toolResponsesTruncated,
-              truncationNoticeInserted,
-              summarized,
-              summarizationSkipped,
-            };
-            if (store) {
-              store.latestCompressionMeta = turnCompressionMeta;
-            }
-          }
-
-          const modifiedEnvelope = {
-            ...envelope,
-            request: {
-              ...envelope.request,
-              messages: wasCompressed ? compressedMessages : rawMessages,
-            },
           };
+          latestCompressionMeta = turnCompressionMeta;
+        }
 
-          const response = await next(modifiedEnvelope, ctx);
+        const modifiedEnvelope = {
+          ...envelope,
+          request: {
+            ...envelope.request,
+            messages: wasCompressed ? compressedMessages : rawMessages,
+          },
+        };
 
-          if (turnCompressionMeta) {
+        const response = await next(modifiedEnvelope, ctx);
+
+        if (isTopLevel) {
+          const finalMeta = turnCompressionMeta ?? latestCompressionMeta;
+          if (finalMeta) {
             return {
               ...response,
               custom: {
                 ...((response.custom as Record<string, unknown>) ?? {}),
-                contextCompression: turnCompressionMeta,
+                contextCompression: finalMeta,
               },
             };
           }
-
-          if (
-            response.custom &&
-            typeof response.custom === 'object' &&
-            'contextCompression' in response.custom
-          ) {
-            const { contextCompression, ...restCustom } =
-              response.custom as Record<string, unknown>;
-            return { ...response, custom: restCustom };
-          }
-
-          return response;
-        };
-
-        if (isTopLevel || !compressionStorage.getStore()) {
-          return compressionStorage.run(
-            { lastInputTokens: undefined, latestCompressionMeta: null },
-            executeTurn
-          );
         }
-        return executeTurn();
+
+        return response;
       },
     };
   }

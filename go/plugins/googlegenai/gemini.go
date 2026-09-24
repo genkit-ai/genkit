@@ -159,7 +159,7 @@ func generate(
 	}
 	model = resolveVertexModelName(client, model)
 
-	cache, err := handleCache(ctx, client, input, model)
+	cache, inline, err := handleCache(ctx, client, input, model)
 	if err != nil {
 		return nil, err
 	}
@@ -169,12 +169,26 @@ func generate(
 		return nil, err
 	}
 
-	contents, err := toGeminiContents(input)
+	contents, err := toGeminiContents(inline)
 	if err != nil {
 		return nil, err
 	}
 	if len(contents) == 0 {
-		return nil, status.Errorf(status.ErrInvalidArgument, "at least one message is required in generate request")
+		if cache == nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "at least one message is required in generate request")
+		}
+		// The cache boundary covers every message, e.g. a single message that
+		// carries both the document and the question. The prefix still reaches
+		// the model through the CachedContent resource, but the API rejects a
+		// request with no contents at all, so carry it with a minimal turn
+		// rather than failing a request that worked before the prefix stopped
+		// being sent inline. The Python plugin pads the same way; the JS one
+		// cannot reach this state, since its cached span is sliced out of the
+		// chat history, which excludes the current prompt.
+		contents = []*genai.Content{{
+			Role:  toGeminiRole(ai.RoleUser),
+			Parts: []*genai.Part{genai.NewPartFromText(" ")},
+		}}
 	}
 
 	// Send out the actual request.
@@ -321,12 +335,19 @@ func mergeCandidateMetadata(dst, src *genai.Candidate) {
 	}
 }
 
-// toGeminiContents converts the non-system messages of an [*ai.ModelRequest]
-// to a slice of [*genai.Content]. System messages are handled separately via
-// the request's system instruction.
-func toGeminiContents(input *ai.ModelRequest) ([]*genai.Content, error) {
-	var contents []*genai.Content
-	for _, m := range input.Messages {
+// toGeminiContents converts non-system messages to a slice of
+// [*genai.Content]. System messages are handled separately via the request's
+// system instruction.
+//
+// It takes the messages rather than the request so that a caller using context
+// caching can hand it just the span it wants encoded. [handleCache] returns the
+// messages left after the cache boundary, and the cached prefix is encoded by
+// [messagesToCache] through this same function, so both halves of the
+// conversation agree on roles and on contentless turns, and the prefix is never
+// sent inline as well as by reference (#6137).
+func toGeminiContents(msgs []*ai.Message) ([]*genai.Content, error) {
+	contents := make([]*genai.Content, 0, len(msgs))
+	for _, m := range msgs {
 		// system parts are handled separately
 		if m.Role == ai.RoleSystem {
 			continue

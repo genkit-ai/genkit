@@ -108,9 +108,6 @@ func DefineAskFlow(g *genkit.Genkit) {
 						"that name first. Then answer in the loaded style.",
 				),
 				ai.WithPrompt(input.Question),
-				// Loading a skill costs one tool-loop turn, so raise the cap from
-				// the default of 5 to leave room for the answer.
-				ai.WithMaxTurns(8),
 				ai.WithUse(&middleware.Skills{SkillPaths: []string{skillsDir}}),
 				ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 					// The use_skill turn streams too, and carries no text, so the

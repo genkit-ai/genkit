@@ -64,14 +64,14 @@ var stderrLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 //
 //	// Zero-config (auto-detects project ID)
 //	googlecloud.EnableGoogleCloudTelemetry(nil)
-//	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+//	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 //
 //	// With configuration
 //	googlecloud.EnableGoogleCloudTelemetry(&googlecloud.GoogleCloudTelemetryOptions{
 //		ProjectID:      "my-project",
 //		ForceDevExport: true,
 //	})
-//	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+//	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 func EnableGoogleCloudTelemetry(options *GoogleCloudTelemetryOptions) {
 	if options == nil {
 		options = &GoogleCloudTelemetryOptions{}

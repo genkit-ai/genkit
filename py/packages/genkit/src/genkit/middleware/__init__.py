@@ -71,7 +71,7 @@ from genkit._core._middleware import (
     ModelHookParams,
     ToolHookParams,
 )
-from genkit._core._typing import MultipartToolResponse
+from genkit._core._model import MultipartToolResponse
 
 __all__ = [
     'BaseMiddleware',

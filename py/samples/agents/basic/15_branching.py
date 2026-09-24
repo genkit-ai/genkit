@@ -33,8 +33,9 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, GenkitError
-from genkit.agent import InMemorySessionStore
+from genkit import GenkitError
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI()])
 # reject_ambiguous_session makes a session-id lookup over a forked history raise
@@ -44,7 +45,7 @@ store = InMemorySessionStore(reject_ambiguous_session=True)
 
 agent = ai.define_agent(
     name='designer',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='You help design a product landing page. Reply in two or three short sentences.',
     store=store,
 )

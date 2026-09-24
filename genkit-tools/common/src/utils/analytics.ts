@@ -100,7 +100,7 @@ export class RunCommandEvent extends GAEvent {
     this.stickyParameters = {
       command,
       runtime_type,
-      ...(project_runtime && { project_runtime }),
+      project_runtime: project_runtime || 'unknown',
     };
   }
 }

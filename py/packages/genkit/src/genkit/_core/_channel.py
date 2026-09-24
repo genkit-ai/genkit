@@ -84,6 +84,12 @@ class Channel(Generic[T_co, R]):
 
         if self._close_future in finished:
             _ = pop_task.cancel()
+            # generate_stream's async for is how callers see the run. If the
+            # generate task died, that has to show up here, not as an empty
+            # stream that only fails later on .response.
+            await self._close_future
+            if not self.queue.empty():
+                return self.queue.get_nowait()
             raise StopAsyncIteration
 
         return await wait_for(pop_task, timeout=self._timeout)

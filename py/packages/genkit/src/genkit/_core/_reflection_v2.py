@@ -54,6 +54,7 @@ from genkit._core._model import ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
+from genkit._core._trace._log_exporter import enable_log_export
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
     AgentInput,
@@ -161,6 +162,7 @@ class ReflectionServerV2:
         self.reflection_handshake_telemetry_applied = True
         # Register HTTP export to this URL on the global OTel provider.
         add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
+        enable_log_export(url=url)
         logger.debug('reflection V2: connected to telemetry server', url=url)
 
     async def run_forever(self) -> None:
@@ -694,11 +696,14 @@ class ReflectionServerV2:
         except ValidationError as e:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
-        if p.type not in ('defaultModel', 'middleware'):
+        if p.type not in ('defaultModel', 'middleware', 'a2ui-catalog'):
             await self.send_error(
                 sid,
                 JSON_RPC_INVALID_PARAMS,
-                f"'type' {p.type} is not supported. Only 'defaultModel' and 'middleware' are supported",
+                (
+                    f"'type' {p.type} is not supported. "
+                    "Only 'defaultModel', 'middleware', and 'a2ui-catalog' are supported"
+                ),
             )
             return
         mapped: dict[str, Any] = {}
@@ -709,10 +714,12 @@ class ReflectionServerV2:
                     f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
-            else:
+            elif p.type == 'defaultModel':
                 # Dev UI lists a model name. A stored ModelRef is an object;
                 # only the name is JSON-serializable here.
                 mapped[name] = value.name if isinstance(value, ModelRef) else value
+            else:
+                mapped[name] = value
         await self.send_response(sid, {'values': mapped})
 
     def handle_configure(self, params: dict[str, Any]) -> None:

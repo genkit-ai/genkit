@@ -17,34 +17,25 @@
 
 """Google Cloud plugin for Genkit.
 
-Exports Genkit telemetry to Cloud Trace, Cloud Monitoring, and Cloud Logging,
-and provides :class:`FirestoreSessionStore` — a durable agent session store
-backed by Firestore. Turns are saved as JSON Patch diffs between periodic
-full-state checkpoints (sharded so no document approaches Firestore's size
-limit), so apps can resume long conversations across processes without
-secondary indexes.
+Exports Genkit telemetry to Cloud Trace, Cloud Monitoring, and Cloud Logging.
+
+Durable agent sessions are experimental — import
+:class:`FirestoreSessionStore` from ``genkit_google_cloud.exp``.
 
 Example:
     ```python
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
-    from genkit_google_cloud import (
-        FirestoreSessionStore,
-        enable_google_cloud_telemetry,
-    )
+    from genkit_google_cloud import enable_google_cloud_telemetry
 
 
-    # 1. Enable Google Cloud Trace and Monitoring export
+    # Enable Google Cloud Trace and Monitoring export
     enable_google_cloud_telemetry(project_id='my-project')
 
-    # 2. All subsequent Genkit actions automatically export telemetry
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+    # All subsequent Genkit actions automatically export telemetry
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
     # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
-
-    # 3. Persist agent sessions in Firestore (ADC / FIRESTORE_EMULATOR_HOST)
-    store = FirestoreSessionStore()
-    agent = ai.define_agent(name='assistant', store=store)
     ```
 
 Requirements:
@@ -56,7 +47,6 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
-from .session_store.firestore import FirestoreSessionStore
 from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
 
 
@@ -70,7 +60,6 @@ def package_name() -> str:
 
 
 __all__ = [
-    'FirestoreSessionStore',
     'add_gcp_telemetry',
     'enable_google_cloud_telemetry',
     'package_name',

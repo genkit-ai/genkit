@@ -1,6 +1,7 @@
-# FastAPI BugBot
+# BugBot
 
-A small FastAPI app that reviews code for security, bug, and style issues.
+A FastAPI app that reviews a snippet for security, bugs, and style.
+Three Gemini calls in parallel, structured JSON back.
 
 ```bash
 export GEMINI_API_KEY=your-api-key
@@ -8,19 +9,10 @@ uv sync
 uv run src/main.py
 ```
 
-- API: http://localhost:8080
-- Swagger: http://localhost:8080/docs
-
 ```bash
 curl -X POST http://localhost:8080/review \
   -H "Content-Type: application/json" \
-  -d '{"code":"eval(user_input)","language":"python"}'
+  -d '{"data":{"code":"eval(user_input)","language":"python"}}'
 ```
 
-To inspect the underlying flows in Dev UI instead:
-
-```bash
-genkit start -- uv run src/main.py
-```
-
-- Dev UI: http://localhost:4000
+Swagger is http://localhost:8080/docs.

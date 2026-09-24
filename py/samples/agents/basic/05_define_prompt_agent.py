@@ -26,15 +26,15 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 ai.define_prompt(
     name='greeterPrompt',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='You are a greeter. Be warm and brief.',
 )
 agent = ai.define_prompt_agent(name='greeterPrompt', store=store)

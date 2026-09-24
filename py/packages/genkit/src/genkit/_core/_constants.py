@@ -16,8 +16,18 @@
 
 """Module containing various core constants."""
 
-# The version of Genkit sent over HTTP in the headers.
-# TODO(#4349): make this dynamic
-GENKIT_VERSION = '0.3.2'
+import importlib.metadata
+
+
+def package_version() -> str:
+    """Installed ``genkit`` package version, or ``0.0.0`` if it is not installed."""
+    try:
+        return importlib.metadata.version('genkit')
+    except importlib.metadata.PackageNotFoundError:
+        return '0.0.0'
+
+
+# Sent over HTTP in the client header and on the OTLP log scope.
+GENKIT_VERSION = package_version()
 
 GENKIT_CLIENT_HEADER = f'genkit-python/{GENKIT_VERSION}'

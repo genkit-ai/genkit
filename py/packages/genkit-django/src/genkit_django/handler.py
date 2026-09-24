@@ -100,16 +100,19 @@ def genkit_django_handler(
 
     ```python
     from django.urls import path
+    from genkit import ActionRunContext
     from genkit_django import genkit_django_handler
 
 
     @genkit_django_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx):
-        return await ai.generate(
-            on_chunk=ctx.send_chunk,
-            prompt=f'tell a medium sized joke about {name}',
-        )
+    async def say_hi(name: str, ctx: ActionRunContext) -> str:
+        stream = ai.generate_stream(prompt=f'tell a joke about {name}')
+        async for chunk in stream.stream:
+            if chunk.text:
+                ctx.send_chunk(chunk.text)
+        res = await stream.response
+        return res.text
 
 
     urlpatterns = [

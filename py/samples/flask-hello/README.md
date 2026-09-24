@@ -1,6 +1,6 @@
-# Flask Hello
+# Flask
 
-Serve a Genkit flow through Flask and stream the model response back to the client.
+Hang a flow on the Flask app you already have.
 
 ```bash
 export GEMINI_API_KEY=your-api-key
@@ -8,17 +8,8 @@ uv sync
 uv run src/main.py
 ```
 
-Then call it:
-
 ```bash
-curl -X POST http://localhost:8080/chat \
+curl -X POST http://localhost:8080/say_hi \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: beginner-demo' \
-  -d '{"data":{"name":"Mittens"}}'
-```
-
-To inspect the flow in Dev UI instead:
-
-```bash
-genkit start -- uv run src/main.py
+  -d '{"data":"Mittens"}'
 ```

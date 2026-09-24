@@ -25,6 +25,7 @@ from typing import Literal
 from genkit._core._typing import (
     AgentFinishReason,
     AgentStreamChunk,
+    GenkitRuntimeError,
     SessionState,
 )
 
@@ -70,3 +71,4 @@ class TurnResult:
     """What an agent turn function returns to tell the loop how the turn ended."""
 
     finish_reason: AgentFinishReason | None = None
+    error: GenkitRuntimeError | None = None

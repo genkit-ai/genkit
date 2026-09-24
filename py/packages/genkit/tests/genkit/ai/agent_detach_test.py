@@ -24,7 +24,6 @@ from genkit._ai._agents._session import Session
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._ai._agents._types import TurnContext
-from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
@@ -47,6 +46,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolRequestPart,
 )
+from genkit.exp import Genkit
 
 
 async def _wait_for_snapshot_status(

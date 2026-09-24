@@ -32,7 +32,7 @@ from typing import Any
 from _ai import ai
 
 from genkit import ActionRunContext
-from genkit.agent import InMemorySessionStore
+from genkit.exp.agent import InMemorySessionStore
 
 branching_agent = ai.define_agent(
     name='branchingAgent',

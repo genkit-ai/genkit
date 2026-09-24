@@ -1,17 +1,24 @@
 # Tracing
 
-Spans show up in Dev UI as they start, not when they finish. For long flows with many steps.
+Run this, open http://localhost:4000, and the ticket triage steps show
+up as spans.
 
 ```bash
 export GEMINI_API_KEY=your-api-key
 uv sync
-uv run src/main.py
-```
-
-To watch it in Dev UI instead:
-
-```bash
 genkit start -- uv run src/main.py
 ```
 
-Run `trace_steps_live` and watch the Traces tab.
+In Dev UI, run `triage_ticket` and open the Traces tab. Or skip the UI:
+
+```bash
+uv run src/main.py
+```
+
+To send the same spans to Cloud Trace later:
+
+```python
+from genkit_google_cloud import enable_google_cloud_telemetry
+
+enable_google_cloud_telemetry(project_id='my-project')
+```

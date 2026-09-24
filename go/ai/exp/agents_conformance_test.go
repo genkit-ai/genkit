@@ -39,6 +39,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,11 +50,22 @@ import (
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
 // specPath is relative to this package directory (go/ai/exp).
 const specPath = "../../../tests/specs/agent.yaml"
+
+// supportedRequires lists the gated spec capabilities this runtime
+// implements. A test whose `requires` names anything absent here is
+// skipped, so the shared spec can carry cases for features an SDK has not
+// adopted yet. A name absent from the spec's own `capabilities` list is a
+// typo instead, and fails.
+var supportedRequires = map[string]bool{
+	"resumable-failures": true,
+	"resumable-aborts":   true,
+}
 
 // customState is the single session-state type used by every conformance
 // agent. A free-form map lets the custom-state agents manipulate arbitrary
@@ -67,13 +79,18 @@ type customState = map[string]any
 // ---------------------------------------------------------------------------
 
 type specSuite struct {
-	Tests []specTest `yaml:"tests"`
+	// Capabilities is every name a test may put in `requires`. It is the
+	// spec's own registry, so a misspelled capability fails here rather than
+	// skipping the test in every SDK at once.
+	Capabilities []string   `yaml:"capabilities"`
+	Tests        []specTest `yaml:"tests"`
 }
 
 type specTest struct {
 	Name        string           `yaml:"name"`
 	Description string           `yaml:"description"`
 	Agent       string           `yaml:"agent"`
+	Requires    []string         `yaml:"requires"`
 	Steps       []map[string]any `yaml:"steps"`
 }
 
@@ -173,6 +190,19 @@ func setupHarness(t *testing.T) *harness {
 			return restartOut{Result: "confirmed: " + in.Action}, nil
 		})
 
+	// flakyTool fails its first call and succeeds after, so a spec case can
+	// fail a turn mid tool round and re-attempt it. The counter is per
+	// harness, and setupHarness runs per test, so each test's first call
+	// fails.
+	var flakyCalls atomic.Int32
+	flakyTool := defineTestTool(reg, "flakyTool", "A tool that fails its first call",
+		func(tc *ai.ToolContext, _ struct{}) (string, error) {
+			if flakyCalls.Add(1) == 1 {
+				return "", status.Errorf(status.ErrUnavailable, "flaky tool failed")
+			}
+			return "tool recovered", nil
+		})
+
 	h := &harness{
 		pm:     pm,
 		agents: map[string]*exp.Agent[customState]{},
@@ -208,6 +238,10 @@ func setupHarness(t *testing.T) *harness {
 		exp.InlinePrompt{model, ai.WithConfig(cfg), ai.WithTools(restartTool)},
 		newStore("promptAgentWithRestartTool"))
 
+	h.agents["promptAgentWithToolsAndStore"] = exp.DefineAgent[customState](reg, "promptAgentWithToolsAndStore",
+		exp.InlinePrompt{model, ai.WithConfig(cfg), ai.WithTools(testTool, flakyTool)},
+		newStore("promptAgentWithToolsAndStore"))
+
 	// --- Custom agents ---
 
 	// customAgentBlocking: server-managed, blocks until its context is
@@ -222,6 +256,28 @@ func setupHarness(t *testing.T) *harness {
 			}
 			return &exp.AgentResult{Message: ai.NewModelTextMessage("unblocked")}, nil
 		}, newStore("customAgentBlocking"))
+
+	// customAgentAbortable: server-managed, records the turn and blocks until
+	// its context is cancelled on the turn whose message is "block". Used for
+	// the resumable-abort cases, where the abort has to land with a committed
+	// turn behind it and an unfinished one in front of it.
+	h.agents["customAgentAbortable"] = exp.DefineCustomAgent(reg, "customAgentAbortable",
+		func(ctx context.Context, _ exp.Responder, sess *exp.SessionRunner[customState]) (*exp.AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, in *exp.AgentInput) (*exp.TurnResult, error) {
+				sess.AddMessages(in.Message)
+				if in.Message != nil && in.Message.Text() == "block" {
+					<-ctx.Done()
+					// No TurnResult: the turn commits nothing, so the message
+					// it just added rolls back with it.
+					return nil, ctx.Err()
+				}
+				sess.AddMessages(ai.NewModelTextMessage("ack"))
+				return nil, nil
+			}); err != nil {
+				return nil, err
+			}
+			return &exp.AgentResult{Message: ai.NewModelTextMessage("done")}, nil
+		}, newStore("customAgentAbortable"))
 
 	// customAgentFailing: server-managed, fails during processing. Used for
 	// detach + background failure tests.
@@ -356,8 +412,21 @@ func TestAgentConformance(t *testing.T) {
 		t.Fatal("spec contains no tests")
 	}
 
+	known := map[string]bool{}
+	for _, c := range suite.Capabilities {
+		known[c] = true
+	}
+
 	for _, tc := range suite.Tests {
 		t.Run(tc.Name, func(t *testing.T) {
+			for _, req := range tc.Requires {
+				if !known[req] {
+					t.Fatalf("unknown capability %q; add it to the spec's capabilities list or fix the spelling", req)
+				}
+				if !supportedRequires[req] {
+					t.Skipf("requires unsupported capability %q", req)
+				}
+			}
 			h := setupHarness(t)
 			agent, ok := h.agents[tc.Agent]
 			if !ok {
@@ -399,10 +468,33 @@ func (h *harness) executeSend(t *testing.T, label string, agent *exp.Agent[custo
 	t.Helper()
 	resolved := resolveTemplates(t, label, step, captures)
 
-	// Program the model for this step.
-	if _, hasResp := resolved["modelResponses"]; hasResp {
-		var modelResponses []*ai.ModelResponse
-		jsonConvert(t, label, resolved["modelResponses"], &modelResponses)
+	// Program the model for this step. An entry may be a response, or
+	// `error: {status, message}` to fail that call with a classified error
+	// (how a spec case makes a turn fail mid loop).
+	if raw, hasResp := resolved["modelResponses"]; hasResp {
+		rawTurns, ok := raw.([]any)
+		if !ok {
+			t.Fatalf("%s: modelResponses is not a list", label)
+		}
+		type modelTurn struct {
+			resp *ai.ModelResponse
+			err  error
+		}
+		turns := make([]modelTurn, len(rawTurns))
+		for i, raw := range rawTurns {
+			if m, ok := raw.(map[string]any); ok {
+				if e, ok := m["error"].(map[string]any); ok {
+					msg := asString(e["message"])
+					if name := asString(e["status"]); name != "" {
+						turns[i].err = status.Errorf(status.Base(status.Name(name)), "%s", msg)
+					} else {
+						turns[i].err = errors.New(msg)
+					}
+					continue
+				}
+			}
+			jsonConvert(t, label, raw, &turns[i].resp)
+		}
 		var streamChunks [][]*ai.ModelResponseChunk
 		if sc, ok := resolved["streamChunks"]; ok {
 			jsonConvert(t, label, sc, &streamChunks)
@@ -418,13 +510,16 @@ func (h *harness) executeSend(t *testing.T, label string, agent *exp.Agent[custo
 					}
 				}
 			}
-			if i < len(modelResponses) {
+			if i < len(turns) {
+				if turns[i].err != nil {
+					return nil, turns[i].err
+				}
 				// Echo the request back on the response, as every real model
 				// does. The prompt agent's tool loop relies on response.Request
 				// to thread intermediate tool-request/response messages into
 				// session history (modelResp.History()); without it the loop
 				// falls back to recording only the final message.
-				resp := modelResponses[i]
+				resp := turns[i].resp
 				resp.Request = req
 				return resp, nil
 			}
@@ -857,9 +952,16 @@ func executeWaitUntilCompleted(t *testing.T, label string, store *localstore.InM
 		if err != nil {
 			t.Fatalf("%s: getSnapshot while polling: %v", label, err)
 		}
-		if s != nil && terminal[normalizeStatus(s.Status)] {
-			snap = s
-			break
+		// An aborted row reaches its status in two writes: the abort flips it,
+		// and the finalize that follows stamps the reason and the state. The
+		// reason is the marker that the second write landed, so a wait that
+		// stopped at the status alone would read a row still being written.
+		if s != nil {
+			st := normalizeStatus(s.Status)
+			if terminal[st] && (st != exp.SnapshotStatusAborted || s.FinishReason != "") {
+				snap = s
+				break
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

@@ -33,7 +33,7 @@ Example:
 
     # 2. Generate content using dynamic model discovery
     res = await ai.generate(
-        model='googleai/gemini-flash-latest',
+        model=GoogleAI.gemini_model('gemini-flash-latest'),
         prompt='Suggest 2 catchy names for a space coffee shop.',
     )
 
@@ -54,7 +54,7 @@ Example:
 
     # 2. Generate content with Gemini Pro on Vertex AI
     res = await ai.generate(
-        model='vertexai/gemini-pro-latest',
+        model=VertexAI.gemini_model('gemini-pro-latest'),
         prompt='Explain quantum entanglement in one sentence.',
     )
 
@@ -76,6 +76,8 @@ from genkit_google_genai.google import (
     GoogleAI,
     VertexAI,
 )
+from genkit_google_genai.models.antigravity import AntigravityConfig
+from genkit_google_genai.models.deep_research import DeepResearchConfig
 from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
     GeminiEmbeddingModels,
@@ -94,8 +96,9 @@ from genkit_google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
-from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
-from genkit_google_genai.models.veo import VeoConfig, VeoVersion
+from genkit_google_genai.models.interactions_lyria import LyriaConfig
+from genkit_google_genai.models.interactions_registry import LyriaVersion
+from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
 
 
 def package_name() -> str:
@@ -114,6 +117,8 @@ __all__ = [
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
     'GemmaConfigSchema',
+    'AntigravityConfig',
+    'DeepResearchConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenConfigSchema',
@@ -123,6 +128,7 @@ __all__ = [
     'KnownGeminiTts',
     'KnownGemma',
     'KnownImagen',
+    'KnownVeo',
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',

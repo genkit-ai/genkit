@@ -23,7 +23,7 @@ import pytest
 from genkit_google_genai.models.embedder import (
     Embedder,
     GeminiEmbeddingModels,
-    get_embedder_options,
+    get_embedder_info,
 )
 from google import genai
 from pytest_mock import MockerFixture
@@ -139,35 +139,35 @@ async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
     googleai_client_mock.aio.models.embed_content.assert_not_called()
 
 
-def test_get_embedder_options_multimodal_and_fallback() -> None:
+def test_get_embedder_info_multimodal_and_fallback() -> None:
     """Gemini embedding 2 models are multimodal while unknown stays text-only."""
-    options = get_embedder_options('gemini-embedding-2', 'Google AI - gemini-embedding-2')
+    options = get_embedder_info('gemini-embedding-2', 'Google AI - gemini-embedding-2')
     assert options.dimensions == 3072
     assert options.supports is not None
     assert options.supports.input == ['text', 'image', 'video']
 
-    unknown_options = get_embedder_options('custom-embedder', 'Google AI - custom-embedder')
+    unknown_options = get_embedder_info('custom-embedder', 'Google AI - custom-embedder')
     assert unknown_options.dimensions is None
     assert unknown_options.supports is not None
     assert unknown_options.supports.input == ['text']
 
 
 @pytest.mark.parametrize('model_name', ['multimodalembedding', 'multimodalembedding@001'])
-def test_get_embedder_options_multimodalembedding_versioned_and_bare(model_name: str) -> None:
+def test_get_embedder_info_multimodalembedding_versioned_and_bare(model_name: str) -> None:
     """The multimodalembedding model is multimodal with or without the '@001' suffix."""
-    options = get_embedder_options(model_name, f'Vertex AI - {model_name}', is_vertex=True)
+    options = get_embedder_info(model_name, f'Vertex AI - {model_name}', is_vertex=True)
     assert options.dimensions == 1408
     assert options.supports is not None
     assert options.supports.input == ['text', 'image', 'video']
 
 
-def test_get_embedder_options_scopes_supports_per_backend() -> None:
+def test_get_embedder_info_scopes_supports_per_backend() -> None:
     """Each backend advertises only its own multimodal models, defaulting to text."""
-    on_vertex = get_embedder_options('gemini-embedding-2', 'Vertex AI - gemini-embedding-2', is_vertex=True)
+    on_vertex = get_embedder_info('gemini-embedding-2', 'Vertex AI - gemini-embedding-2', is_vertex=True)
     assert on_vertex.supports is not None
     assert on_vertex.supports.input == ['text']
 
-    on_googleai = get_embedder_options('multimodalembedding@001', 'Google AI - multimodalembedding@001')
+    on_googleai = get_embedder_info('multimodalembedding@001', 'Google AI - multimodalembedding@001')
     assert on_googleai.supports is not None
     assert on_googleai.supports.input == ['text']
 
