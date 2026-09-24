@@ -66,10 +66,17 @@ from genkit_otel import GenAiInstrumentation
 GenAiInstrumentation(content_capturing_mode='SPAN_ONLY')
 ```
 
-When not supplied, the env var `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
-is consulted using the spec's UPPER_SNAKE tokens (`NO_CONTENT`, `SPAN_ONLY`,
-`EVENT_ONLY`, `SPAN_AND_EVENT`); an explicit value overrides it. An unknown
-token logs a one-time warning and falls back to `NO_CONTENT`.
+Or omit the token and set the env. Same four tokens. Same result:
+
+```bash
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
+```
+
+```python
+GenAiInstrumentation()
+```
+
+A token on the constructor wins over the env var. Garbage in the env var warns and stays `NO_CONTENT`.
 
 > `EVENT_ONLY` emits content on the OpenTelemetry logs signal (a
 > `gen_ai.client.inference.operation.details` log record), not on the span.
