@@ -36,6 +36,15 @@ from genkit.model import Candidate, Message, ModelRequest, ModelResponse
 from genkit.telemetry import SpanMetadata
 
 
+def test_content_capturing_mode_is_not_on_the_package_door() -> None:
+    """from genkit_otel import is GenAiInstrumentation; ContentCapturingMode is ImportError."""
+    import genkit_otel
+
+    assert genkit_otel.__all__ == ['GenAiInstrumentation']
+    with pytest.raises(ImportError):
+        from genkit_otel import ContentCapturingMode  # noqa: F401  # ty: ignore[unresolved-import]
+
+
 def _model_request(
     *,
     config: Mapping[str, object] | None = None,
