@@ -272,7 +272,7 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 		}
 	})
 
-	t.Run("output schema: last wins, format left to resolve", func(t *testing.T) {
+	t.Run("output schema: last wins, keeping JSON format", func(t *testing.T) {
 		custom := map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "string"}}}
 
 		// Mirrors GenerateData's prepend: the inferred type is applied first,
@@ -284,26 +284,8 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 			WithOutputSchema(custom),
 		)
 		assertEqual(t, g.OutputSchema, custom)
-		if g.OutputFormat != "" {
-			t.Errorf("OutputFormat = %q, want empty: the format resolves at generate time", g.OutputFormat)
-		}
-	})
-
-	t.Run("output format: kept whichever side of the type option", func(t *testing.T) {
-		type out struct {
-			Value int `json:"value"`
-		}
-		for _, opts := range [][]GenerateOption{
-			{WithOutputFormat("custom"), WithOutputType(out{})},
-			{WithOutputType(out{}), WithOutputFormat("custom")},
-		} {
-			g := applyGen(opts...)
-			if g.OutputFormat != "custom" {
-				t.Errorf("OutputFormat = %q, want the format kept in either order", g.OutputFormat)
-			}
-			if g.OutputSchema == nil {
-				t.Error("OutputSchema = nil, want the inferred schema")
-			}
+		if g.OutputFormat != OutputFormatJSON {
+			t.Errorf("OutputFormat = %q, want %q", g.OutputFormat, OutputFormatJSON)
 		}
 	})
 }
@@ -375,6 +357,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 			PromptText: opts.PromptText,
 		},
 		outputOptions: outputOptions{
+			OutputFormat: OutputFormatJSON,
 			OutputSchema: opts.OutputSchema,
 			OutputInstructions: func() *string {
 				s := ""
@@ -475,6 +458,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 			DefaultInput: map[string]any{"test": "value"},
 		},
 		outputOptions: outputOptions{
+			OutputFormat: OutputFormatJSON,
 			OutputSchema: opts.OutputSchema,
 			OutputInstructions: func() *string {
 				s := ""
@@ -659,8 +643,8 @@ func TestWithOutputSchema(t *testing.T) {
 		if opts.OutputSchema == nil {
 			t.Fatal("OutputSchema is nil")
 		}
-		if opts.OutputFormat != "" {
-			t.Errorf("OutputFormat = %q, want empty: the format resolves at generate time", opts.OutputFormat)
+		if opts.OutputFormat != OutputFormatJSON {
+			t.Errorf("OutputFormat = %q, want %q", opts.OutputFormat, OutputFormatJSON)
 		}
 	})
 }
