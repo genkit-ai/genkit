@@ -1584,15 +1584,12 @@ describe('contextCompression middleware', () => {
     let turn = 0;
     const capturedRequests: GenerateRequest[] = [];
 
-    const summaryModel = ai.defineModel(
-      { name: 'summaryModel' },
-      async () => ({
-        message: {
-          role: 'model',
-          content: [{ text: 'Summary of past events: steps were executed.' }],
-        },
-      })
-    );
+    const summaryModel = ai.defineModel({ name: 'summaryModel' }, async () => ({
+      message: {
+        role: 'model',
+        content: [{ text: 'Summary of past events: steps were executed.' }],
+      },
+    }));
 
     const dummyTool = ai.defineTool(
       {
