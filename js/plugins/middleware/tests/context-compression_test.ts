@@ -1973,10 +1973,7 @@ describe('contextCompression middleware', () => {
 
     // When preserveOriginalMessages is false and insertTruncationNotice is false, 1 message remains
     assert.strictEqual(response.request.messages.length, 1);
-    assert.strictEqual(
-      response.request.messages[0].content[0].text,
-      'user 2'
-    );
+    assert.strictEqual(response.request.messages[0].content[0].text, 'user 2');
   });
 
   it('prevents stale compressedHistory from shadowing newer compressions in multi-turn history', async () => {
