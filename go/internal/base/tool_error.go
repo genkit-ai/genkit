@@ -27,7 +27,7 @@ func (e *ToolFailError) Error() string { return e.Err.Error() }
 
 func (e *ToolFailError) Unwrap() error { return e.Err }
 
-// SoftToolErrors is the policy of one ToolErrors middleware
+// SoftToolErrors is the policy of one SoftToolErrors middleware
 // (plugins/middleware): which tools return their own errors, and which
 // unknown tool names return a not-found error, to the model. It links to the
 // policy of the middleware outside it.
@@ -48,5 +48,5 @@ func (p *SoftToolErrors) Allows(toolName string) bool {
 }
 
 // SoftToolErrorsKey is the context key for the call's [SoftToolErrors]. Set by
-// the ToolErrors middleware (plugins/middleware), read by ai/generate.go.
+// the SoftToolErrors middleware (plugins/middleware), read by ai/generate.go.
 var SoftToolErrorsKey = NewContextKey[*SoftToolErrors]()

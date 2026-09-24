@@ -143,7 +143,7 @@ func (p *pathLocks) lock(path string) func() {
 // symbolic links.
 //
 // A failed file operation does not fail the generation: its error answers
-// the call, as with [ToolErrors], so the model can correct itself.
+// the call, as with [SoftToolErrors], so the model can correct itself.
 //
 // Usage:
 //

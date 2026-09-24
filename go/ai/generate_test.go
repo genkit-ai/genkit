@@ -4689,7 +4689,7 @@ func TestResumedToolMessageOrder(t *testing.T) {
 	}
 }
 
-// softToolErrors is a stand-in for the ToolErrors middleware in
+// softToolErrors is a stand-in for the SoftToolErrors middleware in
 // plugins/middleware: it puts a policy covering the given tools, or every tool
 // when none are given, on each turn's context.
 func softToolErrors(tools ...string) Middleware {
