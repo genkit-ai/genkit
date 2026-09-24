@@ -187,7 +187,7 @@ Pick the endpoint on the plugin; the model names stay `typesafe/<id>`.
 | Endpoint                          | Key                     | Notes                                                     |
 | --------------------------------- | ----------------------- | --------------------------------------------------------- |
 | `Direct()` (default)              | `TYPESAFE_API_KEY`      | `TYPESAFE_BASE_URL` is read too; lists models              |
-| `OpenRouter()`                    | `OPENROUTER_API_KEY`    | alpha Decisions API; `jev-1.13.0` is served as `typesafe/jev-1.13` |
+| `OpenRouter()`                    | `OPENROUTER_API_KEY`    | alpha Decisions API; releases by minor version, `jev-1.13`; a patch version is refused |
 | `Cloudflare(accountID)`           | `CLOUDFLARE_API_TOKEN`  | alias `typesafe/jev` only; a pinned version is refused     |
 
 ```go

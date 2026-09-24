@@ -74,14 +74,16 @@ func Direct() *Endpoint {
 // OpenRouter serves jev through its Decisions API, an alpha endpoint that
 // takes the native body. The API key comes from OPENROUTER_API_KEY. Model
 // IDs are translated: jev-latest is ~typesafe/jev-latest there, and a
-// release such as jev-1.13.0 is typesafe/jev-1.13, named by minor version.
+// release is named by minor version, jev-1.13 for typesafe/jev-1.13. A
+// patch version such as jev-1.13.0 is refused, since OpenRouter cannot
+// pin one.
 func OpenRouter() *Endpoint {
 	return &Endpoint{
 		name:      "openrouter",
 		baseURL:   "https://openrouter.ai",
 		path:      "/api/alpha/decisions",
 		apiKeyEnv: "OPENROUTER_API_KEY",
-		models:    []string{"jev-latest", "jev-1.13.0"},
+		models:    []string{"jev-latest", "jev-1.13"},
 		modelID:   openRouterModelID,
 	}
 }
@@ -104,18 +106,26 @@ func Cloudflare(accountID string) *Endpoint {
 	}
 }
 
+// openRouterModelID maps an ID onto OpenRouter's names: an alias to its
+// ~typesafe/ form, a release to typesafe/jev-<major.minor>. OpenRouter
+// names a release by its minor version and serves dated snapshots under
+// it, so a patch version cannot be pinned there and is refused rather than
+// widened to whatever the minor version serves.
 func openRouterModelID(id string) (string, error) {
 	switch id {
-	case "jev", "jev-latest", "jev-preview":
+	case "jev", "jev-latest":
 		return "~typesafe/jev-latest", nil
+	case "jev-preview":
+		return "~typesafe/jev-preview", nil
 	}
 	if strings.HasPrefix(id, "typesafe/") || strings.HasPrefix(id, "~typesafe/") {
 		return id, nil
 	}
 	if version, ok := strings.CutPrefix(id, "jev-"); ok {
-		// Keep major.minor: OpenRouter names a release by its minor version.
-		parts := strings.SplitN(version, ".", 3)
-		return "typesafe/jev-" + strings.Join(parts[:min(2, len(parts))], "."), nil
+		if parts := strings.Split(version, "."); len(parts) > 2 {
+			return "", status.Errorf(status.ErrInvalidArgument, "typesafe: OpenRouter names jev releases by minor version, so %q cannot be pinned there; use jev-%s.%s", id, parts[0], parts[1])
+		}
+		return "typesafe/" + id, nil
 	}
 	return id, nil
 }

@@ -128,7 +128,7 @@ func TestOpenRouterEndpoint(t *testing.T) {
 
 	for id, want := range map[string]string{
 		"jev-latest":            "~typesafe/jev-latest",
-		"jev-1.13.0":            "typesafe/jev-1.13",
+		"jev-preview":           "~typesafe/jev-preview",
 		"jev-1.13":              "typesafe/jev-1.13",
 		"typesafe/jev-1.13":     "typesafe/jev-1.13",
 		"~typesafe/jev-preview": "~typesafe/jev-preview",
@@ -147,6 +147,14 @@ func TestOpenRouterEndpoint(t *testing.T) {
 		if resp.Provider != "TypeSafe" || resp.ID != "gen-1" || resp.Usage.Cost == nil || *resp.Usage.Cost != 0.00004 {
 			t.Errorf("gateway fields not decoded: %+v", resp)
 		}
+	}
+
+	calls := rec.calls()
+	if _, err := c.decide(t.Context(), "jev-1.13.0", &request{State: "hi", Questions: triageQuestions}); err == nil || !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "jev-1.13") {
+		t.Errorf("patch version on OpenRouter: error = %v, want invalid argument naming jev-1.13", err)
+	}
+	if rec.calls() != calls {
+		t.Error("a patch version was sent to OpenRouter instead of being refused")
 	}
 }
 

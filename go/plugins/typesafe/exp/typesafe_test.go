@@ -397,7 +397,7 @@ func TestOpenRouterThroughGenerate(t *testing.T) {
 	fake := &fakeJev{}
 	g := newGenkit(t, fake, OpenRouter())
 	out, _, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModelName("typesafe/jev-1.13.0"),
+		ai.WithModelName("typesafe/jev-1.13"),
 		ai.WithPrompt("hi"))
 	if err != nil {
 		t.Fatal(err)
