@@ -280,16 +280,20 @@ func TestSkillsActivationAdvertisesStringOutputSchema(t *testing.T) {
 // A hallucinated skill name must not destroy the generation. Before this, the
 // tool returned an error, which the tool loop turns into ErrToolFailed.
 func TestSkillsUnknownSkillReturnsRecoverableMessage(t *testing.T) {
-	s := &Skills{SkillPaths: []string{setupSkillsDir(t)}}
-	got := callSkillTool(t, s, "unknown", SkillToolName, map[string]any{"skillName": "nonexistent"})
-
-	if !strings.Contains(got, `Unknown skill "nonexistent"`) {
-		t.Errorf("tool response does not name the unknown skill: %q", got)
-	}
-	for _, want := range []string{"javascript", "python"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("tool response does not list the available skill %q: %q", want, got)
-		}
+	const want = `Unknown skill "nonexistent". Available skills: "javascript", "python".`
+	for _, tc := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{SkillToolName, map[string]any{"skillName": "nonexistent"}},
+		{SkillResourceToolName, map[string]any{"skillName": "nonexistent", "filePath": "references/api.md"}},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			s := &Skills{SkillPaths: []string{setupSkillsDir(t)}, AllowResourceAccess: true}
+			if got := callSkillTool(t, s, "unknown-"+tc.tool, tc.tool, tc.input); got != want {
+				t.Errorf("tool response = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

@@ -18,7 +18,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -464,9 +463,11 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 		s.toolName(SkillResourceToolName),
 		"Read a file bundled inside a skill directory, such as a reference document or a script.",
 		func(_ *ai.ToolContext, in readSkillFileInput) (string, error) {
+			// An unknown name is an answer, not a failure, the same as for
+			// use_skill: as an error, WrapTool would repeat the skill list.
 			si, ok := lookupSkill(info, in.SkillName)
 			if !ok {
-				return "", errors.New(unknownSkillMessage(in.SkillName, available))
+				return unknownSkillMessage(in.SkillName, available), nil
 			}
 			if err := requireFilePath(in.FilePath); err != nil {
 				return "", err
