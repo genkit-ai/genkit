@@ -39,8 +39,6 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 import websockets
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
@@ -53,9 +51,9 @@ from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
-from genkit._core._trace._default_exporter import TraceServerExporter
-from genkit._core._trace._log_exporter import enable_log_export
-from genkit._core._tracing import add_custom_exporter
+from genkit._core._telemetry._instrumentation import flush_instrumentations
+from genkit._core._telemetry._log_exporter import enable_log_export
+from genkit._core._telemetry.http import connect_developer_ui_collector
 from genkit._core._typing import (
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
@@ -148,19 +146,16 @@ class ReflectionServerV2:
         self.reflection_handshake_telemetry_applied = False
 
     def apply_handshake_telemetry(self, url: str | None) -> None:
-        """Use the Dev UI trace server URL from the reflection handshake.
+        """Point telemetry at the handshake collector URL.
 
-        The CLI manager returns ``telemetryServerUrl`` on ``register`` and may send it
-        again on ``configure``. We need that base URL so OpenTelemetry spans can be
-        POSTed to ``{url}/api/traces`` (see ``TraceServerExporter``).
+        Same wiring as HTTP ``/api/notify``. Under ``GENKIT_ENV=dev`` this
+        turns tracing on when nothing is minting yet. Already minting
+        with no collector in env hangs the mailbox only.
         """
-        if not url or os.environ.get('GENKIT_TELEMETRY_SERVER'):
-            return
-        if self.reflection_handshake_telemetry_applied:
+        if not url or self.reflection_handshake_telemetry_applied:
             return
         self.reflection_handshake_telemetry_applied = True
-        # Register HTTP export to this URL on the global OTel provider.
-        add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
+        connect_developer_ui_collector(url=url)
         enable_log_export(url=url)
         logger.debug('reflection V2: connected to telemetry server', url=url)
 
@@ -418,9 +413,7 @@ class ReflectionServerV2:
         stream.close()
 
     async def flush_tracing(self) -> None:
-        provider = trace_api.get_tracer_provider()
-        if isinstance(provider, TracerProvider):
-            await asyncio.to_thread(provider.force_flush)
+        await asyncio.to_thread(flush_instrumentations)
 
     @staticmethod
     def run_action_call_options(
@@ -449,6 +442,9 @@ class ReflectionServerV2:
     ) -> Callable[[str, str], Awaitable[None]]:
         async def on_trace_start(tid: str, span_id: str) -> None:
             trace_holder[0] = tid
+            # Empty ids aren't a run the Developer UI can cancel or display.
+            if not tid:
+                return
             if register_for_cancel and (t := asyncio.current_task()):
                 self.active_actions[tid] = t
             await self.notify_run_action_state(sid, tid)

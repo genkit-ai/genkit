@@ -13,7 +13,7 @@ import structlog
 from structlog.typing import BindableLogger, FilteringBoundLogger
 
 from genkit._core._environment import is_dev_environment
-from genkit._core._trace._log_exporter import enable_log_export
+from genkit._core._telemetry._log_exporter import enable_log_export
 
 # Environment variable name
 GENKIT_LOG = 'GENKIT_LOG'
@@ -162,7 +162,7 @@ class ExportTee:
         return ExportTee(self._bound.new(**new_values), attrs=dict(new_values))
 
     def is_enabled_for(self, level: int) -> bool:
-        from genkit._core._trace._log_exporter import log_export_is_enabled
+        from genkit._core._telemetry._log_exporter import log_export_is_enabled
 
         if level >= logging.DEBUG and log_export_is_enabled():
             return True
@@ -177,7 +177,7 @@ class ExportTee:
         return True
 
     def _emit(self, level: int, event: str, args: tuple[object, ...], kw: dict[str, object]) -> None:
-        from genkit._core._trace._log_exporter import emit_log
+        from genkit._core._telemetry._log_exporter import emit_log
 
         emit_log(level=level, event=_interpolate_event(event, args), attrs={**self._attrs, **kw})
 
@@ -227,7 +227,7 @@ def is_debug_enabled(logger: FilteringBoundLogger) -> bool:
         log sink is on (console may still be quieter) or when ``logger``
         exposes no usable level check.
     """
-    from genkit._core._trace._log_exporter import log_export_is_enabled
+    from genkit._core._telemetry._log_exporter import log_export_is_enabled
 
     if log_export_is_enabled():
         return True

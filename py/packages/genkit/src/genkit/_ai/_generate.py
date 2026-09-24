@@ -90,7 +90,8 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._telemetry._attrs import State
+from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._typing import (
     Error,
     FinishReason,
@@ -626,13 +627,16 @@ def define_generate_action(registry: Registry) -> None:
         ctx: ActionRunContext,
     ) -> ModelResponse:
         on_chunk = cast(Callable[[ModelResponseChunk], None], ctx.streaming_callback) if ctx.is_streaming else None
-        return await run_generate(
+        response = await run_generate(
             registry=registry,
             options=input,
             abort_signal=ctx.abort_signal,
             on_chunk=on_chunk,
             context=dict(ctx.context),
         )
+        if response.error is not None:
+            set_span_state(State.ERROR)
+        return response
 
     _ = registry.register_action(
         kind=ActionKind.UTIL,
@@ -656,9 +660,8 @@ async def generate_action(
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
     """
-    span_name = 'generate'
-    span_metadata = SpanMetadata(name=span_name, type='util', input=options)
-    with run_in_new_span(span_metadata) as span:
+
+    async def body(_span: SpanContext) -> ModelResponse:
         result = await run_generate(
             registry=registry,
             options=options,
@@ -668,11 +671,11 @@ async def generate_action(
             current_turn=current_turn,
             context=context,
         )
-        with contextlib.suppress(Exception):
-            span.set_attribute('genkit:output', result.model_dump_json(by_alias=True, exclude_none=True))
         if result.error is not None:
-            span_metadata.state = 'error'
+            set_span_state(State.ERROR)
         return result
+
+    return await run_in_new_span('generate', body, action_type='util', input=options)
 
 
 async def run_generate(

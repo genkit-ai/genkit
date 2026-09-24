@@ -6327,12 +6327,8 @@ async def test_generate_format_parse_error_keeps_model_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_util_generate_dead_turn_paints_span_error() -> None:
+async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
     """Dev UI /util/generate after a dead turn must not look like a win on the action span."""
-    from opentelemetry import trace as trace_api
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     class Recipe(BaseModel):
         title: str
@@ -6346,40 +6342,26 @@ async def test_util_generate_dead_turn_paints_span_error() -> None:
         )
     ]
 
-    provider = trace_api.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider()
-        trace_api.set_tracer_provider(provider)
-    exporter = InMemorySpanExporter()
-    processor = SimpleSpanProcessor(exporter)
-    provider.add_span_processor(processor)
-    try:
-        action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
-        assert action is not None
-        action_response = await action.run(
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[Message(role=Role.USER, content=[Part.from_text('give me a recipe')])],
-                output=GenerateActionOutputConfig(
-                    json_schema=Recipe.model_json_schema(),
-                    schema_type=Recipe,
-                ),
-            )
+    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    assert action is not None
+    action_response = await action.run(
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('give me a recipe')])],
+            output=GenerateActionOutputConfig(
+                json_schema=Recipe.model_json_schema(),
+                schema_type=Recipe,
+            ),
         )
-        response = cast(ModelResponse, action_response.response)
-        assert response.finish_reason == FinishReason.STOP
-        assert response.text == 'not json'
-        assert response.error is not None
-        generate_spans = [span for span in exporter.get_finished_spans() if span.name == 'generate']
-        assert generate_spans
-        attrs = generate_spans[-1].attributes or {}
-        assert attrs.get('genkit:state') == 'error'
-    finally:
-        exporter.clear()
-        if hasattr(provider, '_active_span_processor'):
-            provider._active_span_processor._span_processors = tuple(
-                p for p in provider._active_span_processor._span_processors if p is not processor
-            )
+    )
+    response = cast(ModelResponse, action_response.response)
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'not json'
+    assert response.error is not None
+    generate_spans = [span for span in exporter.get_finished_spans() if span.name == 'generate']
+    assert generate_spans
+    attrs = generate_spans[-1].attributes or {}
+    assert attrs.get('genkit:state') == 'error'
 
 
 @pytest.mark.asyncio

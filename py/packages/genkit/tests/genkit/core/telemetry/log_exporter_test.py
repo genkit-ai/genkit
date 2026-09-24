@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import threading
 import time
 from collections.abc import Iterator
-from queue import Full
+from queue import Full, Queue
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -20,8 +21,12 @@ from structlog.testing import capture_logs
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import GENKIT_ENV
-from genkit._core._logger import get_logger, is_debug_enabled
-from genkit._core._trace._log_exporter import (
+from genkit._core._logger import configure_structlog_level, get_logger, is_debug_enabled
+from genkit._core._reflection_v2 import ReflectionServerV2
+from genkit._core._registry import Registry
+from genkit._core._telemetry import _log_exporter as log_exporter
+from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit._core._telemetry._log_exporter import (
     BATCH_DELAY_S,
     GENKIT_OTEL_ENABLE_LOGS,
     LOG_ENDPOINT,
@@ -38,7 +43,6 @@ from genkit._core._trace._log_exporter import (
     put_poison_pill,
     reset_log_export,
 )
-from genkit._core._tracing import SpanMetadata, run_in_new_span
 
 
 @pytest.fixture
@@ -112,11 +116,11 @@ def test_build_log_record_wire_shape() -> None:
     assert crit_record['severityText'] == 'FATAL'
 
 
-def test_build_log_record_stamps_active_span() -> None:
+def test_build_log_record_stamps_active_span(hex_ids) -> None:
     """A record under a span carries lowercase hex ids."""
     captured: dict[str, str] = {}
 
-    def go() -> None:
+    async def go(_span: object) -> None:
         record = build_log_record(level=logging.INFO, event='inside', attrs={})
         trace_id = record['traceId']
         span_id = record['spanId']
@@ -125,11 +129,7 @@ def test_build_log_record_stamps_active_span() -> None:
         captured['traceId'] = trace_id
         captured['spanId'] = span_id
 
-    from genkit._core._tracing import init_provider
-
-    init_provider()
-    with run_in_new_span(metadata=SpanMetadata(name='demo')):
-        go()
+    asyncio.run(run_in_new_span('demo', go))
 
     assert len(captured['traceId']) == 32
     assert len(captured['spanId']) == 16
@@ -177,7 +177,7 @@ def test_export_does_not_stall_on_hung_collector() -> None:
         release.wait(timeout=5)
         raise httpx.ConnectError('hung')
 
-    with patch('genkit._core._trace._log_exporter.httpx.Client') as mock_client_class:
+    with patch('genkit._core._telemetry._log_exporter.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_client.post.side_effect = blocking_post
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -191,11 +191,9 @@ def test_export_does_not_stall_on_hung_collector() -> None:
         assert elapsed < 0.5
         assert started.wait(timeout=1)
         release.set()
-        from genkit._core._trace._log_exporter import _exporter
-
-        assert _exporter is not None
-        assert _exporter.force_flush(timeout_s=2) is True
-        assert _exporter.last_result_ok is False
+        assert log_exporter._exporter is not None
+        assert log_exporter._exporter.force_flush(timeout_s=2) is True
+        assert log_exporter._exporter.last_result_ok is False
 
 
 @pytest.mark.usefixtures('_reset_export', '_dev_env')
@@ -204,12 +202,10 @@ def test_transport_failure_logs_one_error() -> None:
     enable_log_export(url='http://127.0.0.1:1')
     with capture_logs() as entries:
         emit_log(level=logging.INFO, event='hello', attrs={})
-        from genkit._core._trace._log_exporter import _exporter
-
-        assert _exporter is not None
-        assert _exporter.force_flush(timeout_s=2) is True
+        assert log_exporter._exporter is not None
+        assert log_exporter._exporter.force_flush(timeout_s=2) is True
         emit_log(level=logging.INFO, event='again', attrs={})
-        assert _exporter.force_flush(timeout_s=2) is True
+        assert log_exporter._exporter.force_flush(timeout_s=2) is True
 
     errors = [e for e in entries if 'Failed to export logs' in str(e.get('event', ''))]
     assert len(errors) == 1
@@ -220,19 +216,17 @@ def test_transport_failure_logs_one_error() -> None:
 def test_overflow_drops_and_warns_once() -> None:
     """A full queue drops the record and warns once — emit never blocks."""
     enable_log_export(url='http://127.0.0.1:1')
-    from genkit._core._trace._log_exporter import _exporter
-
-    assert _exporter is not None
+    assert log_exporter._exporter is not None
     record = build_log_record(level=logging.DEBUG, event='overflow', attrs={})
-    with patch.object(_exporter.queue, 'put_nowait', side_effect=Full):
+    with patch.object(log_exporter._exporter.queue, 'put_nowait', side_effect=Full):
         with capture_logs() as entries:
             t0 = time.perf_counter()
-            _exporter.enqueue(record=record)
-            _exporter.enqueue(record=record)
+            log_exporter._exporter.enqueue(record=record)
+            log_exporter._exporter.enqueue(record=record)
             assert time.perf_counter() - t0 < 0.2
         warnings = [e for e in entries if 'queue is full' in str(e.get('event', ''))]
         assert len(warnings) == 1
-        assert _exporter.dropped == 2
+        assert log_exporter._exporter.dropped == 2
 
 
 @pytest.mark.usefixtures('_reset_export', '_dev_env')
@@ -250,7 +244,7 @@ def test_posts_otlp_path_and_batches() -> None:
         response.status_code = 200
         return response
 
-    with patch('genkit._core._trace._log_exporter.httpx.Client') as mock_client_class:
+    with patch('genkit._core._telemetry._log_exporter.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_client.post.side_effect = capture_post
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -259,10 +253,8 @@ def test_posts_otlp_path_and_batches() -> None:
         enable_log_export(url='http://localhost:4033')
         emit_log(level=logging.DEBUG, event='a', attrs={'n': 1})
         emit_log(level=logging.INFO, event='b', attrs={})
-        from genkit._core._trace._log_exporter import _exporter
-
-        assert _exporter is not None
-        assert _exporter.force_flush(timeout_s=2) is True
+        assert log_exporter._exporter is not None
+        assert log_exporter._exporter.force_flush(timeout_s=2) is True
         assert posted.wait(timeout=2)
 
     mock_client.post.assert_called()
@@ -280,27 +272,25 @@ def test_posts_otlp_path_and_batches() -> None:
 def test_get_logger_tees_debug_when_console_is_info() -> None:
     """GENKIT_LOG=info keeps the TTY quiet; the Dev UI still gets debug."""
     enable_log_export(url='http://127.0.0.1:9')
-    from genkit._core._logger import configure_structlog_level
-    from genkit._core._trace._log_exporter import _exporter
 
     with patch.dict(os.environ, {'GENKIT_LOG': 'info'}):
         structlog_ok = configure_structlog_level()
         logger = get_logger('tee-test')
         assert is_debug_enabled(logger) is True
         queued: list[dict[str, object]] = []
-        assert _exporter is not None
-        original = _exporter.enqueue
+        assert log_exporter._exporter is not None
+        original = log_exporter._exporter.enqueue
 
         def capture(*, record: dict[str, object]) -> None:
             queued.append(record)
 
-        _exporter.enqueue = capture  # type: ignore[method-assign]
+        log_exporter._exporter.enqueue = capture  # type: ignore[method-assign]
         try:
             logger.debug('looking up weather', city='Paris')
             logger.error('Startup failed: %s: %s', 'ValueError', 'boom')
             logger.info('kept on console')
         finally:
-            _exporter.enqueue = original  # type: ignore[method-assign]
+            log_exporter._exporter.enqueue = original  # type: ignore[method-assign]
 
     events = [r['body']['stringValue'] for r in queued]  # type: ignore[index]
     assert 'looking up weather' in events
@@ -312,7 +302,7 @@ def test_get_logger_tees_debug_when_console_is_info() -> None:
 @pytest.mark.usefixtures('_reset_export', '_dev_env')
 def test_worker_stops_when_client_construction_fails() -> None:
     """Client() raising must flip stopped so debug branches stop building records."""
-    with patch('genkit._core._trace._log_exporter.httpx.Client', side_effect=RuntimeError('no client')):
+    with patch('genkit._core._telemetry._log_exporter.httpx.Client', side_effect=RuntimeError('no client')):
         enable_log_export(url='http://127.0.0.1:9')
         deadline = time.monotonic() + 2.0
         while log_export_is_enabled() and time.monotonic() < deadline:
@@ -324,10 +314,8 @@ def test_worker_stops_when_client_construction_fails() -> None:
 def test_handshake_enables_log_export_when_env_url_missing() -> None:
     """Reflection register/configure URL turns on log export, same as traces."""
     os.environ.pop('GENKIT_TELEMETRY_SERVER', None)
-    from genkit._core._reflection_v2 import ReflectionServerV2
-    from genkit._core._registry import Registry
 
-    with patch('genkit._core._reflection_v2.add_custom_exporter'):
+    with patch('genkit._core._reflection_v2.connect_developer_ui_collector'):
         server = ReflectionServerV2(registry=Registry(), ws_url='ws://localhost:1')
         server.apply_handshake_telemetry('http://localhost:4033')
         assert log_export_is_enabled() is True
@@ -383,11 +371,10 @@ def test_build_log_record_redacts_camel_case_secrets() -> None:
 
 
 def test_put_poison_pill_lands_when_queue_is_full() -> None:
-    """Shutdown must stop the worker even if the last slot is a leftover record."""
-    from queue import Queue
+    """Shutdown stops the worker even if the queue is already full."""
 
     queue: Queue[dict[str, object] | None] = Queue(maxsize=1)
-    queue.put_nowait({'leftover': True})
+    queue.put_nowait({'queued': True})
     put_poison_pill(queue=queue)
     assert queue.get_nowait() is None
     queue.task_done()
@@ -406,7 +393,7 @@ def test_shutdown_does_not_wait_for_export_timeout() -> None:
         release.wait(timeout=10)
         raise httpx.ConnectError('hung')
 
-    with patch('genkit._core._trace._log_exporter.httpx.Client') as mock_client_class:
+    with patch('genkit._core._telemetry._log_exporter.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_client.post.side_effect = blocking_post
         mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)

@@ -47,7 +47,7 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
-from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
+from .telemetry import enable_google_cloud_telemetry
 
 
 def package_name() -> str:
@@ -60,7 +60,6 @@ def package_name() -> str:
 
 
 __all__ = [
-    'add_gcp_telemetry',
     'enable_google_cloud_telemetry',
     'package_name',
 ]

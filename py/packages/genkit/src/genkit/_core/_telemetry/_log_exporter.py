@@ -16,10 +16,9 @@ import os
 import threading
 import time
 from queue import Empty, Full, Queue
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
-from opentelemetry import trace as trace_api
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
@@ -71,6 +70,19 @@ _skip_export = threading.local()
 _atexit_registered = False
 
 
+def resolve_telemetry_server_url(*, telemetry_server_url: str, telemetry_server_endpoint: str) -> str:
+    """A typo'd collector URL should fail when export starts, not as missing Dev UI rows later."""
+    url = telemetry_server_url.strip()
+    try:
+        joined = urljoin(url, telemetry_server_endpoint)
+    except ValueError as error:
+        raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}') from error
+    parsed = urlparse(joined)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValueError(f'invalid telemetry server URL {telemetry_server_url!r}')
+    return url
+
+
 def logs_opted_out() -> bool:
     """True only when ``GENKIT_OTEL_ENABLE_LOGS`` is a ParseBool false."""
     raw = os.environ.get(GENKIT_OTEL_ENABLE_LOGS, '').strip().lower()
@@ -88,9 +100,6 @@ def enable_log_export(*, url: str) -> None:
     global _exporter
     if not url or logs_opted_out() or not is_dev_environment():
         return
-    # Late import: _default_exporter pulls get_logger, and get_logger tees here.
-    from genkit._core._trace._default_exporter import resolve_telemetry_server_url
-
     try:
         resolved = resolve_telemetry_server_url(
             telemetry_server_url=url,
@@ -140,11 +149,12 @@ def build_log_record(*, level: int, event: str, attrs: dict[str, object]) -> dic
     }
     if dropped:
         record['droppedAttributesCount'] = dropped
-    span = trace_api.get_current_span()
-    ctx = span.get_span_context()
-    if ctx is not None and ctx.is_valid:
-        record['traceId'] = format(ctx.trace_id, '032x')
-        record['spanId'] = format(ctx.span_id, '016x')
+    from genkit._core._telemetry._instrumentation import current_span
+
+    span = current_span.get()
+    if span is not None and span.trace_id and span.span_id:
+        record['traceId'] = span.trace_id
+        record['spanId'] = span.span_id
     return record
 
 
