@@ -101,7 +101,6 @@ def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> No
         mock_adjusting.assert_called_once()
         call_kwargs = mock_adjusting.call_args.kwargs
         assert call_kwargs['exporter'] == mock_base_exporter
-        assert call_kwargs['project_id'] is None
 
         # Verify the wrapped exporter was added
         mock_add_exporter.assert_called_once_with(exporter=mock_wrapped_exporter)
@@ -117,8 +116,8 @@ def test_enable_google_cloud_telemetry_with_project_id() -> None:
     """project_id= lands on the Cloud Trace exporter they get."""
     with (
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
-        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
-        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
         patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
         patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
@@ -126,12 +125,9 @@ def test_enable_google_cloud_telemetry_with_project_id() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with project_id
         enable_google_cloud_telemetry(project_id='my-test-project')
 
-        # Verify project_id was passed correctly
-        call_kwargs = mock_adjusting.call_args.kwargs
-        assert call_kwargs['project_id'] == 'my-test-project'
+        assert mock_gcp_exporter.call_args.kwargs.get('project_id') == 'my-test-project'
 
 
 def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:

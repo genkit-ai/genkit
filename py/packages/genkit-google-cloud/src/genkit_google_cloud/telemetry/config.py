@@ -260,7 +260,6 @@ class GcpTelemetry:
 
                 trace_exporter = GcpAdjustingTraceExporter(
                     exporter=base_exporter,
-                    project_id=self.project_id,
                     error_handler=handle_tracing_error,
                 )
 

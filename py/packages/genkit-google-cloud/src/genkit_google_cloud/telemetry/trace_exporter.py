@@ -125,24 +125,19 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
     def __init__(
         self,
         exporter: SpanExporter,
-        project_id: str | None = None,
         error_handler: Callable[[Exception], None] | None = None,
     ) -> None:
         """Initialize the GCP adjusting trace exporter.
 
         Args:
             exporter: The underlying SpanExporter to wrap.
-            project_id: Optional GCP project ID for log correlation.
             error_handler: Optional callback invoked when export errors occur.
         """
         super().__init__(
             exporter=exporter,
-            log_input_and_output=False,
-            project_id=project_id,
             error_handler=error_handler,
         )
 
     def _adjust(self, span: ReadableSpan) -> ReadableSpan:
         span = super()._adjust(span)
         return TimeAdjustedSpan(span, dict(span.attributes) if span.attributes else {})
-
