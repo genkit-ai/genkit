@@ -16,7 +16,7 @@
 
 """A minimal Genkit app wired to OpenTelemetry GenAI instrumentation.
 
-Run the local telemetry stack first (`python tool/telemetry.py`), then
+Run the local telemetry stack first (`./tool/telemetry.sh`), then
 this app. Traces land in Jaeger (http://localhost:16686) and metrics in
 the collector debug log. See README.md.
 """
@@ -79,8 +79,10 @@ if __name__ == '__main__':
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
     async def main() -> None:
-        response = await ai.generate(prompt='Explain OpenTelemetry in one sentence.')
-        print(response.text)
-        _flush()
+        try:
+            response = await ai.generate(prompt='Explain OpenTelemetry in one sentence.')
+            print(response.text)
+        finally:
+            _flush()
 
     ai.run_main(main())
