@@ -27,16 +27,18 @@ from collections.abc import Mapping
 from typing import Any
 
 import structlog
-from opentelemetry import metrics
+from opentelemetry import metrics, trace as trace_api
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
 from opentelemetry.resourcedetector.gcp_resource_detector import GoogleCloudResourceDetector
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_INSTANCE_ID, SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import get_current_span, span as trace_span
 
-from genkit.plugin_api import add_custom_exporter, is_dev_environment
+from genkit.plugin_api import is_dev_environment
 
 from .constants import (
     DEFAULT_METRIC_EXPORT_INTERVAL_MS,
@@ -49,6 +51,21 @@ from .metrics_exporter import GenkitMetricExporter
 from .trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 
 logger = structlog.get_logger(__name__)
+
+
+def _hang_exporter_on_process_tracer(*, exporter: SpanExporter) -> None:
+    """Attach Cloud Trace to the process tracer they already registered, if any.
+
+    This does not mint Genkit spans. ``configure_instrumentation`` does that.
+    Local export happens on span end so a short ``genkit start`` run still
+    shows up; prod batches.
+    """
+    provider = trace_api.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace_api.set_tracer_provider(provider)
+    processor = SimpleSpanProcessor(exporter) if is_dev_environment() else BatchSpanProcessor(exporter)
+    provider.add_span_processor(processor)
 
 
 def resolve_project_id(
@@ -246,7 +263,7 @@ class GcpTelemetry:
                 error_handler=handle_tracing_error,
             )
 
-            add_custom_exporter(trace_exporter, 'gcp_telemetry_server')
+            _hang_exporter_on_process_tracer(exporter=trace_exporter)
         except Exception as e:
             handle_tracing_error(e)
 

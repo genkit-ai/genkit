@@ -181,14 +181,6 @@
 
 ::: genkit.plugin_api.loop_local_client
 
-::: genkit.plugin_api.tracer
-
-::: genkit.plugin_api.add_custom_exporter
-
-::: genkit.plugin_api.AdjustingTraceExporter
-
-::: genkit.plugin_api.RedactedSpan
-
 ::: genkit.plugin_api.to_display_path
 
 ::: genkit.plugin_api.to_json_schema

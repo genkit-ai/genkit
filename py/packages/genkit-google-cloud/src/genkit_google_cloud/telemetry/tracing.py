@@ -27,13 +27,11 @@ Usage:
     from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
-    # 1. Enable telemetry with default settings (PII redaction enabled)
     enable_google_cloud_telemetry(project_id='my-project')
 
     # 2. All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
-    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
 Requirements:
@@ -45,15 +43,26 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring/docs
 """
 
-import warnings
 from typing import Any
 
 import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
 
+from genkit._core._error import GenkitError
+
 from .config import GcpTelemetry
 
 logger = structlog.get_logger(__name__)
+
+# Once per process: the app (or a test) may call enable_google_cloud_telemetry
+# once. A second call raises so Cloud Trace does not get two exporters.
+_enable_google_cloud_telemetry_already_called = False
+
+
+def _reset_google_cloud_telemetry() -> None:
+    """Clear the once-per-process latch. Tests only."""
+    global _enable_google_cloud_telemetry_already_called
+    _enable_google_cloud_telemetry_already_called = False
 
 
 def enable_google_cloud_telemetry(
@@ -69,14 +78,18 @@ def enable_google_cloud_telemetry(
     # Legacy parameter name for backwards compatibility
     force_export: bool | None = None,
 ) -> None:
-    """Configure GCP telemetry export for traces and metrics.
+    """Attach Cloud Trace and Cloud Monitoring exporters.
 
-    This function sets up OpenTelemetry export to Google Cloud Trace and
-    Cloud Monitoring. By default, model inputs and outputs are redacted
-    for privacy protection.
+    Call this once from the app. A second call raises. This is enough
+    for Cloud Trace. The Cloud exporter hangs on the process-global
+    tracer provider (the one they already registered, or one we boot).
+    Under ``genkit start``, ``Genkit()`` still attaches the Developer
+    UI collector.
 
-    Options control which Cloud Trace, Cloud Monitoring, and Cloud Logging
-    exports are enabled, and whether model inputs and outputs are redacted.
+    Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
+    ``force_dev_export=False``, or when ``disable_traces=True``. Model
+    inputs and outputs are redacted unless you pass
+    ``log_input_and_output=True``.
 
     Args:
         project_id: Google Cloud project ID. If provided, takes precedence over
@@ -93,22 +106,20 @@ def enable_google_cloud_telemetry(
         log_input_and_output: If True, preserve model input/output in traces
             and logs. Defaults to False (redact for privacy). Only enable this
             in trusted environments where PII exposure is acceptable.
-        force_dev_export: If True, export telemetry even in the dev environment.
-            Defaults to True. Set to False for production-only telemetry.
+        force_dev_export: If True, export Cloud telemetry even when
+            ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, metrics will not be exported. Traces and
             logs may still be exported. Defaults to False.
         disable_traces: If True, traces will not be exported. Metrics and
             logs may still be exported. Defaults to False.
         metric_export_interval_ms: Metrics export interval in milliseconds.
-            Cloud Monitoring requires a minimum of 5000ms. Defaults to 5000ms
-            in development and 300000ms in production.
+            GCP requires a minimum of 5000ms. Defaults to 60000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
         force_export: Deprecated. Use force_dev_export instead.
 
     Example:
         ```python
-        # Default: PII redaction enabled
         enable_google_cloud_telemetry()
 
         # Enable input/output logging (disable PII redaction)
@@ -134,6 +145,14 @@ def enable_google_cloud_telemetry(
         - Cloud Trace: https://cloud.google.com/trace/docs
         - Cloud Monitoring: https://cloud.google.com/monitoring/docs
     """
+    global _enable_google_cloud_telemetry_already_called
+    if _enable_google_cloud_telemetry_already_called:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message='enable_google_cloud_telemetry() was already called. Call it once from the app.',
+        )
+    _enable_google_cloud_telemetry_already_called = True
+
     # Handle legacy force_export parameter
     if force_export is not None:
         logger.warning('force_export is deprecated, use force_dev_export instead')
@@ -152,35 +171,3 @@ def enable_google_cloud_telemetry(
     )
 
     manager.initialize()
-
-
-def add_gcp_telemetry(
-    project_id: str | None = None,
-    credentials: dict[str, Any] | None = None,
-    sampler: Sampler | None = None,
-    log_input_and_output: bool = False,
-    force_dev_export: bool = False,
-    disable_metrics: bool = False,
-    disable_traces: bool = False,
-    metric_export_interval_ms: int | None = None,
-    metric_export_timeout_ms: int | None = None,
-    force_export: bool | None = None,
-) -> None:
-    """Deprecated alias for :func:`enable_google_cloud_telemetry`."""
-    warnings.warn(
-        'add_gcp_telemetry is deprecated; use enable_google_cloud_telemetry instead.',
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    enable_google_cloud_telemetry(
-        project_id=project_id,
-        credentials=credentials,
-        sampler=sampler,
-        log_input_and_output=log_input_and_output,
-        force_dev_export=force_dev_export,
-        disable_metrics=disable_metrics,
-        disable_traces=disable_traces,
-        metric_export_interval_ms=metric_export_interval_ms,
-        metric_export_timeout_ms=metric_export_timeout_ms,
-        force_export=force_export,
-    )

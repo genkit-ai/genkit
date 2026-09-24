@@ -14,4 +14,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the genkit._core._trace module."""
+"""On-switch for Genkit traces, and the protocol for a recording backend.
+
+Application code should call :class:`genkit.Genkit`. ``genkit start``
+records to the Developer UI. ``configure_instrumentation`` is the hook
+for a recording backend.
+"""
+
+from genkit._core._telemetry._instrumentation import (
+    Instrumentation,
+    SpanContext,
+    SpanMetadata,
+    configure_instrumentation,
+)
+
+__all__ = [
+    'Instrumentation',
+    'SpanContext',
+    'SpanMetadata',
+    'configure_instrumentation',
+]

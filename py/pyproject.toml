@@ -242,13 +242,14 @@ select = [
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
 "packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit/src/genkit/_core/trace/_adjusting_exporter.py" = ["ANN401"]
+"packages/genkit/src/genkit/_core/_telemetry/_adjusting_exporter.py" = ["ANN401"]
+# Private telemetry folder; helpers here are not a public docstring surface
+"packages/genkit/src/genkit/_core/_telemetry/*.py" = ["D"]
 # Re-export modules (F401 would flag imports used only for re-export)
 "packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
-"packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
 # Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
 "**/tests/**/*.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
