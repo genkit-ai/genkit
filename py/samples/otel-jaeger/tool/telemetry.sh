@@ -15,13 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Docker-free local telemetry stack for the OTel sample.
+# Local telemetry stack for the OTel sample.
 #
 # Downloads Jaeger and otelcol-contrib into .otel/ (skips if cached), writes
 # a collector config, then keeps both running:
 #
 #   app --OTLP:4318--> otelcol-contrib --OTLP:14317--> jaeger (UI :16686)
-#                             \--debug--> collector.log (metrics + logs)
+#                             \--debug--> collector.log (metrics)
 #
 # Env overrides for locked-down networks:
 #   JAEGER_BIN / OTEL_COLLECTOR_BIN         use an existing binary, skip download
@@ -164,10 +164,6 @@ service:
       processors: [batch]
       exporters: [otlp]
     metrics:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [debug]
-    logs:
       receivers: [otlp]
       processors: [batch]
       exporters: [debug]

@@ -99,5 +99,5 @@ A token on the constructor wins over the env var. Garbage in the env var warns a
 ## Example
 
 See [`samples/otel-jaeger`](../../samples/otel-jaeger) for a runnable sample
-that exports traces to Jaeger and metrics to a local collector, with a
-Docker-free script that downloads and runs both.
+that exports traces to Jaeger and metrics to a local collector. `./tool/telemetry.sh`
+downloads Jaeger and otelcol-contrib and keeps them running.
