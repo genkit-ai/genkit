@@ -80,7 +80,7 @@ license = "Apache-2.0"
 name = "genkit"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.11.0"
+version = "0.12.0"
 
 [project.optional-dependencies]
 a2ui                  = ["genkit-a2ui"]
