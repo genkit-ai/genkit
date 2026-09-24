@@ -29,7 +29,7 @@ app-facing `4317`/`4318`.
    into `.otel/`, then reuses them):
 
    ```sh
-   python tool/telemetry.py
+   ./tool/telemetry.sh
    ```
 
    It prints the Jaeger UI URL and the collector log path, then stays running.
