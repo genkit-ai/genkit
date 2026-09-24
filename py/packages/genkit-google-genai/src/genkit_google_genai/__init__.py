@@ -97,7 +97,7 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
 from genkit_google_genai.models.interactions_registry import LyriaVersion
-from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
+from genkit_google_genai.models.veo import GoogleAIVeoVersion, KnownVeo, VeoConfig, VertexAIVeoVersion
 
 
 def package_name() -> str:
@@ -120,6 +120,7 @@ __all__ = [
     'DeepResearchConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
+    'GoogleAIVeoVersion',
     'KnownGemini',
     'KnownGeminiImage',
     'KnownGeminiTts',
@@ -128,9 +129,9 @@ __all__ = [
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',
-    'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
+    'VertexAIVeoVersion',
     'VertexEmbeddingModels',
     'package_name',
 ]
