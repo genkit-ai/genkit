@@ -33,7 +33,7 @@ from _ai import ai
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext
-from genkit.agent import InMemorySessionStore
+from genkit.exp.agent import InMemorySessionStore
 
 
 class UserApprovalInput(BaseModel):

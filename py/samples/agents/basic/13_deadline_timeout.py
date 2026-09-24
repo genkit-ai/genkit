@@ -31,13 +31,13 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit
+from genkit.exp import Genkit
 
 ai = Genkit(plugins=[GoogleAI()])
 
 agent = ai.define_agent(
     name='essayist',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='You are a helpful assistant. When asked to write something long, write many paragraphs.',
 )
 

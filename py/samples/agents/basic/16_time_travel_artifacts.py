@@ -32,14 +32,14 @@ from __future__ import annotations
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Artifacts, Middleware
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 writer = ai.define_agent(
     name='writer',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system=(
         'You build a landing page in a single artifact named "landing.md". On every '
         'request rewrite the whole file, keep it under 14 lines, and reply with one '

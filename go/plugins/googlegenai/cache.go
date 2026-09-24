@@ -20,15 +20,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
-
-const cacheContentsPerPage = 5
 
 var invalidArgMessages = struct {
 	modelVersion string
@@ -39,90 +39,133 @@ var invalidArgMessages = struct {
 	systemPrompt: "system prompts are not supported with context caching",
 }
 
-// handleCache checks if caching should be used, attempts to find or create the cache,
-// and returns the cached content if applicable.
+// handleCache checks if caching should be used and attempts to find or create
+// the cache. It returns the cached content along with the messages that still
+// have to be sent inline: the cached prefix is not among them, since it reaches
+// the model through the CachedContent resource and sending it inline as well
+// would bill it twice (#6137).
 func handleCache(
 	ctx context.Context,
 	client *genai.Client,
 	request *ai.ModelRequest,
 	model string,
-) (*genai.CachedContent, error) {
+) (*genai.CachedContent, []*ai.Message, error) {
 	cs, err := findCacheMarker(request)
 	if err != nil {
-		return nil, err
-	}
-	if cs == nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	// no cache mark found
-	if cs.endIndex == -1 {
-		return nil, err
+	if cs == nil {
+		return nil, request.Messages, nil
 	}
 	// index out of bounds
 	if cs.endIndex < 0 || cs.endIndex >= len(request.Messages) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "end of cached contents, index %d is invalid", cs.endIndex)
+		return nil, nil, status.Errorf(status.ErrInvalidArgument, "end of cached contents, index %d is invalid", cs.endIndex)
 	}
 
 	// since context caching is only available for specific model versions, we
 	// must make sure the configuration has the right version
 	err = validateContextCacheRequest(request, model)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	messages, err := messagesToCache(request.Messages, cs.endIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	hash := calculateCacheHash(messages)
+	hash, err := calculateCacheHash(messages, model)
+	if err != nil {
+		return nil, nil, err
+	}
 
+	// A name only records that an earlier turn built a cache. The resource
+	// lives no longer than its TTL, and the request it was built from may have
+	// moved on since, so a name that no longer resolves falls back to a fresh
+	// cache instead of failing. The caller cannot act on that failure anyway:
+	// the name comes from Genkit's own response metadata, not from them.
 	var cache *genai.CachedContent
 	if cs.name != "" {
 		cache, err = lookupCache(ctx, client, cs.name)
-		if err != nil {
-			// TODO: if cache expired or not found, create a fresh one
-			return nil, fmt.Errorf("cache lookup error: %w", wrapAPIError(err))
+		switch {
+		case err != nil:
+			logger.Warn(ctx, "context cache lookup failed, looking for another cache with the same contents",
+				"name", cs.name, "error", wrapAPIError(err))
+			cache = nil
+		case cache.DisplayName != hash:
+			logger.Warn(ctx, "context cache no longer matches the request messages, looking for another cache with the same contents",
+				"name", cs.name)
+			cache = nil
 		}
-		// make sure the cache contents matches the request messages hash
-		if cache.DisplayName != hash {
-			return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache name: hash mismatch between cached content and request messages")
-		}
-
-		return cache, nil
 	}
 
-	if cs.ttl > 0 {
+	// The name only travels back to the caller through the response metadata,
+	// so a caller who rebuilds the same prefix instead of replaying
+	// resp.History() arrives here without one. Look for a cache that already
+	// holds this content before paying to store a second copy of it.
+	if cache == nil {
+		cache, err = findCacheByHash(ctx, client, hash)
+		if err != nil {
+			logger.Warn(ctx, "context cache scan failed, creating a fresh cache", "error", err)
+		}
+	}
+
+	if cache == nil {
+		if cs.ttl <= 0 {
+			// A name-only marker that resolved to nothing. There is no ttl to
+			// build a replacement with, so send the whole request: the answer
+			// is still right, it just is not cached.
+			logger.Warn(ctx, "no usable context cache and no ttlSeconds to create one, sending the full request",
+				"name", cs.name)
+			return nil, request.Messages, nil
+		}
 		cache, err = client.Caches.Create(ctx, model, &genai.CreateCachedContentConfig{
 			DisplayName: hash,
 			TTL:         time.Duration(cs.ttl) * time.Second,
 			Contents:    messages,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("cache creation error: %w", wrapAPIError(err))
+			return nil, nil, fmt.Errorf("cache creation error: %w", wrapAPIError(err))
 		}
 	}
 
-	return cache, nil
+	return cache, request.Messages[cs.endIndex+1:], nil
 }
 
-// messagesToCache collects all the messages that should be cached
-func messagesToCache(m []*ai.Message, cacheEndIdx int) ([]*genai.Content, error) {
-	var messagesToCache []*genai.Content
-	for i := cacheEndIdx; i >= 0; i-- {
-		m := m[i]
-		if m.Role == ai.RoleSystem {
-			continue
-		}
-		parts, err := toGeminiParts(m.Content)
+// cacheScanLimit bounds the search for a reusable cache. The scan runs before
+// every request that asks for explicit caching, and a project can hold far
+// more cache resources than are worth paging through; giving up only costs a
+// fresh cache.
+const cacheScanLimit = 200
+
+// findCacheByHash looks for a cache resource whose DisplayName is hash, which
+// is how [calculateCacheHash] records what a cache holds. A scan failure is
+// not fatal: the caller falls back to creating a cache.
+func findCacheByHash(ctx context.Context, client *genai.Client, hash string) (*genai.CachedContent, error) {
+	scanned := 0
+	for c, err := range client.Caches.All(ctx) {
 		if err != nil {
-			return nil, err
+			return nil, wrapAPIError(err)
 		}
-		messagesToCache = append(messagesToCache, &genai.Content{
-			Parts: parts,
-			Role:  string(m.Role),
-		})
+		if c.DisplayName == hash {
+			return c, nil
+		}
+		if scanned++; scanned >= cacheScanLimit {
+			logger.Warn(ctx, "gave up looking for a reusable context cache", "scanned", scanned)
+			return nil, nil
+		}
 	}
-	return messagesToCache, nil
+	return nil, nil
+}
+
+// messagesToCache converts the messages through cacheEndIdx (inclusive) into
+// the contents stored on the CachedContent resource. It shares toGeminiContents
+// with the inline path so that the cached prefix is encoded exactly like the
+// messages sent alongside it: same role mapping, same handling of contentless
+// turns. The order is chronological and feeds calculateCacheHash, so changing
+// it invalidates every live cache name.
+func messagesToCache(m []*ai.Message, cacheEndIdx int) ([]*genai.Content, error) {
+	return toGeminiContents(m[:cacheEndIdx+1])
 }
 
 // validateContextCacheRequest checks for supported models and checks if Tools
@@ -146,10 +189,12 @@ type cacheSettings struct {
 	endIndex int
 }
 
-// findCacheMarker finds the cache mark in the list of request messages.
-// All of the messages preceding this mark will be cached.
+// findCacheMarker finds the cache mark in the list of request messages. The
+// marked message and everything before it is cached: endIndex is inclusive.
+// The scan runs newest to oldest, so the newest cache name in the history wins
+// and only the newest ttl marker is honoured.
 func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
-	var cacheName string
+	cacheName, cacheNameIdx := "", -1
 
 	for i := len(request.Messages) - 1; i >= 0; i-- {
 		m := request.Messages[i]
@@ -167,11 +212,12 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 			return nil, status.Errorf(status.ErrInvalidArgument, "cache metadata should be map but got: %T", cacheVal)
 		}
 
-		// cache name should be only used to indicate the request already
-		// generated a cache
-		if n, ok := c["name"].(string); ok {
-			cacheName = n
-			continue
+		// A message can carry the name of a cache an earlier turn built, the
+		// ttl that builds one, or both. Several turns of a replayed history
+		// carry a name, so keep the first seen: the scan runs newest to oldest.
+		name, hasName := c["name"].(string)
+		if hasName && cacheName == "" {
+			cacheName, cacheNameIdx = name, i
 		}
 
 		// ttlSeconds arrives as an int when set in Go code and as a float64 or
@@ -200,7 +246,19 @@ func findCacheMarker(request *ai.ModelRequest) (*cacheSettings, error) {
 			}, nil
 		}
 
+		if hasName {
+			continue
+		}
+
 		return nil, status.Errorf(status.ErrInvalidArgument, "invalid cache metadata, expected ttlSeconds or name, got: %v", c)
+	}
+
+	// A name with no ttl anywhere names a cache an earlier turn built. The
+	// marked message closes the cached span, the same way a ttl marker does;
+	// handleCache checks that against the cache's own contents before trusting
+	// it, and falls back to sending the whole request if it does not hold up.
+	if cacheName != "" {
+		return &cacheSettings{name: cacheName, endIndex: cacheNameIdx}, nil
 	}
 	return nil, nil
 }
@@ -214,23 +272,27 @@ func lookupCache(ctx context.Context, client *genai.Client, name string) (*genai
 	return client.Caches.Get(ctx, name, nil)
 }
 
-// calculateCacheKey generates a sha256 key for cached content used to
-// validate the proper usage of the requested cache
-func calculateCacheHash(content []*genai.Content) string {
-	hash := sha256.New()
-
-	// Incorporate content parts to ensure uniqueness
-	for _, c := range content {
-		for _, p := range c.Parts {
-			if p.Text != "" {
-				hash.Write([]byte(p.Text))
-			} else if p.InlineData != nil {
-				hash.Write([]byte(p.InlineData.MIMEType))
-				hash.Write([]byte(p.InlineData.Data))
-			}
-		}
+// calculateCacheHash generates a sha256 key over the contents of a cache. It
+// is stored as the resource's DisplayName and re-checked on every reuse, so it
+// has to cover everything that tells one cached prefix apart from another.
+// Hashing the JSON encoding does that: it reaches every part kind and keeps
+// field and message boundaries, where folding selected fields into a bare
+// digest silently collided. Two different gs:// videos both hashed to the
+// digest of no bytes at all, because URI media carries neither Text nor
+// InlineData. The model is part of the key because a cache resource belongs to
+// the model that created it, matching the JS and Python plugins.
+func calculateCacheHash(content []*genai.Content, model string) (string, error) {
+	b, err := json.Marshal(struct {
+		Model    string           `json:"model"`
+		Contents []*genai.Content `json:"contents"`
+	}{Model: model, Contents: content})
+	if err != nil {
+		// Reachable through tool inputs and outputs, which carry caller-owned
+		// map[string]any into FunctionCall.Args and FunctionResponse.Response.
+		return "", status.Errorf(status.ErrInvalidArgument, "cannot hash cache contents: %w", err)
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // cacheMetadata writes in the metadata map the cache name used in the

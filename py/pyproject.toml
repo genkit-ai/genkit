@@ -29,6 +29,7 @@ dependencies = [
   "genkit-google-cloud",
   "genkit-google-genai",
   "genkit-middleware",
+  "genkit-a2ui",
   "genkit-ollama",
   "genkit-vertexai",
 ]
@@ -148,6 +149,7 @@ fastapi-bugbot       = { workspace = true }
 flask-hello          = { workspace = true }
 gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
+google-genai-deep-research = { workspace = true }
 google-genai-media   = { workspace = true }
 middleware           = { workspace = true }
 middleware-coding-agent = { workspace = true }
@@ -170,6 +172,7 @@ genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
 genkit-middleware   = { workspace = true }
+genkit-a2ui         = { workspace = true }
 genkit-ollama       = { workspace = true }
 genkit-vertexai     = { workspace = true }
 
@@ -373,6 +376,7 @@ root = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
   ".",  # For samples.shared and other root-level imports
@@ -403,6 +407,7 @@ extraPaths = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
 ]
@@ -446,6 +451,7 @@ search-path = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
 ]

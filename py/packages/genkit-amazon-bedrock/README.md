@@ -5,15 +5,10 @@ Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
 embeddings, image generation, and reranking through InvokeModel.
 
-> Status: text generation (streaming and non-streaming), embedders, image
-> generation, and reranking are available. A runnable sample app covers all of
-> it, and the plugin is documented on the Genkit docsite at
-> [genkit.dev/docs/python/integrations/aws-bedrock](https://genkit.dev/docs/python/integrations/aws-bedrock/).
-
 ## Installation
 
 ```bash
-pip install genkit-amazon-bedrock
+uv add genkit genkit-amazon-bedrock
 ```
 
 ## AWS setup
@@ -247,34 +242,19 @@ embeddings = await ai.embed(
 )
 ```
 
-| Model                                      | Dimensions | Modalities   |
-| ------------------------------------------ | ---------- | ------------ |
-| `amazon.titan-embed-text-v1`               | 1536       | text         |
-| `amazon.titan-embed-text-v2:0`             | 1024       | text         |
-| `amazon.titan-embed-image-v1`              | 1024       | text, image  |
-| `cohere.embed-english-v3`                  | 1024       | text         |
-| `cohere.embed-multilingual-v3`             | 1024       | text         |
-| `amazon.nova-2-multimodal-embeddings-v1:0` | 3072       | text         |
+Listing an embedder is optional: any routable ID resolves on demand,
+including inference-profile and ARN forms. Listing one only adds it to
+the Dev UI.
 
 Notes:
 
-- As with models, listing is optional: any routable embedding model ID
-  resolves on demand, including inference-profile and ARN forms. Listing one
-  only adds it to the Dev UI.
-- `amazon.titan-embed-image-v1` is the only image embedder here. It accepts
-  JPEG and PNG, one image per document, and averages the two vectors when a
-  document carries text as well.
-- **Cohere embedding is text-only on Bedrock.** The AWS parameters page
-  documents an `images` field for Embed v3, but `aws bedrock
-  get-foundation-model` reports `inputModalities: [TEXT]` for both v3 model IDs
-  and a live image request is refused. A document with no text is rejected
-  rather than sent; a media part alongside text is ignored.
-- `cohere.embed-v4` is not supported yet -- it uses a different request schema and fails with `UNIMPLEMENTED`. It is also where Cohere image embedding will arrive.
-- Per-request options are not honoured yet. Cohere requests are pinned to
+- Titan multimodal accepts JPEG and PNG, one image per document, and
+  averages the two vectors when a document carries text as well.
+- **Cohere embedding is text-only on Bedrock.** A document with no text
+  is rejected rather than sent; a media part alongside text is ignored.
+- Per-request embed options are ignored. Cohere requests are pinned to
   `input_type: search_document`, so these embedders are for indexing
   documents, not for embedding queries.
-- `amazon.nova-2-multimodal-embeddings-v1:0` is offered in `us-east-1` only,
-  and is text-only here; its image, audio, and video inputs are not ported.
 
 ## Image generation
 
@@ -359,44 +339,19 @@ Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
 `apiKey`, and the rest of the common config) are not forwarded to image models,
 since Bedrock's image APIs do not accept them.
 
-### Availability
+Text-to-image and image-editing models are not interchangeable: a model
+offered in a region may only inpaint or upscale. Check the Bedrock
+console for the region you are calling. A Legacy model that this
+account cannot use (never enabled, or disabled after idle) arrives as
+`ResourceNotFoundException`, same as a missing grant.
 
-Verified against `aws bedrock get-foundation-model` on 2026-08-11:
-
-| Model                               | Status                         | Regions                                    |
-| ----------------------------------- | ------------------------------ | ------------------------------------------ |
-| `stability.sd3-5-large-v1:0`        | Active                         | `us-west-2`                                |
-| `stability.stable-image-core-v1:1`  | Active                         | `us-west-2`                                |
-| `stability.stable-image-ultra-v1:1` | Active                         | `us-west-2`                                |
-| `amazon.nova-canvas-v1:0`           | Legacy, end of life 2026-09-30 | `us-east-1`, `eu-west-1`, `ap-northeast-1` |
-
-**The active text-to-image models are offered in `us-west-2` only.** Every image
-model on offer in `us-east-1` is an editing service (inpaint, upscale, and the
-rest), not text-to-image, so a text-to-image call needs `us-west-2`.
-
-`amazon.nova-canvas-v1:0` is the one Amazon option and it is Legacy, which is a
-stronger restriction than the end-of-life date suggests: new accounts cannot
-enable it at all, and an account that has enabled it loses access after 30 days
-of disuse. Bedrock reports both as `ResourceNotFoundException`, which the plugin
-surfaces verbatim, so a working integration can start failing without any change
-on your side. Prefer a Stability model unless you specifically need Canvas.
-
-Notes:
-
-- Amazon Titan Image Generator (v1 and v2), Stable Diffusion XL, and the `v1:0`
-  Stability SKUs (`sd3-large-v1:0`, `stable-image-core-v1:0`,
-  `stable-image-ultra-v1:0`) are end of life on Bedrock and no longer callable.
-- The `titan-image` family is still recognised, since it shares its request
-  shape with Nova Canvas. The legacy Stable Diffusion XL schema
-  (`text_prompts`/`artifacts`) is deliberately not ported.
-- `amazon.nova-canvas-v1:0` has no `us.` cross-region inference profile, so
-  those three regions are the whole of it.
-- Stability's `stable-image-*` editing services (inpaint, erase object, search
-  and replace, background removal, style guide, control sketch) are not
-  text-to-image and are out of scope.
-- Nova Canvas may return fewer images than `numberOfImages` asked for.
-  Individually content-filtered images are dropped silently, and the plugin
-  returns whatever arrived.
+The `titan-image` family is still recognised, since it shares its
+request shape with Nova Canvas. The legacy Stable Diffusion XL schema
+(`text_prompts`/`artifacts`) is not ported. Stability editing services
+(inpaint, erase, background removal, and the rest) are not text-to-image
+and are out of scope. Nova Canvas may return fewer images than
+`numberOfImages` asked for; content-filtered images are dropped
+silently.
 
 ## Reranking
 
@@ -447,28 +402,16 @@ Notes:
   permission belongs to the separate Bedrock Agent Runtime `Rerank` API, which
   this plugin does not call.
 
-### Model support
+Which rerank models a region offers changes; check the Bedrock console.
+The two families take different bodies, so the request is built from the
+model ID. Both send `query`, `documents` and `top_n`; only Cohere takes
+`api_version`, whose schema requires the key, while the Amazon schema
+rejects any body carrying it. An ID matching neither family gets the
+Cohere body, that being the only shape AWS documents for InvokeModel
+reranking.
 
-Verified against `aws bedrock get-foundation-model` on 2026-08-11, and matching
-AWS's [supported regions and models for reranking](https://docs.aws.amazon.com/bedrock/latest/userguide/rerank-supported.html):
-
-| Model                  | Status | Regions                                                                    |
-| ---------------------- | ------ | -------------------------------------------------------------------------- |
-| `cohere.rerank-v3-5:0` | Active | `us-east-1`, `us-west-2`, `eu-central-1`, `ap-northeast-1`, `ca-central-1` |
-| `amazon.rerank-v1:0`   | Active | `us-west-2`, `eu-central-1`, `ap-northeast-1`, `ca-central-1`              |
-
-**`amazon.rerank-v1:0` is not offered in `us-east-1`.** Only
-`cohere.rerank-v3-5:0` covers every region on the list, so a setup that defaults
-to `us-east-1` has one rerank model available, not two.
-
-The two families take different bodies, so the request is built from the model
-ID. Both send `query`, `documents` and `top_n`; only Cohere takes
-`api_version`, whose schema requires the key, while the Amazon schema rejects
-any body carrying it. An ID matching neither family gets the Cohere body, that
-being the only shape AWS documents for InvokeModel reranking.
-
-Any model ID is passed to InvokeModel verbatim, so inference profiles and ARNs
-work too.
+Any model ID is passed to InvokeModel verbatim, so inference profiles
+and ARNs work too.
 
 ## Troubleshooting
 
@@ -487,8 +430,7 @@ identical to a missing grant.
 
 **`ResourceNotFoundException`.** The model exists but this account cannot use
 it there: an Anthropic model whose use-case agreement has not been accepted, or
-a Legacy model. The Nova Canvas case is its own trap and is described under
-[Availability](#availability). A model that plainly is not offered in the
+a Legacy model. A model that plainly is not offered in the
 region reports as a `ValidationException` instead, below.
 
 **`ValidationException` reading "The provided model identifier is invalid".**
@@ -522,10 +464,7 @@ image bytes, so they are safe to leave on.
 ## Examples
 
 See [`py/samples/amazon-bedrock-sample`](../../samples/amazon-bedrock-sample)
-for a runnable sample covering every surface here: text generation and
-streaming, structured output, tool calling, reasoning and extended thinking,
-embedders, prompt caching, image and document input, image generation, and
-reranking. Each one is a flow, so they can be run individually in the Dev UI.
+for a runnable `generate()` / `embed()` snippet.
 
 ## License
 

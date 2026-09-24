@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 # serve_agent needs the agent subsystem; skip the whole module where it isn't built.
-_genkit_agent = pytest.importorskip('genkit.agent', reason='agents API not available')
+_genkit_agent = pytest.importorskip('genkit.exp.agent', reason='agents API not available')
 if not hasattr(_genkit_agent, 'InMemorySessionStore'):
     pytest.skip('agents API not available', allow_module_level=True)
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
@@ -21,10 +21,10 @@ AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
-from genkit import Genkit  # noqa: E402
 from genkit._ai._testing import define_programmable_model  # noqa: E402
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel  # noqa: E402
 from genkit._core._typing import FinishReason, Part, Role, TextPart  # noqa: E402
+from genkit.exp import Genkit  # noqa: E402
 
 
 def build_agent(name: str) -> Any:

@@ -21,7 +21,6 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/genai"
 )
 
@@ -65,10 +64,10 @@ type GoogleAI struct {
 	// are merged over the plugin's default headers, so a header set here wins
 	// on collision. Optional.
 	Headers http.Header
-	// HTTPClient is the HTTP client used for API requests. When set, it is
-	// used verbatim: the plugin does not install its default OpenTelemetry
-	// instrumented transport, so wrap your own transport with otelhttp if you
-	// want tracing. Optional.
+	// HTTPClient overrides the HTTP client used for API requests. Defaults
+	// to http.DefaultClient. Supply a custom client to configure proxies,
+	// custom timeouts, or to enable OpenTelemetry HTTP span tracing by
+	// wrapping its transport with otelhttp.NewTransport. Optional.
 	HTTPClient *http.Client
 
 	// Models overrides what the plugin knows about a model, keyed by model ID.
@@ -121,11 +120,13 @@ type VertexAI struct {
 	// are merged over the plugin's default headers, so a header set here wins
 	// on collision. Optional.
 	Headers http.Header
-	// HTTPClient is the HTTP client used for API requests. When set, it is
-	// used verbatim and must handle authentication itself (unless APIKey is
-	// set, which rides on a request header): the plugin does not install its
-	// default credential-carrying, OpenTelemetry instrumented transport.
-	// Optional.
+	// HTTPClient overrides the HTTP client used for API requests. Defaults
+	// to a client authenticated via Application Default Credentials (or
+	// http.DefaultClient in Express Mode). Supply a custom client to configure
+	// custom timeouts, proxies, or to enable OpenTelemetry HTTP span tracing
+	// by wrapping its transport with otelhttp.NewTransport. When set, the
+	// client must handle authentication itself unless APIKey is configured.
+	// Mutually exclusive with Credentials. Optional.
 	HTTPClient *http.Client
 
 	// Models overrides what the plugin knows about a model, keyed by model ID;
@@ -185,15 +186,12 @@ func mergedHeaders(extra http.Header) http.Header {
 	return h
 }
 
-// httpClientOrDefault returns c, or the plugin's default OpenTelemetry
-// instrumented client when c is nil.
+// httpClientOrDefault returns c, or http.DefaultClient when c is nil.
 func httpClientOrDefault(c *http.Client) *http.Client {
 	if c != nil {
 		return c
 	}
-	return &http.Client{
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
+	return http.DefaultClient
 }
 
 // Name returns the name of the plugin.
@@ -385,7 +383,7 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 			}
 			httpClient, err := httptransport.NewClient(&httptransport.Options{
 				Credentials:      cred,
-				BaseRoundTripper: otelhttp.NewTransport(http.DefaultTransport),
+				BaseRoundTripper: http.DefaultTransport,
 				Headers:          headers,
 			})
 			if err != nil {

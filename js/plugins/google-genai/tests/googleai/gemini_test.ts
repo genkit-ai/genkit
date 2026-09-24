@@ -92,6 +92,21 @@ describe('Google AI Gemini', () => {
     messages: [{ role: 'user', content: [{ text: 'Hello' }] }],
   };
 
+  const jsonOutputSchema = {
+    type: 'object',
+    properties: { name: { type: 'string' } },
+  };
+
+  const constrainedJsonRequest: GenerateRequest<typeof GeminiConfigSchema> = {
+    ...minimalRequest,
+    output: {
+      format: 'json',
+      contentType: 'application/json',
+      constrained: true,
+      schema: jsonOutputSchema,
+    },
+  };
+
   const mockCandidate = {
     index: 0,
     content: {
@@ -596,6 +611,69 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('sets a response schema for constrained JSON output', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(constrainedJsonRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.responseMimeType,
+          'application/json'
+        );
+        assert.deepStrictEqual(
+          apiRequest.generationConfig?.responseJsonSchema,
+          jsonOutputSchema
+        );
+      });
+
+      it('sets a legacy response schema for constrained JSON output', async () => {
+        const model = defineModel('gemini-2.5-flash', {
+          ...defaultPluginOptions,
+          legacyResponseSchema: true,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run(constrainedJsonRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          apiRequest.generationConfig?.responseSchema,
+          jsonOutputSchema
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.responseJsonSchema,
+          undefined
+        );
+      });
+
+      it('simulates constrained generation for TTS models', async () => {
+        const model = defineModel(
+          'gemini-2.5-flash-preview-tts',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(constrainedJsonRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig, {
+          responseModalities: ['AUDIO'],
+        });
+        const lastMessage = apiRequest.contents[apiRequest.contents.length - 1];
+        assert.ok(
+          lastMessage.parts.some((part) =>
+            part.text?.includes(
+              'Output should be in JSON format and conform to the following schema'
+            )
+          )
+        );
+      });
+
       it('defaults responseModalities to TEXT, IMAGE for image models', async () => {
         const model = defineModel(
           'gemini-2.5-flash-image',
@@ -720,6 +798,8 @@ describe('Google AI Gemini', () => {
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.info?.supports?.constrained, 'none');
+      assert.deepStrictEqual(modelRef.info?.supports?.output, ['media']);
       assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
     });
 
@@ -728,6 +808,18 @@ describe('Google AI Gemini', () => {
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.info?.supports?.constrained, 'none');
+      assert.deepStrictEqual(modelRef.info?.supports?.output, ['media']);
+      assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
+    });
+
+    it('returns a ModelReference for an unknown tts model string', () => {
+      const name = 'gemini-9.9-flash-tts';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.info?.supports?.constrained, 'none');
+      assert.deepStrictEqual(modelRef.info?.supports?.output, ['media']);
       assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
     });
 

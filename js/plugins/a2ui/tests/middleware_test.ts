@@ -184,6 +184,100 @@ describe('a2ui() middleware', () => {
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
   });
 
+  it('stitches a block split across many final-message text parts', async () => {
+    // The aggregated final message is not guaranteed to coalesce adjacent text:
+    // the Gemini plugin splits a turn into many text parts (fence, JSON body
+    // split many ways, close fence, then a trailing empty-text part carrying
+    // the thought signature). transformResponse must stitch a block spanning
+    // several parts into a single a2ui data part rather than flushing per part
+    // and leaking the whole surface back out as raw prose.
+    const mw = modelHook({ surfaceId: 'sfc' });
+
+    const content = [
+      { text: 'Here is the weather:\n\n``' },
+      { text: `\`a2ui\n[{"createSurface":{"surfaceId":"SURFACE_ID",` },
+      { text: `"catalogId":"${basicCatalog.id}"}},` },
+      { text: `{"updateComponents":{"surfaceId":"SURFACE_ID",` },
+      { text: `"components":[{"id":"root","component":"Text",` },
+      { text: `"text":"hi"}]}}]\n\`\`` },
+      { text: '`' },
+      // A trailing empty-text part that only carries a thought signature.
+      { text: '', metadata: { signature: 'thought-sig-xyz' } },
+    ];
+
+    // Return the *candidates* shape that real models (e.g. google-genai) emit,
+    // not a pre-collapsed top-level `message`. The middleware must transform
+    // candidates[0].message, otherwise it silently passes the raw fence text
+    // through (the bug this guards against).
+    const res = await mw(req('sys'), undefined, async () => ({
+      candidates: [
+        { index: 0, finishReason: 'stop', message: { role: 'model', content } },
+      ],
+    }));
+    const out = (res as any).candidates[0].message.content;
+
+    // The block spread over many parts is stitched into exactly two envelopes
+    // on a single a2ui data part.
+    const envelopes = a2uiEnvelopesFromParts(out);
+    assert.strictEqual(envelopes.length, 2);
+    assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+
+    // No text part should still contain the raw fence: the JSON must have been
+    // parsed out, not leaked back as prose.
+    assert.ok(
+      !out.some(
+        (p: any) => typeof p.text === 'string' && p.text.includes('a2ui')
+      )
+    );
+
+    // The leading prose survives, and the trailing signature part is carried
+    // through untouched.
+    assert.ok(
+      out.some(
+        (p: any) =>
+          typeof p.text === 'string' && p.text.includes('Here is the weather')
+      ),
+      'expected the leading prose to be preserved'
+    );
+    assert.ok(
+      out.some((p: any) => p.metadata?.signature === 'thought-sig-xyz'),
+      'expected the trailing thought-signature part to survive'
+    );
+  });
+
+  it('transforms both message and candidates[0] when a response carries both', async () => {
+    // A response could carry a top-level `message` AND a `candidates` array at
+    // once (e.g. a prior middleware pre-populated `message` while keeping
+    // `candidates`). Both must be transformed so a consumer reading either sees
+    // the parsed a2ui part, never the raw fence text.
+    const mw = modelHook({ surfaceId: 'sfc' });
+    const res = await mw(req('sys'), undefined, async () => ({
+      message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
+      candidates: [
+        {
+          index: 0,
+          finishReason: 'stop',
+          message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
+        },
+      ],
+    }));
+
+    for (const content of [
+      (res as any).message.content,
+      (res as any).candidates[0].message.content,
+    ]) {
+      const envelopes = a2uiEnvelopesFromParts(content);
+      assert.strictEqual(envelopes.length, 2);
+      assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+      assert.ok(
+        !content.some(
+          (p: any) => typeof p.text === 'string' && p.text.includes('```')
+        ),
+        'raw fence must not leak into either shape'
+      );
+    }
+  });
+
   it('leaves plain prose responses untouched (no a2ui parts)', async () => {
     const mw = modelHook({});
     const res = await mw(req('sys'), undefined, async () => ({
@@ -236,6 +330,260 @@ describe('a2ui() middleware', () => {
     const joined = userMsg.content.map((p: any) => p.text).join(' ');
     assert.match(joined, /UI action "refresh"/);
     assert.match(joined, /Tokyo/);
+  });
+
+  it('replays a prior assistant surface as a fenced a2ui block, not a sentinel', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              { text: 'Here you go:' },
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                      version: 'v0.9',
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'hi' },
+                        ],
+                      },
+                      version: 'v0.9',
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'thanks' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    // The a2ui part is gone (the model converter never sees the mime type)...
+    assert.ok(!modelMsg.content.some((p: any) => isA2uiPart(p)));
+    const joined = modelMsg.content.map((p: any) => p.text).join('\n');
+    // ...replaced by the canonical fenced block the model originally emitted,
+    // NOT the old `[rendered UI surface]` sentinel that poisoned the model.
+    assert.doesNotMatch(joined, /\[rendered UI surface\]/);
+    assert.doesNotMatch(joined, /\[UI surface/);
+    assert.match(joined, /```a2ui/);
+    assert.match(joined, /createSurface/);
+    assert.match(joined, /updateComponents/);
+    assert.match(joined, /Here you go:/);
+
+    // The reconstructed block round-trips: parsing it yields the envelopes.
+    const block = joined.slice(
+      joined.indexOf('```a2ui') + '```a2ui'.length,
+      joined.lastIndexOf('```')
+    );
+    const decoded = JSON.parse(block.trim());
+    assert.strictEqual(decoded.length, 2);
+    assert.ok(decoded[0].createSurface);
+
+    // The real surface id is kept verbatim (NOT scrubbed to a placeholder), so
+    // a replayed action `[UI action ... on surface s1]` can still be correlated
+    // with this surface. Reuse is prevented at the parser instead: every
+    // `createSurface` mints a fresh id (see the distinct-id test).
+    assert.strictEqual(decoded[0].createSurface.surfaceId, 's1');
+    assert.strictEqual(decoded[1].updateComponents.surfaceId, 's1');
+  });
+
+  it('drops a message emptied by sanitizing instead of sending empty content', async () => {
+    // A message whose only part is an a2ui part with an empty (or all-
+    // unrecognized) envelope array summarizes to nothing. Sending it downstream
+    // with `content: []` makes providers like Gemini/Vertex reject the request,
+    // so the middleware must drop the whole message instead.
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: { envelopes: [] },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'hi' }] },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+
+    // The emptied model message is gone entirely; no message has empty content.
+    assert.ok(
+      !seen.messages.some(
+        (m: any) => Array.isArray(m.content) && m.content.length === 0
+      )
+    );
+    // The still-meaningful user message survives.
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    assert.ok(userMsg);
+    assert.strictEqual(userMsg.content[0].text, 'hi');
+  });
+
+  it('a new render never reuses a surface id copied from history', async () => {
+    // Regression for the "new answer overwrites the prior surface in place"
+    // bug: history keeps real ids (for action correlation), so the model can
+    // copy an old id into a fresh `createSurface`. The parser must still mint a
+    // distinct id for that new render.
+    const mw = modelHook({ surfaceId: 'sfc-new' });
+    let seen: any;
+    const res = await mw(
+      {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    {
+                      updateComponents: {
+                        surfaceId: 's1',
+                        components: [
+                          { id: 'root', component: 'Text', text: 'old' },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [{ action: { name: 'refresh', surfaceId: 's1' } }],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        // The model copies the prior surface's real id (`s1`) into a brand-new
+        // createSurface - exactly what it does after seeing `s1` in history.
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                text: `Here you go:
+\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "s1", "catalogId": "${basicCatalog.id}" } },
+  { "updateComponents": { "surfaceId": "s1", "components": [
+    { "id": "root", "component": "Text", "text": "new" }
+  ] } }
+]
+\`\`\`
+`,
+              },
+            ],
+          },
+        };
+      }
+    );
+
+    // The new render is minted onto the fixed id `sfc-new`, NOT the copied `s1`,
+    // so it can't overwrite the prior surface.
+    const envelopes = a2uiEnvelopesFromParts((res as any).message.content);
+    const create = envelopes.find((e: any) => e.createSurface) as any;
+    const update = envelopes.find((e: any) => e.updateComponents) as any;
+    assert.strictEqual(create.createSurface.surfaceId, 'sfc-new');
+    assert.strictEqual(update.updateComponents.surfaceId, 'sfc-new');
+
+    // Meanwhile, the sanitized history the model saw kept the real id on both
+    // the reconstructed surface block and the action line (correlation).
+    const modelMsg = seen.messages.find((m: any) => m.role === 'model');
+    const modelText = modelMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(modelText, /"surfaceId"\s*:\s*"s1"/);
+
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const userText = userMsg.content.map((p: any) => p.text).join('\n');
+    assert.match(userText, /on surface s1/);
+  });
+
+  it('groups consecutive surface envelopes into one block but splits around an action', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                data: {
+                  envelopes: [
+                    {
+                      createSurface: {
+                        surfaceId: 's1',
+                        catalogId: basicCatalog.id,
+                      },
+                    },
+                    { updateComponents: { surfaceId: 's1', components: [] } },
+                    { action: { name: 'refresh', surfaceId: 's1' } },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      } as any,
+      undefined,
+      async (r: any) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const userMsg = seen.messages.find((m: any) => m.role === 'user');
+    const joined = userMsg.content.map((p: any) => p.text).join('\n');
+    // Exactly one fenced block (the two surface envelopes grouped together)...
+    assert.strictEqual((joined.match(/```a2ui/g) ?? []).length, 1);
+    // ...plus the action rendered as a text summary after it.
+    assert.match(joined, /UI action "refresh"/);
+    // The block precedes the action line (source order preserved).
+    assert.ok(joined.indexOf('```a2ui') < joined.indexOf('UI action'));
   });
 
   it('mints the same surface id in the stream and the final message', async () => {
@@ -420,5 +768,57 @@ describe('a2ui() end-to-end via ai.generate', () => {
     const envelopes = a2uiEnvelopesFromParts(res.message!.content);
     assert.strictEqual(envelopes.length, 2);
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+  });
+
+  it('rewrites a candidates-shaped model response (real provider shape)', async () => {
+    // Real providers (e.g. google-genai) return the `candidates` shape, not a
+    // pre-collapsed top-level `message`, and split the block across many text
+    // parts. This exercises the full ai.generate path end-to-end, catching the
+    // regression where transformResponse only read `response.message` and thus
+    // left the raw fence text in the persisted message.
+    const ai = genkit({});
+    const model = ai.defineModel({ name: 'echo-candidates' }, async () => {
+      return {
+        candidates: [
+          {
+            index: 0,
+            finishReason: 'stop',
+            message: {
+              role: 'model',
+              content: [
+                { text: 'Here is the weather:\n\n``' },
+                {
+                  text: `\`a2ui\n[{"createSurface":{"surfaceId":"SURFACE_ID",`,
+                },
+                { text: `"catalogId":"${basicCatalog.id}"}},` },
+                { text: `{"updateComponents":{"surfaceId":"SURFACE_ID",` },
+                { text: `"components":[{"id":"root","component":"Text",` },
+                { text: `"text":"hi"}]}}]\n\`\`` },
+                { text: '`' },
+              ],
+            },
+          },
+        ],
+        finishReason: 'stop',
+      };
+    });
+
+    const res = await ai.generate({
+      model,
+      prompt: 'weather please',
+      use: [a2ui({ surfaceId: 'sfc' })],
+    });
+
+    // The final (collapsed) message carries the parsed a2ui data part, not raw
+    // fence text.
+    const envelopes = a2uiEnvelopesFromParts(res.message!.content);
+    assert.strictEqual(envelopes.length, 2);
+    assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
+    assert.ok(
+      !res
+        .message!.content.filter((p: any) => typeof p.text === 'string')
+        .some((p: any) => p.text.includes('a2ui')),
+      'raw a2ui fence must not leak into prose'
+    );
   });
 });

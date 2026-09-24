@@ -21,9 +21,13 @@ import base64
 import json
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
+
+from openai import APIStatusError, BaseModel
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from genkit import (
+    GenkitError,
     MediaPart,
     Message,
     ModelRequest,
@@ -35,6 +39,25 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit.plugin_api import wrap_http_error
+
+
+def reraise_openai_error(error: Exception) -> NoReturn:
+    """Re-raise an OpenAI HTTP or request-shaping error as a classified GenkitError.
+
+    A bad request (missing text, wrong config type) is INVALID_ARGUMENT so
+    retry does not burn attempts on it. A model reply we could not read
+    (malformed tool JSON, empty content) is INTERNAL so retry can try again.
+    """
+    if isinstance(error, APIStatusError):
+        raise wrap_http_error(error, status_code=error.status_code) from error
+    if isinstance(error, json.JSONDecodeError):
+        raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
+    if isinstance(error, ValueError):
+        if str(error) == 'Unable to determine content part':
+            raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
+        raise GenkitError(status='INVALID_ARGUMENT', message=str(error), cause=error) from error
+    raise error
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -180,6 +203,60 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     return {}
 
 
+def _unmodeled_field(source: BaseModel, name: str) -> object:
+    """Read a response field the OpenAI schema does not model.
+
+    The SDK's response models allow extra fields and collect them in
+    ``model_extra``, which is where a provider's non-standard fields land.
+
+    Args:
+        source: A response object from the OpenAI SDK.
+        name: The wire name of the field.
+
+    Returns:
+        The field value, or None when it is absent or arrived as null.
+    """
+    extras = source.model_extra
+    if not isinstance(extras, dict):
+        return None
+    return extras.get(name)
+
+
+def extract_response_metadata(response: ChatCompletion | ChatCompletionChunk) -> dict[str, Any]:
+    """Collect the response metadata that is not part of the generated message.
+
+    Accepts a chat completion or a single streamed chunk of one: both carry
+    the same metadata fields.
+
+    Args:
+        response: A ``ChatCompletion`` or ``ChatCompletionChunk``.
+
+    Returns:
+        A dict of the metadata fields the response actually carries, empty
+        when it carries none.
+    """
+    metadata: dict[str, Any] = {}
+    for key, value in (
+        ('systemFingerprint', response.system_fingerprint),
+        ('model', response.model),
+        ('id', response.id),
+    ):
+        if isinstance(value, str) and value:
+            metadata[key] = value
+
+    # xAI returns live-search sources in an unmodeled citations field.
+    citations = _unmodeled_field(response, 'citations')
+    if citations is not None:
+        metadata['citations'] = citations
+
+    # A gateway reports a mid-generation upstream failure as an error object on the choice.
+    failure = _unmodeled_field(response.choices[0], 'error') if response.choices else None
+    if isinstance(failure, dict):
+        metadata['error'] = failure
+
+    return metadata
+
+
 def _extract_media(request: ModelRequest) -> tuple[str, str]:
     """Extract media content from the first message.
 
@@ -322,6 +399,18 @@ class MessageAdapter:
         except AttributeError:
             return None
 
+    @property
+    def refusal(self) -> str | None:
+        """The 'refusal' attribute of the message if available.
+
+        A model that declines to answer sends the reason it declined here
+        rather than as content.
+
+        Returns:
+            The refusal string or None.
+        """
+        return getattr(self._data, 'refusal', None)
+
 
 ChatCompletionMessageAdapter = DictMessageAdapter | MessageAdapter
 
@@ -431,35 +520,27 @@ class MessageConverter:
     def to_genkit(cls, message: ChatCompletionMessageAdapter) -> Message:
         """Converts an OpenAI-style message into a Genkit `Message` object.
 
-        Handles tool calls, reasoning content (from DeepSeek R1 / reasoner),
-        and regular text content. Matches the JS canonical implementation
-        in fromOpenAIChoice().
+        Emits a reasoning part, a text part, and one tool request part per
+        tool call, in that order, for whichever of them the message carries.
 
         Args:
             message: A ChatCompletionMessageAdapter instance.
 
         Returns:
-            A Genkit `Message` object.
-
-        Raises:
-            ValueError: If neither content, tool_calls, nor reasoning_content
-                are present in the message.
+            A Genkit `Message` object, with empty content when the message
+            carries no content, tool calls, or reasoning.
         """
         content: list[Part] = []
 
-        if message.tool_calls:
-            content = [cls.tool_call_to_genkit(tool_call, args_parser=json.loads) for tool_call in message.tool_calls]
-        else:
-            # Reasoning content comes before regular content (matching JS order).
-            reasoning = message.reasoning_content
-            if reasoning:
-                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+        reasoning = message.reasoning_content
+        if reasoning:
+            content.append(Part(root=ReasoningPart(reasoning=reasoning)))
 
-            if message.content:
-                content.append(cls.text_part_to_genkit(message.content))
+        if message.content:
+            content.append(cls.text_part_to_genkit(message.content))
 
-        if not content:
-            raise ValueError('Unable to determine content part')
+        for tool_call in message.tool_calls or []:
+            content.append(cls.tool_call_to_genkit(tool_call, args_parser=json.loads))
 
         role = message.role or Role.MODEL
         return Message(role=cls._genkit_role_map.get(role, role), content=content)
@@ -507,7 +588,7 @@ class MessageConverter:
         default_args = str(func_args) if func_args else ''
         args_input: str | dict[str, Any] | None = args_segment if args_segment is not None else default_args
         if args_parser and isinstance(args_input, str):
-            args_input = args_parser(args_input)
+            args_input = args_parser(args_input) if args_input else {}
 
         return Part(
             root=ToolRequestPart(

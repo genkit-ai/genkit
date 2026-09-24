@@ -35,7 +35,7 @@ from _ai import ai
 from genkit_middleware import Filesystem, ToolApproval
 
 from genkit import ActionRunContext
-from genkit.agent import FileSessionStore
+from genkit.exp.agent import FileSessionStore
 
 WORKSPACE_DIR = Path(__file__).resolve().parent / 'workspace'
 WORKSPACE_DIR.mkdir(exist_ok=True)

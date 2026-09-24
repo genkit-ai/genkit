@@ -77,7 +77,7 @@
 
 ::: genkit.EmbedderRef
 
-::: genkit.EmbedderOptions
+::: genkit.EmbedderInfo
 
 ::: genkit.Embedding
 
@@ -169,7 +169,7 @@
 
 ::: genkit.embedder.EmbedderSupports
 
-::: genkit.embedder.EmbedderOptions
+::: genkit.embedder.EmbedderInfo
 
 ## genkit.plugin_api
 

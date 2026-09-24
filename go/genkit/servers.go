@@ -93,9 +93,9 @@ func WithStreamManager(manager streaming.StreamManager) HandlerOption {
 // Example:
 //
 //	genkit.Handler(
-//		g,
-//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
-//			return api.ActionContext{"myKey": "myValue"}, nil
+//		myFlow,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+//			return core.ActionContext{"uid": req.Headers["authorization"]}, nil
 //		}))
 func Handler(a api.Action, opts ...HandlerOption) http.HandlerFunc {
 	return wrapHandler(HandlerFunc(a, opts...))
@@ -117,9 +117,9 @@ func Handler(a api.Action, opts ...HandlerOption) http.HandlerFunc {
 // Example:
 //
 //	genkit.HandlerFunc(
-//		g,
-//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
-//			return api.ActionContext{"myKey": "myValue"}, nil
+//		myFlow,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
+//			return core.ActionContext{"uid": req.Headers["authorization"]}, nil
 //		}),
 //	)
 func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, *http.Request) error {

@@ -1,153 +1,88 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # SPDX-License-Identifier: Apache-2.0
 
-r"""BugBot: AI Code Reviewer.
-
-    genkit start -- uv run src/main.py
-    curl localhost:8080/review -d '{"code": "query = f\"SELECT * FROM users WHERE id={user_input}\""}'
-
-If something looks wrong, check localhost:4000 to see what the model actually received.
-"""
+"""Review a snippet — three generate() calls in parallel, structured JSON back."""
 
 import asyncio
-from pathlib import Path
 from typing import Literal
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from genkit_fastapi import genkit_fastapi_handler
+from genkit_fastapi import serve_flow
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
-from typing_extensions import Never
 
-from genkit import Flow, Genkit
+from genkit import Genkit
 
 _ = load_dotenv()
 
-# The Dev UI reflection server starts automatically in a background thread
-# when GENKIT_ENV=dev is set — no lifespan wiring needed.
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
-    prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
 )
 
 
-Severity = Literal['critical', 'warning', 'info']
-Category = Literal['security', 'bug', 'style']
-
-
 class Issue(BaseModel):
-    """A single issue found in the code."""
-
-    line: int = Field(description='Line number where the issue occurs')
-    title: str = Field(description='Brief title like "SQL Injection Risk"')
-    severity: Severity
-    category: Category
-    explanation: str = Field(description='Why this is a problem')
-    suggestion: str = Field(description='How to fix it')
+    line: int
+    title: str
+    severity: Literal['critical', 'warning', 'info']
+    category: Literal['security', 'bug', 'style']
+    explanation: str
+    suggestion: str
 
 
 class Analysis(BaseModel):
-    """Analysis result containing found issues."""
-
     issues: list[Issue] = Field(default_factory=list)
 
 
 class CodeInput(BaseModel):
-    """Input for code analysis."""
-
     code: str
     language: str = 'python'
 
 
-class DiffInput(BaseModel):
-    """Input for diff analysis."""
-
-    diff: str
-    context: str = ''
-
-
-security_prompt = ai.prompt('analyze_security', input_schema=CodeInput, output_schema=Analysis)
-bugs_prompt = ai.prompt('analyze_bugs', input_schema=CodeInput, output_schema=Analysis)
-style_prompt = ai.prompt('analyze_style', input_schema=CodeInput, output_schema=Analysis)
-diff_prompt = ai.prompt('analyze_diff', input_schema=DiffInput, output_schema=Analysis)
-
-
-@ai.flow()
-async def analyze_security(input: CodeInput) -> Analysis:
-    """Analyze code for security vulnerabilities."""
-    response = await security_prompt(input=input)
-    return response.output
-
-
-@ai.flow()
-async def analyze_bugs(input: CodeInput) -> Analysis:
-    """Analyze code for potential bugs."""
-    response = await bugs_prompt(input=input)
-    return response.output
-
-
-@ai.flow()
-async def analyze_style(input: CodeInput) -> Analysis:
-    """Analyze code for style issues."""
-    response = await style_prompt(input=input)
-    return response.output
-
-
 @ai.flow()
 async def review_code(input: CodeInput) -> Analysis:
-    """Run all analyzers in parallel and combine results."""
+    # output_schema is the Pydantic model the model has to fill in — and
+    # what you return from the route. Three focused calls so one review
+    # doesn't wait for the others.
     security, bugs, style = await asyncio.gather(
-        analyze_security(input),
-        analyze_bugs(input),
-        analyze_style(input),
+        ai.generate(
+            prompt=f'Find security issues in this {input.language} snippet:\n{input.code}',
+            output_schema=Analysis,
+        ),
+        ai.generate(
+            prompt=f'Find bugs in this {input.language} snippet:\n{input.code}',
+            output_schema=Analysis,
+        ),
+        ai.generate(
+            prompt=f'Find style issues in this {input.language} snippet:\n{input.code}',
+            output_schema=Analysis,
+        ),
     )
-    return Analysis(issues=security.issues + bugs.issues + style.issues)
+    issues = []
+    for result in (security, bugs, style):
+        if result.output:
+            issues.extend(result.output.issues)
+    return Analysis(issues=issues)
 
 
-@ai.flow()
-async def review_diff(input: DiffInput) -> Analysis:
-    """Review a code diff for issues."""
-    response = await diff_prompt(input=input)
-    return response.output
-
-
-app = FastAPI(title='BugBot', description='AI-powered code review API')
-
-
-@app.post('/review')
-async def review(input: CodeInput) -> Analysis:
-    """Review code for security, bugs, and style issues."""
-    return await review_code(input)
-
-
-@app.post('/review/security')
-async def review_security_endpoint(input: CodeInput) -> Analysis:
-    """Review code for security issues only."""
-    return await analyze_security(input)
-
-
-@app.post('/review/diff')
-async def review_diff_endpoint(input: DiffInput) -> Analysis:
-    """Review a code diff."""
-    return await review_diff(input)
-
-
-@app.post('/flow/review', response_model=None)
-@genkit_fastapi_handler(ai)
-def flow_review() -> Flow[CodeInput, Analysis, Never]:
-    """Expose review_code flow directly via {"data": {"code": "...", "language": "..."}}."""
-    return review_code
-
-
-@app.post('/flow/security', response_model=None)
-@genkit_fastapi_handler(ai)
-def flow_security() -> Flow[CodeInput, Analysis, Never]:
-    """Expose analyze_security flow directly."""
-    return analyze_security
+app = FastAPI(title='BugBot')
+app.include_router(serve_flow(review_code, base_path='/review'))
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8080)  # noqa: S104
+    uvicorn.run(app, host='127.0.0.1', port=8080)

@@ -95,7 +95,7 @@ class Middleware(MiddlewarePlugin):
 
         # 2. Generate with automatic retry resilience
         res = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             prompt='Summarize quantum computing.',
             use=[Retry(max_retries=3)],
         )

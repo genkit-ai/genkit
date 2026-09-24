@@ -26,6 +26,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  detectRuntime,
+  detectRuntimeSync,
   findProjectRoot,
   projectNameFromGenkitFilePath,
 } from '../../src/utils';
@@ -51,20 +53,34 @@ describe('utils', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('returns the directory containing a pubspec.yaml', async () => {
-      const projectDir = path.join(tmpDir, 'dart-app');
-      const nestedDir = path.join(projectDir, 'lib', 'src');
-      fs.mkdirSync(nestedDir, { recursive: true });
-      fs.writeFileSync(path.join(projectDir, 'pubspec.yaml'), 'name: dart_app');
+    const projectMarkers = [
+      'package.json',
+      'go.mod',
+      'pyproject.toml',
+      'requirements.txt',
+      'pom.xml',
+      'build.gradle',
+      'build.gradle.kts',
+      'pubspec.yaml',
+    ];
 
-      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(nestedDir);
+    it.each(projectMarkers)(
+      'returns the directory containing %s when called from a nested subdirectory',
+      async (markerFile) => {
+        const projectDir = path.join(tmpDir, `project-${markerFile}`);
+        const nestedDir = path.join(projectDir, 'src', 'nested');
+        fs.mkdirSync(nestedDir, { recursive: true });
+        fs.writeFileSync(path.join(projectDir, markerFile), '');
 
-      try {
-        expect(await findProjectRoot()).toEqual(projectDir);
-      } finally {
-        cwdSpy.mockRestore();
+        const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(nestedDir);
+
+        try {
+          expect(await findProjectRoot()).toEqual(projectDir);
+        } finally {
+          cwdSpy.mockRestore();
+        }
       }
-    });
+    );
 
     it('returns the nearest project root when a Dart project is nested under a package.json', async () => {
       // Mirrors a Dart project living inside a JS workspace or monorepo. The
@@ -83,6 +99,60 @@ describe('utils', () => {
       } finally {
         cwdSpy.mockRestore();
       }
+    });
+  });
+
+  describe('detectRuntime / detectRuntimeSync', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-detect-runtime-'))
+      );
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    const runtimeMarkerCases: { file: string; expected: string }[] = [
+      { file: 'pom.xml', expected: 'java' },
+      { file: 'build.gradle', expected: 'java' },
+      { file: 'build.gradle.kts', expected: 'java' },
+      { file: 'go.mod', expected: 'go' },
+      { file: 'main.go', expected: 'go' },
+      { file: 'pyproject.toml', expected: 'python' },
+      { file: 'requirements.txt', expected: 'python' },
+      { file: 'pubspec.yaml', expected: 'dart' },
+      { file: 'package.json', expected: 'nodejs' },
+    ];
+
+    it.each(runtimeMarkerCases)(
+      'detects "$expected" for marker file "$file"',
+      async ({ file, expected }) => {
+        const appDir = path.join(tmpDir, `app-${file}`);
+        fs.mkdirSync(appDir, { recursive: true });
+        fs.writeFileSync(path.join(appDir, file), '');
+
+        expect(await detectRuntime(appDir)).toBe(expected);
+        expect(detectRuntimeSync(appDir)).toBe(expected);
+      }
+    );
+
+    it('returns undefined when no marker files exist in the directory', async () => {
+      const emptyDir = path.join(tmpDir, 'empty-app');
+      fs.mkdirSync(emptyDir, { recursive: true });
+
+      expect(await detectRuntime(emptyDir)).toBeUndefined();
+      expect(detectRuntimeSync(emptyDir)).toBeUndefined();
+    });
+
+    it('returns undefined when a marker is a directory rather than a file', async () => {
+      const dirMarkerApp = path.join(tmpDir, 'dir-marker-app');
+      fs.mkdirSync(path.join(dirMarkerApp, 'go.mod'), { recursive: true });
+
+      expect(await detectRuntime(dirMarkerApp)).toBeUndefined();
+      expect(detectRuntimeSync(dirMarkerApp)).toBeUndefined();
     });
   });
 

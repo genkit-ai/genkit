@@ -31,7 +31,6 @@ from genkit._ai._agents._client import (
 )
 from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._types import StateManagement
-from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
 from genkit._core._channel import CloseableQueue
@@ -60,7 +59,8 @@ from genkit._core._typing import (
     ToolResponsePart,
     TurnEnd,
 )
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application

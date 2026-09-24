@@ -16,18 +16,18 @@
 
 """Constants for GCP telemetry.
 
-This module centralizes all constants used across the GCP telemetry
-implementation, matching the pattern from JS/Go implementations.
+This module centralizes metric export intervals, project ID env fallbacks,
+and Cloud Trace / Cloud Monitoring limits used by this package.
 """
 
-# Metric export intervals (matching JS/Go implementations)
+# Cloud Monitoring metric export intervals
 MIN_METRIC_EXPORT_INTERVAL_MS = 5000
 DEFAULT_METRIC_EXPORT_INTERVAL_MS = 300000
 DEV_METRIC_EXPORT_INTERVAL_MS = 5000
 PROD_METRIC_EXPORT_INTERVAL_MS = 300000
 
 # Project ID environment variables (resolution order)
-# Priority: FIREBASE_PROJECT_ID > GOOGLE_CLOUD_PROJECT > GCLOUD_PROJECT
+# Project ID env fallbacks. FIREBASE_PROJECT_ID is still honored for existing deployments.
 PROJECT_ID_ENV_VARS = (
     'FIREBASE_PROJECT_ID',
     'GOOGLE_CLOUD_PROJECT',

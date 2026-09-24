@@ -14,7 +14,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Amazon Bedrock plugin for Genkit."""
+"""Amazon Bedrock plugin for Genkit.
+
+Example:
+    ```python
+    from genkit import Genkit
+    from genkit_amazon_bedrock import Bedrock, ModelDefinition
+
+    ai = Genkit(
+        plugins=[
+            Bedrock(
+                region='us-east-1',
+                models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            )
+        ],
+        model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+    )
+
+    res = await ai.generate(prompt='Explain recursion in 10 words.')
+    print(res.text)
+    ```
+"""
 
 from genkit_amazon_bedrock.config import BedrockConfig, BedrockImageConfig, ModelDefinition
 from genkit_amazon_bedrock.converters import cache_point_part

@@ -1994,6 +1994,16 @@ func TestDataPromptAbnormalFinish(t *testing.T) {
 			},
 		},
 		{
+			// What the loop's failure partial reports; parsing must skip it
+			// the same way.
+			name: "failed with failure text",
+			response: &ModelResponse{
+				FinishReason:  FinishReasonFailed,
+				FinishMessage: "provider down",
+				Message:       NewModelTextMessage("Error: provider down"),
+			},
+		},
+		{
 			name: "other with filter details",
 			response: &ModelResponse{
 				FinishReason:  FinishReasonOther,

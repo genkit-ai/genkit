@@ -184,6 +184,22 @@ func (r *Registry) RegisterValue(name string, value any) {
 	slog.Debug("registered value", "name", name)
 }
 
+// RegisterValueIfAbsent records value under name only if name is not already
+// present in this registry (it does not consult parents). It returns true if
+// the value was stored, false if an entry already existed. Unlike
+// [Registry.RegisterValue] it never panics on a duplicate, so it is safe for
+// concurrent register-if-absent callers racing on the same key.
+func (r *Registry) RegisterValueIfAbsent(name string, value any) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.values[name]; ok {
+		return false
+	}
+	r.values[name] = value
+	slog.Debug("RegisterValueIfAbsent", "name", name)
+	return true
+}
+
 // LookupValue returns the value for the given name.
 // It first checks the current registry, then falls back to the parent if not found.
 // Returns nil if the value is not found in the registry hierarchy.

@@ -14,52 +14,40 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Django + Genkit - Serve flows as HTTP endpoints. See README.md."""
-
-from collections.abc import Mapping
-from typing import Any, cast
+"""A flow as a Django view. Streaming and request context included."""
 
 from django.http import HttpRequest
 from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from genkit import Genkit, ModelResponse
-from genkit._core._action import ActionRunContext
+from genkit import ActionRunContext, Genkit, ModelResponse
 from genkit.plugin_api import RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
 )
 
 
 class SayHiInput(BaseModel):
-    """Input for say_hi flow."""
-
-    name: str = Field(default='Mittens', description='Name to greet')
+    name: str = 'Mittens'
 
 
-async def my_context_provider(request: RequestData[HttpRequest]) -> dict[str, Any]:
-    """Provide a context for the flow."""
-    # Django types `HttpRequest.headers` as a cached_property which trips static
-    # checkers; cast to a Mapping so .get() resolves.
-    headers = cast(Mapping[str, str], request.request.headers)
-    return {'username': headers.get('authorization')}
+async def auth_context(request: RequestData[HttpRequest]) -> dict[str, object]:
+    # The caller is identified from the request, not the JSON body.
+    return {'username': request.request.META.get('HTTP_AUTHORIZATION') or 'guest'}
 
 
-@genkit_django_handler(ai, context_provider=my_context_provider)
+@genkit_django_handler(ai, context_provider=auth_context)
 @ai.flow()
-async def say_hi(
-    input: SayHiInput,
-    ctx: ActionRunContext | None = None,
-) -> ModelResponse:
-    """Say hi to the user, streaming the model output."""
-    username = ctx.context.get('username') if ctx is not None else 'unknown'
-    stream_response = ai.generate_stream(
+async def say_hi(input: SayHiInput, ctx: ActionRunContext) -> ModelResponse:
+    username = ctx.context.get('username', 'guest')
+    stream = ai.generate_stream(
         prompt=f'tell a medium sized joke about {input.name} for user {username}',
+        context=ctx.context,
     )
-    async for chunk in stream_response.stream:
-        if ctx is not None and chunk.text:
+    async for chunk in stream.stream:
+        if chunk.text:
             ctx.send_chunk(chunk.text)
-    return await stream_response.response
+    return await stream.response

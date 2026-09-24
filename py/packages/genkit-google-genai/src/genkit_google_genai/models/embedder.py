@@ -30,7 +30,7 @@ from google.genai import types as genai_types
 
 from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
 from genkit._core._typing import DocumentData, MediaPart, TextPart
-from genkit.embedder import EmbedderOptions, EmbedderSupports
+from genkit.embedder import EmbedderInfo, EmbedderSupports
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 
@@ -72,7 +72,7 @@ class EmbeddingTaskType(StrEnum):
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
 # discovery returns the bare name on some accounts/regions; lookups strip the
-# '@version' suffix before matching (see get_embedder_options).
+# '@version' suffix before matching (see get_embedder_info).
 EMBEDDER_DIMENSIONS: dict[str, int] = {
     # Google AI
     'gemini-embedding-2-preview': 3072,
@@ -113,8 +113,8 @@ def _base_name(name: str) -> str:
     return name.split('@', 1)[0]
 
 
-def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderOptions:
-    """Return EmbedderOptions metadata for a discovered embedder model.
+def get_embedder_info(name: str, label: str, is_vertex: bool = False) -> EmbedderInfo:
+    """Return catalog info for a discovered embedder model.
 
     Args:
         name: The bare (unprefixed) model name, e.g. 'gemini-embedding-2'.
@@ -122,14 +122,14 @@ def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> Embe
         is_vertex: True when resolving for the Vertex backend.
 
     Returns:
-        EmbedderOptions describing the model's label, supported inputs and
+        EmbedderInfo describing the model's label, supported inputs and
         static dimensions.
     """
     base = _base_name(name)
     supports_map = VERTEX_EMBEDDER_INPUT_SUPPORTS if is_vertex else GOOGLEAI_EMBEDDER_INPUT_SUPPORTS
     supports = supports_map.get(name) or supports_map.get(base) or ['text']
     dimensions = EMBEDDER_DIMENSIONS.get(name) or EMBEDDER_DIMENSIONS.get(base)
-    return EmbedderOptions(
+    return EmbedderInfo(
         label=label,
         supports=EmbedderSupports(input=supports),
         dimensions=dimensions,
@@ -209,7 +209,7 @@ class Embedder:
         ``multimodalembedding@001`` accepts only one instance per ``:predict``
         call, so multi-document requests (e.g. ``embed_many``) are rejected
         rather than sent as an invalid multi-instance payload. Batching multiple
-        documents is not supported yet.
+        documents is rejected; send one document per request.
 
         Args:
             request: Genkit embed request.
@@ -308,9 +308,9 @@ class Embedder:
     def _media_reference(url: str, content_type: str, include_mime_type: bool = True) -> dict[str, Any]:
         """Map a media URL to a Vertex image/video reference (gcsUri or base64).
 
-        Unlike the JS plugin, http(s) URLs raise instead of being forwarded as a
-        ``gcsUri``: Vertex only accepts ``gs://`` URIs there, so passing an
-        http(s) URL produces an opaque API error. Failing fast is clearer.
+        http(s) URLs raise instead of being forwarded as a ``gcsUri``: Vertex
+        only accepts ``gs://`` URIs there, so passing an http(s) URL produces an
+        opaque API error. Failing fast is clearer.
         """
         if url.startswith('gs://'):
             ref: dict[str, Any] = {'gcsUri': url}

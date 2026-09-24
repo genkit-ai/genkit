@@ -27,8 +27,9 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message
-from genkit.agent import (
+from genkit import ActionRunContext, FinishReason, Message
+from genkit.exp import Genkit
+from genkit.exp.agent import (
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -49,7 +50,7 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
         messages = [Message(m) for m in history] if history else None
 
         stream_resp = ai.generate_stream(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini_model('gemini-flash-latest'),
             system='Concise coding assistant.',
             messages=messages,
         )

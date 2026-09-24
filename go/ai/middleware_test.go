@@ -685,6 +685,53 @@ func TestBuildMiddlewareErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestBuildMiddlewareErrorWrapping(t *testing.T) {
+	t.Run("unclassified error becomes INVALID_ARGUMENT and names the middleware", func(t *testing.T) {
+		err := wrapBuildError("vectorstore", errors.New("boom"))
+		if got := status.Of(err); got != status.InvalidArgument {
+			t.Errorf("status = %v, want %v", got, status.InvalidArgument)
+		}
+		if got, want := status.Convert(err).Message, `ai: failed to build middleware "vectorstore": boom`; got != want {
+			t.Errorf("wire message = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("classified error keeps its status", func(t *testing.T) {
+		// A network-backed New reporting UNAVAILABLE is not a caller mistake,
+		// so it must not be rebranded as one.
+		inner := status.Errorf(status.ErrUnavailable, "dial vectors.internal: connection refused")
+		err := wrapBuildError("vectorstore", inner)
+		if got := status.Of(err); got != status.Unavailable {
+			t.Errorf("status = %v, want %v", got, status.Unavailable)
+		}
+		if !errors.Is(err, status.ErrUnavailable) {
+			t.Error("errors.Is(err, ErrUnavailable) = false, want the cause to stay matchable")
+		}
+	})
+
+	t.Run("classified error still names the middleware on the wire", func(t *testing.T) {
+		// Serialization resolves to the outermost status error, so wrapping
+		// with fmt.Errorf would leave a client holding the inner message with
+		// nothing saying which middleware failed to build.
+		inner := status.Errorf(status.ErrUnavailable, "dial vectors.internal: connection refused")
+		got := status.Convert(wrapBuildError("vectorstore", inner)).Message
+		want := `ai: failed to build middleware "vectorstore": dial vectors.internal: connection refused`
+		if got != want {
+			t.Errorf("wire message = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a New's public message is not republished", func(t *testing.T) {
+		// Building the envelope here is what keeps it non-public: a New that
+		// chose to publish its own text did not choose to publish it through
+		// the middleware-build path.
+		inner := status.PublicErrorf(status.ErrUnavailable, "internal detail")
+		if msg, public := status.PublicMessage(wrapBuildError("vectorstore", inner)); public {
+			t.Errorf("PublicMessage = %q, public = true, want the wrapper to withhold it", msg)
+		}
+	})
+}
+
 // --- tool interrupt from WrapTool ---
 
 func TestWrapToolInterrupts(t *testing.T) {

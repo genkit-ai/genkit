@@ -31,7 +31,7 @@ from typing import Any
 from _ai import ai
 
 from genkit import ActionRunContext
-from genkit.agent import InMemorySessionStore
+from genkit.exp.agent import InMemorySessionStore
 
 # The store is what makes detach possible — the background turn writes its result
 # there under the snapshot id, and the client reads it back when it's ready.

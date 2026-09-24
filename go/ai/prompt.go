@@ -1143,10 +1143,12 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 //
 // A refusal is an error: when the response finished blocked, the output is the
 // zero value of Out and the error is [ErrGenerationBlocked], carrying the
-// provider's explanation. The response is still returned alongside it.
+// provider's explanation. The response is still returned alongside it. A
+// generation failure likewise returns its error alongside the partial
+// response [Generate] documents, with a zero-value output.
 //
 // The output is the zero value of Out with no error in two other cases:
-// generation ended aborted, interrupted, or other, or the response carried no
+// generation ended failed, aborted, interrupted, or other, or the response carried no
 // text to parse, which is what a turn holding tool requests, interrupts, or
 // media looks like. Check resp.FinishReason, resp.Interrupts(), and
 // resp.ToolRequests() to handle them.
@@ -1162,7 +1164,7 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 	allOpts := append(slices.Clone(opts), WithInput(input))
 	resp, err := dp.prompt.Execute(ctx, allOpts...)
 	if err != nil {
-		return base.Zero[Out](), nil, err
+		return base.Zero[Out](), resp, err
 	}
 
 	// A refusal cannot produce the value this helper promises, so it is
@@ -1205,7 +1207,7 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 // [WithInput] passed in opts.
 //
 // Like [DataPrompt.Execute], a blocked response fails with
-// [ErrGenerationBlocked], while one that ends aborted, interrupted, or other,
+// [ErrGenerationBlocked], while one that ends failed, aborted, interrupted, or other,
 // or carries no text to parse, yields zero-value Output and no error; check
 // Response.FinishReason, Response.Interrupts(), and Response.ToolRequests().
 //

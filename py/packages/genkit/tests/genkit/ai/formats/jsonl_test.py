@@ -92,7 +92,7 @@ class TestJsonlFormatMessage:
         fmt = jsonl_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         result = fmt.parse_message(Message(role='model', content=[Part(TextPart(text=''))]))
-        assert result == []
+        assert result is None
 
     def test_parses_jsonl_with_preamble_and_code_fence(self) -> None:
         """Test parsing JSONL with preamble and code fence."""

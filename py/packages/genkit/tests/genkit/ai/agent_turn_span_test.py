@@ -36,7 +36,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import Attr, metadata_key
 from genkit._core._typing import AgentInput, AgentResult, MessageData, Part, SessionState, TextPart
-from genkit.agent import AgentFinishReason, InMemorySessionStore
+from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 SESSION_ID_ATTR = metadata_key('agent:sessionId')

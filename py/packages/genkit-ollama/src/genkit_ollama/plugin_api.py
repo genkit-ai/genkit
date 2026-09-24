@@ -27,13 +27,14 @@ import structlog
 
 from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import (
-    EmbedderOptions,
+    EmbedderInfo,
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
+    embedder as create_embedder,
     embedder_action_metadata,
 )
-from genkit.model import model_action_metadata
+from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -216,12 +217,12 @@ class Ollama(Plugin):
 
         Static (or absent) headers are baked into a per-event-loop cached client that
         is shared across requests and left open. A header *callable* is resolved on
-        every call — receiving the server address plus any model/request context (JS
-        parity) — and applied to a *fresh* client, so expiring auth tokens or
+        every call — receiving the server address plus any model/request context —
+        and applied to a *fresh* client, so expiring auth tokens or
         request-specific headers take effect. Because the Ollama SDK bakes headers in
-        at construction (it has no per-request header hook, unlike the JS ``fetch`` and
-        Go ``http.Request`` paths), that fresh client owns its own httpx connection
-        pool; it is closed on exit so long-running callers don't accumulate pools.
+        at construction (it has no per-request header hook), that fresh client owns
+        its own httpx connection pool; it is closed on exit so long-running callers
+        don't accumulate pools.
 
         Args:
             model: The model/embedder definition this request targets, if any.
@@ -348,10 +349,10 @@ class Ollama(Plugin):
             async with self._client_for_request(model=model_ref, model_request=request) as client:
                 return await model.generate(request, ctx, client=client)
 
-        action = Action(
-            kind=ActionKind.MODEL,
-            name=name,
-            fn=_run,
+        action = create_model(
+            name,
+            _run,
+            config_schema=OllamaConfig,
             metadata=action_metadata.metadata,
         )
 
@@ -388,18 +389,15 @@ class Ollama(Plugin):
                 async with wrap_connection_errors(server_address):
                     return await embedder.embed(request, client=client)
 
-        return Action(
-            kind=ActionKind.EMBEDDER,
-            name=name,
-            fn=_run,
-            metadata={
-                'embedder': {
-                    'label': f'Ollama Embedding - {clean_name}',
-                    'dimensions': embedder_ref.dimensions,
-                    'supports': {'input': ['text']},
-                    'customOptions': to_json_schema(ollama_api.Options),
-                },
-            },
+        return create_embedder(
+            name,
+            _run,
+            info=EmbedderInfo(
+                label=f'Ollama Embedding - {clean_name}',
+                dimensions=embedder_ref.dimensions,
+                supports=EmbedderSupports(input=['text']),
+                config_schema=to_json_schema(ollama_api.Options),
+            ),
         )
 
     async def list_actions(self) -> list[ActionMetadata]:
@@ -425,7 +423,7 @@ class Ollama(Plugin):
                 actions.append(
                     embedder_action_metadata(
                         name=ollama_name(name),
-                        options=EmbedderOptions(
+                        info=EmbedderInfo(
                             config_schema=to_json_schema(ollama_api.Options),
                             label=f'Ollama Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),

@@ -201,6 +201,22 @@ func DefineCustomAgent[State any](
 	return aix.DefineCustomAgent(genkitbridge.RegistryOf(g), name, fn, opts...)
 }
 
+// LookupAgent resolves an agent registered on g by name and returns its
+// [aix.AgentHandle]: the untyped caller-side view for code that does not hold
+// the typed [aix.Agent] value (orchestrators, middleware, tools). The handle
+// runs the agent ([aix.AgentHandle.Run], [aix.AgentHandle.RunText]), launches
+// and tracks background work ([aix.AgentHandle.RunDetached],
+// [aix.AgentHandle.Task]), and reads or aborts snapshots, with custom
+// state as raw JSON.
+//
+// It returns nil when name resolves to no agent, matching every other Lookup
+// in the framework. Like [ListAgents] it does not require
+// [genkit.WithExperimental]: it only reads the registry, and an agent can only
+// have been registered through the gated constructors.
+func LookupAgent(g *genkit.Genkit, name string) *aix.AgentHandle {
+	return aix.LookupAgent(genkitbridge.RegistryOf(g), name)
+}
+
 // ListAgents returns a slice of all [api.Action] instances that represent
 // agents registered with the Genkit instance g. Like [genkit.ListFlows], this
 // is useful for introspection or for dynamically exposing agent endpoints in an

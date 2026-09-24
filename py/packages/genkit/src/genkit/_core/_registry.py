@@ -54,6 +54,7 @@ from genkit._core._typing import (
     EmbedResponse,
     EvalRequest,
     EvalResponse,
+    Operation,
 )
 
 logger = get_logger(__name__)
@@ -268,6 +269,18 @@ class Registry:
                 self._entries[action.kind] = {}
             self._entries[action.kind][action.name] = action
 
+    def registered_action(self, kind: ActionKind, name: str) -> Action | None:
+        """Return an action that is already in this registry.
+
+        Does not initialize plugins or run resolve. Falls back to the parent
+        registry.
+        """
+        with self._lock:
+            local = self._entries.get(kind, {}).get(name)
+        if local is not None:
+            return local
+        return self._parent.registered_action(kind, name) if self._parent is not None else None
+
     async def resolve_actions_by_kind(self, kind: ActionKind) -> dict[str, Action]:
         """Returns all registered actions for a specific kind, triggering lazy loading.
 
@@ -287,11 +300,13 @@ class Registry:
         return actions
 
     async def list_actions(self) -> dict[str, ActionMetadata]:
-        """Return reflection metadata for plugins, registered actions, and DAP-expanded tools.
+        """Return reflection metadata for plugins and registered actions.
 
         Initializes plugins, advertises plugin rows from each plugin's ``list_actions()``,
-        then fills registered :class:`Action` rows and expands DAP-provided actions. Merges
-        with the parent registry's catalog; entries from this registry win on duplicate keys.
+        then fills registered :class:`Action` rows. DAP children are not catalog rows;
+        they become ``/tool.v2/<name>`` when generate binds them on a child registry.
+        Merges with the parent registry's catalog; entries from this registry win
+        on duplicate keys.
 
         Returns:
             Map of action key string to typed :class:`ActionMetadata`.
@@ -317,28 +332,11 @@ class Registry:
                 key = f'/{meta.action_type}/{meta.name}'
                 catalog[key] = meta.model_copy(update={'key': key})
 
-        # 2. Concrete registered actions, plus DAP-expanded actions if the action is a provider.
+        # 2. Concrete registered actions (local tools are ``/tool.v2/<name>``).
         for kind in ActionKind.__members__.values():
             for name, action in (await self.resolve_actions_by_kind(kind)).items():
                 key = create_action_key(kind, name)
                 catalog[key] = _action_metadata_for_registered_action(action)
-
-                dap = getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
-                if dap is None:
-                    continue
-                try:
-                    # DAP action keys are prefixed with the provider action's ``name``;
-                    # see :meth:`DynamicActionProvider.list_action_metadata_by_key`.
-                    dap_actions = await dap.list_action_metadata_by_key(action.name)
-                except Exception:
-                    logger.exception(
-                        'Error listing actions for Dynamic Action Provider %s',
-                        action.name,
-                    )
-                    continue
-                # ``list_action_metadata_by_key`` already populates each entry's ``meta.key``
-                # to match its DAP action key, so we can merge straight into the catalog.
-                catalog.update(dap_actions)
 
         # 3. Merge in parent registry's catalog; entries from this registry win on duplicate keys.
         if self._parent is None:
@@ -582,9 +580,10 @@ class Registry:
         """Resolve an action by kind and name.
 
         Tries an exact (kind, name) cache hit first. DAP-qualified names
-        (provider:innerKind/innerName) go through that provider only. If the name contains a
-        slash, the first segment is treated as a plugin id: that plugin is initialized and
-        plugin.resolve is used. Falls back to parent registry if nothing found.
+        (``provider:innerKind/innerName``) go through that provider. If the
+        name contains a slash, the first segment is treated as a plugin id:
+        that plugin is initialized and plugin.resolve is used. Falls back to
+        parent registry if nothing found.
 
         Args:
             kind: The type of action to resolve.
@@ -597,7 +596,8 @@ class Registry:
             if kind in self._entries and name in self._entries[kind]:
                 return await self._trigger_lazy_loading(self._entries[kind][name])
 
-        # DAP-qualified names: resolve via that provider only (not plugin slash splitting).
+        # DAP-qualified names go through that provider (not plugin slash
+        # splitting). This returns the Action. It does not catalog it.
         if kind != ActionKind.DYNAMIC_ACTION_PROVIDER and parse_dap_qualified_name(name) is not None:
             action = await self._resolve_dap_qualified_action(kind, name)
             if action is not None:
@@ -756,20 +756,32 @@ class Registry:
             return None
         return cast(Action[EmbedRequest, EmbedResponse, Never], action)
 
-    async def resolve_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
-        """Resolve a model action by name with full type information.
+    async def resolve_model(
+        self, name: str
+    ) -> Action[ModelRequest, ModelResponse | Operation, ModelResponseChunk] | None:
+        """Resolve a model action by name.
+
+        Looks up a normal model first, then a background start action, so a
+        name registered only with ``define_background_model`` is findable
+        under the same string callers already pass. A start returns an
+        Operation, not a ModelResponse.
 
         Args:
             name: The model name (e.g., "gemini-pro" or "plugin/model").
 
         Returns:
-            A fully typed model action, or None if not found.
+            The MODEL action, or the BACKGROUND_MODEL start action, or None.
         """
         action = await self.resolve_action(ActionKind.MODEL, name)
         if action is None:
+            # Models registered with define_background_model live under this
+            # kind. Callers still pass the same name they would for a normal
+            # model.
+            action = await self.resolve_action(ActionKind.BACKGROUND_MODEL, name)
+        if action is None:
             return None
         return cast(
-            Action[ModelRequest, ModelResponse, ModelResponseChunk],
+            Action[ModelRequest, ModelResponse | Operation, ModelResponseChunk],
             action,
         )
 

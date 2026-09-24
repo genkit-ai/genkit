@@ -119,6 +119,7 @@ const (
 	ActionTypeUtil             ActionType = "util"
 	ActionTypeCustom           ActionType = "custom"
 	ActionTypeAgentSnapshot    ActionType = "agent-snapshot"
+	ActionTypeAgentWait        ActionType = "agent-wait"
 	ActionTypeAgentAbort       ActionType = "agent-abort"
 	ActionTypeCheckOperation   ActionType = "check-operation"
 	ActionTypeCancelOperation  ActionType = "cancel-operation"

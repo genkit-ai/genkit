@@ -251,10 +251,10 @@ Compresses conversation context when it grows too large, reducing token usage an
 
 **Strategies applied:**
 
-1. **Safety cap**: Hard-truncates any single oversized tool response (`maxToolResponseChars`, default: 400,000 chars).
+1. **Safety cap**: Hard-truncates any single oversized tool response (`maxToolResponseChars`, default: 400,000 chars) with a `[TRUNCATED: ...]` marker.
 2. **Deduplication**: Replaces duplicate tool responses with a short notice (`deduplicateToolResponses`).
-3. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent responses.
-4. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, optionally inserting a notice.
+3. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent responses with a `[TRUNCATED: ...]` marker.
+4. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, preserving system messages and ensuring conversation history begins with a user turn.
 5. **Summarization**: Summarizes older conversation history using an LLM (`summarize`), with optional threshold skipping (`skipSummarizationThreshold`) and dynamic overshoot adjustment.
 6. **Non-destructive session history**: By default (`preserveOriginalMessages: true`), compressed history is saved in message metadata (`message.metadata.compressedHistory`) rather than modifying original messages in place. Model calls receive the compressed view while session and UI logs retain full original messages. Use `resolveCompressedHistory(messages)` to extract active messages.
 
@@ -265,7 +265,7 @@ import { contextCompression, resolveCompressedHistory } from '@genkit-ai/middlew
 const ai = genkit({ ... });
 
 const response = await ai.generate({
-  model: googleAI.model('gemini-2.5-pro'),
+  model: googleAI.model('gemini-flash-latest'),
   prompt: 'Research and summarize...',
   tools: [searchTool],
   use: [
@@ -290,4 +290,22 @@ console.log(response.messages.length);
 // Resolve the active compressed messages sent to the model:
 const activeMessages = resolveCompressedHistory(response.messages);
 ```
+
+#### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
+| `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
+| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. |
+| `deduplicateToolResponses` | `object` | — | Deduplication settings for repeated tool calls. |
+| `toolResponses` | `object` | — | Truncation settings for older tool responses. |
+| `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
+| `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool responses to keep untruncated. |
+| `summarize` | `object` | — | LLM summarization settings (`model`, `preserveRecent`, `prompt`). |
+| `skipSummarizationThreshold` | `number` | — | Skip summarization if cheap strategies save at least this fraction of context. |
+| `maxMessages` | `number` | — | Maximum message count target. Drops older non-system messages, ensuring history begins with a user turn. |
+| `insertTruncationNotice` | `boolean` | `true` | Inserts an advisory notice when messages are dropped. |
+| `truncationNotice` | `string` | standard text | Custom notice text to use when messages are dropped. |
+
 
