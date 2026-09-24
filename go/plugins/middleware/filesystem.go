@@ -142,6 +142,9 @@ func (p *pathLocks) lock(path string) func() {
 // that resolves outside the root, including via "..", absolute paths, or
 // symbolic links.
 //
+// A failed file operation does not fail the generation: its error answers
+// the call, as with [ToolErrors], so the model can correct itself.
+//
 // Usage:
 //
 //	resp, err := genkit.Generate(ctx, g,
@@ -203,6 +206,12 @@ func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	for _, t := range tools {
 		toolSet[t.Name()] = struct{}{}
 	}
+	// The model sees a failed file operation as the call's response and can
+	// correct its path or edit. Other tools keep failing the generation.
+	returnErrors := returnToolErrors(func(name string) bool {
+		_, ours := toolSet[name]
+		return ours
+	})
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		mu.Lock()
@@ -227,36 +236,12 @@ func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			params.Request.Messages = append(params.Request.Messages, queued...)
 		}
 
-		return next(ctx, params)
-	}
-
-	wrapTool := func(ctx context.Context, params *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
-		if _, ours := toolSet[params.Tool.Name()]; !ours {
-			return next(ctx, params)
-		}
-
-		resp, err := next(ctx, params)
-		if err == nil {
-			return resp, nil
-		}
-		if isInterrupt, _ := ai.IsToolInterruptError(err); isInterrupt {
-			return nil, err
-		}
-
-		// The error is deliberately not propagated: the model sees the failure
-		// as a user message on the next turn and can self-correct, so this log
-		// is the only direct record of the original error.
-		logger.Debug(ctx, "filesystem tool failed, converting to user message", "tool", params.Tool.Name(), "error", err)
-		enqueueParts(ai.NewTextPart(fmt.Sprintf("Tool %q failed: %v", params.Tool.Name(), err)))
-		return &ai.MultipartToolResponse{
-			Output: "Tool call failed; see user message below for details.",
-		}, nil
+		return returnErrors(ctx, params, next)
 	}
 
 	return &ai.Hooks{
 		Tools:        tools,
 		WrapGenerate: wrapGenerate,
-		WrapTool:     wrapTool,
 	}, nil
 }
 
