@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import structlog
+from genkit_otel import GenAiInstrumentation
 from opentelemetry import metrics, trace as trace_api
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
 from opentelemetry.resourcedetector.gcp_resource_detector import GoogleCloudResourceDetector
@@ -38,7 +39,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import get_current_span, span as trace_span
 
+from genkit._core._telemetry._instrumentation import is_instrumented_by
 from genkit.plugin_api import is_dev_environment
+from genkit.telemetry import configure_instrumentation
 
 from .constants import (
     DEFAULT_METRIC_EXPORT_INTERVAL_MS,
@@ -186,8 +189,6 @@ class GcpTelemetry:
         is_dev = is_dev_environment()
         should_export = self.force_dev_export or not is_dev
 
-        # ALWAYS configure logging (required for telemetry handlers)
-        # The export flag is passed down to control Cloud Logging export
         self._configure_logging()
 
         # Only configure tracing/metrics if exporting (performance optimization)
@@ -206,24 +207,11 @@ class GcpTelemetry:
                 'Telemetry initialized in local-only mode',
                 export_enabled=False,
                 environment='dev',
-                note='Use force_dev_export=True for full AIM visibility in dev',
+                note='Use force_dev_export=True to export Cloud Trace in dev',
             )
 
     def _configure_logging(self) -> None:
-        """Configure structlog with Cloud Logging export and trace correlation."""
-        from .gcp_logger import gcp_logger
-
-        is_dev = is_dev_environment()
-        should_export = self.force_dev_export or not is_dev
-
-        # Initialize the GCP logger for telemetry modules
-        gcp_logger.initialize(
-            project_id=self.project_id,
-            credentials=self.credentials,
-            export=should_export,
-        )
-
-        # Configure structlog processors for trace correlation
+        """Stamp Cloud Logging trace correlation fields on structlog events."""
         try:
             current_config = structlog.get_config()
             processors = list(current_config.get('processors', []))
@@ -264,6 +252,9 @@ class GcpTelemetry:
             )
 
             _hang_exporter_on_process_tracer(exporter=trace_exporter)
+            if is_instrumented_by(GenAiInstrumentation):
+                return
+            configure_instrumentation(GenAiInstrumentation())
         except Exception as e:
             handle_tracing_error(e)
 

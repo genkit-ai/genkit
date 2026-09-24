@@ -26,6 +26,7 @@ from genkit_google_cloud.telemetry.tracing import (
     _reset_google_cloud_telemetry,
     enable_google_cloud_telemetry,
 )
+from genkit_otel import GenAiInstrumentation
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -34,16 +35,36 @@ from genkit import ActionKind, Genkit
 from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._telemetry._instrumentation import (
+    instrumentations,
     is_instrumented_by,
     parent_path_context,
     reset_instrumentation,
 )
 from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit._core._telemetry.http import GenkitBuiltinInstrumentation
+from genkit.telemetry import configure_instrumentation
 
 
 def _hex_id(value: str, length: int) -> bool:
     return len(value) == length and all(c in '0123456789abcdef' for c in value)
+
+
+def _flush_exporters_in_provider(provider: TracerProvider) -> None:
+    active = getattr(provider, '_active_span_processor', None)
+    if active is None:
+        return
+    processors = getattr(active, '_span_processors', [active])
+    for proc in processors:
+        exp = getattr(proc, 'span_exporter', None) or getattr(proc, 'exporter', None)
+        if exp is not None and hasattr(exp, 'force_flush'):
+            exp.force_flush()
+
+
+def _force_flush() -> None:
+    provider = trace_api.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        provider.force_flush()
+        _flush_exporters_in_provider(provider)
 
 
 async def _joke() -> str:
@@ -99,19 +120,67 @@ def _isolate_telemetry(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
 
 
 @pytest.mark.asyncio
-async def test_enable_under_genkit_start_with_force_still_adds_the_ui_poster(
+async def test_enable_google_cloud_telemetry_mints_ids_and_sends_the_action_to_cloud() -> None:
+    """enable_google_cloud_telemetry() turns GenAI spans on; Cloud sees the action."""
+    with _cloud_enable() as cloud:
+        action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
+        result = await action.run()
+        _force_flush()
+
+        assert is_instrumented_by(GenAiInstrumentation)
+        assert _hex_id(result.trace_id, 32)
+        names = [span.name for span in cloud.get_finished_spans()]
+        assert 'joke' in names
+
+
+@pytest.mark.asyncio
+async def test_configure_genai_then_enable_sends_one_span_to_cloud() -> None:
+    """configure_instrumentation(GenAiInstrumentation()) then enable(): Cloud sees one joke span."""
+    yours = GenAiInstrumentation()
+    configure_instrumentation(yours)
+    with _cloud_enable() as cloud:
+        action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
+        result = await action.run()
+        _force_flush()
+
+        assert [i for i in instrumentations if isinstance(i, GenAiInstrumentation)] == [yours]
+        assert _hex_id(result.trace_id, 32)
+        joke = [span for span in cloud.get_finished_spans() if span.name == 'joke']
+        assert len(joke) == 1
+
+
+@pytest.mark.asyncio
+async def test_configure_genai_on_a_private_tracer_then_enable_does_not_send_that_action_to_cloud() -> None:
+    """GenAI on a private tracer then enable(): Cloud hangs on the process tracer, so that action is not there."""
+    private = TracerProvider()
+    configure_instrumentation(GenAiInstrumentation(tracer=private.get_tracer('test')))
+    with _cloud_enable() as cloud:
+        action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
+        result = await action.run()
+        _force_flush()
+        private.force_flush()
+
+        assert _hex_id(result.trace_id, 32)
+        names = [span.name for span in cloud.get_finished_spans()]
+        assert 'joke' not in names
+    private.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_enable_under_genkit_start_still_adds_the_ui_poster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """force_dev_export=True hangs Cloud; Genkit() still adds the Traces tab poster."""
+    """force_dev_export=True under genkit start turns GenAI spans on; Genkit() still adds the Traces tab poster."""
     monkeypatch.setenv(GENKIT_ENV, 'dev')
     monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
 
     with _cloud_enable(force_dev_export=True):
-        pass
+        assert is_instrumented_by(GenAiInstrumentation)
 
     Genkit()
     action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
     result = await action.run()
 
+    assert is_instrumented_by(GenAiInstrumentation)
     assert is_instrumented_by(GenkitBuiltinInstrumentation)
     assert _hex_id(result.trace_id, 32)

@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,9 +17,6 @@
 [project]
 authors = [
   { name = "Google" },
-  { name = "Yesudeep Mangalapilly", email = "yesudeep@google.com" },
-  { name = "Elisa Shen", email = "mengqin@google.com" },
-  { name = "Niraj Nepal", email = "nnepal@google.com" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -29,6 +26,7 @@ classifiers = [
   "Framework :: Pydantic",
   "Framework :: Pydantic :: 2",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3 :: Only",
@@ -40,27 +38,24 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
-  "Typing :: Typed",
-  "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit",
-  "genkit-otel",
-  "google-cloud-firestore>=2.14.0",
-  "google-cloud-logging>=3.10.0",
-  "opentelemetry-exporter-gcp-trace>=1.9.0",
-  "opentelemetry-exporter-gcp-monitoring>=1.9.0",
-  "strenum>=0.4.15; python_version < '3.11'",
+  "genkit>=0.12.0",
+  "opentelemetry-api>=1.29.0",
+  "opentelemetry-exporter-otlp>=1.29.0",
+  "opentelemetry-sdk>=1.29.0",
 ]
-description = "Cloud Trace, Cloud Logging, and Firestore sessions for Genkit"
+description = "OpenTelemetry GenAI semantic-conventions instrumentation for Genkit (traces, metrics, and message-content capture)."
 keywords = [
   "genkit",
-  "cloud-trace",
-  "firestore",
+  "genai",
   "observability",
+  "opentelemetry",
+  "otel",
+  "telemetry",
 ]
 license = "Apache-2.0"
-name = "genkit-google-cloud"
+name = "genkit-otel"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.12.0"
@@ -77,5 +72,5 @@ build-backend = "hatchling.build"
 requires      = ["hatchling"]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["src/genkit_google_cloud"]
+only-include = ["src/genkit_otel"]
 sources      = ["src"]

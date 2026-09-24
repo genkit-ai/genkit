@@ -80,16 +80,14 @@ def enable_google_cloud_telemetry(
 ) -> None:
     """Attach Cloud Trace and Cloud Monitoring exporters.
 
-    Call this once from the app. A second call raises. This is enough
-    for Cloud Trace. The Cloud exporter hangs on the process-global
-    tracer provider (the one they already registered, or one we boot).
-    Under ``genkit start``, ``Genkit()`` still attaches the Developer
-    UI collector.
+    Call this once from the app. A second call raises. This hangs Cloud
+    on the process-global tracer and turns on ``GenAiInstrumentation``
+    unless one is already minting. Under ``genkit start``, ``Genkit()``
+    still attaches the Developer UI collector.
 
     Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
-    ``force_dev_export=False``, or when ``disable_traces=True``. Model
-    inputs and outputs are redacted unless you pass
-    ``log_input_and_output=True``.
+    ``force_dev_export=False``, or when ``disable_traces=True``. Prompt
+    and reply text are not written on GenAI spans.
 
     Args:
         project_id: Google Cloud project ID. If provided, takes precedence over
@@ -103,9 +101,9 @@ def enable_google_cloud_telemetry(
             - AlwaysOnSampler: Collect all traces
             - AlwaysOffSampler: Collect no traces
             - TraceIdRatioBasedSampler: Sample a percentage of traces
-        log_input_and_output: If True, preserve model input/output in traces
-            and logs. Defaults to False (redact for privacy). Only enable this
-            in trusted environments where PII exposure is acceptable.
+        log_input_and_output: If True, leave ``genkit:input`` / ``genkit:output``
+            intact on exported spans that still carry those keys. GenAI spans
+            do not write prompt or reply text. Defaults to False.
         force_dev_export: If True, export Cloud telemetry even when
             ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, metrics will not be exported. Traces and
