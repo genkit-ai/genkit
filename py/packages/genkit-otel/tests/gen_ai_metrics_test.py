@@ -14,8 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import pytest
 from genkit_otel import GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import GenAiAttr, GenAiMetric

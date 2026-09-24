@@ -20,8 +20,6 @@ Used only when content capture is on, so prompt and reply text stay
 off the span until the caller opts in.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple

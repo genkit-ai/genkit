@@ -16,8 +16,6 @@
 
 """The two spec-defined GenAI client metrics, recorded per model operation."""
 
-from __future__ import annotations
-
 from opentelemetry.metrics import Histogram, Meter
 from opentelemetry.util.types import AttributeValue
 

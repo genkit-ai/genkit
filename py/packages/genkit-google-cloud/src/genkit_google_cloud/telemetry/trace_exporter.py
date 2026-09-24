@@ -125,7 +125,6 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
     def __init__(
         self,
         exporter: SpanExporter,
-        log_input_and_output: bool = False,
         project_id: str | None = None,
         error_handler: Callable[[Exception], None] | None = None,
     ) -> None:
@@ -133,14 +132,12 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
 
         Args:
             exporter: The underlying SpanExporter to wrap.
-            log_input_and_output: If True, preserve input/output in spans and logs.
-                Defaults to False (redact for privacy).
             project_id: Optional GCP project ID for log correlation.
             error_handler: Optional callback invoked when export errors occur.
         """
         super().__init__(
             exporter=exporter,
-            log_input_and_output=log_input_and_output,
+            log_input_and_output=False,
             project_id=project_id,
             error_handler=error_handler,
         )

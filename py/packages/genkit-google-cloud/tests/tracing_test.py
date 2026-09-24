@@ -101,7 +101,6 @@ def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> No
         mock_adjusting.assert_called_once()
         call_kwargs = mock_adjusting.call_args.kwargs
         assert call_kwargs['exporter'] == mock_base_exporter
-        assert call_kwargs.get('log_input_and_output', False) is False
         assert call_kwargs['project_id'] is None
 
         # Verify the wrapped exporter was added
@@ -267,7 +266,6 @@ def test_enable_google_cloud_telemetry_disable_metrics() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader') as mock_reader,
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with disable_metrics=True (JS/Go: disableMetrics)
         enable_google_cloud_telemetry(disable_metrics=True)
 
         # Verify metrics exporter was NOT created
@@ -372,7 +370,6 @@ def test_enable_google_cloud_telemetry_custom_metric_interval() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader') as mock_reader,
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with custom metric_export_interval_ms (JS/Go: metricExportIntervalMillis)
         enable_google_cloud_telemetry(metric_export_interval_ms=30000)
 
         # Verify metric reader was created with correct interval
