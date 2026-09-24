@@ -102,16 +102,15 @@ _CONTENT_CAPTURING_MODES: dict[str, ContentCapturingMode] = {
 }
 
 
-def parse_content_capturing_mode(raw: str | None) -> ContentCapturingMode | None:
+def parse_content_capturing_mode(raw: str) -> ContentCapturingMode:
     """Parse a spec content-capturing token.
 
-    Null/empty → ``NO_CONTENT``. A known token (case-insensitive,
-    surrounding whitespace ignored) → that mode. Unknown → ``None``
-    so the caller can warn and fall back.
+    Empty or unknown → ``NO_CONTENT``. A known token (case-insensitive,
+    surrounding whitespace ignored) → that mode.
     """
-    if raw is None or not raw.strip():
+    if not raw.strip():
         return 'NO_CONTENT'
-    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper())
+    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper(), 'NO_CONTENT')
 
 
 def split_model_name(name: str) -> tuple[str | None, str]:

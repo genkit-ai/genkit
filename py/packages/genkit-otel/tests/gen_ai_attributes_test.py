@@ -128,12 +128,11 @@ def test_parse_known_content_tokens() -> None:
     assert parse_content_capturing_mode('  SPAN_AND_EVENT  ') == 'SPAN_AND_EVENT'
 
 
-def test_parse_null_or_empty_is_no_content() -> None:
-    assert parse_content_capturing_mode(None) == 'NO_CONTENT'
+def test_parse_empty_is_no_content() -> None:
     assert parse_content_capturing_mode('') == 'NO_CONTENT'
     assert parse_content_capturing_mode('   ') == 'NO_CONTENT'
 
 
-def test_parse_unknown_token_is_none() -> None:
-    assert parse_content_capturing_mode('true') is None
-    assert parse_content_capturing_mode('bogus') is None
+def test_parse_unknown_token_is_no_content() -> None:
+    assert parse_content_capturing_mode('true') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('bogus') == 'NO_CONTENT'
