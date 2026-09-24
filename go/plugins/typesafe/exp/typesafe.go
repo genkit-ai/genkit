@@ -449,9 +449,10 @@ func messageValue(msg *ai.Message, cfg *Config) (any, error) {
 }
 
 // partValue is a part's contribution to the state. Text is sent as is, or
-// parsed when the config asks; a data part is sent as its value. Loop
-// plumbing left in a history is skipped rather than sent as state, and any
-// other kind of part is refused rather than stringified.
+// as the JSON it holds when the config asks, kept verbatim so a number too
+// large for a float64 reaches the model unchanged; a data part is sent as
+// its value. Loop plumbing left in a history is skipped rather than sent as
+// state, and any other kind of part is refused rather than stringified.
 func partValue(part *ai.Part, cfg *Config) (any, error) {
 	if isFormatInstructions(part) {
 		return nil, nil
@@ -459,7 +460,7 @@ func partValue(part *ai.Part, cfg *Config) (any, error) {
 	switch {
 	case part.IsText():
 		if cfg != nil && cfg.StateJSON {
-			var value any
+			var value json.RawMessage
 			if err := json.Unmarshal([]byte(part.Text), &value); err != nil {
 				return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: stateJSON is set but the text is not JSON: %w", err)
 			}

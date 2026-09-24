@@ -247,6 +247,16 @@ func TestStateShapes(t *testing.T) {
 		if want := map[string]any{"ticket": "hi"}; !reflect.DeepEqual(state, want) {
 			t.Errorf("state = %v, want the parsed object", state)
 		}
+
+		// The JSON goes out as written, so an ID past a float64's integer
+		// range is not rounded.
+		wire, err := buildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage(`{"id": 9007199254740993}`)}}, &Config{StateJSON: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := base.JSONString(wire); got != `{"id":9007199254740993}` {
+			t.Errorf("state on the wire = %s, want the number unchanged", got)
+		}
 	})
 	t.Run("extra", func(t *testing.T) {
 		decide(t, ai.WithPrompt("hi"), ai.WithConfig(&Config{Extra: map[string]any{"session_id": "s-1"}}))
