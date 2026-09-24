@@ -15,7 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from genkit_otel._gen_ai_attributes import (
-    ContentCapturingMode,
     as_double,
     as_int,
     as_string_list,
@@ -123,16 +122,16 @@ def test_as_string_list() -> None:
 
 
 def test_parse_known_content_tokens() -> None:
-    assert parse_content_capturing_mode('NO_CONTENT') is ContentCapturingMode.NO_CONTENT
-    assert parse_content_capturing_mode('span_only') is ContentCapturingMode.SPAN_ONLY
-    assert parse_content_capturing_mode('Event_Only') is ContentCapturingMode.EVENT_ONLY
-    assert parse_content_capturing_mode('  SPAN_AND_EVENT  ') is ContentCapturingMode.SPAN_AND_EVENT
+    assert parse_content_capturing_mode('NO_CONTENT') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('span_only') == 'SPAN_ONLY'
+    assert parse_content_capturing_mode('Event_Only') == 'EVENT_ONLY'
+    assert parse_content_capturing_mode('  SPAN_AND_EVENT  ') == 'SPAN_AND_EVENT'
 
 
 def test_parse_null_or_empty_is_no_content() -> None:
-    assert parse_content_capturing_mode(None) is ContentCapturingMode.NO_CONTENT
-    assert parse_content_capturing_mode('') is ContentCapturingMode.NO_CONTENT
-    assert parse_content_capturing_mode('   ') is ContentCapturingMode.NO_CONTENT
+    assert parse_content_capturing_mode(None) == 'NO_CONTENT'
+    assert parse_content_capturing_mode('') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('   ') == 'NO_CONTENT'
 
 
 def test_parse_unknown_token_is_none() -> None:
