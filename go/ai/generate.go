@@ -580,7 +580,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	// The run's total counts every call that reaches the model, so it is
 	// taken under the WrapModel hooks: a retried or hedged call counts, a
 	// response served from a cache does not. A hook may call the model
-	// concurrently, hence the lock.
+	// concurrently, hence the lock. The same calls go to the usage sink an
+	// enclosing agent invocation installed.
 	var (
 		usageMu    sync.Mutex
 		totalUsage *GenerationUsage
@@ -590,8 +591,11 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		resp, err := callModel(ctx, req, cb)
 		if resp != nil && resp.Usage != nil {
 			usageMu.Lock()
-			totalUsage = addUsage(totalUsage, resp.Usage)
+			totalUsage = SumUsage(totalUsage, resp.Usage)
 			usageMu.Unlock()
+			if sink := base.UsageSinkFromContext(ctx); sink != nil {
+				sink(resp.Usage)
+			}
 		}
 		return resp, err
 	}
@@ -884,17 +888,18 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	return resp, err
 }
 
-// addUsage returns the field-by-field sum of a and b, adding
-// [GenerationUsage.Custom] key by key. Either may be nil. It never mutates
-// its arguments, since a model or hook may retain the usage it returned.
-func addUsage(a, b *GenerationUsage) *GenerationUsage {
-	if a == nil && b == nil {
-		return nil
-	}
-	var sum GenerationUsage
-	for _, u := range []*GenerationUsage{a, b} {
+// SumUsage returns the field-by-field sum of usages, adding
+// [GenerationUsage.Custom] key by key. Nil entries are skipped; the result is
+// nil when every entry is. It never mutates its arguments, so it is safe on
+// usage a model or hook still holds.
+func SumUsage(usages ...*GenerationUsage) *GenerationUsage {
+	var sum *GenerationUsage
+	for _, u := range usages {
 		if u == nil {
 			continue
+		}
+		if sum == nil {
+			sum = &GenerationUsage{}
 		}
 		sum.InputTokens += u.InputTokens
 		sum.OutputTokens += u.OutputTokens
@@ -916,7 +921,7 @@ func addUsage(a, b *GenerationUsage) *GenerationUsage {
 			sum.Custom[k] += v
 		}
 	}
-	return &sum
+	return sum
 }
 
 // turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and

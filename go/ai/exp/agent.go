@@ -174,6 +174,51 @@ type SessionRunner[State any] struct {
 	// is no snapshot to read one from. Written once by captureInitial and
 	// never mutated after.
 	initialState *SessionState[State]
+
+	// usageMu guards the usage totals below. recordUsage feeds them from
+	// whatever goroutine made the model call, which can be a tool's. Each
+	// total is replaced, never mutated, so a value read out stays valid.
+	usageMu sync.Mutex
+	// inTurn reports whether a turn is running. A call the agent function
+	// makes between turns counts toward the invocation and the session, but
+	// toward no turn.
+	inTurn bool
+	// turnUsage totals the running turn's model calls. endTurn moves it to
+	// lastTurnUsage, which the turn-end signal reports.
+	turnUsage     *ai.GenerationUsage
+	lastTurnUsage *ai.GenerationUsage
+	// invocationUsage totals every model call of the invocation, failed
+	// turns included, for [AgentOutput.Usage].
+	invocationUsage *ai.GenerationUsage
+}
+
+// recordUsage is the usage sink the runtime installs on the invocation's work
+// context (see [base.WithUsageSink]). It adds one model call's usage to the
+// session state, the invocation, and the running turn. The state takes it
+// live, so a turn that fails without committing takes it back out with its
+// other mutations when the resume point falls to an earlier state.
+func (s *SessionRunner[State]) recordUsage(v any) {
+	u, ok := v.(*ai.GenerationUsage)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	s.state.Usage = ai.SumUsage(s.state.Usage, u)
+	s.mu.Unlock()
+
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	s.invocationUsage = ai.SumUsage(s.invocationUsage, u)
+	if s.inTurn {
+		s.turnUsage = ai.SumUsage(s.turnUsage, u)
+	}
+}
+
+// totalUsage returns the invocation's usage so far.
+func (s *SessionRunner[State]) totalUsage() *ai.GenerationUsage {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	return s.invocationUsage
 }
 
 // suspendSnapshots stops all further turn-end snapshot writes for this
@@ -320,6 +365,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		if s.onStartTurn != nil {
 			s.onStartTurn()
 		}
+		s.usageMu.Lock()
+		s.inTurn, s.turnUsage = true, nil
+		s.usageMu.Unlock()
 		// Reserve this turn's snapshot ID before the turn runs so the per-turn
 		// fn can read it (with the parent ID and turn index) from its context
 		// via [TurnContextFromContext]; the turn-end write persists under it.
@@ -405,6 +453,9 @@ func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishRe
 	s.lastTurnFinishReason = reason
 	s.lastTurnErr = cause
 	s.lastTurnCommitted = committed
+	s.usageMu.Lock()
+	s.lastTurnUsage, s.turnUsage, s.inTurn = s.turnUsage, nil, false
+	s.usageMu.Unlock()
 	s.onEndTurn(ctx)
 	if committed {
 		s.captureLastGood()
@@ -1395,6 +1446,7 @@ func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
 		FinishReason: reason,
+		Usage:        rt.sess.lastTurnUsage,
 	}})
 }
 
@@ -1409,6 +1461,9 @@ func (rt *agentRuntime[State]) run(
 ) (*AgentOutput[State], error) {
 	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(clientCtx))
 	workCtx = NewSessionContext(workCtx, rt.session)
+	// Count the model calls made under this invocation. The sink replaces
+	// any a calling agent installed, so a subagent's usage stays its own.
+	workCtx = base.WithUsageSink(workCtx, rt.sess.recordUsage)
 
 	// Wire custom-state streaming now that the work context exists: every
 	// UpdateCustom mutation during the invocation emits a customPatch chunk
@@ -1640,6 +1695,7 @@ func (rt *agentRuntime[State]) completedOutput(ctx context.Context, res fnDoneRe
 		SessionID:    rt.session.SessionID(),
 		SnapshotID:   rt.sess.lastSnapshotID,
 		FinishReason: reason,
+		Usage:        rt.sess.totalUsage(),
 	}
 	if res.result != nil {
 		// Deep-copy at the framework boundary so the caller cannot
@@ -1805,6 +1861,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, reason AgentFin
 		SessionID:    rt.session.SessionID(),
 		FinishReason: reason,
 		Error:        convertKeepText(cause),
+		Usage:        rt.sess.totalUsage(),
 	}
 	if rt.cfg.store == nil {
 		// This is already the failure path, so a transform that also fails

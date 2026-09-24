@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -9004,4 +9005,151 @@ func TestAgent_GetSnapshotMetadataOnly(t *testing.T) {
 			t.Errorf("%s: meta read shaped differently from the full read: meta=%+v full=%+v", name, meta, full)
 		}
 	}
+}
+
+// TestAgent_Usage pins who counts which model calls: a turn its own, the
+// invocation all of its turns, the session state the turns it keeps, and a
+// subagent none of its parent's.
+func TestAgent_Usage(t *testing.T) {
+	// setup defines a model that reports 10 input tokens per call and an
+	// agent whose turns call it as many times as the user message says.
+	// A turn sent "fail" calls it once and then fails without committing.
+	setup := func(t *testing.T) (*registry.Registry, *Agent[testState]) {
+		t.Helper()
+		reg := newTestRegistry(t)
+		ai.ConfigureFormats(reg)
+		defineTestModel(reg, "test/usage", nil, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Message: ai.NewModelTextMessage("ok"),
+				Usage:   &ai.GenerationUsage{InputTokens: 10},
+			}, nil
+		})
+		af := DefineCustomAgent(reg, "counter",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					text := input.Message.Content[0].Text
+					calls, _ := strconv.Atoi(text)
+					if text == "fail" {
+						calls = 1
+					}
+					for range calls {
+						if _, err := ai.Generate(ctx, reg, ai.WithModelName("test/usage"), ai.WithPrompt("go")); err != nil {
+							return nil, err
+						}
+					}
+					if text == "fail" {
+						return nil, errors.New("turn failed")
+					}
+					return nil, nil
+				})
+			},
+		)
+		return reg, af
+	}
+	inputTokens := func(u *ai.GenerationUsage) int {
+		if u == nil {
+			return 0
+		}
+		return u.InputTokens
+	}
+
+	t.Run("turns, invocations, and the session each total their own calls", func(t *testing.T) {
+		_, af := setup(t)
+		conn, err := af.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		var turns []int
+		for _, text := range []string{"2", "1"} {
+			sendText(t, conn, text)
+			for chunk, err := range conn.Receive() {
+				if err != nil {
+					t.Fatalf("Receive: %v", err)
+				}
+				if chunk.TurnEnd != nil {
+					turns = append(turns, inputTokens(chunk.TurnEnd.Usage))
+					break
+				}
+			}
+		}
+		conn.Close()
+		out, err := conn.Output()
+		if err != nil || out.Error != nil {
+			t.Fatalf("Output = (%+v, %v), want success", out.Error, err)
+		}
+		if !slices.Equal(turns, []int{20, 10}) {
+			t.Errorf("TurnEnd input tokens = %v, want [20 10]", turns)
+		}
+		if got := inputTokens(out.Usage); got != 30 {
+			t.Errorf("output input tokens = %d, want 30", got)
+		}
+
+		// The next invocation counts only its own calls; the session state
+		// carries on from the one it resumed.
+		next, err := af.RunText(t.Context(), "1", WithState(out.State))
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if got := inputTokens(next.Usage); got != 10 {
+			t.Errorf("next output input tokens = %d, want 10", got)
+		}
+		if got := inputTokens(next.State.Usage); got != 40 {
+			t.Errorf("next state input tokens = %d, want 40", got)
+		}
+	})
+
+	t.Run("a turn rolled back on failure takes its usage out of the state", func(t *testing.T) {
+		_, af := setup(t)
+		conn, err := af.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		sendText(t, conn, "1")
+		sendText(t, conn, "fail")
+		conn.Close()
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+		}
+		// The failed turn's call was billed, so the invocation reports it,
+		// but the resume point is the state before that turn.
+		if got := inputTokens(out.Usage); got != 20 {
+			t.Errorf("output input tokens = %d, want 20", got)
+		}
+		if got := inputTokens(out.State.Usage); got != 10 {
+			t.Errorf("state input tokens = %d, want 10", got)
+		}
+	})
+
+	t.Run("a subagent's calls stay out of its parent's usage", func(t *testing.T) {
+		reg, child := setup(t)
+		parent := DefineCustomAgent(reg, "parent",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					out, err := child.RunText(ctx, "2")
+					if err != nil {
+						return nil, err
+					}
+					if got := inputTokens(out.Usage); got != 20 {
+						t.Errorf("child output input tokens = %d, want 20", got)
+					}
+					_, err = ai.Generate(ctx, reg, ai.WithModelName("test/usage"), ai.WithPrompt("go"))
+					return nil, err
+				})
+			},
+		)
+		out, err := parent.RunText(t.Context(), "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if got := inputTokens(out.Usage); got != 10 {
+			t.Errorf("parent output input tokens = %d, want 10 (its own call only)", got)
+		}
+		if got := inputTokens(out.State.Usage); got != 10 {
+			t.Errorf("parent state input tokens = %d, want 10", got)
+		}
+	})
 }

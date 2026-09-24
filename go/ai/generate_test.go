@@ -4799,8 +4799,8 @@ func TestGenerateTotalUsage(t *testing.T) {
 }
 
 // A field added to GenerationUsage in the schema must also be added to
-// addUsage, or run totals silently drop it.
-func TestAddUsageSumsEveryField(t *testing.T) {
+// SumUsage, or run totals silently drop it.
+func TestSumUsageSumsEveryField(t *testing.T) {
 	var u GenerationUsage
 	v := reflect.ValueOf(&u).Elem()
 	for i := range v.NumField() {
@@ -4810,10 +4810,10 @@ func TestAddUsageSumsEveryField(t *testing.T) {
 		case reflect.Map:
 			f.Set(reflect.ValueOf(map[string]float64{"k": 1}))
 		default:
-			t.Fatalf("GenerationUsage.%s has kind %s, which addUsage does not handle", v.Type().Field(i).Name, f.Kind())
+			t.Fatalf("GenerationUsage.%s has kind %s, which SumUsage does not handle", v.Type().Field(i).Name, f.Kind())
 		}
 	}
-	sum := reflect.ValueOf(addUsage(&u, &u)).Elem()
+	sum := reflect.ValueOf(SumUsage(&u, nil, &u)).Elem()
 	for i := range sum.NumField() {
 		name := sum.Type().Field(i).Name
 		switch f := sum.Field(i); f.Kind() {
@@ -4828,6 +4828,6 @@ func TestAddUsageSumsEveryField(t *testing.T) {
 		}
 	}
 	if u.InputTokens != 1 || u.Custom["k"] != 1 {
-		t.Errorf("addUsage mutated its argument: %+v", u)
+		t.Errorf("SumUsage mutated its argument: %+v", u)
 	}
 }
