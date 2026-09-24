@@ -4856,6 +4856,32 @@ func TestToolErrorsReturnedToModel(t *testing.T) {
 		}
 	})
 
+	// A hook that answers for the tool, without running it, can mark its
+	// error the way a tool author does.
+	t.Run("a marked error from a hook answers the call", func(t *testing.T) {
+		ran := false
+		refuse := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return nil, &base.ToolFailError{Err: errors.New("pick a city in Europe")}
+			}}, nil
+		})
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "records the call", func(ctx *ToolContext, in map[string]any) (string, error) {
+			ran = true
+			return "ok", nil
+		})
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(refuse))
+		assertNoError(t, err)
+		if ran {
+			t.Error("the tool ran, want the hook to answer for it")
+		}
+		assertToolError(t, got, "pick a city in Europe")
+	})
+
 	t.Run("hooks see the tool's error before it becomes a response", func(t *testing.T) {
 		var seen error
 		observer := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
