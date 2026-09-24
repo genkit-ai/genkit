@@ -64,20 +64,15 @@ func (t ToolErrors) covers(name string) bool {
 
 // returnToolErrors returns a WrapGenerate hook that has the tool loop return
 // the errors of the tools covers accepts to the model, with the rules
-// [ToolErrors] describes. Build one per Generate call (in New): it remembers
-// the policy it installed.
+// [ToolErrors] describes.
 func returnToolErrors(covers func(toolName string) bool) func(context.Context, *ai.GenerateParams, ai.GenerateNext) (*ai.ModelResponse, error) {
-	// Every turn after the first runs inside the first one's context, so the
-	// policy is installed once and later turns find it there.
-	var installed *base.SoftToolErrors
 	return func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
-		outer := base.SoftToolErrorsKey.FromContext(ctx)
-		for p := outer; p != nil; p = p.Outer {
-			if p == installed {
-				return next(ctx, params)
-			}
+		// Every turn after the first runs inside the first one's context,
+		// so later turns find the policy there.
+		if params.Iteration > 0 {
+			return next(ctx, params)
 		}
-		installed = &base.SoftToolErrors{Covers: covers, Outer: outer}
-		return next(base.SoftToolErrorsKey.NewContext(ctx, installed), params)
+		policy := &base.SoftToolErrors{Covers: covers, Outer: base.SoftToolErrorsKey.FromContext(ctx)}
+		return next(base.SoftToolErrorsKey.NewContext(ctx, policy), params)
 	}
 }

@@ -184,12 +184,7 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 func resultText(result *mcp.CallToolResult) string {
 	var sb strings.Builder
 	for _, c := range result.Content {
-		switch c := c.(type) {
-		case mcp.TextContent:
-			sb.WriteString(c.Text)
-		case *mcp.TextContent:
-			sb.WriteString(c.Text)
-		}
+		sb.WriteString(ExtractTextFromContent(c))
 	}
 	if sb.Len() == 0 {
 		return "the tool reported an error without a message"

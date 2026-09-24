@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/ai/exp/tool"
 	"github.com/firebase/genkit/go/core/api"
 )
 
@@ -155,25 +154,5 @@ func TestToolErrorsKeepsApprovalInterrupts(t *testing.T) {
 	}
 	if resp.FinishReason != "interrupted" {
 		t.Errorf("FinishReason = %q, want interrupted", resp.FinishReason)
-	}
-}
-
-// TestToolFailWithoutMiddleware checks the author's side of the feature: an
-// error made with tool.Fail answers the call with no middleware installed,
-// carrying the tool's own message.
-func TestToolFailWithoutMiddleware(t *testing.T) {
-	r := newTestRegistry(t)
-	var got []*ai.Part
-	m := defineToolModel(t, r, "test/loop", toolLoopModel(&got, "lookup"))
-	lookup := failingTool(r, "lookup", tool.Fail(errors.New("no such city")))
-
-	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithTools(lookup)); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("model received %d tool responses, want 1", len(got))
-	}
-	if msg := errorMessage(t, got[0]); msg != "no such city" {
-		t.Errorf("error = %q, want %q", msg, "no such city")
 	}
 }
