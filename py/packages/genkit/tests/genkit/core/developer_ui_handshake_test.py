@@ -24,6 +24,7 @@ from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
 from genkit._core._telemetry._instrumentation import (
+    flush_instrumentations,
     instrumentations,
     is_instrumented_by,
     parent_path_context,
@@ -32,7 +33,6 @@ from genkit._core._telemetry._instrumentation import (
 from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit._core._telemetry.http import (
     GenkitBuiltinInstrumentation,
-    flush_direct_http_instrumentations,
 )
 from genkit.telemetry import configure_instrumentation
 
@@ -42,7 +42,7 @@ def _hex_id(value: str, length: int) -> bool:
 
 
 def _force_flush() -> None:
-    flush_direct_http_instrumentations()
+    flush_instrumentations()
 
 
 async def _joke() -> str:
