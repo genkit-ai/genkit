@@ -21,8 +21,6 @@ this app. Traces land in Jaeger (http://localhost:16686) and metrics in
 the collector debug log. See README.md.
 """
 
-from __future__ import annotations
-
 import os
 
 from genkit_google_genai import GoogleAI
@@ -39,26 +37,20 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from genkit import Genkit
 from genkit.telemetry import configure_instrumentation
 
+resource = Resource.create({SERVICE_NAME: os.environ.get('OTEL_SERVICE_NAME', 'genkit-otel-sample')})
+tracer_provider = TracerProvider(resource=resource)
+# Each span goes out when it ends, so this script can exit without a
+# flush. In a long-running app, BatchSpanProcessor is the better default.
+tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(tracer_provider)
 
-def _init_otel() -> None:
-    """Own the SDK. Defaults to OTLP http/protobuf on localhost:4318."""
-    resource = Resource.create({SERVICE_NAME: os.environ.get('OTEL_SERVICE_NAME', 'genkit-otel-sample')})
-    tracer_provider = TracerProvider(resource=resource)
-    # Each span goes out when it ends, so this script can exit without a
-    # flush. In a long-running app, BatchSpanProcessor is the better default.
-    tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(tracer_provider)
-
-    meter_provider = MeterProvider(
-        resource=resource,
-        metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter())],
-    )
-    metrics.set_meter_provider(meter_provider)
-
+meter_provider = MeterProvider(
+    resource=resource,
+    metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter())],
+)
+metrics.set_meter_provider(meter_provider)
 
 if __name__ == '__main__':
-    _init_otel()
-
     # Content capture is opt-in (it may contain PII). SPAN_ONLY is the
     # easiest to eyeball in Jaeger; EVENT_ONLY emits a logs-signal event
     # Jaeger can't show. Unset consults
@@ -76,9 +68,6 @@ if __name__ == '__main__':
         finally:
             # The metric reader batches. Shutdown so token-usage reaches
             # the collector before this process exits.
-            meter = metrics.get_meter_provider()
-            shutdown = getattr(meter, 'shutdown', None)
-            if shutdown is not None:
-                shutdown()
+            meter_provider.shutdown()
 
     ai.run_main(main())
