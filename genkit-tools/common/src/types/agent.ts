@@ -16,7 +16,11 @@
 
 import { z } from 'zod';
 import { RuntimeErrorSchema } from './error';
-import { MessageSchema, ModelResponseChunkSchema } from './model';
+import {
+  GenerationUsageSchema,
+  MessageSchema,
+  ModelResponseChunkSchema,
+} from './model';
 import {
   PartSchema,
   ToolRequestPartSchema,
@@ -130,6 +134,13 @@ export const SessionStateSchema = z.object({
   custom: z.any().optional(),
   /** Named collections of parts produced during the conversation. */
   artifacts: z.array(ArtifactSchema).optional(),
+  /**
+   * Usage of the agent's own model calls in the turns this state includes,
+   * summed field by field. Framework-owned. A turn rolled back on failure
+   * takes its usage with it, as it does its messages. Excludes subagents,
+   * which report usage in their own sessions.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
@@ -269,6 +280,12 @@ export const AgentOutputSchema = z.object({
    * `INTERNAL`) so callers can still branch on it.
    */
   error: RuntimeErrorSchema.optional(),
+  /**
+   * Usage of the agent's own model calls during this invocation, summed
+   * field by field, failed turns included. Excludes subagents. Omitted when
+   * `finishReason` is `detached`, since the work continues.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
@@ -298,6 +315,11 @@ export const TurnEndSchema = z.object({
    * the error and the last-good state.
    */
   finishReason: AgentFinishReasonSchema.optional(),
+  /**
+   * Usage of the agent's own model calls during this turn, summed field by
+   * field, whether the turn succeeded or failed. Excludes subagents.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 

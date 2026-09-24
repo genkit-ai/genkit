@@ -388,7 +388,15 @@ export const ModelResponseSchema = z.object({
    */
   error: RuntimeErrorSchema.optional(),
   latencyMs: z.number().optional(),
+  /** Usage of the model call that produced this response. */
   usage: GenerationUsageSchema.optional(),
+  /**
+   * Usage of every model call in one generate run, summed field by field
+   * (`custom` key by key). Set by generate, never by a model: a run with
+   * tool calls makes several model calls, and `usage` reports only the
+   * last one. A resumed run counts only its own calls.
+   */
+  totalUsage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */
   custom: z.unknown(),
   raw: z.unknown(),
