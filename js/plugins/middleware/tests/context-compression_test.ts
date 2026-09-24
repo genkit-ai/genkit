@@ -1578,4 +1578,113 @@ describe('contextCompression middleware', () => {
       false
     );
   });
+
+  it('deduplicates only duplicate parts in parallel tool calls without replacing unique sibling parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'parallelDedupModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run parallel tools' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_1',
+                input: { id: 'shared' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_2',
+                input: { id: 'unique' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_1',
+                output: 'Shared output 1 ' + 'X'.repeat(200),
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_2',
+                output: 'Unique output 2 ' + 'Y'.repeat(200),
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_3',
+                input: { id: 'shared' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_3',
+                output: 'Shared output 3 ' + 'Z'.repeat(200),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+        }),
+      ],
+    });
+
+    const toolMessages = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(toolMessages.length, 2);
+    // First tool message: part 0 ('shared') is deduplicated, part 1 ('unique') is preserved intact
+    assert.match(
+      String(toolMessages[0].content[0].toolResponse?.output),
+      /Deduplicated/
+    );
+    assert.ok(
+      String(toolMessages[0].content[1].toolResponse?.output).startsWith(
+        'Unique output 2 '
+      )
+    );
+    // Second tool message: newest occurrence of 'shared' is preserved intact
+    assert.ok(
+      String(toolMessages[1].content[0].toolResponse?.output).startsWith(
+        'Shared output 3 '
+      )
+    );
+  });
 });

@@ -400,12 +400,13 @@ export const contextCompression: GenerateMiddleware<
         }
       }
 
-      const groups = new Map<string, number[]>();
+      const groups = new Map<string, { msgIdx: number; partIdx: number }[]>();
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
         if (msg.role !== 'tool') continue;
 
-        for (const part of msg.content) {
+        for (let j = 0; j < msg.content.length; j++) {
+          const part = msg.content[j];
           if (!part.toolResponse) continue;
 
           let toolInput = part.toolResponse.ref
@@ -418,11 +419,15 @@ export const contextCompression: GenerateMiddleware<
             i > 0 &&
             messages[i - 1]?.role === 'model'
           ) {
-            const reqPart = messages[i - 1].content.find(
-              (p) => p.toolRequest?.name === part.toolResponse?.name
-            );
-            if (reqPart?.toolRequest) {
-              toolInput = reqPart.toolRequest.input;
+            const prevParts = messages[i - 1].content;
+            const positionalPart =
+              prevParts[j]?.toolRequest?.name === part.toolResponse.name
+                ? prevParts[j]
+                : prevParts.find(
+                    (p) => p.toolRequest?.name === part.toolResponse?.name
+                  );
+            if (positionalPart?.toolRequest) {
+              toolInput = positionalPart.toolRequest.input;
             }
           }
 
@@ -434,33 +439,43 @@ export const contextCompression: GenerateMiddleware<
                   input: toolInput,
                 });
           if (!groups.has(key)) groups.set(key, []);
-          groups.get(key)!.push(i);
+          groups.get(key)!.push({ msgIdx: i, partIdx: j });
         }
       }
 
-      const indicesToReplace = new Set<number>();
-      for (const indices of groups.values()) {
-        if (indices.length > dedupKeepRecent) {
-          const toRemove = indices.slice(0, indices.length - dedupKeepRecent);
-          for (const idx of toRemove) {
-            indicesToReplace.add(idx);
+      const partsToReplace = new Set<string>();
+      for (const occurrences of groups.values()) {
+        if (occurrences.length > dedupKeepRecent) {
+          const toRemove = occurrences.slice(
+            0,
+            occurrences.length - dedupKeepRecent
+          );
+          for (const occ of toRemove) {
+            partsToReplace.add(`${occ.msgIdx}-${occ.partIdx}`);
           }
         }
       }
 
-      if (indicesToReplace.size === 0) {
+      if (partsToReplace.size === 0) {
         return { messages, deduplicated: 0 };
       }
 
       let deduplicatedCount = 0;
-      const result = messages.map((msg, idx) => {
-        if (!indicesToReplace.has(idx)) return msg;
-        if (hasCompressionFlag(msg, 'deduplicated')) return msg;
+      const result = messages.map((msg, i) => {
+        if (msg.role !== 'tool') return msg;
 
-        const newContent = msg.content.map((part): Part => {
-          if (part.toolResponse) {
+        let changed = false;
+        const newContent = msg.content.map((part, j): Part => {
+          if (
+            part.toolResponse &&
+            partsToReplace.has(`${i}-${j}`) &&
+            !hasCompressionFlag(part, 'deduplicated')
+          ) {
             deduplicatedCount++;
+            changed = true;
             return {
+              ...part,
+              metadata: withCompressionMetadata(part, { deduplicated: true }),
               toolResponse: {
                 ...part.toolResponse,
                 output: dedupNotice,
@@ -469,11 +484,7 @@ export const contextCompression: GenerateMiddleware<
           }
           return part;
         });
-        return {
-          ...msg,
-          metadata: withCompressionMetadata(msg, { deduplicated: true }),
-          content: newContent,
-        };
+        return changed ? { ...msg, content: newContent } : msg;
       });
 
       return { messages: result, deduplicated: deduplicatedCount };
@@ -504,7 +515,6 @@ export const contextCompression: GenerateMiddleware<
 
       const result = messages.map((msg, mIdx) => {
         if (msg.role !== 'tool') return msg;
-        if (hasCompressionFlag(msg, 'deduplicated')) return msg;
 
         const isTruncatableMsg =
           includeToolTruncation &&
@@ -517,8 +527,11 @@ export const contextCompression: GenerateMiddleware<
             return part;
           }
 
-          // Skip if this part was already truncated to toolResponses.maxChars
-          if (hasCompressionFlag(part, 'truncated')) {
+          // Skip if this part was already truncated to toolResponses.maxChars or deduplicated
+          if (
+            hasCompressionFlag(part, 'truncated') ||
+            hasCompressionFlag(part, 'deduplicated')
+          ) {
             return part;
           }
 
