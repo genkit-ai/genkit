@@ -1070,8 +1070,15 @@ async def generate_prompt_agent_turn(
         response=response,
     )
 
-    # Bad JSON is not a dead turn — generate already kept the model text.
-    if response.error is not None and response.error.reason is not RuntimeErrorReason.INVALID_OUTPUT:
+    # The model finished, but the text is not the schema the prompt asked for.
+    # send() raises so the caller can tell a Recipe from a miss.
+    if response.error is not None and response.error.reason is RuntimeErrorReason.INVALID_OUTPUT:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=response.error.message,
+        )
+
+    if response.error is not None:
         raise GenkitError(
             message=response.error.message,
             status=cast(Any, response.error.status),

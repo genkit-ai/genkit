@@ -18,6 +18,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Part
+from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._preamble import (
     HISTORY_TAG,
     PREAMBLE_KEY,
@@ -315,8 +316,8 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prompt_agent_schema_miss_keeps_the_model_text() -> None:
-    """Bad JSON is not a dead turn: send() returns the model text like generate()."""
+async def test_prompt_agent_schema_miss_keeps_invalid_argument() -> None:
+    """A Recipe the model did not return fails the turn with INVALID_ARGUMENT."""
 
     class Recipe(BaseModel):
         title: str
@@ -332,9 +333,9 @@ async def test_prompt_agent_schema_miss_keeps_the_model_text() -> None:
         )
     )
 
-    out = await agent.chat().send('give me a recipe')
-    assert out.finish_reason == AgentFinishReason.STOP
-    assert out.text == 'not json'
+    with pytest.raises(AgentError) as raised:
+        await agent.chat().send('give me a recipe')
+    assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
