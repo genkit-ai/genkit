@@ -53,37 +53,202 @@ ${JSON.stringify(schema.items)}
     }
 
     return {
-      parseChunk: (chunk) => {
-        const results: unknown[] = [];
+      parseChunk: (() => {
+        let lineParts: string[] = [];
+        let lineType: 'object' | 'other' | undefined;
+        let depth = 0;
+        let quote: '"' | "'" | undefined;
+        let escaped = false;
+        let comment: 'line' | 'block' | undefined;
+        let blockCommentStar = false;
+        let pendingSlash = false;
+        let rootClosed = false;
+        let invalidLine = false;
+        let lineEmitted = false;
+        let parseAttempted = false;
+        const processedContents: object[] = [];
+        let cachedResults: unknown[] = [];
 
-        const text = chunk.accumulatedText;
+        const resetLine = () => {
+          lineParts = [];
+          lineType = undefined;
+          depth = 0;
+          quote = undefined;
+          escaped = false;
+          comment = undefined;
+          blockCommentStar = false;
+          pendingSlash = false;
+          rootClosed = false;
+          invalidLine = false;
+          lineEmitted = false;
+          parseAttempted = false;
+        };
 
-        let startIndex = 0;
-        if (chunk.previousChunks?.length) {
-          const lastNewline = chunk.previousText.lastIndexOf('\n');
-          if (lastNewline !== -1) {
-            startIndex = lastNewline + 1;
-          }
-        }
+        const scanSegment = (segment: string) => {
+          if (lineEmitted) return;
+          lineParts.push(segment);
 
-        const lines = text.slice(startIndex).split('\n');
+          for (const char of segment) {
+            if (!lineType) {
+              if (/\s/u.test(char)) continue;
+              lineType = char === '{' ? 'object' : 'other';
+              if (lineType === 'object') depth = 1;
+              continue;
+            }
+            if (lineType === 'other') continue;
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('{')) {
-            try {
-              const result = JSON5.parse(trimmed);
-              if (result) {
-                results.push(result);
+            if (quote) {
+              if (escaped) {
+                escaped = false;
+              } else if (char === '\\') {
+                escaped = true;
+              } else if (char === quote) {
+                quote = undefined;
               }
-            } catch (e) {
-              break;
+              continue;
+            }
+            if (comment === 'line') continue;
+            if (comment === 'block') {
+              if (blockCommentStar && char === '/') {
+                comment = undefined;
+                blockCommentStar = false;
+              } else {
+                blockCommentStar = char === '*';
+              }
+              continue;
+            }
+            if (pendingSlash) {
+              pendingSlash = false;
+              if (char === '/') {
+                comment = 'line';
+                continue;
+              }
+              if (char === '*') {
+                comment = 'block';
+                blockCommentStar = false;
+                continue;
+              }
+              invalidLine = true;
+            }
+            if (char === '/') {
+              pendingSlash = true;
+              continue;
+            }
+            if (rootClosed) {
+              if (!/\s/u.test(char)) invalidLine = true;
+              continue;
+            }
+            if (char === '"' || char === "'") {
+              quote = char;
+              continue;
+            }
+            if (char === '{' || char === '[') {
+              depth++;
+            } else if (char === '}' || char === ']') {
+              depth--;
+              if (depth === 0) rootClosed = true;
             }
           }
-        }
+        };
 
-        return results;
-      },
+        const parseLine = (): unknown[] => {
+          if (
+            lineEmitted ||
+            parseAttempted ||
+            lineType !== 'object' ||
+            !rootClosed ||
+            quote ||
+            comment === 'block' ||
+            pendingSlash ||
+            invalidLine
+          ) {
+            return [];
+          }
+
+          parseAttempted = true;
+          try {
+            const result = JSON5.parse(lineParts.join('').trim());
+            if (result) {
+              lineEmitted = true;
+              return [result];
+            }
+          } catch {
+            // A closed root object cannot become valid by appending to the line.
+          }
+          return [];
+        };
+
+        const processText = (text: string): unknown[] => {
+          const results: unknown[] = [];
+          const segments = text.split('\n');
+          let emitResults = true;
+
+          for (let index = 0; index < segments.length; index++) {
+            scanSegment(segments[index]);
+            if (emitResults) results.push(...parseLine());
+
+            if (index < segments.length - 1) {
+              if (lineType === 'object' && !lineEmitted) {
+                emitResults = false;
+              }
+              resetLine();
+            }
+          }
+          return results;
+        };
+
+        const resetStream = () => {
+          resetLine();
+          processedContents.length = 0;
+          cachedResults = [];
+        };
+
+        const hasMatchingPrefix = (
+          previousChunks: readonly { content: object }[],
+          length: number
+        ) => {
+          if (previousChunks.length < length) return false;
+          for (let index = 0; index < length; index++) {
+            if (previousChunks[index]?.content !== processedContents[index]) {
+              return false;
+            }
+          }
+          return true;
+        };
+
+        return (chunk) => {
+          const previousChunks = chunk.previousChunks ?? [];
+
+          if (
+            processedContents.length === previousChunks.length + 1 &&
+            processedContents[processedContents.length - 1] === chunk.content &&
+            hasMatchingPrefix(previousChunks, previousChunks.length)
+          ) {
+            return cachedResults;
+          }
+
+          if (!hasMatchingPrefix(previousChunks, processedContents.length)) {
+            resetStream();
+          }
+
+          for (
+            let index = processedContents.length;
+            index < previousChunks.length;
+            index++
+          ) {
+            processText(
+              previousChunks[index].content
+                .map((part) => part.text || '')
+                .join('')
+            );
+            processedContents.push(previousChunks[index].content);
+          }
+
+          cachedResults = processText(chunk.text);
+          processedContents.push(chunk.content);
+          return cachedResults;
+        };
+      })(),
 
       parseMessage: (message) => {
         const items = objectLines(message.text)
