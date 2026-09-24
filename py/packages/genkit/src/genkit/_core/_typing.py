@@ -164,6 +164,7 @@ class AgentOutput(GenkitModel):
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
+    usage: GenerationUsage | None = None
 
 
 class AgentResult(GenkitModel):
@@ -237,6 +238,7 @@ class SessionState(GenkitModel):
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
 
 
 class TurnEnd(GenkitModel):
@@ -245,6 +247,7 @@ class TurnEnd(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = None
     finish_reason: AgentFinishReason | None = None
+    usage: GenerationUsage | None = None
 
 
 class DocumentData(GenkitModel):
