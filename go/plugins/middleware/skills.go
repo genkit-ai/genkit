@@ -87,8 +87,10 @@ const (
 	// SKILL.md length: an oversized file is skipped, never truncated.
 	skillMaxBytes = 1 << 20
 
-	// skillResourceMaxBytes bounds one read through SkillResourceToolName.
-	skillResourceMaxBytes = 1 << 20
+	// skillResourceMaxBytes bounds one read through SkillResourceToolName. It
+	// shares the Filesystem middleware's bound, since both put the whole file
+	// into the model's context.
+	skillResourceMaxBytes = readMaxBytes
 
 	// Advisory bounds from the specification. Exceeding one is a diagnostic;
 	// the skill still loads.
@@ -250,7 +252,7 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 		// Inject first, then read the activation set back out of the result:
 		// a preloaded skill marks itself through the metadata on the part that
 		// carries it.
-		params.Request = s.injectSkills(params.Request, catalog, preload)
+		params.Request = s.injectSkills(ctx, params.Request, catalog, preload)
 		act.reset(params.Request.Messages)
 		return next(ctx, params)
 	}
@@ -299,17 +301,18 @@ func (s *Skills) paths() []string {
 // toolName returns suffix prefixed with s.ToolNamePrefix.
 func (s *Skills) toolName(suffix string) string { return s.ToolNamePrefix + suffix }
 
-// resolvePreload renders each skill in Skills.Preload from the bytes the scan
-// read, keyed by skill name. Rendering from the scan rather than from disk
-// means a discovered skill cannot fail to preload, so no skill is left out of
-// both the catalog and the request. An unknown name is logged and dropped: New
-// runs on the request path, so a name that fails to resolve because a
-// directory was briefly unreadable must not fail the request.
-func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) map[string]string {
+// resolvePreload returns the discovered skills named in Skills.Preload, keyed
+// by skill name. Each carries the SKILL.md bytes the scan read, and rendering
+// from those rather than from disk means a discovered skill cannot fail to
+// preload, so no skill is left out of both the catalog and the request. An
+// unknown name is logged and dropped: New runs on the request path, so a name
+// that fails to resolve because a directory was briefly unreadable must not
+// fail the request.
+func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) map[string]skillInfo {
 	if len(s.Preload) == 0 {
 		return nil
 	}
-	preload := make(map[string]string, len(s.Preload))
+	preload := make(map[string]skillInfo, len(s.Preload))
 	for _, name := range s.Preload {
 		si, ok := info[name]
 		if !ok {
@@ -317,7 +320,7 @@ func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) 
 				"skill", name, "available", sortedNames(info))
 			continue
 		}
-		preload[name] = s.skillContent(ctx, si, si.body)
+		preload[name] = si
 	}
 	return preload
 }
@@ -492,6 +495,13 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 			if err != nil {
 				return "", fmt.Errorf("read %q from skill %q: %w", rel, in.SkillName, err)
 			}
+			// The result is a string, so bytes that are not UTF-8, such as an
+			// image under assets/, would reach the model as replacement
+			// characters. Saying what the file is costs a line instead.
+			if !utf8.Valid(data) {
+				return fmt.Sprintf("%s is a binary file (%d bytes); %s returns text files only.",
+					catalogText(rel), len(data), s.toolName(SkillResourceToolName)), nil
+			}
 			return string(data), nil
 		},
 	)
@@ -525,7 +535,21 @@ func readSkillResource(dir, rel string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return readChecked(f, st, rel)
+}
 
+// readChecked reads f whole, provided it is still the file described by st.
+// Between the stat and the open the path can be replaced, including by a
+// symbolic link that the open follows; comparing the opened file against the
+// checked one refuses the substitute instead of reading it.
+func readChecked(f *os.File, st os.FileInfo, name string) ([]byte, error) {
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(st, opened) {
+		return nil, fmt.Errorf("%s changed while it was being opened", name)
+	}
 	data := make([]byte, st.Size())
 	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, err
@@ -581,9 +605,20 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 			continue
 		}
 		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
 			// IsDir is false for a symbolic link, so a linked skill directory
-			// is not followed.
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			// is not followed. Linking a skill in is a common way to install
+			// one, so the skip is reported rather than silent.
+			if entry.Type()&fs.ModeSymlink != 0 {
+				if st, err := os.Stat(filepath.Join(abs, entry.Name())); err == nil && st.IsDir() {
+					logger.Warn(ctx, "skill directory is a symbolic link, which is not followed; skipping",
+						"path", filepath.Join(abs, entry.Name()))
+				}
+				continue
+			}
+			if !entry.IsDir() {
 				continue
 			}
 			si, ok := readSkillDir(ctx, abs, entry.Name(), slices.Contains(retain, entry.Name()))
@@ -624,7 +659,7 @@ func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillI
 			continue
 		}
 		if !e.Type().IsRegular() {
-			logger.Debug(ctx, "SKILL.md is not a regular file, skipping skill",
+			logger.Warn(ctx, "SKILL.md is not a regular file, skipping skill",
 				"path", filepath.Join(dir, skillFileName), "mode", e.Type())
 			break
 		}
@@ -655,7 +690,7 @@ func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillI
 		logger.Warn(ctx, "SKILL.md frontmatter could not be parsed; the skill is listed by name only",
 			"path", skillMd, "error", yamlErr)
 	case yamlErr != nil:
-		logger.Debug(ctx, "SKILL.md frontmatter is not valid YAML; fields were recovered by line scan",
+		logger.Debug(ctx, "SKILL.md frontmatter is not valid YAML; fields were recovered leniently",
 			"path", skillMd, "error", yamlErr)
 	}
 	if desc == "" {
@@ -683,7 +718,11 @@ func validateSkillMetadata(ctx context.Context, dirName string, fm skillFrontmat
 			"(1-64 lowercase letters, digits and single hyphens); the skill is loaded anyway",
 			"skill", dirName, "path", skillMd)
 	}
-	if fmName := strings.TrimSpace(fm.Name); fmName != "" && fmName != dirName {
+	switch fmName := strings.TrimSpace(fm.Name); {
+	case fmName == "":
+		logger.Debug(ctx, "SKILL.md has no name field, which the specification requires; "+
+			"the directory name is used", "directory", dirName, "path", skillMd)
+	case fmName != dirName:
 		logger.Debug(ctx, "SKILL.md name does not match its directory name; the directory name is used",
 			"name", fmName, "directory", dirName, "path", skillMd)
 	}
@@ -716,7 +755,8 @@ func warnNestedSkills(ctx context.Context, dir string, entries []os.DirEntry) {
 //
 // Lstat, not Stat: a symbolic link here would name a file the skill author
 // neither owns nor can write. The scan applies the same rule, but a file can be
-// replaced between the two.
+// replaced between the two, and again between this check and the open, which
+// [readChecked] catches.
 func readSkillFile(p string) ([]byte, error) {
 	fi, err := os.Lstat(p)
 	if err != nil {
@@ -730,12 +770,7 @@ func readSkillFile(p string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-
-	data := make([]byte, fi.Size())
-	if _, err := io.ReadFull(f, data); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return readChecked(f, fi, p)
 }
 
 // validSkillName reports whether name meets the Agent Skills naming rules:
@@ -765,10 +800,12 @@ func validSkillName(name string) bool {
 //
 // The closing fence must be a line holding only "---", so a horizontal rule or
 // a run of dashes inside a block scalar does not truncate the block. When the
-// YAML does not parse, name and description are recovered by scanning those
-// lines directly, which is what the JS runtime does and what keeps the common
-// authoring mistake of an unquoted colon in a description from losing the
-// whole block. The parse error is returned either way, for the caller to log.
+// YAML does not parse, the block is parsed again with its plain top-level
+// values turned into block scalars, the fallback the specification's client
+// guide recommends for an unquoted colon in a description. If that also fails,
+// name and description are recovered by scanning those lines directly, which is
+// what the JS runtime does. The first parse error is returned whenever the
+// block was not valid YAML, for the caller to log.
 func parseFrontmatter(content []byte) (skillFrontmatter, error) {
 	var fm skillFrontmatter
 	text := strings.TrimPrefix(string(content), "\ufeff") // strip optional BOM
@@ -790,9 +827,48 @@ func parseFrontmatter(content []byte) (skillFrontmatter, error) {
 		return fm, nil
 	}
 	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
+		var repaired skillFrontmatter
+		if yaml.Unmarshal([]byte(blockScalarPlainValues(block)), &repaired) == nil {
+			return repaired, err
+		}
 		return scanFrontmatterLines(block), err
 	}
 	return fm, nil
+}
+
+// blockScalarPlainValues rewrites each plain top-level value in a frontmatter
+// block as a folded block scalar, taking its space-indented continuation lines
+// with it. Inside a block scalar a colon, a leading "@" or backtick, and a "#"
+// are text, which is how other clients read such values. Quoted, flow, block,
+// and empty values (a nested mapping such as metadata) are left untouched.
+func blockScalarPlainValues(block string) string {
+	lines := strings.Split(block, "\n")
+	var b strings.Builder
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\r")
+		key, value, ok := strings.Cut(line, ":")
+		value = strings.TrimSpace(value)
+		if !ok || key == "" || strings.ContainsAny(key[:1], " \t#-") ||
+			value == "" || strings.ContainsAny(value[:1], `"'|>[{&*!#`) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			continue
+		}
+		fmt.Fprintf(&b, "%s: >-\n  %s\n", key, value)
+		for i+1 < len(lines) {
+			next := strings.TrimRight(lines[i+1], "\r")
+			if next != "" && !strings.HasPrefix(next, " ") {
+				break
+			}
+			i++
+			if next = strings.TrimSpace(next); next == "" {
+				b.WriteByte('\n')
+				continue
+			}
+			fmt.Fprintf(&b, "  %s\n", next)
+		}
+	}
+	return b.String()
 }
 
 // cutFrontmatterBlock returns everything before the closing fence: the first
@@ -958,6 +1034,12 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 			}
 			return nil
 		}
+		// Installed dependencies are not something the skill author wrote for
+		// the model, and the walk is lexical, so node_modules would otherwise
+		// fill the listing cap before references/ and scripts/ are reached.
+		if d.IsDir() && d.Name() == "node_modules" {
+			return fs.SkipDir
+		}
 		if d.IsDir() {
 			if strings.Count(rel, "/")+1 >= skillResourceMaxDepth {
 				return fs.SkipDir
@@ -967,9 +1049,11 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 		if rel == skillFileName {
 			return nil
 		}
-		// Listing a path is an invitation to read it, so anything the reader
-		// would refuse is left out: a named pipe, a socket, a device node.
-		if !d.Type().IsRegular() {
+		// Listing a path is an invitation to read it, so the listing admits
+		// exactly what the reader does: a regular file, or a symbolic link
+		// that resolves to one without leaving the skill directory. A named
+		// pipe, a socket, or a device node is left out.
+		if !d.Type().IsRegular() && !linksToRegularFile(root, rel, d) {
 			return nil
 		}
 		if len(files) >= skillResourceListMax {
@@ -997,6 +1081,22 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 	return b.String()
 }
 
+// linksToRegularFile reports whether d is a symbolic link that resolves, inside
+// the skill directory dir, to a regular file. It applies the containment the
+// reader applies, so the listing never advertises a link the reader refuses.
+func linksToRegularFile(dir, rel string, d fs.DirEntry) bool {
+	if d.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	st, err := root.Stat(filepath.FromSlash(rel))
+	return err == nil && st.Mode().IsRegular()
+}
+
 // activatedSkills returns the set of skills whose instructions are present in
 // msgs. It is rebuilt from the conversation on every turn, so it never reports
 // a skill as loaded once context management has dropped the part carrying it.
@@ -1021,8 +1121,10 @@ func activatedSkills(msgs []*ai.Message) map[string]bool {
 // injectSkills returns a copy of req carrying the skills catalog and the
 // instructions of any preloaded skill. The catalog is marked by skillsMarker so
 // a later tool-loop iteration refreshes it in place instead of appending a
-// second copy; preloaded parts are recognized by their activation metadata.
-func (s *Skills) injectSkills(req *ai.ModelRequest, catalog string, preload map[string]string) *ai.ModelRequest {
+// second copy; preloaded parts are recognized by their activation metadata. A
+// preload is rendered only when its part is missing, which after the first
+// turn it rarely is, so its resource listing is not rebuilt on every turn.
+func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog string, preload map[string]skillInfo) *ai.ModelRequest {
 	newReq := *req
 	newReq.Messages = append([]*ai.Message(nil), req.Messages...)
 
@@ -1039,7 +1141,8 @@ func (s *Skills) injectSkills(req *ai.ModelRequest, catalog string, preload map[
 		if present[name] {
 			continue
 		}
-		p := ai.NewTextPart(preload[name])
+		si := preload[name]
+		p := ai.NewTextPart(s.skillContent(ctx, si, si.body))
 		p.Metadata = map[string]any{SkillActivationMetadataKey: name}
 		parts = append(parts, p)
 	}
@@ -1124,7 +1227,7 @@ func sortedNames(info map[string]skillInfo) []string {
 
 // loadableNames returns the skills the model may activate: everything
 // discovered, less anything already injected by Preload.
-func loadableNames(info map[string]skillInfo, preload map[string]string) []string {
+func loadableNames(info map[string]skillInfo, preload map[string]skillInfo) []string {
 	names := make([]string, 0, len(info))
 	for _, name := range sortedNames(info) {
 		if _, ok := preload[name]; !ok {

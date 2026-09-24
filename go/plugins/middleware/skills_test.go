@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -455,6 +456,25 @@ func TestParseFrontmatter(t *testing.T) {
 			name:     "unquoted colon in description",
 			content:  "---\nname: a\ndescription: Use when: the user asks\n---\nbody",
 			wantName: "a", wantDesc: "Use when: the user asks", wantYAMLErr: true,
+		},
+		{
+			// A plain value continues on indented lines. Recovering only the
+			// first line would drop the words the model routes on.
+			name:     "unquoted colon in a multi-line description",
+			content:  "---\nname: a\ndescription: Use when: the user asks\n  about PDFs\n---\nbody",
+			wantName: "a", wantDesc: "Use when: the user asks about PDFs", wantYAMLErr: true,
+		},
+		{
+			// Another field breaks the YAML. The quoted description must come
+			// back as its value, not with its quotes.
+			name:     "quoted description beside an unrelated colon fault",
+			content:  "---\nname: a\ndescription: \"Extract PDFs\"\ncompatibility: Requires: git\n---\nbody",
+			wantName: "a", wantDesc: "Extract PDFs", wantYAMLErr: true,
+		},
+		{
+			name:     "description starting with a backtick",
+			content:  "---\nname: a\ndescription: `pdf` tools\n---\nbody",
+			wantName: "a", wantDesc: "`pdf` tools", wantYAMLErr: true,
 		},
 		{
 			// Valid YAML, but a line inside it starts with dashes. Matching
@@ -1006,6 +1026,116 @@ func TestSkillsResourceReadIsConfinedToSkillDirectory(t *testing.T) {
 		if _, err := read.RunRaw(ctx, map[string]any{"skillName": "python", "filePath": bad}); err == nil {
 			t.Errorf("reading %q should be refused", bad)
 		}
+	}
+}
+
+// node_modules sorts before references/ and scripts/, so listing it would fill
+// the cap with dependencies and hide the files the author wrote.
+func TestSkillsResourceListingSkipsNodeModules(t *testing.T) {
+	skillsDir := setupSkillsDir(t)
+	python := filepath.Join(skillsDir, "python")
+	for _, rel := range []string{"node_modules/dep/index.js", "references/api.md"} {
+		p := filepath.Join(python, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := &Skills{SkillPaths: []string{skillsDir}, AllowResourceAccess: true}
+	out := callSkillTool(t, s, "res-nm", SkillToolName, map[string]any{"skillName": "python"})
+
+	if strings.Contains(out, "node_modules") {
+		t.Errorf("the listing should skip node_modules: %q", out)
+	}
+	if !strings.Contains(out, "references/api.md") {
+		t.Errorf("the listing should still include references/api.md: %q", out)
+	}
+}
+
+// The reader follows a symbolic link that stays inside the skill, so the
+// listing advertises one. A link out of the skill is refused by the reader and
+// so is not listed either.
+func TestSkillsResourceListingMatchesReaderOnSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs elevation on Windows")
+	}
+	skillsDir := setupSkillsDir(t)
+	refs := filepath.Join(skillsDir, "python", "references")
+	if err := os.MkdirAll(refs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(refs, "v2.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("v2.md", filepath.Join(refs, "latest.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(skillsDir, "javascript", "SKILL.md"), filepath.Join(refs, "escape.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Skills{SkillPaths: []string{skillsDir}, AllowResourceAccess: true}
+	out := callSkillTool(t, s, "res-link", SkillToolName, map[string]any{"skillName": "python"})
+
+	if !strings.Contains(out, "references/latest.md") {
+		t.Errorf("the listing should include a link that stays in the skill: %q", out)
+	}
+	if strings.Contains(out, "escape.md") {
+		t.Errorf("the listing should leave out a link the reader refuses: %q", out)
+	}
+}
+
+// A string result cannot carry bytes that are not UTF-8, so a binary asset is
+// described rather than returned as replacement characters.
+func TestSkillsResourceReadDescribesBinaryFiles(t *testing.T) {
+	skillsDir := setupSkillsDir(t)
+	assets := filepath.Join(skillsDir, "python", "assets")
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "logo.png"), []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := mustHooks(t, &Skills{SkillPaths: []string{skillsDir}, AllowResourceAccess: true})
+	read := findTool(h, SkillResourceToolName)
+	read.Register(newTestRegistry(t))
+
+	got, err := read.RunRaw(ctx, map[string]any{"skillName": "python", "filePath": "assets/logo.png"})
+	if err != nil {
+		t.Fatalf("reading a binary file failed: %v", err)
+	}
+	out, _ := got.(string)
+	if !utf8.ValidString(out) || !strings.Contains(out, "binary file") {
+		t.Errorf("read = %q, want a description of the binary file", out)
+	}
+}
+
+// A path swapped between the check and the open is refused, not read.
+func TestReadCheckedRefusesSwappedFile(t *testing.T) {
+	dir := t.TempDir()
+	checked := filepath.Join(dir, "checked")
+	swapped := filepath.Join(dir, "swapped")
+	for _, p := range []string{checked, swapped} {
+		if err := os.WriteFile(p, []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := os.Lstat(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(swapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if _, err := readChecked(f, st, checked); err == nil {
+		t.Error("readChecked read a file other than the one it checked")
 	}
 }
 
