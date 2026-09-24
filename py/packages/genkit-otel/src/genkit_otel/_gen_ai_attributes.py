@@ -20,8 +20,6 @@ Provider, model, finish reason, and output type are plain functions, so
 tests can check them without a tracer.
 """
 
-from __future__ import annotations
-
 from typing import Literal
 
 
@@ -89,14 +87,19 @@ class GenAiMetric:
     OPERATION_DURATION = 'gen_ai.client.operation.duration'
 
 
-GEN_AI_SEMCONV_VERSION = '1.38.0'
-
 GEN_AI_OPERATION_DETAILS_EVENT = 'gen_ai.client.inference.operation.details'
 
 CAPTURE_CONTENT_ENV_VAR = 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
 
 
 ContentCapturingMode = Literal['NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT']
+
+_CONTENT_CAPTURING_MODES: dict[str, ContentCapturingMode] = {
+    'NO_CONTENT': 'NO_CONTENT',
+    'SPAN_ONLY': 'SPAN_ONLY',
+    'EVENT_ONLY': 'EVENT_ONLY',
+    'SPAN_AND_EVENT': 'SPAN_AND_EVENT',
+}
 
 
 def parse_content_capturing_mode(raw: str | None) -> ContentCapturingMode | None:
@@ -108,16 +111,7 @@ def parse_content_capturing_mode(raw: str | None) -> ContentCapturingMode | None
     """
     if raw is None or not raw.strip():
         return 'NO_CONTENT'
-    token = raw.strip().upper()
-    if token == 'NO_CONTENT':
-        return 'NO_CONTENT'
-    if token == 'SPAN_ONLY':
-        return 'SPAN_ONLY'
-    if token == 'EVENT_ONLY':
-        return 'EVENT_ONLY'
-    if token == 'SPAN_AND_EVENT':
-        return 'SPAN_AND_EVENT'
-    return None
+    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper())
 
 
 def split_model_name(name: str) -> tuple[str | None, str]:
