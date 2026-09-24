@@ -230,6 +230,14 @@ func (p *Part) IsPartial() bool {
 	return p != nil && p.IsToolResponse() && p.Metadata != nil && p.Metadata["partial"] == true
 }
 
+// IsToolError reports whether the [Part] is a tool response that answers the
+// call with an error the model can act on, rather than a result. Its output
+// is {"error": message}. Model plugins whose API marks such results (for
+// example Anthropic's is_error) read this.
+func (p *Part) IsToolError() bool {
+	return p != nil && p.IsToolResponse() && p.Metadata != nil && p.Metadata["error"] == true
+}
+
 // NewPartialToolResponsePart returns a [Part] containing a partial tool response.
 // Partial tool responses are streamed during tool execution for client-side
 // display (e.g., progress indicators) and are not included in conversation history.

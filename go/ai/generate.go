@@ -443,6 +443,10 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 // first turn opens its own "generate" span; the generate action passes false
 // because its own span already serves as that one.
 func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
+	// The soft-failure policy belongs to the call whose middleware set it: a
+	// Generate run from inside a tool starts without its parent's.
+	ctx = base.SoftToolErrorsKey.NewContext(ctx, nil)
+
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
 			opts.Model = defaultModel
@@ -968,20 +972,27 @@ func buildModelChain(mws []namedHooks, fn ModelFunc) ModelFunc {
 	return chain
 }
 
-// toolRanKey carries a per-call flag that the innermost runner sets when it
-// actually executes the tool, letting the engine attribute a hook that
-// short-circuits the call to the tool in traces. It rides the context rather
-// than ToolParams so that a WrapTool hook which rebuilds the params struct (to
+// toolRun records what the innermost runner did for one tool call: whether it
+// executed the tool, which lets the engine attribute a hook that
+// short-circuits the call to the tool in traces, and the error the tool
+// returned, which tells the tool's own failures apart from a hook's.
+type toolRun struct {
+	ran bool
+	err error
+}
+
+// toolRunKey carries the call's [toolRun]. It rides the context rather than
+// ToolParams so that a WrapTool hook which rebuilds the params struct (to
 // rewrite the request, say) cannot silently lose it: every hook that derives
-// its context from the one it was handed keeps the flag.
-var toolRanKey = base.NewContextKey[*bool]()
+// its context from the one it was handed keeps it.
+var toolRunKey = base.NewContextKey[*toolRun]()
 
 // buildToolRunner composes the WrapTool hooks from mws (outer-to-inner) into
 // a single function that executes a tool. The returned function is safe to
 // invoke from concurrent goroutines; each invocation threads its own params
 // through the shared hook chain. When no WrapTool hooks are configured, the
 // tool is invoked directly without allocating a ToolParams wrapper.
-func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
+func buildToolRunner(mws []namedHooks) toolRunnerFunc {
 	hasHook := false
 	for _, mw := range mws {
 		if mw.hooks != nil && mw.hooks.WrapTool != nil {
@@ -990,15 +1001,21 @@ func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req 
 		}
 	}
 	if !hasHook {
-		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-			return tool.RunRawMultipart(ctx, req.Input)
+		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, bool, error) {
+			resp, err := tool.RunRawMultipart(ctx, req.Input)
+			return resp, true, err
 		}
 	}
 	chain := func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
-		if ran := toolRanKey.FromContext(ctx); ran != nil {
-			*ran = true
+		run := toolRunKey.FromContext(ctx)
+		if run != nil {
+			run.ran = true
 		}
-		return params.Tool.RunRawMultipart(ctx, params.Request.Input)
+		resp, err := params.Tool.RunRawMultipart(ctx, params.Request.Input)
+		if run != nil {
+			run.err = err
+		}
+		return resp, err
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
@@ -1024,13 +1041,16 @@ func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req 
 			return resp, err
 		}
 	}
-	return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-		ran := false
-		resp, err := chain(toolRanKey.NewContext(ctx, &ran), &ToolParams{Request: req, Tool: tool})
-		if !ran {
-			return recordToolShortCircuit(ctx, tool.Name(), req.Input, resp, err)
+	return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, bool, error) {
+		var run toolRun
+		resp, err := chain(toolRunKey.NewContext(ctx, &run), &ToolParams{Request: req, Tool: tool})
+		if !run.ran {
+			resp, err = recordToolShortCircuit(ctx, tool.Name(), req.Input, resp, err)
+			return resp, false, err
 		}
-		return resp, err
+		// The error is the tool's own when the hooks passed it up, wrapped or
+		// not, rather than replacing it with one of their own.
+		return resp, run.err != nil && errors.Is(err, run.err), err
 	}
 }
 
@@ -1525,8 +1545,46 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 }
 
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
-// raw [MultipartToolResponse]. Returned by [buildToolRunner].
-type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
+// raw [MultipartToolResponse]. On error, fromTool reports whether the error is
+// the tool's own rather than one a hook raised. Returned by [buildToolRunner].
+type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (resp *MultipartToolResponse, fromTool bool, err error)
+
+// returnsToModel reports whether err, raised for a call to the named tool,
+// answers the call instead of failing the loop. An error made with
+// [base.ToolFailError] always does. Any other error does when it is the
+// tool's own (fromTool; a missing tool counts) and the soft-failure policy on
+// ctx covers the tool. Nothing does once the caller has stopped. Interrupts
+// are the caller's to rule out first.
+func returnsToModel(ctx context.Context, name string, err error, fromTool bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var fail *base.ToolFailError
+	if errors.As(err, &fail) {
+		return true
+	}
+	return fromTool && base.SoftToolErrorsKey.FromContext(ctx).Allows(name)
+}
+
+// toolErrorResponse answers a tool call with err, in the shape
+// [Part.IsToolError] recognizes. The model reads the tool's own words: an
+// error made with [base.ToolFailError] answers with its message, which its
+// author wrote for the model, and a [toolCallError] no hook changed loses the
+// tool-name prefix the response already carries. Context a hook added stays.
+func toolErrorResponse(ctx context.Context, name string, err error) *MultipartToolResponse {
+	logger.Debug(ctx, "tool failed, returning the error to the model", "tool", name, "error", err)
+	msg := err.Error()
+	var fail *base.ToolFailError
+	if errors.As(err, &fail) {
+		msg = fail.Error()
+	} else if call, ok := err.(*toolCallError); ok { // Unwrapped on purpose: a hook's wrapping keeps the whole message.
+		msg = call.err.Error()
+	}
+	return &MultipartToolResponse{
+		Output:   map[string]any{"error": msg},
+		Metadata: map[string]any{"error": true},
+	}
+}
 
 // interruptedPart clones a tool request part and marks it interrupted. The
 // interrupt's metadata is the marker when it carries any; otherwise the
@@ -1613,9 +1671,22 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 
 		go func(idx int, p *Part) {
 			toolReq := p.ToolRequest
+			respond := func(resp *MultipartToolResponse) {
+				newPart := clone(p)
+				stampPendingToolOutcome(newPart, resp)
+				revisedMsg.Content[idx] = newPart
+
+				resultChan <- result[*MultipartToolResponse]{index: idx, value: resp}
+			}
+
 			tool := LookupTool(r, p.ToolRequest.Name)
 			if tool == nil {
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolNotFound, "tool %q not found", toolReq.Name)}
+				err := status.Errorf(ErrToolNotFound, "tool %q not found", toolReq.Name)
+				if returnsToModel(ctx, toolReq.Name, err, true) {
+					respond(toolErrorResponse(ctx, toolReq.Name, err))
+					return
+				}
+				resultChan <- result[*MultipartToolResponse]{index: idx, err: err}
 				return
 			}
 
@@ -1642,7 +1713,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				})
 			}
 
-			multipartResp, err := runTool(toolCtx, tool, toolReq)
+			multipartResp, fromTool, err := runTool(toolCtx, tool, toolReq)
 			if err != nil {
 				var tie *toolInterruptError
 				if errors.As(err, &tie) {
@@ -1651,16 +1722,14 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
 					return
 				}
-
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
-				return
+				if !returnsToModel(ctx, toolReq.Name, err, fromTool) {
+					resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
+					return
+				}
+				multipartResp = toolErrorResponse(ctx, toolReq.Name, err)
 			}
 
-			newPart := clone(p)
-			stampPendingToolOutcome(newPart, multipartResp)
-			revisedMsg.Content[idx] = newPart
-
-			resultChan <- result[*MultipartToolResponse]{index: idx, value: multipartResp}
+			respond(multipartResp)
 		}(i, part)
 	}
 
@@ -2253,7 +2322,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					Ref:   restartPart.ToolRequest.Ref,
 					Input: restartPart.ToolRequest.Input,
 				}
-				multipartResp, err := runTool(resumedCtx, tool, restartToolReq)
+				multipartResp, fromTool, err := runTool(resumedCtx, tool, restartToolReq)
 				if err != nil {
 					var tie *toolInterruptError
 					if errors.As(err, &tie) {
@@ -2262,8 +2331,10 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 							interrupt: interruptedPart(p, tie),
 						}, nil
 					}
-
-					return nil, toolFailureError(ctx, restartPart.ToolRequest.Name, err)
+					if !returnsToModel(ctx, restartPart.ToolRequest.Name, err, fromTool) {
+						return nil, toolFailureError(ctx, restartPart.ToolRequest.Name, err)
+					}
+					multipartResp = toolErrorResponse(ctx, restartPart.ToolRequest.Name, err)
 				}
 
 				newToolReq := clone(p)
