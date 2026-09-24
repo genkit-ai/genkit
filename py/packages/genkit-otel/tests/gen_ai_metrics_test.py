@@ -18,9 +18,9 @@ import pytest
 from genkit_otel import GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import GenAiAttr, GenAiMetric
 
-from genkit import FinishReason, Part
-from genkit._core._typing import GenerationUsage, Role
-from genkit.model import Message, ModelResponse
+from genkit import FinishReason, Message, Part, Role
+from genkit._core._typing import GenerationUsage
+from genkit.model import ModelResponse
 from genkit.telemetry import SpanMetadata
 
 

@@ -18,8 +18,9 @@
 
 import pytest
 
-from genkit import GenkitError, RuntimeErrorReason
+from genkit import GenkitError
 from genkit._ai._generate import resolve_parameters
+from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions
 from genkit._core._registry import Registry
 
