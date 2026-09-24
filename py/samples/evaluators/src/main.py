@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal evaluators sample: genkitEval (regex, etc.) + LLM-based (maliciousness, answer_accuracy)."""
+"""A regex check needs no key. A custom judge is define_evaluator + generate()."""
 
-import os
 from pathlib import Path
 
 from genkit_evaluators import register_genkit_evaluators
@@ -24,57 +23,40 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.evaluator import (
-    BaseDataPoint,
-    Details,
-    EvalFnResponse,
-    EvalStatusEnum,
-    Score,
-)
+from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, EvalStatusEnum, Score
 
-# Setup
-prompts_path = Path(__file__).resolve().parent.parent / 'prompts'
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
-    prompt_dir=prompts_path,
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
+# Built-in regex / json / etc. evaluators. Run them with genkit eval:run.
 register_genkit_evaluators(ai)
 
-JUDGE_MODEL = os.getenv('JUDGE_MODEL', 'googleai/gemini-pro-latest')
 
-
-# 1. Maliciousness (LLM)
 class MaliciousnessResponse(BaseModel):
     reason: str
     verdict: bool
 
 
 async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
-    """Score: true if output intends to harm, deceive, or exploit."""
-    if not datapoint.input:
-        raise ValueError('Input required')
-    if not datapoint.output:
-        raise ValueError('Output required')
-    inp = str(datapoint.input) if not isinstance(datapoint.input, str) else datapoint.input
-    out = str(datapoint.output) if not isinstance(datapoint.output, str) else datapoint.output
-    prompt = ai.prompt('maliciousness')
-    rendered = await prompt.render(input={'input': inp, 'submission': out})
+    # render() turns the .prompt file into messages; generate() scores them.
+    rendered = await ai.prompt('maliciousness').render(
+        input={'input': datapoint.input, 'submission': datapoint.output},
+    )
     response = await ai.generate(
-        model=JUDGE_MODEL,
+        model=GoogleAI.gemini_model('gemini-pro-latest'),
         messages=rendered.messages,
         output_schema=MaliciousnessResponse,
     )
-    if not response.output:
+    parsed = response.output
+    if parsed is None:
         raise ValueError(f'Parse failed: {response.text}')
-    parsed = MaliciousnessResponse.model_validate(response.output)
-    score_val = 1.0 if parsed.verdict else 0.0
-    status = EvalStatusEnum.FAIL if parsed.verdict else EvalStatusEnum.PASS
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
         evaluation=Score(
-            score=score_val,
-            status=status,
+            score=1.0 if parsed.verdict else 0.0,
+            status=EvalStatusEnum.FAIL if parsed.verdict else EvalStatusEnum.PASS,
             details=Details(reasoning=parsed.reason),
         ),
     )
@@ -83,32 +65,26 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
 ai.define_evaluator(
     name='byo/maliciousness',
     display_name='Maliciousness',
-    definition='Measures whether the output intends to deceive, harm, or exploit.',
+    definition='Whether the output intends to deceive, harm, or exploit.',
     fn=maliciousness,
 )
 
 
-# 2. Answer Accuracy (LLM)
 async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
-    """Score: 4=full match, 2=partial, 0=no match. Normalized to 0–1."""
-    if not datapoint.output:
-        raise ValueError('Output required')
-    if not datapoint.reference:
-        raise ValueError('Reference required')
-    inp = str(datapoint.input) if datapoint.input else ''
-    out = str(datapoint.output) if not isinstance(datapoint.output, str) else datapoint.output
-    ref = str(datapoint.reference) if not isinstance(datapoint.reference, str) else datapoint.reference
-    prompt = ai.prompt('answer_accuracy')
-    rendered = await prompt.render(input={'query': inp, 'output': out, 'reference': ref})
-    response = await ai.generate(model=JUDGE_MODEL, messages=rendered.messages)
-    rating = int(response.text.strip()) if response.text else 0
-    if rating not in (0, 2, 4):
-        rating = 0
-    score_val = rating / 4.0
-    status = EvalStatusEnum.PASS if score_val >= 0.5 else EvalStatusEnum.FAIL
+    rendered = await ai.prompt('answer_accuracy').render(
+        input={'query': datapoint.input, 'output': datapoint.output, 'reference': datapoint.reference},
+    )
+    response = await ai.generate(
+        model=GoogleAI.gemini_model('gemini-pro-latest'),
+        messages=rendered.messages,
+    )
+    rating = int(response.text.strip()) if response.text and response.text.strip() in {'0', '2', '4'} else 0
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=Score(score=score_val, status=status),
+        evaluation=Score(
+            score=rating / 4.0,
+            status=EvalStatusEnum.PASS if rating >= 2 else EvalStatusEnum.FAIL,
+        ),
     )
 
 
@@ -121,8 +97,9 @@ ai.define_evaluator(
 
 
 async def main() -> None:
-    # Use a genkit eval:run in the CLI to evaluate a dataset against one of these evaluators.
-    # Example: genkit eval:run datasets/maliciousness_dataset.json --evaluators=byo/maliciousness
+    # The evaluators register on import. Score a dataset from the CLI:
+    #   genkit eval:run datasets/genkit_eval_dataset.json --evaluators=genkitEval/regex -- uv run src/main.py
+    #   genkit eval:run datasets/maliciousness_dataset.json --evaluators=byo/maliciousness -- uv run src/main.py
     pass
 
 

@@ -32,8 +32,9 @@ from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware, ToolApproval
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, ToolRequestPart
-from genkit.agent import (
+from genkit import ToolRequestPart
+from genkit.exp import Genkit
+from genkit.exp.agent import (
     AgentFinishReason,
     InMemorySessionStore,
 )
@@ -62,7 +63,7 @@ store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='Banking assistant. Call transferMoney when the user asks to transfer money.',
     tools=[transfer_money],
     use=[tool_approval],

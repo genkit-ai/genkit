@@ -28,8 +28,9 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemorySessionStore
+from genkit import GenkitError, ToolRunContext
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
@@ -46,7 +47,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
 
 agent = ai.define_agent(
     name='longTaskAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini_model('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,

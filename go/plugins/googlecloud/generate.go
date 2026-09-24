@@ -382,7 +382,13 @@ func (g *GenerateTelemetry) toPartLogContent(part *ai.Part) string {
 	case ai.PartText:
 		return truncate(part.Text)
 	case ai.PartData:
-		return truncate(part.Text)
+		if part.Data != nil {
+			if s, ok := part.Data.(string); ok {
+				return truncate(s)
+			}
+			data, _ := json.Marshal(part.Data)
+			return truncate(string(data))
+		}
 	case ai.PartMedia:
 		return g.toPartLogMedia(part)
 	case ai.PartCustom:

@@ -32,8 +32,6 @@ from uuid import uuid4
 import uvicorn
 from pydantic import BaseModel
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -313,15 +311,6 @@ def create_reflection_asgi_app(
             Route('/api/notify', notify, methods=['POST']),
             Route('/api/runAction', run, methods=['POST']),
             Route('/api/cancelAction', cancel, methods=['POST']),
-        ],
-        middleware=[
-            Middleware(
-                CORSMiddleware,  # type: ignore[arg-type]
-                allow_origins=['*'],
-                allow_methods=['*'],
-                allow_headers=['*'],
-                expose_headers=['X-Genkit-Trace-Id', 'X-Genkit-Span-Id', 'x-genkit-version'],
-            )
         ],
         lifespan=lifespan,
     )

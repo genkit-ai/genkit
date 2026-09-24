@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import Action, ActionKind, Genkit, GenkitError
-from genkit.agent import Agent, SessionSnapshot
+from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import ContextProvider, RequestData, get_callable_json
 
 
@@ -235,7 +235,7 @@ def genkit_fastapi_handler(
     ai: Genkit,
     context_provider: ContextProvider | None = None,
 ) -> Callable[
-    [Callable[[], Action[InputT, OutputT, ChunkT, InitT]] | Action[InputT, OutputT, ChunkT, InitT]],
+    [Callable[[], Awaitable[Action[InputT, OutputT, ChunkT, InitT]]] | Action[InputT, OutputT, ChunkT, InitT]],
     Callable[[Request], Awaitable[Response | dict[str, Any]]],
 ]:
     """Decorator for serving Genkit actions (flows, agents, tools, etc.) via FastAPI.
@@ -271,7 +271,7 @@ def genkit_fastapi_handler(
     """
 
     def decorator(
-        fn: Callable[[], Action[InputT, OutputT, ChunkT, InitT]] | Action[InputT, OutputT, ChunkT, InitT],
+        fn: Callable[[], Awaitable[Action[InputT, OutputT, ChunkT, InitT]]] | Action[InputT, OutputT, ChunkT, InitT],
     ) -> Callable[[Request], Awaitable[Response | dict[str, Any]]]:
         async def handler(request: Request) -> Response | dict[str, Any]:
             if isinstance(fn, Action):

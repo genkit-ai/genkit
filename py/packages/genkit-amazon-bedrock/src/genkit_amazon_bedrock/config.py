@@ -76,7 +76,8 @@ class ModelDefinition(BaseModel):
     """A Bedrock model to register with Genkit.
 
     Capabilities are inferred from the built-in registry when not provided;
-    unknown chat models default to multimodal + tools at the unstable stage.
+    unknown chat models default to multimodal + tools with conservative catalog
+    defaults (marked unstable in the model catalog).
     """
 
     name: str

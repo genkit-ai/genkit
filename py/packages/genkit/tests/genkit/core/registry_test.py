@@ -12,10 +12,11 @@ functionality, ensuring proper registration and management of Genkit resources.
 import pytest
 
 from genkit import Genkit, Plugin
-from genkit._core._action import Action, ActionKind, create_action_key
+from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
 from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata
+from genkit._core._typing import ActionMetadata, Operation
 
 
 async def _identity(x: object) -> object:
@@ -57,8 +58,8 @@ async def test_resolve_action_by_key_invalid_format() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_action_via_dynamic_action_provider() -> None:
-    """Registry resolves DAP tools only for DAP-qualified names (host:kind/name)."""
+async def test_lookup_mcp_tool_echo_does_not_register_tool_v2_echo() -> None:
+    """resolve_action(TOOL, 'mcp:tool/echo') returns the Action. It does not write /tool.v2/echo."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -78,11 +79,39 @@ async def test_resolve_action_via_dynamic_action_provider() -> None:
 
     got = await registry.resolve_action(ActionKind.TOOL, 'my-dap:tool/inner-tool')
     assert got is inner
+    assert 'inner-tool' not in registry._entries.get(ActionKind.TOOL, {})
+
+
+@pytest.mark.asyncio
+async def test_child_resolve_action_dap_tool_returns_action_without_catalog() -> None:
+    """A generate child can peek the parent's DAP Action. Bind still happens in expand."""
+    parent = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    inner = Action(
+        name='inner-tool',
+        kind=ActionKind.TOOL,
+        fn=tool_fn,
+        metadata={'name': 'inner-tool'},
+    )
+
+    async def dap_fn() -> DapValue:
+        return {'tool': [inner]}
+
+    define_dynamic_action_provider(parent, 'my-dap', dap_fn)
+    child = parent.new_child()
+
+    got = await child.resolve_action(ActionKind.TOOL, 'my-dap:tool/inner-tool')
+    assert got is inner
+    assert 'inner-tool' not in child._entries.get(ActionKind.TOOL, {})
+    assert 'inner-tool' not in parent._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio
 async def test_resolve_action_by_key_dap_qualified() -> None:
-    """DAP-qualified keys resolve nested actions."""
+    """Qualified DAP key returns the child Action. It does not bind or catalog it."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -102,6 +131,12 @@ async def test_resolve_action_by_key_dap_qualified() -> None:
 
     got = await registry.resolve_action_by_key('/dynamic-action-provider/my-dap:tool/inner-tool')
     assert got is inner
+    assert 'inner-tool' not in registry._entries.get(ActionKind.TOOL, {})
+
+    catalog = await registry.list_actions()
+    assert '/dynamic-action-provider/my-dap' in catalog
+    assert '/dynamic-action-provider/my-dap:tool/inner-tool' not in catalog
+    assert '/tool.v2/inner-tool' not in catalog
 
 
 @pytest.mark.asyncio
@@ -333,14 +368,14 @@ async def test_child_resolvable_local_tool_shadows_parent_plugin_metadata() -> N
     )
 
     catalog = await child.list_actions()
-    entry = catalog['/tool/parentplugin/shared-name']
+    entry = catalog['/tool.v2/parentplugin/shared-name']
     assert entry.description == 'from child registry'
     assert entry.description != 'from parent plugin'
 
 
 @pytest.mark.asyncio
 async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> None:
-    """DAP-exposed nested actions must shadow parent plugin metadata for the same (kind, name)."""
+    """DAP children are not catalog rows; plugin-advertised ``/tool.v2/`` stays until generate binds."""
 
     class ParentPlugin(Plugin):
         name = 'parentplugin'
@@ -381,13 +416,13 @@ async def test_child_resolvable_dap_tool_shadows_parent_plugin_metadata() -> Non
 
     catalog = await child.list_actions()
     qualified = create_action_key(ActionKind.DYNAMIC_ACTION_PROVIDER, 'mcp:tool/parentplugin/mcp-tool')
-    assert catalog[qualified].description == 'from mcp'
-    assert catalog['/tool/parentplugin/mcp-tool'].description == 'stale parent schema'
+    assert qualified not in catalog
+    assert catalog['/tool.v2/parentplugin/mcp-tool'].description == 'stale parent schema'
 
 
 @pytest.mark.asyncio
 async def test_list_actions_registered_canonical_coexists_with_qualified_dap_rows() -> None:
-    """Registered ``/tool/...`` row coexists with DAP ``/dynamic-action-provider/...`` rows when shortnames collide."""
+    """Registered ``/tool.v2/...`` row is the catalog key; DAP children are not listed."""
     tool_name = 'suite/same-canonical'
 
     async def registered_fn(_: str) -> str:
@@ -426,9 +461,7 @@ async def test_list_actions_registered_canonical_coexists_with_qualified_dap_row
     assert canonical in catalog
     assert catalog[canonical].description == 'from registry registration'
 
-    assert qualified in catalog
-    assert catalog[qualified].key == qualified
-
+    assert qualified not in catalog
     assert provider_key in catalog
 
 
@@ -438,3 +471,75 @@ def test_registry_satisfies_registry_like() -> None:
     from genkit._core._registry import Registry
 
     assert isinstance(Registry(None), RegistryLike)
+
+
+async def _bg_start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    return Operation(id='bg-op', done=False)
+
+
+async def _bg_check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    return op
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_finds_background_model() -> None:
+    """A name registered only as a background model is still findable."""
+    ai = Genkit()
+    action = ai.define_background_model(name='bg-model', start=_bg_start, check=_bg_check)
+
+    got = await ai.registry.resolve_model('bg-model')
+
+    assert got is not None
+    assert got is action.start_action
+    assert got.kind == ActionKind.BACKGROUND_MODEL
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_prefers_foreground_when_both_exist() -> None:
+    """A normal model of the same name wins. The fallback is only for names that have no MODEL."""
+
+    async def fg(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse()
+
+    ai = Genkit()
+    foreground = ai.define_model(name='same-name', fn=fg)
+    ai.define_background_model(name='same-name', start=_bg_start, check=_bg_check)
+
+    got = await ai.registry.resolve_model('same-name')
+
+    assert got is not None
+    assert got is foreground
+    assert got.kind == ActionKind.MODEL
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_missing_is_none() -> None:
+    """Unknown names stay None. This is not NOT_FOUND — callers decide the error."""
+    ai = Genkit()
+    assert await ai.registry.resolve_model('no-such-model') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_finds_plugin_background_model() -> None:
+    """A plugin MODEL miss still lets the BACKGROUND_MODEL start action through."""
+
+    class VeoPlugin(Plugin):
+        name = 'plug'
+
+        async def init(self) -> list[Action]:
+            return []
+
+        async def list_actions(self) -> list[ActionMetadata]:
+            return []
+
+        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+            if action_type != ActionKind.BACKGROUND_MODEL:
+                return None
+            return Action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=_bg_start)
+
+    ai = Genkit(plugins=[VeoPlugin()])
+    got = await ai.registry.resolve_model('plug/veo-2.0-generate-001')
+
+    assert got is not None
+    assert got.kind == ActionKind.BACKGROUND_MODEL
+    assert got.name == 'plug/veo-2.0-generate-001'

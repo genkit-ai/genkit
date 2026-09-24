@@ -456,8 +456,8 @@ def _state_patch_data_loss(snapshot_id: str, detail: str) -> GenkitError:
         message=(
             f"FirestoreSessionStore: snapshot '{snapshot_id}' has an unreadable "
             f"'statePatch' field ({detail}). "
-            'Documents written by pre-release versions are not readable; '
-            "delete the session's documents and re-create."
+            "This snapshot's statePatch is an older or incompatible format; "
+            'delete the session documents and create a new session.'
         ),
     )
 
@@ -1434,8 +1434,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                         f"FirestoreSessionStore: snapshot '{seg_doc.snapshot_id}' has an unreadable "
                         f"'statePatch' field (expected a JSON string; found "
                         f'{type(seg_doc.state_patch).__name__}). '
-                        'Documents written by pre-release versions are not readable; '
-                        "delete the session's documents and re-create."
+                        "This snapshot's statePatch is an older or incompatible format; "
+                        'delete the session documents and create a new session.'
                     ),
                 ) from e
             target_doc = seg_doc

@@ -175,6 +175,13 @@ async def test_channel_close_future_with_exception() -> None:
     with pytest.raises(ValueError, match='Task failed!'):
         await channel.closed
 
+    # async for has to raise too — generate_stream iterate is this loop.
+    channel2: Channel[Any] = Channel()
+    channel2.set_close_future(asyncio.create_task(failing_task()))
+    with pytest.raises(ValueError, match='Task failed!'):
+        async for _item in channel2:
+            pass
+
 
 @pytest.mark.asyncio
 async def test_channel_close_future_cancelled() -> None:

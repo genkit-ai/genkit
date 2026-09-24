@@ -31,8 +31,8 @@ from genkit import Document, ModelRequest, ModelResponse
 
 # DocumentData has no public re-export yet; the rerank helper is built on it.
 from genkit._core._typing import DocumentData
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
-from genkit.model import model_action_metadata
+from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
+from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -50,7 +50,7 @@ from genkit_amazon_bedrock.config import (
 )
 from genkit_amazon_bedrock.embedders import (
     BedrockEmbedder,
-    get_embedder_options,
+    get_embedder_info,
     is_embedding_model,
     looks_like_embedding_model,
 )
@@ -225,10 +225,10 @@ class Bedrock(Plugin):
             model = BedrockModel(model_id=model_id, transport=self._transport)
             return await model.generate(request, ctx)
 
-        return Action(
-            kind=ActionKind.MODEL,
-            name=bedrock_name(model_id),
-            fn=_generate,
+        return create_model(
+            bedrock_name(model_id),
+            _generate,
+            config_schema=BedrockImageConfig if is_image else BedrockConfig,
             metadata={
                 'model': {
                     'label': model_info.label,
@@ -246,12 +246,10 @@ class Bedrock(Plugin):
             embedder = BedrockEmbedder(model_id=model_id, transport=self._transport)
             return await embedder.embed(request)
 
-        return Action(
-            kind=ActionKind.EMBEDDER,
-            name=bedrock_name(model_id),
-            fn=_embed,
-            # Same helper as list_actions, so the two can never drift apart.
-            metadata=embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id)).metadata,
+        return embedder(
+            bedrock_name(model_id),
+            _embed,
+            info=get_embedder_info(model_id),
         )
 
     async def list_actions(self) -> list[ActionMetadata]:
@@ -281,7 +279,7 @@ class Bedrock(Plugin):
         ]
         models = len(actions)
         actions.extend(
-            embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id))
+            embedder_action_metadata(bedrock_name(model_id), get_embedder_info(model_id))
             for model_id in self.embedders
             if is_embedding_model(model_id)
         )

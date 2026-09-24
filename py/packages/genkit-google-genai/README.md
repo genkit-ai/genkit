@@ -26,15 +26,30 @@ To use Vertex AI models, ensure you have a Google Cloud project and Application 
 gcloud auth application-default login
 ```
 
+## Quickstart
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+
+
+@ai.flow()
+async def greet(name: str) -> str:
+    res = await ai.generate(prompt=f'Say hello to {name}.')
+    return res.text
+```
+
 ## Features
 
 ### Dynamic Models
 
-The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `googleai/gemini-flash-latest`, `vertexai/gemini-2.5-pro`).
+The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-2.5-pro')`).
 
 ### Dynamic Configuration
 
-New or experimental parameters can be passed on the family config and ride through to the API:
+Unrecognized provider parameters on the family config are forwarded to the API:
 
 ```python
 from genkit_google_genai import GeminiConfigSchema
@@ -44,6 +59,49 @@ config = GeminiConfigSchema.model_validate({
     'response_modalities': ['TEXT', 'IMAGE'],
 })
 ```
+
+### Video generation (Veo)
+
+Video is a job, not a round-trip. `generate_operation` hands back a ticket;
+`check_operation` is how you find out when the video is ready. When the job
+finishes, `operation.output` has a playable `media.url` — Studio sends a
+download URL, Vertex often sends the mp4 inline.
+
+**With `GoogleAI`:**
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+operation = await ai.generate_operation(
+    model=GoogleAI.veo_model('veo-3.1-fast-generate-preview'),
+    prompt='A paper airplane gliding through a bright classroom',
+)
+while not operation.done:
+    operation = await ai.check_operation(operation)
+print(operation.output)
+```
+
+**With `VertexAI`:**
+
+```python
+from genkit import Genkit
+from genkit_google_genai import VertexAI
+
+ai = Genkit(plugins=[VertexAI()])
+
+operation = await ai.generate_operation(
+    model=VertexAI.veo_model('veo-3.1-generate-001'),
+    prompt='A paper airplane gliding through a bright classroom',
+)
+while not operation.done:
+    operation = await ai.check_operation(operation)
+print(operation.output)
+```
+
+Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media).
 
 ### Vertex AI Evaluators
 
@@ -74,23 +132,4 @@ for result in results.root:
     print(f'Score: {result.evaluation.score}')
 ```
 
-
-**Supported evaluators:**
-
-| Evaluator | Description |
-|-----------|-------------|
-| `vertexai/bleu` | Translation quality (compare to reference) |
-| `vertexai/rouge` | Summarization quality |
-| `vertexai/fluency` | Language mastery and readability |
-| `vertexai/safety` | Harmful/inappropriate content detection |
-| `vertexai/groundedness` | Hallucination detection |
-| `vertexai/summarization_quality` | Overall summarization ability |
-
-## Examples
-
-For comprehensive usage examples, see:
-
-- [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media) - Speech, image, and video generation
-- [gemini-code-execution](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-code-execution) - Gemini code execution
-- [gemini-context-caching](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-context-caching) - Context caching for large prompts
-- [vertexai-imagen](https://github.com/genkit-ai/genkit/tree/main/py/samples/vertexai-imagen) - Vertex AI Imagen generation
+Runnable snippets are in [`py/samples`](../../samples).

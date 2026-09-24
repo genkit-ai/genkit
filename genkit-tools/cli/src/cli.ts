@@ -33,6 +33,7 @@ import { evalRun } from './commands/eval-run';
 import { flowBatchRun } from './commands/flow-batch-run';
 import { flowRun } from './commands/flow-run';
 import { initAiTools } from './commands/init-ai-tools/index';
+import { logList } from './commands/log-list';
 import { mcp } from './commands/mcp';
 import { getPluginCommands, getPluginSubCommand } from './commands/plugins';
 import {
@@ -72,6 +73,7 @@ const commands: Command[] = [
   docsList,
   docsRead,
   docsSearch,
+  logList,
   traceGet,
   traceList,
 ];

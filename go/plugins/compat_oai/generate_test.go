@@ -798,7 +798,9 @@ func TestConcatenateContentSkipsNonTextParts(t *testing.T) {
 		ai.NewTextPart("visible"),
 		ai.NewReasoningPart("thought", nil),
 		nil,
-		ai.NewDataPart("data:application/octet-stream;base64,AAAA"),
+		// Data and media parts carry their payload on Data (not Text) and must
+		// not contribute to concatenated text.
+		ai.NewDataPart(map[string]any{"some": "data"}),
 		ai.NewMediaPart("image/png", "data:image/png;base64,AAAA"),
 	}
 	if got := concatenateTextContent(parts); got != "visible" {

@@ -157,6 +157,18 @@ export abstract class BaseRuntimeManager {
       if (query !== '') query += '&';
       query += `continuationToken=${continuationToken}`;
     }
+    if (filter?.severityText) {
+      if (query !== '') query += '&';
+      query += `severityText=${encodeURIComponent(filter.severityText)}`;
+    }
+    if (filter?.severityNumber) {
+      if (query !== '') query += '&';
+      query += `severityNumber=${filter.severityNumber}`;
+    }
+    if (filter?.spanId && !filter?.traceId) {
+      if (query !== '') query += '&';
+      query += `spanId=${encodeURIComponent(filter.spanId)}`;
+    }
 
     const fullUrl = query !== '' ? `${url}?${query}` : url;
 

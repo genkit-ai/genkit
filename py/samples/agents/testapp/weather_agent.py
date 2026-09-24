@@ -32,7 +32,7 @@ from _ai import ai
 from pydantic import BaseModel
 
 from genkit import ActionRunContext
-from genkit.agent import FileSessionStore
+from genkit.exp.agent import FileSessionStore
 
 
 class WeatherInput(BaseModel):

@@ -20,8 +20,9 @@ Capabilities are keyed by base Bedrock model ID; cross-region inference-profile
 prefixes are stripped for lookup only - the full original model ID is always
 sent to Bedrock untouched.
 Unknown chat/text models fall back to modern Converse defaults (multimodal +
-tools) at the unstable stage, so newer or inference-profile-only models remain
-callable without a plugin release.
+tools) with conservative catalog defaults (marked unstable in the model catalog),
+so newer or inference-profile-only models remain callable without a plugin
+release.
 """
 
 from typing import Literal, NamedTuple
@@ -163,7 +164,8 @@ def get_model_info(
 
     Returns:
         ModelInfo with capabilities from the registry, or modern Converse
-        defaults at the unstable stage for unknown chat/text models.
+        defaults with conservative catalog defaults (marked unstable in the
+        model catalog) for unknown chat/text models.
     """
     if model_type == 'image':
         return ModelInfo(

@@ -46,9 +46,8 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 SpanAttributeValue = otel_types.AttributeValue
 
 
-def _record_latency(output: object, start_time: float) -> object:
+def _record_latency(output: object, latency_ms: float) -> object:
     """Stamp ``latency_ms`` on the output if it has one (in place, or via ``model_copy`` for frozen models)."""
-    latency_ms = (time.perf_counter() - start_time) * 1000
     if hasattr(output, 'latency_ms'):
         try:
             cast(Any, output).latency_ms = latency_ms
@@ -100,6 +99,24 @@ def _sanitize_value(val: object, seen: set[int] | None = None) -> object:
             return repr(val)
 
 
+def context_for_telemetry(context: dict[str, Any]) -> dict[str, Any]:
+    """Copy of action context for the Dev UI Context panel.
+
+    ``auth`` and ``secrets`` are what the caller put on the request for
+    identity and keys. The live action still sees the real values; the
+    panel should not.
+    """
+    # Sanitize on the caller's dict so a self-pointer becomes '[Circular]'
+    # instead of one extra unwrap on the panel.
+    cleaned = _sanitize_value(context)
+    traced = dict(cleaned) if isinstance(cleaned, dict) else {}
+    if 'auth' in traced:
+        traced['auth'] = '<redacted>'
+    if 'secrets' in traced:
+        traced['secrets'] = '<redacted>'
+    return traced
+
+
 # =============================================================================
 # Action types
 # =============================================================================
@@ -129,7 +146,8 @@ class ActionKind(StrEnum):
     RERANKER = 'reranker'
     RESOURCE = 'resource'
     RETRIEVER = 'retriever'
-    TOOL = 'tool'
+    # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
+    TOOL = 'tool.v2'
     UTIL = 'util'
 
 
@@ -146,6 +164,7 @@ class ActionResponse(BaseModel, Generic[ResponseT]):
     response: ResponseT
     trace_id: str
     span_id: str = ''
+    latency_ms: float | None = None
 
 
 ChunkT_co = TypeVar('ChunkT_co', covariant=True)
@@ -283,6 +302,9 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
+    # Catalog kind, not a selector. People write provider:tool/name.
+    if inner_kind == ActionKind.TOOL:
+        return None
     return DapQualifiedName(provider, inner_kind, inner_name)
 
 
@@ -337,7 +359,7 @@ _action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
 
-class ActionRunContext:
+class ActionRunContext(Generic[ChunkT]):
     """Execution context for an action.
 
     Provides read-only access to action context (auth, metadata), streaming
@@ -347,7 +369,7 @@ class ActionRunContext:
     def __init__(
         self,
         context: dict[str, Any] | None = None,
-        streaming_callback: StreamingCallback | None = None,
+        streaming_callback: Callable[[ChunkT], None] | None = None,
         abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
@@ -360,23 +382,24 @@ class ActionRunContext:
 
     @property
     def context(self) -> dict[str, Any]:
+        """The action context."""
         return self._context
 
     @property
     def init(self) -> object | None:
-        """Per-run initialization data (session identity for agents).
+        """The session initialization value passed on connection open, if any.
 
-        Separate from ``input``: ``input`` is the payload for one call, while
-        ``init`` says which longer-lived thing that call is part of. Plain
-        actions ignore it; bidi actions read it to pick up the right session.
+        For request-response actions this is None; for bidi streams (like live
+        agent chat) this carries whatever credentials/metadata the caller sent
+        in the handshake before any turns started.
         """
         return self._init
 
     @property
     def input_stream(self) -> AsyncIterator[object] | None:
-        """The live sequence of per-turn inputs for a bidi run, if any.
+        """The incoming input stream for bidi actions, if any.
 
-        A one-shot call has a single ``input`` and no stream; a bidi call (an
+        An action that receives inputs continuously across a session (e.g. live
         agent chat) instead gets its turns over time here. Plain actions never
         look at it — only bidi actions drain it turn by turn.
         """
@@ -388,7 +411,7 @@ class ActionRunContext:
         return self._streaming_callback is not None
 
     @property
-    def streaming_callback(self) -> StreamingCallback | None:
+    def streaming_callback(self) -> Callable[[ChunkT], None] | None:
         """The streaming callback, if any.
 
         Use this when you need to pass the callback to another action.
@@ -396,7 +419,7 @@ class ActionRunContext:
         """
         return self._streaming_callback
 
-    def send_chunk(self, chunk: object) -> None:
+    def send_chunk(self, chunk: ChunkT) -> None:
         """Send a streaming chunk to the client.
 
         Args:
@@ -423,11 +446,17 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
+        # Python class for generate's isinstance check. Not in metadata —
+        # that bag is JSON for the Dev UI.
+        self._config_schema: type[BaseModel] | None = (
+            config_schema if isinstance(config_schema, type) and issubclass(config_schema, BaseModel) else None
+        )
         self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
         # Optional matcher function for resource actions
         self.matches: Callable[[object], bool] | None = None
@@ -551,7 +580,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         init = self._validate_init(init)
 
         token = None
-        if context:
+        if context is not None:
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
@@ -756,14 +785,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # Surface action context (auth, headers, etc.) on the span so the Dev UI
         # trace inspector can render the "Context" panel for a flow run.
         if ctx.context:
+            traced_context = context_for_telemetry(ctx.context)
             try:
-                extra_metadata['context'] = json.dumps(ctx.context)
+                extra_metadata['context'] = json.dumps(traced_context)
             except Exception:
                 try:
-                    cleaned_context = _sanitize_value(ctx.context)
+                    cleaned_context = _sanitize_value(traced_context)
                     extra_metadata['context'] = json.dumps(cleaned_context)
                 except Exception:
-                    extra_metadata['context'] = str(ctx.context)
+                    extra_metadata['context'] = str(traced_context)
         span_meta = SpanMetadata(
             name=self._name,
             type='action',
@@ -787,10 +817,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     output = await execute()
                 else:
                     output = await self._invoke(input, ctx)
-                output = cast(OutputT, _record_latency(output, start_time))
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                output = cast(OutputT, _record_latency(output, latency_ms))
                 # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
                 span_meta.output = output
-                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+                return ActionResponse(
+                    response=output,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    latency_ms=latency_ms,
+                )
         except GenkitError:
             raise
         except Exception as e:

@@ -60,6 +60,50 @@ func TestActionRunJSON(t *testing.T) {
 	}
 }
 
+// TestActionRunPartialResult pins that a failure carries whatever the
+// function produced. The generate loop returns the conversation it completed
+// alongside its error, and that value has to survive the action boundary to
+// reach a caller or the reflection wire.
+func TestActionRunPartialResult(t *testing.T) {
+	boom := errors.New("boom")
+
+	t.Run("a partial value rides back with the error", func(t *testing.T) {
+		r := registry.New()
+		a := defineStreamingAction(r, "test/partial", api.ActionTypeCustom, nil, nil,
+			func(_ context.Context, x int, _ noStream) (int, error) { return x + 1, boom })
+
+		got, err := a.Run(context.Background(), 3, nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		if want := 4; got != want {
+			t.Errorf("got %d, want the partial %d", got, want)
+		}
+
+		raw, err := a.RunJSON(context.Background(), []byte("3"), nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("RunJSON err = %v, want boom", err)
+		}
+		if !bytes.Equal(raw, []byte("4")) {
+			t.Errorf("RunJSON result = %s, want the marshaled partial 4", raw)
+		}
+	})
+
+	t.Run("a function that produced nothing yields no result", func(t *testing.T) {
+		r := registry.New()
+		a := defineStreamingAction(r, "test/nothing", api.ActionTypeCustom, nil, nil,
+			func(_ context.Context, _ int, _ noStream) (*int, error) { return nil, boom })
+
+		res, err := a.RunJSONWithTelemetry(context.Background(), []byte("3"), nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		if res.Result != nil {
+			t.Errorf("result = %s, want none rather than a null", res.Result)
+		}
+	})
+}
+
 // TestActionInvalidInput pins how an action classifies input it refuses, on
 // both entry points: Run validates the typed value against the schema, and
 // RunJSON fails earlier, deserializing the bytes. Each is reported with

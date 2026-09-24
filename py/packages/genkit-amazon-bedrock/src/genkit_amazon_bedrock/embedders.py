@@ -37,7 +37,7 @@ rejected with ``Invalid parameter combination``. Image embedding needs
 import asyncio
 import json
 from collections.abc import Coroutine
-from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
@@ -47,7 +47,7 @@ from genkit import MediaPart, TextPart
 # DocumentData has no public re-export yet; the embedder protocol is built on it.
 from genkit._core._typing import DocumentData
 from genkit.embedder import (
-    EmbedderOptions,
+    EmbedderInfo,
     EmbedderSupports,
     Embedding,
     EmbedRequest,
@@ -97,20 +97,31 @@ _FAMILY_INPUTS: dict[EmbeddingFamily, tuple[str, ...]] = {
 }
 
 
-class EmbedderInfo(NamedTuple):
-    """Published capabilities of a Bedrock embedding model."""
-
-    dimensions: int
-    input: tuple[str, ...]
-
-
 EMBEDDER_INFO: dict[str, EmbedderInfo] = {
-    'amazon.titan-embed-text-v1': EmbedderInfo(dimensions=1536, input=TEXT_ONLY),
-    'amazon.titan-embed-text-v2:0': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'amazon.titan-embed-image-v1': EmbedderInfo(dimensions=1024, input=TEXT_AND_IMAGE),
-    'cohere.embed-english-v3': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'cohere.embed-multilingual-v3': EmbedderInfo(dimensions=1024, input=TEXT_ONLY),
-    'amazon.nova-2-multimodal-embeddings-v1:0': EmbedderInfo(dimensions=3072, input=TEXT_ONLY),
+    'amazon.titan-embed-text-v1': EmbedderInfo(
+        dimensions=1536,
+        supports=EmbedderSupports(input=list(TEXT_ONLY)),
+    ),
+    'amazon.titan-embed-text-v2:0': EmbedderInfo(
+        dimensions=1024,
+        supports=EmbedderSupports(input=list(TEXT_ONLY)),
+    ),
+    'amazon.titan-embed-image-v1': EmbedderInfo(
+        dimensions=1024,
+        supports=EmbedderSupports(input=list(TEXT_AND_IMAGE)),
+    ),
+    'cohere.embed-english-v3': EmbedderInfo(
+        dimensions=1024,
+        supports=EmbedderSupports(input=list(TEXT_ONLY)),
+    ),
+    'cohere.embed-multilingual-v3': EmbedderInfo(
+        dimensions=1024,
+        supports=EmbedderSupports(input=list(TEXT_ONLY)),
+    ),
+    'amazon.nova-2-multimodal-embeddings-v1:0': EmbedderInfo(
+        dimensions=3072,
+        supports=EmbedderSupports(input=list(TEXT_ONLY)),
+    ),
 }
 
 
@@ -159,7 +170,7 @@ def looks_like_embedding_model(model_id: str) -> bool:
     return 'embed' in strip_inference_profile_prefix(model_id)
 
 
-def get_embedder_options(model_id: str) -> EmbedderOptions:
+def get_embedder_info(model_id: str) -> EmbedderInfo:
     """Builds the Genkit embedder metadata for a Bedrock embedding model.
 
     Single source for both ``resolve`` and ``list_actions`` so the two can
@@ -169,22 +180,22 @@ def get_embedder_options(model_id: str) -> EmbedderOptions:
         model_id: Bedrock model ID, inference-profile ID, or ARN.
 
     Returns:
-        EmbedderOptions with registry dimensions, or unset dimensions and
+        EmbedderInfo with registry dimensions, or unset dimensions and
         family-default modalities for a routable ID that is not registered.
     """
-    info = EMBEDDER_INFO.get(strip_inference_profile_prefix(model_id))
+    known = EMBEDDER_INFO.get(strip_inference_profile_prefix(model_id))
     family = _embedding_family(model_id)
-    if info is not None:
-        inputs = info.input
+    if known is not None and known.supports is not None:
+        supports = known.supports
     elif family is not None:
-        inputs = _FAMILY_INPUTS[family]
+        supports = EmbedderSupports(input=list(_FAMILY_INPUTS[family]))
     else:
-        inputs = TEXT_ONLY
-    return EmbedderOptions(
+        supports = EmbedderSupports(input=list(TEXT_ONLY))
+    return EmbedderInfo(
         # The label keeps the prefix: it names what the caller asked for.
         label=model_label(model_id),
-        dimensions=info.dimensions if info is not None else None,
-        supports=EmbedderSupports(input=list(inputs)),
+        dimensions=known.dimensions if known is not None else None,
+        supports=supports,
     )
 
 
@@ -382,7 +393,7 @@ class BedrockEmbedder:
             raise GenkitError(
                 message=(
                     f'bedrock embed: {self._model_id!r} uses the Cohere Embed v4 request schema, '
-                    'which is not supported yet; use cohere.embed-english-v3 or cohere.embed-multilingual-v3'
+                    'which this plugin does not accept; use cohere.embed-english-v3 or cohere.embed-multilingual-v3.'
                 ),
                 status='UNIMPLEMENTED',
             )

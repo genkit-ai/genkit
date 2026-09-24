@@ -17,7 +17,7 @@
 [project]
 authors = [{ name = "Google" }]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Environment :: Web Environment",
   "Framework :: AsyncIO",
@@ -34,6 +34,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
@@ -41,28 +42,22 @@ classifiers = [
 # keeps the manual AWS_REGION lookup in transport.py necessary: it did not read
 # AWS_REGION itself until 1.41.
 dependencies = ["genkit", "boto3>=1.37.24", "botocore>=1.37.24", "structlog>=25.2.0"]
-description = "Genkit Amazon Bedrock Plugin"
+description = "Bedrock on Genkit"
 keywords = [
   "genkit",
-  "ai",
-  "llm",
-  "machine-learning",
-  "artificial-intelligence",
-  "generative-ai",
-  "aws",
   "bedrock",
-  "amazon",
+  "aws",
 ]
 license = "Apache-2.0"
 name = "genkit-amazon-bedrock"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.10.0"
+version = "0.11.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
 Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-amazon-bedrock/CHANGELOG.md"
-"Documentation" = "https://firebase.google.com/docs/genkit"
+"Documentation" = "https://genkit.dev/docs/get-started/?lang=python"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
 

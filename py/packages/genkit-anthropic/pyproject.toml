@@ -22,7 +22,7 @@ authors = [
   { name = "Niraj Nepal", email = "nnepal@google.com" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Environment :: Web Environment",
   "Framework :: AsyncIO",
@@ -39,18 +39,14 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = ["genkit", "anthropic>=0.96.0"]
-description = "Genkit Anthropic Plugin (Community)"
+description = "Claude on Genkit"
 keywords = [
   "genkit",
-  "ai",
-  "llm",
-  "machine-learning",
-  "artificial-intelligence",
-  "generative-ai",
   "anthropic",
   "claude",
 ]
@@ -58,11 +54,12 @@ license = "Apache-2.0"
 name = "genkit-anthropic"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.10.0"
+version = "0.11.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-"Documentation" = "https://firebase.google.com/docs/genkit"
+Changelog       = "https://github.com/genkit-ai/genkit/releases"
+"Documentation" = "https://genkit.dev/docs/get-started/?lang=python"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
 

@@ -27,7 +27,7 @@ from genkit._ai._model import (
 )
 from genkit._core._compat import override
 from genkit._core._error import GenkitError
-from genkit._core._extract_json import extract_json_array_from_text
+from genkit._core._extract_json import extract_json, extract_json_array_from_text
 
 
 class ArrayFormat(FormatDef):
@@ -92,10 +92,20 @@ class ArrayFormat(FormatDef):
                 message="Must supply an 'array' schema type when using the 'items' parser format.",
             )
 
-        def message_parser(msg: Message) -> list[object]:
-            """Parses a complete message into a list of items."""
-            result = extract_json_array_from_text(msg.text, 0)
-            return result.items
+        def message_parser(msg: Message) -> list[object] | None:
+            """Parses a complete message into a list of items.
+
+            The incremental extractor only collects ``{...}`` objects. A
+            finished reply like ``["a", "b"]`` has to be read as one JSON
+            array or the caller gets an empty list instead of the strings.
+            """
+            if '[' not in msg.text:
+                return None
+            try:
+                parsed = extract_json(msg.text)
+            except ValueError:
+                return None
+            return parsed if isinstance(parsed, list) else None
 
         def chunk_parser(chunk: ModelResponseChunk) -> list[object]:
             """Parses a streaming chunk into a list of items."""

@@ -333,6 +333,14 @@ func RunInNewSpan[I, O any](
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 		}
+		// A failure can still carry a result: the generate loop returns the
+		// conversation it completed alongside its error. Record it so the
+		// span shows what the call produced and not only that it stopped.
+		// Guarded, because a function that returns nothing on error would
+		// otherwise stamp a null output on every failing span.
+		if !base.IsNil(output) {
+			sm.Output = output
+		}
 	} else {
 		sm.State = spanStateSuccess
 		sm.Output = output

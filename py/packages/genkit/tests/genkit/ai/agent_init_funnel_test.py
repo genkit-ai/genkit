@@ -37,7 +37,7 @@ from genkit._core._typing import (
     SnapshotStatus,
     TextPart,
 )
-from genkit.agent import InMemorySessionStore, TurnContext, TurnResult
+from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
 
 
 async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:

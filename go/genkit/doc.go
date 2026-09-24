@@ -369,7 +369,7 @@ Available part constructors in the [ai] package:
 
   - [ai.NewTextPart]: Text content
   - [ai.NewMediaPart]: Images, audio, video (base64-encoded)
-  - [ai.NewDataPart]: Raw data strings
+  - [ai.NewDataPart]: Arbitrary structured data (a string, map, slice, or any JSON-serializable value)
   - [ai.NewToolRequestPart], [ai.NewToolResponsePart]: Tool interactions
 
 # Generation Options

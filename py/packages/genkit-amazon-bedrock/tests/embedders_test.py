@@ -29,7 +29,7 @@ from genkit_amazon_bedrock.embedders import (
     BedrockEmbedder,
     decode_cohere_embeddings,
     document_text,
-    get_embedder_options,
+    get_embedder_info,
     image_from_document,
     is_embedding_model,
 )
@@ -676,7 +676,7 @@ async def test_request_options_are_ignored() -> None:
     ],
 )
 def test_registry_dimensions_and_modalities(model_id: str, dimensions: int, inputs: list[str]) -> None:
-    options = get_embedder_options(model_id)
+    options = get_embedder_info(model_id)
     assert options.dimensions == dimensions
     assert options.supports is not None and options.supports.input == inputs
     assert options.label == f'Amazon Bedrock - {model_id}'
@@ -693,13 +693,13 @@ def test_registry_dimensions_and_modalities(model_id: str, dimensions: int, inpu
     ],
 )
 def test_unregistered_but_routable_model_falls_back_to_family_defaults(model_id: str, inputs: list[str]) -> None:
-    options = get_embedder_options(model_id)
+    options = get_embedder_info(model_id)
     assert options.dimensions is None
     assert options.supports is not None and options.supports.input == inputs
 
 
 def test_profile_prefixed_lookup_strips_but_the_label_keeps_the_prefix() -> None:
-    options = get_embedder_options(f'us.{TITAN_TEXT}')
+    options = get_embedder_info(f'us.{TITAN_TEXT}')
     assert options.dimensions == 1024
     assert options.label == f'Amazon Bedrock - us.{TITAN_TEXT}'
 

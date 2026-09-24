@@ -28,21 +28,28 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from genkit import GenkitError
+from genkit import GenkitError, ModelInfo
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelRef, model_ref
 from genkit_google_genai.models._routing import classify_family, strip_ref_prefixes
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
-# Families with a constructor, for "use X instead" error hints.
-FAMILY_METHOD = {
+# Map known families onto their GoogleAI/VertexAI method name.
+FAMILY_METHOD: dict[str, str] = {
     'gemini': 'gemini_model',
     'tts': 'gemini_tts_model',
     'image': 'gemini_image_model',
     'gemma': 'gemma_model',
     'imagen': 'imagen_model',
+    'veo': 'veo_model',
     'embedder': 'embedding',
+}
+
+INTERACTIONS_FAMILY_METHODS: dict[str, tuple[str, str]] = {
+    'deep-research': ('Deep Research', 'deep_research_model'),
+    'antigravity': ('Antigravity', 'antigravity_model'),
+    'lyria': ('Lyria', 'lyria_model'),
 }
 
 
@@ -50,10 +57,13 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
     """Build the INVALID_ARGUMENT error naming the id and the way out."""
     if actual == 'embedder':
         hint = f"'{local}' is an embedder; use {plugin_class}.embedding()."
-    elif actual == 'veo':
-        hint = f"'{local}' is a Veo video model; it runs as a background model and has no ref constructor."
-    elif actual in ('lyria', 'deep-research', 'antigravity'):
-        hint = f"'{local}' has no ref constructor in this plugin."
+    elif actual in INTERACTIONS_FAMILY_METHODS:
+        display, method_name = INTERACTIONS_FAMILY_METHODS[actual]
+        hint = (
+            f"'{local}' is a {display} model; use {plugin_class}.{method_name}()."
+            if plugin_class == 'GoogleAI'
+            else f"'{local}' has no ref constructor in this plugin."
+        )
     elif actual == 'unsupported':
         hint = f"'{local}' is not a supported model."
     elif actual in FAMILY_METHOD:
@@ -72,6 +82,7 @@ def family_model_ref(
     method: str,
     config_schema: type[ConfigT],
     config: ConfigT | None,
+    info: ModelInfo | None = None,
 ) -> ModelRef[ConfigT]:
     """Strip, gate against the closed family set, then stamp this plugin's namespace."""
     # str(None) is 'None', and gemini_model allows unknown ids, so a
@@ -88,7 +99,7 @@ def family_model_ref(
     allowed = actual == family or (family == 'gemini' and actual == 'unknown')
     if not allowed:
         raise wrong_family_error(plugin_class=plugin_class, method=method, family=family, local=local, actual=actual)
-    return model_ref(local, config_schema=config_schema, namespace=namespace, config=config)
+    return model_ref(local, config_schema=config_schema, namespace=namespace, config=config, info=info)
 
 
 def family_embedder_ref(

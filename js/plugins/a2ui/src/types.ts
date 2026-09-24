@@ -125,6 +125,21 @@ export interface ActionEnvelope {
 }
 
 /**
+ * The server → client A2UI envelopes: the surfaces an agent renders. These are
+ * what a renderer consumes, so {@link a2uiEnvelopesFromParts} yields exactly
+ * this type (an {@link ActionEnvelope} never rides a render stream).
+ *
+ * This union is structurally compatible with the message unions of the renderer
+ * packages (e.g. `@a2ui/web_core`'s `A2uiMessage`), so envelopes read off a
+ * chunk can be handed straight to a renderer without a cast.
+ */
+export type A2uiServerEnvelope =
+  | CreateSurfaceEnvelope
+  | UpdateComponentsEnvelope
+  | UpdateDataModelEnvelope
+  | DeleteSurfaceEnvelope;
+
+/**
  * A single A2UI envelope message.
  *
  * Most variants flow server → client (surfaces the agent renders); the
@@ -132,12 +147,7 @@ export interface ActionEnvelope {
  * back as the next turn). Keeping both directions in one union lets
  * {@link a2uiPart} be the single constructor for every a2ui part.
  */
-export type A2uiEnvelope =
-  | CreateSurfaceEnvelope
-  | UpdateComponentsEnvelope
-  | UpdateDataModelEnvelope
-  | DeleteSurfaceEnvelope
-  | ActionEnvelope;
+export type A2uiEnvelope = A2uiServerEnvelope | ActionEnvelope;
 
 /**
  * The canonical "a2ui part": a Genkit `data` part whose `data` is an object

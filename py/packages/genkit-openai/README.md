@@ -1,7 +1,5 @@
 # Genkit OpenAI Plugin
 
-> **Preview** — This plugin is in preview and may have API changes in future releases.
-
 OpenAI-compatible model provider for Genkit (OpenAI, Azure OpenAI, and other
 compatible endpoints).
 
@@ -20,7 +18,7 @@ from genkit_openai import OpenAI
 ai = Genkit(plugins=[OpenAI()])
 
 res = await ai.generate(
-    model='openai/gpt-5.2',
+    model=OpenAI.gpt_model('gpt-5.2'),
     prompt='Suggest 2 catchy names for an AI newsletter.',
 )
 print(res.text)

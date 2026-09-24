@@ -5,7 +5,7 @@
 
 import pytest
 
-from genkit import Genkit
+from genkit.exp import Genkit
 from genkit.middleware import GenerateMiddlewareContext
 
 

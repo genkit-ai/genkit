@@ -17,7 +17,10 @@
 """Exhaustive tests for models/utils.py utility functions."""
 
 import base64
+import json
+from collections.abc import Callable
 
+import httpx
 import pytest
 from genkit_openai.models.utils import (
     DictMessageAdapter,
@@ -28,11 +31,16 @@ from genkit_openai.models.utils import (
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    extract_response_metadata,
     parse_data_uri_content_type,
+    reraise_openai_error,
 )
+from openai import APIStatusError
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -506,19 +514,18 @@ class TestMessageConverterReasoningContent:
         assert len(msg.content) == 1
         assert isinstance(msg.content[0].root, TextPart)
 
-    def test_raises_when_no_content_at_all(self) -> None:
-        """Raise ValueError when all content fields are None/empty."""
+    def test_empty_message_has_empty_content(self) -> None:
+        """A message with no content fields converts to a message with no parts."""
         adapter = DictMessageAdapter({
             'content': None,
             'role': 'assistant',
         })
-        with pytest.raises(ValueError, match='Unable to determine content part'):
-            MessageConverter.to_genkit(adapter)
+        assert MessageConverter.to_genkit(adapter).content == []
 
-    def test_tool_calls_take_precedence_over_reasoning(self) -> None:
-        """Tool calls take precedence; reasoning_content is ignored."""
+    def test_reasoning_text_and_tool_calls_are_all_kept(self) -> None:
+        """Keep reasoning, text, and tool call parts together, in that order."""
         adapter = DictMessageAdapter({
-            'content': None,
+            'content': 'Checking the weather.',
             'reasoning_content': 'Some reasoning',
             'tool_calls': [
                 {
@@ -532,10 +539,50 @@ class TestMessageConverterReasoningContent:
             'role': 'assistant',
         })
         msg = MessageConverter.to_genkit(adapter)
-        # Should produce tool request parts, not reasoning.
-        assert len(msg.content) == 1
+        assert len(msg.content) == 3
+        assert isinstance(msg.content[0].root, ReasoningPart)
+        assert msg.content[0].root.reasoning == 'Some reasoning'
+        assert isinstance(msg.content[1].root, TextPart)
+        assert msg.content[1].root.text == 'Checking the weather.'
+        assert isinstance(msg.content[2].root, ToolRequestPart)
+        assert msg.content[2].root.tool_request.ref == 'call_1'
+        assert msg.content[2].root.tool_request.name == 'get_weather'
+        assert msg.content[2].root.tool_request.input == {'location': 'NYC'}
 
+    def test_text_and_tool_calls_without_reasoning(self) -> None:
+        """Keep text alongside tool calls when there is no reasoning."""
+        adapter = DictMessageAdapter({
+            'content': 'Let me look that up.',
+            'tool_calls': [
+                {
+                    'id': 'call_1',
+                    'function': {
+                        'name': 'get_weather',
+                        'arguments': '{"location": "NYC"}',
+                    },
+                }
+            ],
+            'role': 'assistant',
+        })
+        msg = MessageConverter.to_genkit(adapter)
+        assert len(msg.content) == 2
+        assert isinstance(msg.content[0].root, TextPart)
+        assert msg.content[0].root.text == 'Let me look that up.'
+        assert isinstance(msg.content[1].root, ToolRequestPart)
+        assert msg.content[1].root.tool_request.input == {'location': 'NYC'}
+
+    def test_zero_argument_tool_call_has_empty_input(self) -> None:
+        """A tool call whose arguments are an empty string parses to an empty input."""
+        adapter = DictMessageAdapter({
+            'content': None,
+            'tool_calls': [{'id': 'call_1', 'function': {'name': 'ping', 'arguments': ''}}],
+            'role': 'assistant',
+        })
+        msg = MessageConverter.to_genkit(adapter)
+        assert len(msg.content) == 1
         assert isinstance(msg.content[0].root, ToolRequestPart)
+        assert msg.content[0].root.tool_request.name == 'ping'
+        assert msg.content[0].root.tool_request.input == {}
 
     def test_role_defaults_to_model(self) -> None:
         """Default role should be MODEL when not provided."""
@@ -744,3 +791,112 @@ class TestMessageConverterToOpenAI:
         message = Message(role=Role.USER, content=[])
         result = MessageConverter.to_openai(message)
         assert result == []
+
+
+def test_reraise_openai_error_marks_503_unavailable() -> None:
+    """A provider 503 must stay retryable, not collapse to INTERNAL."""
+    error = APIStatusError(
+        'overloaded',
+        response=httpx.Response(503, request=httpx.Request('POST', 'https://api.openai.com/v1/chat')),
+        body=None,
+    )
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+    assert raised.value.status == 'UNAVAILABLE'
+
+
+def test_reraise_openai_error_marks_request_shaping_invalid_argument() -> None:
+    """A request we could never send is INVALID_ARGUMENT so retry skips it."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('No text content found in the first message'))
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+def test_reraise_openai_error_marks_empty_model_reply_internal() -> None:
+    """An empty model reply is not a bad request — retry can try again."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(ValueError('Unable to determine content part'))
+    assert raised.value.status == 'INTERNAL'
+
+
+def test_reraise_openai_error_marks_malformed_tool_json_internal() -> None:
+    """Malformed tool-call JSON from the model is INTERNAL so retry can try again."""
+    try:
+        json.loads('{')
+    except json.JSONDecodeError as error:
+        with pytest.raises(GenkitError) as raised:
+            reraise_openai_error(error)
+        assert raised.value.status == 'INTERNAL'
+        return
+    raise AssertionError('expected JSONDecodeError')
+
+
+class TestExtractResponseMetadata:
+    """Tests for extract_response_metadata."""
+
+    def test_ids_and_fingerprint(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """The fingerprint, model and id are collected under camelCase keys."""
+        completion = make_completion(system_fingerprint='fp_44709d6fcb')
+        assert extract_response_metadata(completion) == {
+            'systemFingerprint': 'fp_44709d6fcb',
+            'model': 'gpt-4o-2024-08-06',
+            'id': 'chatcmpl-abc',
+        }
+
+    def test_ids_without_fingerprint(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """Providers that omit the fingerprint still report their model and id."""
+        assert extract_response_metadata(make_completion()) == {
+            'model': 'gpt-4o-2024-08-06',
+            'id': 'chatcmpl-abc',
+        }
+
+    def test_citations(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """Citations pass through in the shape the provider returned them."""
+        citations = ['https://a.example', 'https://b.example']
+        metadata = extract_response_metadata(make_completion(citations=citations))
+        assert metadata['citations'] == citations
+
+    def test_null_citations_are_absent(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """A citations field that arrived as null is treated as absent."""
+        assert 'citations' not in extract_response_metadata(make_completion(citations=None))
+
+    def test_choice_error_object(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """The error object a failing choice carries is kept whole."""
+        failure = {
+            'message': 'Provider returned error',
+            'code': 429,
+            'metadata': {'provider_name': 'xai'},
+        }
+        metadata = extract_response_metadata(make_completion(choice={'finish_reason': 'error', 'error': failure}))
+        assert metadata['error'] == failure
+
+    def test_non_object_choice_error_is_dropped(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """An error field that is not an object is not metadata."""
+        metadata = extract_response_metadata(make_completion(choice={'error': 'boom'}))
+        assert 'error' not in metadata
+
+    def test_empty_choices(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """A response with no choices still reports its top-level metadata."""
+        metadata = extract_response_metadata(make_completion(choices=[], citations=['u']))
+        assert metadata == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc', 'citations': ['u']}
+
+    def test_chunk(self, make_chunk: Callable[..., ChatCompletionChunk]) -> None:
+        """A streamed chunk reports the same metadata a completion does."""
+        chunk = make_chunk(
+            content='hi',
+            system_fingerprint='fp_stream',
+            citations=['https://x.example'],
+            choice={'finish_reason': 'error', 'error': {'message': 'boom'}},
+        )
+        assert extract_response_metadata(chunk) == {
+            'systemFingerprint': 'fp_stream',
+            'model': 'grok-4',
+            'id': 'chatcmpl-stream',
+            'citations': ['https://x.example'],
+            'error': {'message': 'boom'},
+        }
+
+    def test_empty_strings_are_absent(self, make_completion: Callable[..., ChatCompletion]) -> None:
+        """An empty id, model or fingerprint is treated as absent."""
+        completion = make_completion(id='', model='', system_fingerprint='')
+        assert extract_response_metadata(completion) == {}

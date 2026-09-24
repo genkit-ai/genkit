@@ -114,6 +114,8 @@ export class LocalFileLogStore implements LogStore {
       startFromIndex,
       traceId: query?.traceId,
       spanId: query?.spanId,
+      severityText: query?.severityText,
+      severityNumber: query?.severityNumber,
     });
 
     const logs: LogRecordData[] = [];
@@ -235,6 +237,8 @@ export class LogIndex {
     startFromIndex: number;
     traceId?: string;
     spanId?: string;
+    severityText?: string;
+    severityNumber?: number;
   }): LogIndexSearchResult {
     const indexFiles = this.listIndexFiles().sort().reverse();
 
@@ -263,6 +267,17 @@ export class LogIndex {
           if (!d) return false;
           if (query.traceId && d.traceId !== query.traceId) return false;
           if (query.spanId && d.spanId !== query.spanId) return false;
+          if (
+            query.severityText &&
+            d.severityText?.toLowerCase() !== query.severityText.toLowerCase()
+          )
+            return false;
+          if (
+            query.severityNumber !== undefined &&
+            (d.severityNumber === undefined ||
+              d.severityNumber < query.severityNumber)
+          )
+            return false;
           return true;
         });
 

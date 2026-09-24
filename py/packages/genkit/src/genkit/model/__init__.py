@@ -14,14 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model protocol types for plugin authors."""
+"""Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
 from genkit._ai._model import (
     ModelConfigDict,
+    model,
     model_action_metadata,
     model_ref,
 )
-from genkit._core._background import BackgroundAction
+from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
     GenerateActionOptions,
     Message,
@@ -70,6 +71,8 @@ __all__ = [
     'Constrained',
     'Stage',
     # Factory functions and metadata
+    'model',
+    'background_model',
     'model_action_metadata',
     'model_ref',
     # Reference types

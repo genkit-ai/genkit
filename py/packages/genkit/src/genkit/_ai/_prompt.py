@@ -38,7 +38,7 @@ from genkit._ai._generate import (
     generate_action,
     register_middleware,
     register_tools,
-    resolve_tool,
+    resolve_tools_from_options,
     to_tool_definition,
     tools_to_action_names,
 )
@@ -48,8 +48,11 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    assert_correct_config_class,
+    config_schema_at_define,
     normalize_config,
     resolve_call_model,
+    resolve_for_generate,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -155,15 +158,15 @@ class ModelStreamResponse(Generic[OutputT]):
 
     def __init__(
         self,
-        channel: Channel[ModelResponseChunk, ModelResponse[OutputT]],
+        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]],
         response_future: asyncio.Future[ModelResponse[OutputT]],
     ) -> None:
         """Initialize with streaming channel and response future."""
-        self._channel: Channel[ModelResponseChunk, ModelResponse[OutputT]] = channel
+        self._channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = channel
         self._response_future: asyncio.Future[ModelResponse[OutputT]] = response_future
 
     @property
-    def stream(self) -> AsyncIterable[ModelResponseChunk]:
+    def stream(self) -> AsyncIterable[ModelResponseChunk[OutputT]]:
         """Async iterable of response chunks.
 
         Returns:
@@ -194,7 +197,7 @@ class ModelStreamResponse(Generic[OutputT]):
     # Delegating to the underlying channel lets that work without forcing the
     # caller to remember the extra `.stream` hop, while `.stream` and `.response`
     # remain available for cases where you want both halves explicitly.
-    def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
+    def __aiter__(self) -> AsyncIterator[ModelResponseChunk[OutputT]]:
         return self._channel.__aiter__()
 
 
@@ -295,6 +298,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._name = name
         self._ns = ns
         self._prompt_action: Action | None = None
+        define_name, define_schema = config_schema_at_define(model=model, registry=registry)
+        # Hop identity is what we knew at define time, not today's defaultModel.
+        self._defined_model_name = define_name
+        assert_correct_config_class(config=config, schema=define_schema, model=define_name)
 
     @property
     def ref(self) -> dict[str, Any]:
@@ -316,6 +323,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         resolved = await lookup_prompt(self._registry, self._name, self._variant)
         self._model = resolved._model
         self._config = resolved._config
+        self._defined_model_name = resolved._defined_model_name
         self._description = resolved._description
         self._input_schema = resolved._input_schema
         self._system = resolved._system
@@ -366,11 +374,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             child_registry,
             gen_options,
             on_chunk=on_chunk,
-            context=context if context else get_current_context(),
+            context=context if context is not None else get_current_context(),
         )
         return cast(ModelResponse[OutputT], result)
 
-    def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
+    async def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
         merged_config: Mapping[str, Any] | BaseModel | None
@@ -384,11 +392,24 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
-        resolved = resolve_call_model(
+        resolved = await resolve_for_generate(
             model=opts.get('model') or self._model,
             config=merged_config,
             registry=self._registry,
         )
+        assert_correct_config_class(
+            config=opts.get('config'),
+            schema=resolved.config_schema,
+            model=resolved.name,
+        )
+        # Re-check the stored typed config unless this call hops models.
+        # Leftover-key overlay lives in overlay_config, not here.
+        if self._defined_model_name is None or self._defined_model_name == resolved.name:
+            assert_correct_config_class(
+                config=self._config,
+                schema=resolved.config_schema,
+                model=resolved.name,
+            )
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
@@ -430,10 +451,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         **opts: Unpack[PromptGenerateOptions],
     ) -> ModelStreamResponse[OutputT]:
         """Stream the prompt execution, returning (stream, response_future)."""
-        channel: Channel[ModelResponseChunk, ModelResponse[OutputT]] = Channel(timeout=timeout)
+        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel(timeout=timeout)
         stream_opts: PromptGenerateOptions = {
             **opts,  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-            'on_chunk': lambda c: channel.send(cast(ModelResponseChunk, c)),
+            'on_chunk': lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
         }
         resp = self._call_impl(input, stream_opts)
         response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(resp)
@@ -605,7 +626,7 @@ async def _prepare(
         * ``gen_options`` — the resolved request the engine consumes.
     """
     await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
-    prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
+    prompt_config = await ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
     child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
     await register_tools(child_registry, prompt_config.tools)
     refs = register_middleware(child_registry, prompt_config.use)
@@ -701,11 +722,7 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
 
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
-    tools: list[Action] = []
-    if options.tools:
-        for tool_ref in options.tools:
-            tools.append(await resolve_tool(registry, tool_ref))
-
+    tools = await resolve_tools_from_options(registry, options.tools)
     tool_defs = [to_tool_definition(tool) for tool in tools] if tools else []
 
     if not options.messages:

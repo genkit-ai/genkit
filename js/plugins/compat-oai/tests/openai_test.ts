@@ -23,6 +23,7 @@ import {
   defineCompatOpenAIModel,
   toOpenAIRequestBody,
 } from '../src/model';
+import { SUPPORTED_GPT_MODELS } from '../src/openai/gpt';
 
 describe('gptModel', () => {
   afterEach(() => {
@@ -106,6 +107,37 @@ describe('gptModel', () => {
         systemRole: true,
         output: ['text', 'json'],
       },
+    });
+  });
+});
+
+describe('gpt-6-astra', () => {
+  const expectedSupports = {
+    multiturn: true,
+    tools: false,
+    media: true,
+    systemRole: true,
+    output: ['text', 'json'],
+  };
+
+  it('is in the supported GPT model catalog without tool support', () => {
+    const modelRef = SUPPORTED_GPT_MODELS['gpt-6-astra'];
+    expect(modelRef.name).toBe('openai/gpt-6-astra');
+    expect(modelRef.info?.supports).toStrictEqual(expectedSupports);
+  });
+
+  it('defines a model action with the catalog supports', () => {
+    const model = defineCompatOpenAIModel({
+      name: 'openai/gpt-6-astra',
+      client: {} as OpenAI,
+      modelRef: SUPPORTED_GPT_MODELS['gpt-6-astra'],
+    });
+    expect({
+      name: model.__action.name,
+      supports: model.__action.metadata?.model.supports,
+    }).toStrictEqual({
+      name: 'openai/gpt-6-astra',
+      supports: expectedSupports,
     });
   });
 });

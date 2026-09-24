@@ -254,6 +254,38 @@ async def test_reflection_server_v2_list_values(fake_manager: FakeReflectionMana
 
 
 @pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_a2ui_catalog(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Developer UI can list registered A2UI catalogs."""
+    registry = Registry()
+    catalog = {
+        'id': 'https://example.com/catalogs/banner.json',
+        'components': [{'name': 'Banner', 'description': 'A banner.', 'props': 'title: string.'}],
+    }
+    registry.register_value('a2ui-catalog', catalog['id'], catalog)
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'a2ui-catalog'},
+            'id': '2c',
+        })
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '2c'
+        result = resp.get('result')
+        assert isinstance(result, dict)
+        values = result.get('values')
+        assert isinstance(values, dict)
+        assert values.get(catalog['id']) == catalog
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
 async def test_reflection_server_v2_list_values_model_ref_is_name(
     fake_manager: FakeReflectionManager,
 ) -> None:

@@ -77,6 +77,14 @@ class TestArrayFormatMessage:
         )
         assert result == [{'id': 1, 'name': 'test'}]
 
+    def test_parses_array_of_scalars(self) -> None:
+        """A finished reply of strings is the list, not an empty object extract."""
+        array_fmt = ArrayFormat()
+        fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'string'}})
+
+        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text='["a", "b"]'))])))
+        assert result == ['a', 'b']
+
     def test_parses_empty_array(self) -> None:
         """Test parsing an empty array."""
         array_fmt = ArrayFormat()

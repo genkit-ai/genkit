@@ -29,7 +29,7 @@ from genkit._core._typing import (
     SessionState,
     SnapshotStatus,
 )
-from genkit.agent import InMemorySessionStore
+from genkit.exp.agent import InMemorySessionStore
 
 INVALID_ARGUMENT = 'INVALID_ARGUMENT'
 

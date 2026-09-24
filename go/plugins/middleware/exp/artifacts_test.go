@@ -18,7 +18,6 @@ package exp
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -27,31 +26,6 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
-
-func toolResponseByName(t *testing.T, msgs []*ai.Message, name string) (any, bool) {
-	t.Helper()
-	for _, m := range msgs {
-		for _, p := range m.Content {
-			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == name {
-				return p.ToolResponse.Output, true
-			}
-		}
-	}
-	return nil, false
-}
-
-func decodeReadArtifact(t *testing.T, v any) readArtifactOutput {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var o readArtifactOutput
-	if err := json.Unmarshal(b, &o); err != nil {
-		t.Fatalf("unmarshal readArtifactOutput: %v", err)
-	}
-	return o
-}
 
 func TestArtifactsReadonlyOmitsWriteTool(t *testing.T) {
 	hooks, err := (&Artifacts{Readonly: true}).New(ctx)
@@ -110,11 +84,11 @@ func TestArtifactsWriteThenRead(t *testing.T) {
 	}
 
 	// read_artifact returned the content written by write_artifact.
-	v, ok := toolResponseByName(t, statemessages(out), "read_artifact")
-	if !ok {
+	reads := toolOutputs(statemessages(out), "read_artifact")
+	if len(reads) == 0 {
 		t.Fatal("no read_artifact tool response found")
 	}
-	read := decodeReadArtifact(t, v)
+	read := decodeToolOutput[readArtifactOutput](t, reads[0])
 	if !read.Found || read.Content != "hello world" {
 		t.Errorf("read_artifact = %+v, want found with content %q", read, "hello world")
 	}
@@ -192,11 +166,11 @@ func TestArtifactsNoSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, ok := toolResponseByName(t, resp.History(), "read_artifact")
-	if !ok {
+	reads := toolOutputs(resp.History(), "read_artifact")
+	if len(reads) == 0 {
 		t.Fatal("no read_artifact tool response found")
 	}
-	read := decodeReadArtifact(t, v)
+	read := decodeToolOutput[readArtifactOutput](t, reads[0])
 	if read.Found || !strings.Contains(read.Content, "no active session") {
 		t.Errorf("expected a no-active-session result, got %+v", read)
 	}

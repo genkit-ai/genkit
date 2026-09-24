@@ -268,7 +268,7 @@ def test_does_not_mark_non_model_span_with_model() -> None:
 
     span = create_mock_span(
         attributes={
-            'genkit:metadata:subtype': 'tool',
+            'genkit:metadata:subtype': 'tool.v2',
             'genkit:name': 'myTool',
         }
     )

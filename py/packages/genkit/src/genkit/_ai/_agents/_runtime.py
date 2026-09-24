@@ -636,7 +636,7 @@ class AgentRuntime:
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
-            error=self.session_runner.last_turn_error if is_failed else None,
+            error=self.session_runner.last_turn_error,
             force=is_failed,
         )
         # turnEnd is just the boundary marker. The full session rides home on
@@ -756,11 +756,7 @@ class AgentRuntime:
         # finalize used to look only at err_holder, so a graceful turn failure
         # wrote status=completed / error=None. Same rule as emit_turn_end.
         turn_err = self.session_runner.last_turn_error
-        is_failed = (
-            fn_err is not None
-            or turn_err is not None
-            or self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
-        )
+        is_failed = fn_err is not None or self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
         if is_failed:
             finish_reason = AgentFinishReason.FAILED
         else:

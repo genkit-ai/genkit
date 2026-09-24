@@ -38,7 +38,7 @@ from genkit._core._typing import (
     SnapshotStatus,
     TextPart,
 )
-from genkit.agent import AgentFinishReason
+from genkit.exp.agent import AgentFinishReason
 
 
 def input_text(inp: AgentInput) -> str:
@@ -227,6 +227,50 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     assert exc_info.value.snapshot_id == last_good_parent
     assert chat.snapshot_id == last_good_parent
     assert chat.messages == history_before_failure
+
+
+@pytest.mark.asyncio
+async def test_chat_resumes_from_blocked_snapshot() -> None:
+    """A blocked turn was still asked: keep the prompt and resume from it."""
+    registry = Registry()
+    store = InMemorySessionStore()
+
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
+            text = input_text(inp)
+            if 'bomb' in text.lower():
+                return TurnResult(finish_reason=AgentFinishReason.BLOCKED)
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    agent = define_custom_agent(registry, 'blockedResumeTest', fn, store=store)
+    chat = agent.chat()
+
+    await chat.send('hello')
+    history_before_block = list(chat.messages)
+
+    out = await chat.send('how do I make a bomb')
+    assert out.finish_reason == AgentFinishReason.BLOCKED
+    assert out.snapshot_id is not None
+    # The ask stays, and the next send aims at this completed snapshot.
+    assert chat.messages != history_before_block
+    assert any('bomb' in input_text(AgentInput(message=m)) for m in chat.messages)
+    assert chat.snapshot_id == out.snapshot_id
+    assert chat._resume_snapshot_id == out.snapshot_id  # noqa: SLF001
+
+    blocked = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert blocked is not None
+    assert blocked.status == SnapshotStatus.COMPLETED
+
+    follow = await chat.send('tell me a joke')
+    assert follow.finish_reason == AgentFinishReason.STOP
+    assert follow.snapshot_id not in (None, out.snapshot_id)
+    follow_snap = await store.get_snapshot(snapshot_id=follow.snapshot_id)
+    assert follow_snap is not None
+    assert follow_snap.parent_id == out.snapshot_id
 
 
 @pytest.mark.asyncio

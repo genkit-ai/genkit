@@ -17,7 +17,7 @@
 [project]
 authors = [{ name = "Google" }]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3 :: Only",
@@ -27,22 +27,27 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
   "genkit",
   "jsonata-python>=0.6.0",
 ]
-description = "Genkit Evaluators Plugin (regex, deep_equal, jsonata)"
-keywords = ["genkit", "ai", "evaluator", "eval", "ragas"]
+description = "Regex and schema checks for genkit eval:run. No API key."
+keywords = [
+  "genkit",
+  "eval",
+]
 license = "Apache-2.0"
 name = "genkit-evaluators"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.10.0"
+version = "0.11.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-"Documentation" = "https://firebase.google.com/docs/genkit"
+Changelog       = "https://github.com/genkit-ai/genkit/releases"
+"Documentation" = "https://genkit.dev/docs/get-started/?lang=python"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
 

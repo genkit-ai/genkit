@@ -184,13 +184,13 @@ if [ "$USE_PR_NOTES" = true ]; then
     echo -e "${YELLOW}Step 4: Finding release PR...${NC}"
     if [ -z "$PR_NUMBER" ]; then
         # Auto-find the merged PR for this version
-        PR_NUMBER=$(gh pr list --repo firebase/genkit --state merged \
+        PR_NUMBER=$(gh pr list --repo genkit-ai/genkit --state merged \
             --search "Python SDK ${VERSION} in:title" \
             --json number --limit 1 | jq -r '.[0].number // empty')
         
         if [ -z "$PR_NUMBER" ]; then
             # Try searching by version in body
-            PR_NUMBER=$(gh pr list --repo firebase/genkit --state merged \
+            PR_NUMBER=$(gh pr list --repo genkit-ai/genkit --state merged \
                 --search "v${VERSION} label:python" \
                 --json number --limit 1 | jq -r '.[0].number // empty')
         fi
@@ -207,7 +207,7 @@ if [ "$USE_PR_NOTES" = true ]; then
 
     echo ""
     echo -e "${YELLOW}Step 5: Fetching PR description...${NC}"
-    gh pr view "$PR_NUMBER" --repo firebase/genkit --json body --jq '.body' > "$RELEASE_NOTES_FILE"
+    gh pr view "$PR_NUMBER" --repo genkit-ai/genkit --json body --jq '.body' > "$RELEASE_NOTES_FILE"
 
     if [ ! -s "$RELEASE_NOTES_FILE" ]; then
         echo -e "${RED}Error: PR #${PR_NUMBER} has no description${NC}"
