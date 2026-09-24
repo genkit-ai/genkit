@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -4686,4 +4687,321 @@ func TestResumedToolMessageOrder(t *testing.T) {
 	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
 		t.Errorf("resumed tool message order = %v, want %v", names, want)
 	}
+}
+
+// softToolErrors is a stand-in for the ToolErrors middleware in
+// plugins/middleware: it puts a policy covering the given tools, or every tool
+// when none are given, on each turn's context.
+func softToolErrors(tools ...string) Middleware {
+	policy := &base.SoftToolErrors{Covers: func(name string) bool {
+		return len(tools) == 0 || slices.Contains(tools, name)
+	}}
+	return MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, params *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				return next(base.SoftToolErrorsKey.NewContext(ctx, policy), params)
+			},
+		}, nil
+	})
+}
+
+// softFailModel requests toolName on its first turn and answers the tool
+// response it then receives with "done", recording that response in *got.
+func softFailModel(t *testing.T, r api.Registry, toolName string, got **Part) {
+	t.Helper()
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/softFail",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if last := req.Messages[len(req.Messages)-1]; last.Role == RoleTool {
+				*got = last.Content[0]
+				return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+			}
+			return &ModelResponse{Request: req, Message: &Message{
+				Role:    RoleModel,
+				Content: []*Part{NewToolRequestPart(&ToolRequest{Name: toolName, Input: map[string]any{}})},
+			}}, nil
+		},
+	})
+}
+
+// assertToolError fails t unless p answers its call with an error whose
+// message contains want.
+func assertToolError(t *testing.T, p *Part, want string) {
+	t.Helper()
+	if p == nil {
+		t.Fatal("the model never received a tool response")
+	}
+	if !p.IsToolError() {
+		t.Fatalf("IsToolError() = false for %+v, want true", p)
+	}
+	out, _ := p.ToolResponse.Output.(map[string]any)
+	if msg, _ := out["error"].(string); !strings.Contains(msg, want) {
+		t.Errorf("Output = %v, want an error containing %q", p.ToolResponse.Output, want)
+	}
+}
+
+func TestToolErrorsReturnedToModel(t *testing.T) {
+	failWith := func(err error) ToolFunc[map[string]any, string] {
+		return func(ctx *ToolContext, in map[string]any) (string, error) { return "", err }
+	}
+
+	t.Run("a marked error answers the call without a policy", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(&base.ToolFailError{Err: errors.New("no such city")}))
+
+		resp, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup))
+		assertNoError(t, err)
+		if resp.Text() != "done" {
+			t.Errorf("Text() = %q, want %q", resp.Text(), "done")
+		}
+		assertToolError(t, got, "no such city")
+		// The model reads the message the tool wrote, not the context the
+		// tool action added around it.
+		if msg := got.ToolResponse.Output.(map[string]any)["error"]; msg != "no such city" {
+			t.Errorf("error message = %q, want %q", msg, "no such city")
+		}
+	})
+
+	t.Run("an unmarked error fails the loop without a policy", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup))
+		if !errors.Is(err, ErrToolFailed) {
+			t.Fatalf("err = %v, want ErrToolFailed", err)
+		}
+	})
+
+	t.Run("the policy returns the tool's own error", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		assertToolError(t, got, "boom")
+		// The response already names the call, so the model reads the tool's
+		// error without the tool action's "error calling tool" prefix.
+		if msg := got.ToolResponse.Output.(map[string]any)["error"]; msg != "boom" {
+			t.Errorf("error message = %q, want %q", msg, "boom")
+		}
+	})
+
+	t.Run("the policy returns a call to a missing tool", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "missing", &got)
+		lookup := defineTool(r, "lookup", "unused", failWith(nil))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		assertToolError(t, got, `tool "missing" not found`)
+	})
+
+	t.Run("a missing tool fails the loop without a policy", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "missing", &got)
+		lookup := defineTool(r, "lookup", "unused", failWith(nil))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup))
+		if !errors.Is(err, ErrToolNotFound) {
+			t.Fatalf("err = %v, want ErrToolNotFound", err)
+		}
+	})
+
+	t.Run("the policy skips tools it does not cover", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors("other")))
+		if !errors.Is(err, ErrToolFailed) {
+			t.Fatalf("err = %v, want ErrToolFailed", err)
+		}
+	})
+
+	// The policy covers the tool's failures, not the hooks': a hook that
+	// replaces the tool's error with its own stops the loop on purpose,
+	// wherever it sits relative to the policy.
+	t.Run("the policy keeps a hook's own error", func(t *testing.T) {
+		denied := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				if _, err := next(ctx, p); err != nil {
+					return nil, errors.New("budget exhausted")
+				}
+				return nil, errors.New("unreachable")
+			}}, nil
+		})
+		for _, order := range [][]Middleware{{softToolErrors(), denied}, {denied, softToolErrors()}} {
+			r := newTestRegistry(t)
+			var got *Part
+			softFailModel(t, r, "lookup", &got)
+			lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+			_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+				WithUse(order...))
+			if !errors.Is(err, ErrToolFailed) || !strings.Contains(err.Error(), "budget exhausted") {
+				t.Errorf("err = %v, want ErrToolFailed carrying the hook's error", err)
+			}
+		}
+	})
+
+	t.Run("hooks see the tool's error before it becomes a response", func(t *testing.T) {
+		var seen error
+		observer := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				resp, err := next(ctx, p)
+				seen = err
+				return resp, fmt.Errorf("observed: %w", err)
+			}}, nil
+		})
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors(), observer))
+		assertNoError(t, err)
+		if seen == nil || !strings.HasSuffix(seen.Error(), "boom") {
+			t.Errorf("hook saw %v, want the tool's error", seen)
+		}
+		// A hook that wraps the tool's error passes it up, so the policy
+		// still covers it, message and all.
+		assertToolError(t, got, "observed: ")
+	})
+
+	t.Run("an interrupt stays an interrupt", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "ask", &got)
+		ask := defineTool(r, "ask", "interrupts", func(ctx *ToolContext, in map[string]any) (string, error) {
+			return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"q": "sure?"}})
+		})
+
+		resp, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(ask),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		if resp.FinishReason != "interrupted" {
+			t.Errorf("FinishReason = %q, want interrupted", resp.FinishReason)
+		}
+	})
+
+	t.Run("a stopped caller stays stopped", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		ctx, cancel := context.WithCancel(testCtx)
+		defer cancel()
+		lookup := defineTool(r, "lookup", "stops the caller", func(tc *ToolContext, in map[string]any) (string, error) {
+			cancel()
+			return "", tc.Err()
+		})
+
+		_, err := Generate(ctx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors()))
+		if !errors.Is(err, status.ErrCancelled) {
+			t.Fatalf("err = %v, want a cancellation", err)
+		}
+		if got != nil {
+			t.Errorf("the model received %+v, want no tool response", got)
+		}
+	})
+
+	t.Run("a Generate inside a tool starts without the policy", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "outer", &got)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/inner",
+			handler: toolCallingModelHandler("inner", map[string]any{}, "unused"),
+		})
+		inner := defineTool(r, "inner", "fails", failWith(errors.New("inner boom")))
+		var innerErr error
+		outer := defineTool(r, "outer", "runs a Generate", func(tc *ToolContext, in map[string]any) (string, error) {
+			_, innerErr = Generate(tc, r, WithModelName("test/inner"), WithPrompt("go"), WithTools(inner))
+			return "", innerErr
+		})
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(outer),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		if !errors.Is(innerErr, ErrToolFailed) {
+			t.Errorf("inner Generate err = %v, want ErrToolFailed", innerErr)
+		}
+		assertToolError(t, got, "inner boom")
+	})
+
+	t.Run("a restarted tool's error answers the call", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "flaky", &got)
+		calls := 0
+		flaky := defineTool(r, "flaky", "interrupts, then fails", func(ctx *ToolContext, in map[string]any) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", ctx.Interrupt(nil)
+			}
+			return "", &base.ToolFailError{Err: errors.New("still broken")}
+		})
+
+		res, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(flaky))
+		assertNoError(t, err)
+		_, err = Generate(testCtx, r, WithModelName("test/softFail"), WithMessages(res.History()...), WithTools(flaky),
+			WithToolRestarts(flaky.Restart(res.Interrupts()[0], nil)))
+		assertNoError(t, err)
+		assertToolError(t, got, "still broken")
+	})
+
+	// A sibling's interrupt pauses the round, so the error is stashed on its
+	// request and replayed on resume, still marked as an error.
+	t.Run("an error in an interrupted round survives the resume", func(t *testing.T) {
+		r := newTestRegistry(t)
+		asks := 0
+		ask := defineTool(r, "ask", "interrupts once", func(ctx *ToolContext, in map[string]any) (string, error) {
+			asks++
+			if asks == 1 {
+				return "", ctx.Interrupt(nil)
+			}
+			return "yes", nil
+		})
+		lookup := defineTool(r, "lookup", "fails", failWith(&base.ToolFailError{Err: errors.New("no such city")}))
+		var toolMsg *Message
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/twoTools",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				if last := req.Messages[len(req.Messages)-1]; last.Role == RoleTool {
+					toolMsg = last
+					return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "ask", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "lookup", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r, WithModelName("test/twoTools"), WithPrompt("go"), WithTools(ask, lookup))
+		assertNoError(t, err)
+		_, err = Generate(testCtx, r, WithModelName("test/twoTools"), WithMessages(res.History()...), WithTools(ask, lookup),
+			WithToolRestarts(ask.Restart(res.Interrupts()[0], nil)))
+		assertNoError(t, err)
+		if toolMsg == nil || len(toolMsg.Content) != 2 {
+			t.Fatalf("tool message = %+v, want two responses", toolMsg)
+		}
+		assertToolError(t, toolMsg.Content[1], "no such city")
+	})
 }

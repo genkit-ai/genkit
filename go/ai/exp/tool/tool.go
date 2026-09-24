@@ -96,6 +96,32 @@ func Resume[Res any](interruptedPart *ai.Part, data Res) (*ai.Part, error) {
 	return newPart, nil
 }
 
+// --- Fail ---
+
+// Fail marks err as a result for the model rather than a failure of the tool
+// loop. The loop answers the tool call with {"error": err.Error()} (see
+// [ai.Part.IsToolError]) and continues, so the model can correct its input
+// and try again. Return any other error to stop the loop.
+//
+// Use it for errors the model can act on, such as invalid input or a missing
+// record. A WrapTool hook may also return it. To return every error of a
+// tool you do not own to the model, use the ToolErrors middleware in
+// plugins/middleware instead.
+//
+// Example:
+//
+//	rows, err := db.Query(ctx, in.SQL)
+//	if errors.Is(err, ErrSyntax) {
+//		return nil, tool.Fail(err) // the model fixes the query
+//	}
+//	return rows, err // a lost connection stops the loop
+func Fail(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &base.ToolFailError{Err: err}
+}
+
 // --- Respond ---
 
 // Respond creates a tool response [ai.Part] for an interrupted tool request.
