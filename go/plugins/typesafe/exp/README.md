@@ -142,8 +142,10 @@ The state is built from the user and model messages, with no instruction text
 mixed in. A system message is never state: it goes in front of every
 question's instructions, and for the enum format it is the question. That is
 the place for shared context, such as what the state is and what its fields
-mean. To judge a transcript that has its own system prompt, leave that prompt
-out of the messages.
+mean. A description on the output schema itself, such as one a prompt file's
+schema carries, follows the system message in every question's instructions.
+To judge a transcript that has its own system prompt, leave that prompt out of
+the messages.
 
 - One message is sent as its value: the string of a text part, or the JSON of a
   data part. `ai.WithPromptParts(ai.NewDataPart(v))` sends any value as an

@@ -172,6 +172,19 @@ func TestPreambleLeadsEveryQuestion(t *testing.T) {
 			t.Errorf("%s instructions = %q, want %q", id, q.Instructions, want)
 		}
 	}
+
+	// The schema's own description follows the system text.
+	schema := triageSchema(t)
+	schema["description"] = "Triage a ticket for the support queue."
+	got, err = compileQuestions(schema, "The state is a support ticket.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, q := range got {
+		if want := "The state is a support ticket.\n\nTriage a ticket for the support queue.\n\n" + triageQuestions[id].Instructions; q.Instructions != want {
+			t.Errorf("%s instructions = %q, want %q", id, q.Instructions, want)
+		}
+	}
 }
 
 func TestCompileQuestionsRejects(t *testing.T) {

@@ -335,12 +335,15 @@ func (q question) legend() map[string]any {
 // property, each marked with the x-typesafe keyword the answer types emit.
 // A property without the marker is rejected, since the model has no way to
 // answer a shape it does not know. The preamble, the request's system text,
-// goes in front of every question's own instructions.
+// goes in front of every question's own instructions, followed by the
+// schema's own description when it has one, as it is for the enum format.
 func compileQuestions(schema map[string]any, preamble string) (map[string]question, error) {
 	props, _ := schema["properties"].(map[string]any)
 	if len(props) == 0 {
 		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: the output schema has no properties; each question is a field of the output type")
 	}
+	description, _ := schema["description"].(string)
+	preamble = joinInstructions(preamble, description)
 	questions := make(map[string]question, len(props))
 	for id, raw := range props {
 		prop, _ := raw.(map[string]any)
