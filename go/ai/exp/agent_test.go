@@ -2667,6 +2667,36 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 			resume: &ToolResume{Restart: restart("numeric", "r3", map[string]any{"a": 1})},
 		},
 		{
+			// A restart that revised the input (RestartWithInput) is
+			// accountable for the original it preserves, so a revision the
+			// person made before approving is not a forgery.
+			name: "restart with replaced input preserves the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "x"}}
+				return parts
+			}()},
+		},
+		{
+			// The same restart as a peer runtime sends it, with the original
+			// under the wire key.
+			name: "restart with replaced input under the wire key",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Metadata = map[string]any{"replacedInput": map[string]any{"b": "x"}, "resumed": true}
+				return parts
+			}()},
+		},
+		{
+			name: "restart with replaced input forges the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "forged"}}
+				return parts
+			}()},
+			wantErr: "modified inputs",
+		},
+		{
 			// A kind-PartToolRequest part with a nil ToolRequest pointer (e.g.
 			// NewToolRequestPart(nil)) must be skipped, not panic.
 			name:   "restart with nil tool request pointer is skipped",

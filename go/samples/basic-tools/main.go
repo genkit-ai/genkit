@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates tools: Go functions the model may call mid-answer,
-// and what a tool hands back when its answer is more than one value.
+// This sample demonstrates a tool whose answer is more than one value: a slow
+// deployment that streams progress while it runs and attaches a chart to what
+// it returns. The runtime helpers in ai/tool do the work without changing the
+// tool's signature (*[ai.ToolContext] embeds the context they take):
 //
-// deployService simulates a rollout that takes a while, then reports how it
-// went. It is a multipart tool, so it answers with two things: a *Rollout as
-// its output, and a chart of the latency it recorded as an attached content
-// part. Attachments reach the model and the client both, so the model can
-// describe the shape of the rollout and the Dev UI can show the picture. They
-// must be media or data parts; a text part is not a valid attachment.
+//   - tool.AttachParts attaches the chart, so the tool returns a plain *Rollout
+//     instead of an *[ai.MultipartToolResponse]. The signature stops having to
+//     announce that the tool sometimes has more to say.
+//   - tool.SendPartial streams structured progress while the rollout runs, so a
+//     slow tool does not look like a hang.
+//   - tool.SendChunk streams a chunk the tool builds itself, for an update that
+//     is a line of prose rather than a value.
 //
-// deployFlow streams the run, so the report arrives as the model writes it.
-//
-// basic-tools-exp is this same sample written against the in-preview tools API
-// in genkit/exp. Reading the two side by side is the shortest way to see what
-// that API changes and what it adds.
+// The two streaming helpers are best-effort: with a caller that is not
+// streaming they are no-ops, so the tool still works when nobody is listening,
+// and the returned *Rollout is always the authoritative answer. Neither is
+// written to history, since progress is for showing, not for the model to read.
 //
 // Run it:
 //
@@ -38,8 +40,8 @@
 //	curl -sL cli.genkit.dev | bash    # install the Genkit CLI, once
 //	genkit start -- go run .
 //
-// Or over HTTP. Streaming needs ?stream=true, otherwise only the final report
-// comes back:
+// Or over HTTP. Streaming needs ?stream=true, otherwise the progress goes
+// nowhere and only the final report comes back:
 //
 //	curl -N -X POST 'http://localhost:8080/deployFlow?stream=true' \
 //	  -H "Content-Type: application/json" \
@@ -61,6 +63,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
@@ -78,13 +81,20 @@ type (
 		Environment string `json:"environment" jsonschema:"enum=staging,enum=production" jsonschema_description:"Where to deploy it"`
 	}
 
-	// Rollout is the tool's answer, and the Output half of its multipart
-	// response.
+	// Rollout is the tool's answer, and the whole of its return type: the
+	// chart it attaches does not appear here.
 	Rollout struct {
 		Service  string  `json:"service"`
 		Revision string  `json:"revision"`
 		Healthy  bool    `json:"healthy"`
 		P95Ms    float64 `json:"p95Ms" jsonschema_description:"The p95 latency after the rollout, in milliseconds"`
+	}
+
+	// Progress is what tool.SendPartial sends. It is the tool's own shape, not
+	// one the API dictates: any value that survives JSON works.
+	Progress struct {
+		Step    string `json:"step"`
+		Percent int    `json:"percent"`
 	}
 
 	// DeployRequest is what the flow takes.
@@ -108,7 +118,8 @@ var rolloutStages = []struct {
 	{"checking health", 92},
 }
 
-// stageDuration stands in for work that really takes time.
+// stageDuration stands in for work that really takes time. It is what makes
+// the streamed progress worth watching.
 const stageDuration = 250 * time.Millisecond
 
 // model is shared by every flow below, so switching models or thinking levels
@@ -124,35 +135,47 @@ func main() {
 
 	// The Google AI plugin reads the API key from GEMINI_API_KEY or
 	// GOOGLE_API_KEY, which is the recommended practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+	)
 
 	// The name and description are all the model knows about a tool, beside
 	// the schemas inferred from the types. They are prompt, so they are worth
 	// writing as carefully as one.
-	//
-	// A multipart tool differs from a plain one only in what it returns: the
-	// value a plain tool would have answered with goes in Output, and whatever
-	// is not a value goes in Content.
-	deployService := genkit.DefineMultipartTool(g, "deployService",
+	deployService := genkit.DefineTool(g, "deployService",
 		"Deploys a service to an environment and reports how the rollout went.",
-		func(ctx *ai.ToolContext, input Deploy) (*ai.MultipartToolResponse, error) {
+		func(ctx *ai.ToolContext, input Deploy) (*Rollout, error) {
 			latencies := make([]float64, 0, len(rolloutStages))
-			for _, stage := range rolloutStages {
+			for i, stage := range rolloutStages {
+				// Sent before the work, so the client sees the step it is
+				// waiting on rather than the one already done.
+				tool.SendPartial(ctx, Progress{
+					Step:    stage.Name,
+					Percent: (i + 1) * 100 / len(rolloutStages),
+				})
 				time.Sleep(stageDuration)
 				latencies = append(latencies, stage.P95)
 			}
 
 			revision := fmt.Sprintf("%s-00042", input.Service)
-			return &ai.MultipartToolResponse{
-				Output: &Rollout{
-					Service:  input.Service,
-					Revision: revision,
-					Healthy:  true,
-					P95Ms:    latencies[len(latencies)-1],
-				},
-				// The model receives this as a picture, so it can describe the
-				// shape of the rollout rather than only its last number.
-				Content: []*ai.Part{ai.NewMediaPart("image/png", barChartPNG(latencies))},
+
+			// An update with no structure worth giving it. RoleTool marks the
+			// chunk as the tool's, which is how the flow below tells it from
+			// the model's own text.
+			tool.SendChunk(ctx, &ai.ModelResponseChunk{
+				Role:    ai.RoleTool,
+				Content: []*ai.Part{ai.NewTextPart(fmt.Sprintf("%s is live in %s", revision, input.Environment))},
+			})
+
+			// The model receives this as a picture, so it can describe the
+			// shape of the rollout rather than only its last number.
+			tool.AttachParts(ctx, ai.NewMediaPart("image/png", barChartPNG(latencies)))
+
+			return &Rollout{
+				Service:  input.Service,
+				Revision: revision,
+				Healthy:  true,
+				P95Ms:    latencies[len(latencies)-1],
 			}, nil
 		})
 
@@ -171,11 +194,21 @@ func main() {
 					return val.Response.Text(), nil
 				}
 				// A tool call is several turns, so the stream carries the
-				// tool's traffic as well as the model's. Only the text is
-				// worth forwarding: the tool's answer goes to the model
-				// rather than to the caller.
+				// tool's traffic as well as the model's. The tool's own text
+				// carries RoleTool like every other part of its message, so
+				// the role is what separates the two text cases below.
 				for _, part := range val.Chunk.Content {
-					if part.IsText() {
+					switch {
+					case part.IsPartial():
+						// From tool.SendPartial. In process the value arrives
+						// as the one the tool sent; a client reading the HTTP
+						// stream gets its JSON instead.
+						if p, ok := part.ToolResponse.Output.(Progress); ok {
+							sendChunk(ctx, fmt.Sprintf("[%3d%%] %s", p.Percent, p.Step))
+						}
+					case part.IsText() && val.Chunk.Role == ai.RoleTool:
+						sendChunk(ctx, "deploy: "+part.Text) // From tool.SendChunk.
+					case part.IsText():
 						sendChunk(ctx, part.Text) // The model writing its report.
 					}
 				}

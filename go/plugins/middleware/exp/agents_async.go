@@ -314,13 +314,13 @@ func maybeDetachRejection(agent *aix.AgentHandle, out *aix.AgentOutput[json.RawM
 func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
 	names := a.backgroundToolNames()
 	return []ai.Tool{
-		aix.NewTool(names.check,
+		plainTool(names.check,
 			"Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.",
 			a.taskReportTool(st, readSnapshotOnce)),
-		aix.NewTool(names.wait,
+		plainTool(names.wait,
 			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to \"first\" to return as soon as any one task settles.",
 			a.waitForBackgroundTasks(st)),
-		aix.NewTool(names.abort,
+		plainTool(names.abort,
 			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A live task reports \"aborting\" while it winds down and settles as \"aborted\"; a task that had already finished is unaffected and reports its result.",
 			a.taskReportTool(st, a.abortSnapshot())),
 	}

@@ -761,13 +761,24 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 // `inputSchema` and `outputSchema` in the tool's definition, which guide the model
 // on how to provide input and interpret output.
 //
+// A tool that pauses generation to ask the caller something is defined with
+// [DefineResumableTool] instead, which hands it the caller's answer.
+//
 // For tools that don't need to be registered (e.g., dynamically created tools),
 // use [ai.NewTool] instead.
 //
 // # Options
 //
-//   - [ai.WithInputSchema]: Provide a custom JSON schema instead of inferring from the type parameter
-//   - [ai.WithInputSchemaName]: Reference a pre-registered schema by name
+// An explicit schema stands in for a type parameter, so the input options
+// require In to be any and the output options require Out to be any; any
+// other type panics here.
+//
+//   - [ai.WithInputSchema]: Provide a JSON schema for the input
+//   - [ai.WithInputSchemaName]: Reference a pre-registered input schema by name
+//   - [ai.WithInputType]: Derive the input schema from a Go value (prefer the In type parameter)
+//   - [ai.WithOutputSchema]: Provide a JSON schema for the output
+//   - [ai.WithOutputSchemaName]: Reference a pre-registered output schema by name
+//   - [ai.WithStrictSchema]: Have the provider enforce the input schema strictly, where supported
 //
 // Example:
 //
@@ -795,6 +806,93 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //	fmt.Println(resp.Text()) // Might output something like "The weather in Paris is Sunny, 25°C."
 func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
 	t := ai.NewTool(name, description, fn, opts...)
+	t.Register(g.reg)
+	return t
+}
+
+// DefineResumableTool defines a tool that can pause generation to ask the
+// caller something and resume with the caller's answer, typed as Res,
+// registers it as a [core.Action] of type Tool, and returns the concrete
+// [ai.ResumableToolAction].
+//
+// Unlike [DefineTool], the function receives a plain [context.Context] and a
+// third parameter for the resume payload: nil on the first call, and set to
+// what the caller sent when the tool is re-executed after an interrupt. Inside
+// the function, return [github.com/firebase/genkit/go/ai/tool.Interrupt] to
+// pause, with typed data if there is something to say about the pause. Res must
+// be a struct or a map with string keys, so that the payload serializes to a
+// JSON object; any other type panics here. The schema inferred from Res is
+// advertised on the tool's definition as the "resumeSchema" metadata. A
+// payload built as Res reaches the function as is; any other, such as one
+// that crossed the wire, is validated against that schema before the tool
+// re-executes, as the model's input is against In.
+//
+// The caller claims the interrupted part with
+// [ai.ResumableToolAction.Interrupted], which decodes the input to In,
+// then re-executes the tool with [ai.InterruptedCall.Restart] or answers the
+// call outright with [ai.InterruptedCall.Respond], and resumes generation
+// with [ai.WithResume].
+//
+// # Options
+//
+// An explicit schema stands in for a type parameter, so the input options
+// require In to be any and the output options require Out to be any; any
+// other type panics here.
+//
+//   - [ai.WithInputSchema]: Provide a JSON schema for the input
+//   - [ai.WithInputSchemaName]: Reference a pre-registered input schema by name
+//   - [ai.WithInputType]: Derive the input schema from a Go value (prefer the In type parameter)
+//   - [ai.WithOutputSchema]: Provide a JSON schema for the output
+//   - [ai.WithOutputSchemaName]: Reference a pre-registered output schema by name
+//   - [ai.WithStrictSchema]: Have the provider enforce the input schema strictly, where supported
+//
+// Example:
+//
+//	type TransferInput struct {
+//		ToAccount string  `json:"toAccount"`
+//		Amount    float64 `json:"amount"`
+//	}
+//
+//	type Confirmation struct {
+//		Approved bool `json:"approved"`
+//	}
+//
+//	transferMoney := genkit.DefineResumableTool(g, "transferMoney",
+//		"Transfers money to another account.",
+//		func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
+//			if confirm == nil && input.Amount > 100 {
+//				return "", tool.Interrupt(ctx, nil) // Pause; the input says what to approve.
+//			}
+//			if confirm != nil && !confirm.Approved {
+//				return "Transfer cancelled.", nil
+//			}
+//			return "Transfer completed.", nil
+//		},
+//	)
+//
+//	resp, _ := genkit.Generate(ctx, g,
+//		ai.WithPrompt("Transfer $200 to Alice"),
+//		ai.WithTools(transferMoney),
+//	)
+//
+//	var parts []*ai.Part
+//	for _, part := range resp.Interrupts() {
+//		if call, ok := transferMoney.Interrupted(part); ok {
+//			// Ask the person, then re-execute the tool with their answer. It
+//			// arrives as the tool's *Confirmation parameter.
+//			approved := askHuman(call.Input.Amount, call.Input.ToAccount)
+//			parts = append(parts, call.Restart(Confirmation{Approved: approved}))
+//		}
+//	}
+//	if len(parts) > 0 {
+//		resp, _ = genkit.Generate(ctx, g,
+//			ai.WithMessages(resp.History()...),
+//			ai.WithTools(transferMoney),
+//			ai.WithResume(parts...),
+//		)
+//	}
+func DefineResumableTool[In, Out, Res any](g *Genkit, name, description string, fn ai.ResumableToolFunc[In, Out, Res], opts ...ai.ToolOption) *ai.ResumableToolAction[In, Out, Res] {
+	t := ai.NewResumableTool(name, description, fn, opts...)
 	t.Register(g.reg)
 	return t
 }
@@ -867,8 +965,16 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //
 // # Options
 //
-//   - [ai.WithInputSchema]: Provide a custom JSON schema instead of inferring from the type parameter
-//   - [ai.WithInputSchemaName]: Reference a pre-registered schema by name
+// An explicit input schema stands in for In, which must then be any; the
+// output options describe the logical output (the envelope's output field)
+// the tool advertises, and carry no such constraint.
+//
+//   - [ai.WithInputSchema]: Provide a JSON schema for the input
+//   - [ai.WithInputSchemaName]: Reference a pre-registered input schema by name
+//   - [ai.WithInputType]: Derive the input schema from a Go value
+//   - [ai.WithOutputSchema]: Provide a JSON schema for the advertised output
+//   - [ai.WithOutputSchemaName]: Reference a pre-registered output schema by name
+//   - [ai.WithStrictSchema]: Have the provider enforce the input schema strictly, where supported
 //
 // Example:
 //
@@ -907,6 +1013,10 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	}
 //
 //	fmt.Println(resp.Text())
+//
+// Deprecated: Use [DefineTool] and attach content parts with
+// [github.com/firebase/genkit/go/ai/tool.AttachParts], which keeps the output
+// type (and therefore the advertised output schema).
 func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolAction[In, *ai.MultipartToolResponse] {
 	t := ai.NewMultipartTool(name, description, fn, opts...)
 	t.Register(g.reg)
@@ -916,7 +1026,10 @@ func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.Mult
 // LookupTool retrieves a registered tool by its name.
 // It returns the tool instance if found, or `nil` if no tool with the
 // given name is registered (e.g., via [DefineTool]).
-// Since the types are not known at lookup time, it returns a type-erased tool.
+// Since the types are not known at lookup time, it returns a type-erased tool;
+// an interrupt it raised is resolved on the part, with [ai.Part.ToToolRestart]
+// and [ai.Part.ToToolResponse], and generation resumes with
+// [ai.WithResume].
 func LookupTool(g *Genkit, name string) ai.Tool {
 	return ai.LookupTool(g.reg, name)
 }
@@ -1347,8 +1460,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //   - [ai.WithMiddleware]: Apply middleware to the model request/response
 //
 // Tool Continuation:
-//   - [ai.WithToolResponses]: Resume generation with tool response parts
-//   - [ai.WithToolRestarts]: Resume generation by restarting tool requests
+//   - [ai.WithResume]: Resume generation after an interrupt with the parts that resolve it
 //
 // Example:
 //

@@ -2998,10 +2998,13 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 			field, name, toolRefSuffix(ref))
 	}
 
-	// Restart entries: name + ref must be pending and the input must match
-	// the original request exactly. IsToolRequest only checks the part kind,
-	// so guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
-	// PartToolRequest with a nil ToolRequest.
+	// Restart entries: name + ref must be pending and the input the restart is
+	// accountable for must match the original request exactly. A restart that
+	// revised the input (ai.InterruptedCall.RestartWithInput) preserves the
+	// original it replaced, and that original is what must match; the revised
+	// input is what the tool re-executes with. IsToolRequest only checks the
+	// part kind, so guard the pointer too: a hand-built NewToolRequestPart(nil)
+	// is kind PartToolRequest with a nil ToolRequest.
 	for _, p := range resume.Restart {
 		if !p.IsToolRequest() || p.ToolRequest == nil {
 			continue
@@ -3011,9 +3014,9 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		if match == nil {
 			return unresolved("restart", req.Name, req.Ref)
 		}
-		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
+		if !jsonEqual(normalizeJSON(restartOriginalInput(p)), normalizeJSON(match.Input)) {
 			return status.Errorf(status.ErrInvalidArgument,
-				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
+				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request, or a restart that replaces the input must preserve the original it replaced",
 				req.Name, toolRefSuffix(req.Ref))
 		}
 	}
@@ -3030,6 +3033,20 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 	}
 
 	return nil
+}
+
+// restartOriginalInput returns the input a restart part is accountable for
+// against history: the original a replaced-input restart preserves, on the
+// typed state or under the wire key a peer runtime writes, else the request's
+// own input.
+func restartOriginalInput(p *ai.Part) any {
+	if p.Restart != nil && p.Restart.OriginalInput != nil {
+		return p.Restart.OriginalInput
+	}
+	if v, ok := p.Metadata["replacedInput"]; ok && v != nil {
+		return v
+	}
+	return p.ToolRequest.Input
 }
 
 // toolRefSuffix renders a " (ref: X)" clause for resume validation errors, or
@@ -3328,8 +3345,9 @@ func (c *AgentConnection[State]) SendText(text string) error {
 }
 
 // SendResume sends a resume payload to continue an interrupted generation.
-// Construct the payload with [ai.ToolAction.RestartWith] or
-// [ai.ToolAction.RespondWith] parts.
+// Construct the payload from [ai.InterruptedCall.Restart] and
+// [ai.InterruptedCall.Respond] parts, or [ai.Part.ToToolRestart] and
+// [ai.Part.ToToolResponse].
 func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }

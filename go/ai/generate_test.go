@@ -434,7 +434,8 @@ func TestGenerate(t *testing.T) {
 					Name:         "gablorken",
 					OutputSchema: map[string]any{"type": string("number")},
 					Metadata: map[string]any{
-						"multipart": false,
+						"multipart":    false,
+						"resumeSchema": map[string]any{"type": string("object")},
 					},
 				},
 			},
@@ -535,14 +536,13 @@ func TestGenerate(t *testing.T) {
 			t.Fatalf("expected 1 content part, got %d", len(res.Message.Content))
 		}
 
-		metadata := res.Message.Content[0].Metadata
-		if metadata == nil {
-			t.Fatal("expected metadata in content part")
+		if !res.Message.Content[0].IsInterrupt() {
+			t.Fatal("expected an interrupted tool request")
 		}
 
-		interrupt, ok := metadata["interrupt"].(map[string]any)
+		interrupt, ok := res.Message.Content[0].Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata")
+			t.Fatalf("interrupt data = %T, want map[string]any", res.Message.Content[0].Interrupt.Data)
 		}
 
 		reason, ok := interrupt["reason"].(string)
@@ -1104,9 +1104,12 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Fatal("expected second part to be a tool request")
 		}
 
-		interruptMeta, ok := interruptedPart.Metadata["interrupt"].(map[string]any)
+		if !interruptedPart.IsInterrupt() {
+			t.Fatal("expected the tool request to be interrupted")
+		}
+		interruptMeta, ok := interruptedPart.Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata in tool request")
+			t.Fatalf("interrupt data = %T, want map[string]any", interruptedPart.Interrupt.Data)
 		}
 
 		if reason, ok := interruptMeta["reason"].(string); !ok || reason != "user_intervention_required" {
@@ -1204,13 +1207,16 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Errorf("expected interrupt to be false, got %v", replacedInput.Interrupt)
 		}
 
-		if _, hasInterrupt := restartPart.Metadata["interrupt"]; hasInterrupt {
-			t.Error("expected interrupt metadata to be removed")
+		if restartPart.Interrupt != nil {
+			t.Error("expected the interrupt state to be dropped from the restart part")
 		}
 
-		resumedMeta, ok := restartPart.Metadata["resumed"].(map[string]any)
+		if restartPart.Restart == nil {
+			t.Fatal("expected restart state on the restart part")
+		}
+		resumedMeta, ok := restartPart.Restart.Resume.(map[string]any)
 		if !ok {
-			t.Fatal("expected resumed metadata")
+			t.Fatalf("resume data = %T, want map[string]any", restartPart.Restart.Resume)
 		}
 
 		if resumedMeta["data"] != "resumed_data" {
@@ -2591,7 +2597,7 @@ func TestModelResponseInterrupts(t *testing.T) {
 			Name:  "confirmAction",
 			Input: map[string]any{},
 		})
-		interruptPart.Metadata = map[string]any{"interrupt": true}
+		interruptPart.Interrupt = &ToolInterrupt{}
 
 		resp := &ModelResponse{
 			Message: &Message{
@@ -3503,10 +3509,11 @@ func interruptedForResume(t *testing.T) (api.Registry, Tool, *ModelResponse) {
 func TestResumeCarriesOptionsForward(t *testing.T) {
 	t.Run("keeps the caller's step name", func(t *testing.T) {
 		r, tool, res := interruptedForResume(t)
-		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+		respond, err := res.Message.Content[0].ToToolResponse("answer")
+		assertNoError(t, err)
 		spans := collectSpans(t)
 
-		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		_, err = Generate(testCtx, r, WithModelName("test/resumeModel"),
 			WithMessages(res.History()...), WithTools(tool),
 			WithToolResponses(respond), WithStepName("myStep"))
 		assertNoError(t, err)
@@ -3522,7 +3529,8 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 
 	t.Run("resume survives a hook writing to its options", func(t *testing.T) {
 		r, tool, res := interruptedForResume(t)
-		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+		respond, err := res.Message.Content[0].ToToolResponse("answer")
+		assertNoError(t, err)
 
 		clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 			return &Hooks{

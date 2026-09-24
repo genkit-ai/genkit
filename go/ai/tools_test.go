@@ -18,9 +18,12 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -43,30 +46,10 @@ func TestToolName(t *testing.T) {
 	})
 }
 
-func TestToolInterruptError(t *testing.T) {
-	t.Run("Error includes metadata when present", func(t *testing.T) {
-		err := &toolInterruptError{Metadata: map[string]any{"key": "value"}}
-		got := err.Error()
-		want := "tool execution interrupted: \n\n{\n  \"key\": \"value\"\n}"
-		if got != want {
-			t.Errorf("Error() = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Error returns simple message when no metadata", func(t *testing.T) {
-		err := &toolInterruptError{}
-		got := err.Error()
-		want := "tool execution interrupted"
-		if got != want {
-			t.Errorf("Error() = %q, want %q", got, want)
-		}
-	})
-}
-
 func TestIsToolInterruptError(t *testing.T) {
-	t.Run("returns true for toolInterruptError", func(t *testing.T) {
+	t.Run("returns true for an interrupt error", func(t *testing.T) {
 		meta := map[string]any{"reason": "user cancelled"}
-		err := &toolInterruptError{Metadata: meta}
+		err := &base.ToolInterruptError{Data: meta}
 
 		isInterrupt, gotMeta := IsToolInterruptError(err)
 
@@ -78,9 +61,9 @@ func TestIsToolInterruptError(t *testing.T) {
 		}
 	})
 
-	t.Run("returns true for wrapped toolInterruptError", func(t *testing.T) {
+	t.Run("returns true for a wrapped interrupt error", func(t *testing.T) {
 		meta := map[string]any{"step": 3}
-		innerErr := &toolInterruptError{Metadata: meta}
+		innerErr := &base.ToolInterruptError{Data: meta}
 		wrappedErr := errors.New("context: " + innerErr.Error())
 		// Use proper wrapping
 		wrappedErr = &wrappedInterruptError{cause: innerErr}
@@ -648,7 +631,7 @@ func TestToolRespond(t *testing.T) {
 			Ref:   "ref-123",
 			Input: map[string]any{"x": 1},
 		})
-		reqPart.Metadata = map[string]any{"interrupt": true}
+		reqPart.Interrupt = &ToolInterrupt{}
 
 		resp := tl.Respond(reqPart, "output data", nil)
 
@@ -688,7 +671,7 @@ func TestToolRespond(t *testing.T) {
 		reqPart := NewToolRequestPart(&ToolRequest{
 			Name: "provider/responder",
 		})
-		reqPart.Metadata = map[string]any{"interrupt": true}
+		reqPart.Interrupt = &ToolInterrupt{}
 
 		opts := &RespondOptions{
 			Metadata: map[string]any{"custom": "value"},
@@ -718,7 +701,7 @@ func TestToolRestart(t *testing.T) {
 			Ref:   "ref-456",
 			Input: map[string]any{"value": 10},
 		})
-		reqPart.Metadata = map[string]any{"interrupt": true}
+		reqPart.Interrupt = &ToolInterrupt{}
 
 		restart := tl.Restart(reqPart, nil)
 
@@ -731,11 +714,19 @@ func TestToolRestart(t *testing.T) {
 		if restart.ToolRequest.Name != "provider/restarter" {
 			t.Errorf("Name = %q, want %q", restart.ToolRequest.Name, "provider/restarter")
 		}
-		if restart.Metadata["resumed"] != true {
-			t.Errorf("resumed = %v, want true", restart.Metadata["resumed"])
+		if restart.Restart == nil || restart.Restart.Resume != nil {
+			t.Errorf("Restart = %+v, want a bare restart", restart.Restart)
 		}
-		if restart.Metadata["interrupt"] != nil {
-			t.Error("interrupt should be removed from metadata")
+		if restart.Interrupt != nil {
+			t.Error("the restart part must not carry interrupt state")
+		}
+		// The typed state folds back into the JS-compatible wire keys.
+		wire := wireMetadataOf(t, restart)
+		if wire["resumed"] != true {
+			t.Errorf("wire resumed = %v, want true", wire["resumed"])
+		}
+		if _, ok := wire["interrupt"]; ok {
+			t.Error("interrupt should not be on the wire for a restart part")
 		}
 	})
 
@@ -762,7 +753,7 @@ func TestToolRestart(t *testing.T) {
 			Name:  "provider/restarter",
 			Input: map[string]any{"value": 10},
 		})
-		reqPart.Metadata = map[string]any{"interrupt": true}
+		reqPart.Interrupt = &ToolInterrupt{}
 
 		newInputVal := struct {
 			Value int `json:"value"`
@@ -778,8 +769,11 @@ func TestToolRestart(t *testing.T) {
 		if newInput.Value != 20 {
 			t.Errorf("new input value = %v, want 20", newInput.Value)
 		}
-		if restart.Metadata["replacedInput"] == nil {
-			t.Error("replacedInput not set in metadata")
+		if restart.Restart == nil || restart.Restart.OriginalInput == nil {
+			t.Error("the original input was not preserved on the restart")
+		}
+		if wireMetadataOf(t, restart)["replacedInput"] == nil {
+			t.Error("replacedInput not set on the wire")
 		}
 	})
 
@@ -787,14 +781,14 @@ func TestToolRestart(t *testing.T) {
 		reqPart := NewToolRequestPart(&ToolRequest{
 			Name: "provider/restarter",
 		})
-		reqPart.Metadata = map[string]any{"interrupt": true}
+		reqPart.Interrupt = &ToolInterrupt{}
 
 		opts := &RestartOptions{
 			ResumedMetadata: map[string]any{"reason": "user confirmed"},
 		}
 		restart := tl.Restart(reqPart, opts)
 
-		resumed := restart.Metadata["resumed"].(map[string]any)
+		resumed := restart.Restart.Resume.(map[string]any)
 		if resumed["reason"] != "user confirmed" {
 			t.Errorf("resumed.reason = %v, want %q", resumed["reason"], "user confirmed")
 		}
@@ -1160,7 +1154,7 @@ func TestResumedValue(t *testing.T) {
 	ctxWithResumed := func(m map[string]any) *ToolContext {
 		ctx := context.Background()
 		if m != nil {
-			ctx = resumedCtxKey.NewContext(ctx, m)
+			ctx = base.ToolResumeKey.NewContext(ctx, m)
 		}
 		return &ToolContext{Context: ctx, Resumed: m}
 	}
@@ -1248,7 +1242,7 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("works with a plain context.Context (middleware use)", func(t *testing.T) {
-		ctx := resumedCtxKey.NewContext(context.Background(), map[string]any{
+		ctx := base.ToolResumeKey.NewContext(context.Background(), map[string]any{
 			"toolApproved": true,
 		})
 
@@ -1487,13 +1481,11 @@ func TestInterruptMetadata(t *testing.T) {
 			Name:  "testTool",
 			Input: map[string]any{},
 		})
-		part.Metadata = map[string]any{
-			"interrupt": map[string]any{
-				"reason":    "large amount",
-				"amount":    200.0,
-				"recipient": "Bob",
-			},
-		}
+		part.Interrupt = &ToolInterrupt{Data: map[string]any{
+			"reason":    "large amount",
+			"amount":    200.0,
+			"recipient": "Bob",
+		}}
 
 		meta, ok := InterruptAs[ConfirmMeta](part)
 		if !ok {
@@ -1526,15 +1518,545 @@ func TestInterruptMetadata(t *testing.T) {
 		}
 	})
 
-	t.Run("returns false when interrupt metadata is not a map", func(t *testing.T) {
+	t.Run("returns false when the interrupt carries no data", func(t *testing.T) {
 		part := NewToolRequestPart(&ToolRequest{Name: "test"})
-		part.Metadata = map[string]any{
-			"interrupt": true, // bool instead of map
-		}
+		part.Interrupt = &ToolInterrupt{} // bare interrupt, no data
 
 		_, ok := InterruptAs[ConfirmMeta](part)
 		if ok {
-			t.Error("InterruptMetadata() ok = true for bool interrupt, want false")
+			t.Error("InterruptMetadata() ok = true for a bare interrupt, want false")
 		}
 	})
+}
+
+// wireMetadataOf marshals a part and returns the metadata map it produced, so
+// tests can assert the wire contract (the JS-compatible metadata keys) that the
+// typed Interrupt and Restart fields fold into.
+func wireMetadataOf(t *testing.T, p *Part) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal part: %v", err)
+	}
+	var wire struct {
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("unmarshal part: %v", err)
+	}
+	return wire.Metadata
+}
+
+// TestPartToRestart_PreservesIdentity pins the shape of a restart part: the
+// identity the generate loop matches on survives, unrelated metadata is carried
+// over, the interrupt state is dropped, and the source part is left alone. It
+// also pins the wire keys the typed state folds into, which the JS runtime
+// reads.
+func TestPartToRestart_PreservesIdentity(t *testing.T) {
+	part := NewToolRequestPart(&ToolRequest{
+		Name:  "transfer",
+		Ref:   "call-1",
+		Input: map[string]any{"amount": float64(200)},
+	})
+	part.Interrupt = &ToolInterrupt{Data: map[string]any{"reason": "large_amount"}}
+	part.Metadata = map[string]any{"keep": "me"}
+
+	type confirmation struct {
+		Approved bool `json:"approved"`
+	}
+	got, err := part.ToToolRestart(confirmation{Approved: true})
+	if err != nil {
+		t.Fatalf("ToToolRestart: %v", err)
+	}
+	if !got.IsToolRequest() {
+		t.Fatal("ToToolRestart must produce a tool request part")
+	}
+	if got.IsInterrupt() || got.Interrupt != nil {
+		t.Error("the restart part must not carry interrupt state")
+	}
+	if got.ToolRequest.Name != "transfer" || got.ToolRequest.Ref != "call-1" {
+		t.Errorf("identity = %q/%q, want transfer/call-1", got.ToolRequest.Name, got.ToolRequest.Ref)
+	}
+	if got.Restart == nil || got.Restart.Resume.(confirmation) != (confirmation{Approved: true}) {
+		t.Errorf("Restart = %+v, want the resume payload", got.Restart)
+	}
+	if got.Metadata["keep"] != "me" {
+		t.Errorf("unrelated metadata was dropped: %v", got.Metadata)
+	}
+	if part.Interrupt == nil || part.Interrupt.Resolved {
+		t.Error("ToToolRestart must not mutate the source part")
+	}
+
+	// On the wire the typed state becomes the JS-compatible metadata keys.
+	wire := wireMetadataOf(t, got)
+	resumed, ok := wire["resumed"].(map[string]any)
+	if !ok {
+		t.Fatalf("wire resumed = %T, want map[string]any", wire["resumed"])
+	}
+	if resumed["approved"] != true {
+		t.Errorf("wire resumed[approved] = %v, want true", resumed["approved"])
+	}
+	if _, ok := wire["interrupt"]; ok {
+		t.Error("the restart part must not carry an interrupt key on the wire")
+	}
+	if wire["keep"] != "me" {
+		t.Errorf("unrelated metadata missing from the wire: %v", wire)
+	}
+
+	// A bare restart marks the call as resumed without carrying data.
+	bare, err := part.ToToolRestart(nil)
+	if err != nil {
+		t.Fatalf("bare ToToolRestart: %v", err)
+	}
+	if bare.Restart == nil || bare.Restart.Resume != nil {
+		t.Errorf("bare restart = %+v, want no resume payload", bare.Restart)
+	}
+	if wireMetadataOf(t, bare)["resumed"] != true {
+		t.Error("a bare restart must be marked resumed on the wire")
+	}
+}
+
+// TestPartToRestartToResponse_RejectNonInterrupt keeps the part verbs from
+// building parts out of anything that isn't an interrupted tool request.
+func TestPartToRestartToResponse_RejectNonInterrupt(t *testing.T) {
+	plain := NewToolRequestPart(&ToolRequest{Name: "x"}) // never interrupted
+	resolved := NewToolRequestPart(&ToolRequest{Name: "x"})
+	resolved.Interrupt = &ToolInterrupt{Resolved: true}
+
+	for _, tc := range []struct {
+		name string
+		part *Part
+	}{
+		{"non-interrupt tool request", plain},
+		{"already resolved interrupt", resolved},
+		{"text part", NewTextPart("hi")},
+	} {
+		if _, err := tc.part.ToToolRestart(nil); err == nil {
+			t.Errorf("ToToolRestart(%s) must error", tc.name)
+		}
+		if _, err := tc.part.ToToolRestartWithInput(map[string]any{}, nil); err == nil {
+			t.Errorf("ToToolRestartWithInput(%s) must error", tc.name)
+		}
+		if _, err := tc.part.ToToolResponse("out"); err == nil {
+			t.Errorf("ToToolResponse(%s) must error", tc.name)
+		}
+	}
+}
+
+// TestPartToRestart_NonObjectResume covers the documented constraint: resume
+// data must serialize to a JSON object, and a scalar yields an actionable error
+// rather than an opaque json failure.
+func TestPartToRestart_NonObjectResume(t *testing.T) {
+	part := NewToolRequestPart(&ToolRequest{Name: "x"})
+	part.Interrupt = &ToolInterrupt{}
+
+	_, err := part.ToToolRestart("just a string")
+	if err == nil {
+		t.Fatal("expected an error restarting with non-object resume data")
+	}
+	if !strings.Contains(err.Error(), "JSON object") {
+		t.Errorf("error = %q, want it to mention the JSON object constraint", err)
+	}
+}
+
+// TestPartToResponse_MarksInterruptResponse pins the marker the generate loop
+// keys on to resolve an interrupt instead of re-executing the tool.
+func TestPartToResponse_MarksInterruptResponse(t *testing.T) {
+	part := NewToolRequestPart(&ToolRequest{Name: "transfer", Ref: "call-1"})
+	part.Interrupt = &ToolInterrupt{}
+
+	got, err := part.ToToolResponse(map[string]any{"status": "cancelled"})
+	if err != nil {
+		t.Fatalf("ToToolResponse: %v", err)
+	}
+	if !got.IsToolResponse() {
+		t.Fatal("ToToolResponse must produce a tool response part")
+	}
+	if got.ToolResponse.Name != "transfer" || got.ToolResponse.Ref != "call-1" {
+		t.Errorf("identity = %q/%q, want transfer/call-1", got.ToolResponse.Name, got.ToolResponse.Ref)
+	}
+	if got.Metadata["interruptResponse"] != true {
+		t.Errorf("interruptResponse = %v, want true", got.Metadata["interruptResponse"])
+	}
+}
+
+// TestToolDefinition_OutputSchema pins what a tool advertises as its output:
+// the schema of its output type, an explicit override when given, and nothing
+// at all when the output type carries no schema. The action's own output schema
+// is the multipart envelope every tool function is wrapped in, and that must
+// never reach a model.
+func TestToolDefinition_OutputSchema(t *testing.T) {
+	type weather struct {
+		Temp int    `json:"temp"`
+		Sky  string `json:"sky"`
+	}
+
+	t.Run("typed output advertises its schema", func(t *testing.T) {
+		tl := NewTool("typed", "d", func(ctx *ToolContext, _ struct{}) (weather, error) {
+			return weather{}, nil
+		})
+		props, _ := tl.Definition().OutputSchema["properties"].(map[string]any)
+		if _, ok := props["temp"]; !ok {
+			t.Errorf("output schema = %#v, want the weather fields", tl.Definition().OutputSchema)
+		}
+	})
+
+	t.Run("any output advertises no schema", func(t *testing.T) {
+		tl := NewTool("anyOut", "d", func(ctx *ToolContext, _ struct{}) (any, error) {
+			return "anything at all", nil
+		})
+		if got := tl.Definition().OutputSchema; got != nil {
+			t.Errorf("output schema = %#v, want none: an unconstrained output is described by no schema", got)
+		}
+	})
+
+	t.Run("multipart tool advertises no schema", func(t *testing.T) {
+		tl := NewMultipartTool("multi", "d", func(ctx *ToolContext, _ struct{}) (*MultipartToolResponse, error) {
+			return &MultipartToolResponse{Output: "ok"}, nil
+		})
+		got := tl.Definition().OutputSchema
+		if props, ok := got["properties"].(map[string]any); ok {
+			if _, leaked := props["content"]; leaked {
+				t.Errorf("output schema leaked the multipart envelope: %#v", got)
+			}
+		}
+		if got != nil {
+			t.Errorf("output schema = %#v, want none", got)
+		}
+	})
+
+	t.Run("explicit output schema wins", func(t *testing.T) {
+		custom := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"custom": map[string]any{"type": "string"}},
+		}
+		tl := NewTool("override", "d",
+			func(ctx *ToolContext, _ struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(custom))
+		if diff := cmp.Diff(custom, tl.Definition().OutputSchema); diff != "" {
+			t.Errorf("output schema mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
+
+// TestPartToRestart_LiftsRawInterruptMetadata keeps the part verbs as lenient
+// as the type-erased tool verbs they replace: a part hand-assembled with the
+// JS "interrupt" metadata key restarts, the caller's map is untouched, and the
+// key does not ride along onto the part built from it.
+func TestPartToRestart_LiftsRawInterruptMetadata(t *testing.T) {
+	raw := map[string]any{"interrupt": map[string]any{"reason": "confirm"}, "keep": "me"}
+	part := NewToolRequestPart(&ToolRequest{Name: "transfer", Input: map[string]any{"amount": float64(200)}})
+	part.Metadata = raw
+
+	restart, err := part.ToToolRestart(map[string]any{"approved": true})
+	if err != nil {
+		t.Fatalf("ToToolRestart: %v", err)
+	}
+	if !restart.IsRestart() || restart.Interrupt != nil {
+		t.Errorf("restart = %+v, want typed restart state and no interrupt state", restart)
+	}
+	if _, ok := restart.Metadata["interrupt"]; ok {
+		t.Error("the raw interrupt key rode along onto the restart part")
+	}
+	if restart.Metadata["keep"] != "me" {
+		t.Errorf("unrelated metadata was dropped: %v", restart.Metadata)
+	}
+	if _, ok := raw["interrupt"]; !ok || part.Interrupt != nil {
+		t.Error("ToToolRestart must not mutate the source part")
+	}
+	wire := wireMetadataOf(t, restart)
+	if _, ok := wire["interrupt"]; ok {
+		t.Errorf("wire metadata = %v, want no interrupt key", wire)
+	}
+	if wire["resumed"] == nil {
+		t.Errorf("wire metadata = %v, want resumed", wire)
+	}
+
+	response, err := part.ToToolResponse("out")
+	if err != nil {
+		t.Fatalf("ToToolResponse: %v", err)
+	}
+	if !response.IsToolResponse() {
+		t.Error("ToToolResponse must produce a tool response part")
+	}
+
+	resolved := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+	resolved.Metadata = map[string]any{"resolvedInterrupt": true}
+	if _, err := resolved.ToToolRestart(nil); err == nil {
+		t.Error("a raw resolvedInterrupt part must not restart")
+	}
+}
+
+// TestInterrupted_LiftsRawInterruptMetadata is the same leniency on the claim:
+// a part hand-assembled with the JS "interrupt" metadata key is claimed on a
+// copy, so the parts built from it carry typed state and the source part is
+// untouched.
+func TestInterrupted_LiftsRawInterruptMetadata(t *testing.T) {
+	type approval struct {
+		Approved bool `json:"approved"`
+	}
+	transfer := NewResumableTool("transfer", "d",
+		func(ctx context.Context, _ struct{}, _ *approval) (string, error) { return "", nil })
+
+	part := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+	part.Metadata = map[string]any{"interrupt": true}
+
+	call, ok := transfer.Interrupted(part)
+	if !ok {
+		t.Fatal("Interrupted must lift raw interrupt metadata and claim the part")
+	}
+	restart := call.Restart(approval{Approved: true})
+	if !restart.IsRestart() || restart.Metadata != nil {
+		t.Errorf("restart = %+v (metadata %v), want typed restart state and no leftover metadata", restart, restart.Metadata)
+	}
+	if resp := call.Respond("declined"); !resp.IsToolResponse() {
+		t.Errorf("Respond = %+v, want a tool response part", resp)
+	}
+	if part.Interrupt != nil || part.Metadata["interrupt"] != true {
+		t.Error("the claim must not mutate the source part")
+	}
+}
+
+// TestInterruptedCall_Verbs pins the parts each verb of a claimed call builds,
+// on a ToolAction, whose resume type is a map.
+func TestInterruptedCall_Verbs(t *testing.T) {
+	type in struct {
+		Value int `json:"value"`
+	}
+	tl := NewTool("restarter", "d", func(ctx *ToolContext, input in) (int, error) { return input.Value, nil })
+	part := NewToolRequestPart(&ToolRequest{Name: "restarter", Ref: "r1", Input: map[string]any{"value": 10}})
+	part.Interrupt = &ToolInterrupt{}
+	call, ok := tl.Interrupted(part)
+	if !ok {
+		t.Fatal("Interrupted did not claim the tool's own interrupt")
+	}
+	if call.Input.Value != 10 {
+		t.Errorf("call.Input = %+v, want the input decoded to the tool's In type", call.Input)
+	}
+
+	t.Run("nil map is a bare restart", func(t *testing.T) {
+		restart := call.Restart(nil)
+		if !restart.IsRestart() || restart.Restart.Resume != nil {
+			t.Errorf("Restart = %+v, want a bare restart", restart.Restart)
+		}
+		if wireMetadataOf(t, restart)["resumed"] != true {
+			t.Error("a bare restart must be marked resumed on the wire")
+		}
+		if restart.ToolRequest.Name != "restarter" || restart.ToolRequest.Ref != "r1" {
+			t.Errorf("identity = %q/%q, want restarter/r1", restart.ToolRequest.Name, restart.ToolRequest.Ref)
+		}
+	})
+
+	t.Run("map resume rides on the part", func(t *testing.T) {
+		restart := call.Restart(map[string]any{"approved": true})
+		resumed, _ := restart.Restart.Resume.(map[string]any)
+		if resumed["approved"] != true {
+			t.Errorf("Resume = %v, want the map", restart.Restart.Resume)
+		}
+	})
+
+	t.Run("RestartWithInput preserves the original", func(t *testing.T) {
+		restart := call.RestartWithInput(in{Value: 20}, nil)
+		if got, _ := restart.ToolRequest.Input.(in); got.Value != 20 {
+			t.Errorf("input = %+v, want the new input {20}", restart.ToolRequest.Input)
+		}
+		orig, _ := restart.Restart.OriginalInput.(map[string]any)
+		if orig["value"] != 10 {
+			t.Errorf("OriginalInput = %v, want the original {10}", restart.Restart.OriginalInput)
+		}
+		if wireMetadataOf(t, restart)["replacedInput"] == nil {
+			t.Error("replacedInput not set on the wire")
+		}
+	})
+
+	t.Run("Respond marks the interrupt response", func(t *testing.T) {
+		resp := call.Respond(7)
+		if !resp.IsToolResponse() || resp.ToolResponse.Output != 7 {
+			t.Errorf("Respond = %+v, want a tool response carrying 7", resp)
+		}
+		if resp.ToolResponse.Name != "restarter" || resp.ToolResponse.Ref != "r1" {
+			t.Errorf("identity = %q/%q, want restarter/r1", resp.ToolResponse.Name, resp.ToolResponse.Ref)
+		}
+		if resp.Metadata["interruptResponse"] != true {
+			t.Errorf("interruptResponse = %v, want true", resp.Metadata["interruptResponse"])
+		}
+	})
+}
+
+// TestPartClone_IsolatesInterruptPayloads pins that Clone copies the top-level
+// container of every payload the interrupt and restart state carry, the way it
+// does for Data, so mutating the clone's payload maps leaves the original
+// untouched.
+func TestPartClone_IsolatesInterruptPayloads(t *testing.T) {
+	part := NewToolRequestPart(&ToolRequest{Name: "transfer", Input: map[string]any{"amount": 200}})
+	part.Interrupt = &ToolInterrupt{Data: map[string]any{"reason": "confirm"}}
+	part.Restart = &ToolRestart{
+		Resume:        map[string]any{"approved": true},
+		OriginalInput: []any{"original"},
+	}
+
+	cp := part.Clone()
+	cp.Interrupt.Data.(map[string]any)["reason"] = "changed"
+	cp.Restart.Resume.(map[string]any)["approved"] = false
+	cp.Restart.OriginalInput.([]any)[0] = "changed"
+
+	if got := part.Interrupt.Data.(map[string]any)["reason"]; got != "confirm" {
+		t.Errorf("original Interrupt.Data[reason] = %v, want confirm", got)
+	}
+	if got := part.Restart.Resume.(map[string]any)["approved"]; got != true {
+		t.Errorf("original Restart.Resume[approved] = %v, want true", got)
+	}
+	if got := part.Restart.OriginalInput.([]any)[0]; got != "original" {
+		t.Errorf("original Restart.OriginalInput[0] = %v, want original", got)
+	}
+
+	// A struct payload is shared as is: there is no container to copy.
+	type reason struct{ Why string }
+	part.Interrupt.Data = reason{Why: "struct"}
+	if got := part.Clone().Interrupt.Data; got != (reason{Why: "struct"}) {
+		t.Errorf("cloned struct payload = %v, want the value copied through", got)
+	}
+}
+
+// TestDeprecatedRestart_CarriesResumeAsGiven pins that the deprecated Restart
+// builds a part from whatever resume data it is handed, as it did before the
+// typed verbs existed: a non-object value rides to the loop, which reads it as
+// a bare restart, rather than turning the whole call into a nil part.
+func TestDeprecatedRestart_CarriesResumeAsGiven(t *testing.T) {
+	tl := NewTool("t", "d", func(ctx *ToolContext, _ struct{}) (string, error) { return "", nil })
+	part := NewToolRequestPart(&ToolRequest{Name: "t"})
+	part.Interrupt = &ToolInterrupt{}
+
+	restart := tl.Restart(part, &RestartOptions{ResumedMetadata: "approved"})
+	if restart == nil {
+		t.Fatal("Restart returned nil for a scalar resume value")
+	}
+	if !restart.IsRestart() || restart.Restart.Resume != "approved" {
+		t.Errorf("restart state = %+v, want the resume value as given", restart.Restart)
+	}
+}
+
+// TestInterruptVerbs_NilToolRequest pins that a tool request part with no
+// request, which the kind check alone lets through, is declined by every
+// verb that would otherwise dereference it: the typed claim reports false,
+// the part verbs return an error, and the deprecated verbs return nil or an
+// error as their contracts say.
+func TestInterruptVerbs_NilToolRequest(t *testing.T) {
+	tl := NewTool("t", "d", func(ctx *ToolContext, _ struct{}) (string, error) { return "", nil })
+
+	rawKeyed := NewToolRequestPart(nil)
+	rawKeyed.Metadata = map[string]any{"interrupt": true}
+	typed := &Part{Kind: PartToolRequest, Interrupt: &ToolInterrupt{}}
+
+	for name, part := range map[string]*Part{"raw key": rawKeyed, "typed field": typed} {
+		t.Run(name, func(t *testing.T) {
+			if part.IsInterrupt() || part.IsRestart() {
+				t.Error("a tool request part with no ToolRequest must not read as an interrupt or a restart")
+			}
+			if err := part.Validate(); err == nil {
+				t.Error("Validate() = nil, want the missing request reported")
+			}
+			if _, ok := tl.Interrupted(part); ok {
+				t.Error("Interrupted claimed a part with no request")
+			}
+			if _, err := part.ToToolRestart(nil); err == nil {
+				t.Error("ToToolRestart accepted a part with no request")
+			}
+			if _, err := part.ToToolRestartWithInput(struct{}{}, nil); err == nil {
+				t.Error("ToToolRestartWithInput accepted a part with no request")
+			}
+			if _, err := part.ToToolResponse("out"); err == nil {
+				t.Error("ToToolResponse accepted a part with no request")
+			}
+			if tl.Respond(part, "out", nil) != nil {
+				t.Error("Respond built a part from a request part with no request")
+			}
+			if tl.Restart(part, nil) != nil {
+				t.Error("Restart built a part from a request part with no request")
+			}
+			if _, err := tl.RespondWith(part, "out"); err == nil {
+				t.Error("RespondWith accepted a part with no request")
+			}
+			if _, err := tl.RestartWith(part); err == nil {
+				t.Error("RestartWith accepted a part with no request")
+			}
+		})
+	}
+}
+
+// TestRestartWithInput_ReplacementIsExplicit pins that the verbs decide
+// whether the input is replaced, not the value: the typed verb replaces with
+// whatever it is given, a nil pointer included; the untyped part verb refuses
+// a nil input outright; and the deprecated option-driven verbs treat a nil of
+// any type as "not set", since replacing is optional there.
+func TestRestartWithInput_ReplacementIsExplicit(t *testing.T) {
+	type in struct {
+		Amount int `json:"amount"`
+	}
+	type confirmation struct {
+		Approved bool `json:"approved"`
+	}
+	original := map[string]any{"amount": float64(200)}
+	interrupted := func() *Part {
+		p := NewToolRequestPart(&ToolRequest{Name: "transfer", Input: original})
+		p.Interrupt = &ToolInterrupt{}
+		return p
+	}
+
+	t.Run("typed verb replaces with a nil pointer", func(t *testing.T) {
+		tl := NewResumableTool("transfer", "d",
+			func(ctx context.Context, _ *in, _ *confirmation) (string, error) { return "", nil })
+		call, ok := tl.Interrupted(interrupted())
+		if !ok {
+			t.Fatal("Interrupted did not claim the part")
+		}
+		restart := call.RestartWithInput(nil, confirmation{Approved: true})
+		if got, ok := restart.ToolRequest.Input.(*in); !ok || got != nil {
+			t.Errorf("input = %#v, want the nil pointer the caller gave", restart.ToolRequest.Input)
+		}
+		if diff := cmp.Diff(original, restart.Restart.OriginalInput); diff != "" {
+			t.Errorf("OriginalInput mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("part verb refuses a nil input", func(t *testing.T) {
+		for name, input := range map[string]any{"untyped nil": nil, "typed nil": (*in)(nil)} {
+			if _, err := interrupted().ToToolRestartWithInput(input, nil); err == nil {
+				t.Errorf("ToToolRestartWithInput(%s) = nil error, want a rejection", name)
+			}
+		}
+	})
+
+	t.Run("deprecated verbs treat a nil replacement as not set", func(t *testing.T) {
+		tl := NewTool("transfer", "d", func(ctx *ToolContext, _ *in) (string, error) { return "", nil })
+		restart := tl.Restart(interrupted(), &RestartOptions{ReplaceInput: (*in)(nil)})
+		if diff := cmp.Diff(original, restart.ToolRequest.Input); diff != "" || restart.Restart.OriginalInput != nil {
+			t.Errorf("Restart replaced the input with a typed nil: input diff %s, original %v", diff, restart.Restart.OriginalInput)
+		}
+		restart, err := tl.RestartWith(interrupted(), WithNewInput[*in](nil))
+		if err != nil {
+			t.Fatalf("RestartWith: %v", err)
+		}
+		if diff := cmp.Diff(original, restart.ToolRequest.Input); diff != "" || restart.Restart.OriginalInput != nil {
+			t.Errorf("RestartWith replaced the input with a typed nil: input diff %s, original %v", diff, restart.Restart.OriginalInput)
+		}
+	})
+}
+
+// TestBuildRestartPart_DropsPendingBookkeeping pins that a restart part does
+// not carry the loop's record of a completed sibling (pendingOutput and its
+// companions) off the interrupted part it is built from: that record
+// describes the request in history, and a restart must not replay it.
+func TestBuildRestartPart_DropsPendingBookkeeping(t *testing.T) {
+	part := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+	part.Interrupt = &ToolInterrupt{}
+	part.Metadata = map[string]any{"pendingOutput": "stale", "pendingMetadata": map[string]any{}, "pendingContent": []any{}, "keep": "me"}
+
+	restart, err := part.ToToolRestart(nil)
+	if err != nil {
+		t.Fatalf("ToToolRestart: %v", err)
+	}
+	if diff := cmp.Diff(map[string]any{"keep": "me"}, restart.Metadata); diff != "" {
+		t.Errorf("restart metadata mismatch (-want +got):\n%s", diff)
+	}
 }

@@ -14,24 +14,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package exp
+package base
 
-import (
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/api"
-)
+import "testing"
 
-// Test-local define helpers: New* + Register in one call, mirroring the
-// removed registry-taking ai.Define* helpers so tests stay concise.
-
-func defineTestModel(r api.Registry, name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
-	m := ai.NewModel(name, opts, fn)
-	m.Register(r)
-	return m
-}
-
-func defineTestTool[In, Out any](r api.Registry, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
-	t := ai.NewTool(name, description, fn, opts...)
-	t.Register(r)
-	return t
+func TestToolInterruptError_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		want string
+	}{
+		{"object data", map[string]any{"key": "value"}, "tool execution interrupted: \n\n{\n  \"key\": \"value\"\n}"},
+		{"bare interrupt", nil, "tool execution interrupted"},
+		{"unmarshalable data", func() {}, "tool execution interrupted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &ToolInterruptError{Data: tt.data}
+			if got := err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
