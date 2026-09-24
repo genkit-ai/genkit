@@ -44,7 +44,7 @@ async def plan_trip(destination: str) -> str:
 
 - **Type-Safe by Design:** Leverage Python type annotations and Pydantic models for structured inputs, outputs, and tool definitions.
 - **Multi-Model Provider API:** Switch effortlessly between Google Gemini, Anthropic Claude, OpenAI, Ollama, Vertex AI, and Amazon Bedrock with a unified API.
-- **Pluggable Observability:** OpenTelemetry when you want it. `genkit start -- uv run app.py` sets the collector before `Genkit()`. If you start the app yourself after `genkit start`, the collector URL arrives on the reflection handshake.
+- **Pluggable Observability:** Under `genkit start`, `Genkit()` fills the Developer UI Traces tab over HTTP. If you start the app yourself after `genkit start`, the collector URL arrives on the reflection handshake.
 - **Deploy Anywhere:** Expose flows as standard ASGI/WSGI applications compatible with FastAPI, Flask, Django, Cloud Run, or any serverless platform.
 
 ---

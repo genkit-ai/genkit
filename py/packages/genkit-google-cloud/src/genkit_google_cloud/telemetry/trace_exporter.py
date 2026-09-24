@@ -225,7 +225,6 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
                 features_telemetry.tick(span, self._log_input_and_output, self._project_id)
 
                 # Set root state explicitly
-                # (matches JS: span.attributes['genkit:rootState'] = span.attributes['genkit:state'])
                 state = attrs.get('genkit:state')
                 if state:
                     new_attrs = dict(attrs)

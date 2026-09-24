@@ -41,7 +41,6 @@ from ._instrumentation import (
     SpanMetadata,
     SpanNext,
     configure_instrumentation,
-    instrumentations,
     is_instrumented_by,
     parent_path_context,
     start_attributes,
@@ -430,7 +429,7 @@ def genkit_dev_instrumentation() -> Instrumentation | None:
     return direct_http_for_collector(url=url)
 
 
-def enable_dev_instrumentation_for_server(*, url: str) -> None:
+def connect_developer_ui_collector(*, url: str) -> None:
     """Turn on the Developer UI poster from a handshake / notify URL.
 
     No-op when the URL is empty or the poster is already registered, so
@@ -443,19 +442,6 @@ def enable_dev_instrumentation_for_server(*, url: str) -> None:
     if is_instrumented_by(GenkitBuiltinInstrumentation):
         return
     configure_instrumentation(direct_http_for_collector(url=url))
-
-
-def connect_developer_ui_collector(*, url: str) -> None:
-    """Handshake / notify entry. Same wiring as ``enable_dev_instrumentation_for_server``."""
-    enable_dev_instrumentation_for_server(url=url)
-
-
-def flush_direct_http_instrumentations() -> None:
-    """Wait for in-flight collector POSTs. Tests."""
-    for inst in instrumentations:
-        flush = getattr(inst, 'flush', None)
-        if callable(flush):
-            flush()
 
 
 def maybe_inject_dev_instrumentation() -> None:

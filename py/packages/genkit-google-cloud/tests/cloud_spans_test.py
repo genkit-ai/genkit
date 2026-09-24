@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""enable_google_cloud_telemetry() under genkit start still adds the Traces tab poster."""
+"""enable_google_cloud_telemetry() hangs Cloud; Genkit() under genkit start fills the Traces tab."""
 
 from collections.abc import Generator
 from contextlib import contextmanager

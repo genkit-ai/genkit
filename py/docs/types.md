@@ -156,10 +156,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.plugin_api.GenkitError
 
-::: genkit.plugin_api.AdjustingTraceExporter
-
-::: genkit.plugin_api.RedactedSpan
-
 ::: genkit.plugin_api.ModelConfig
 
 ::: genkit.plugin_api.ModelRef

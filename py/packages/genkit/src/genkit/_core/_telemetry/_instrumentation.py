@@ -183,7 +183,7 @@ def configure_instrumentation(instrumentation: Instrumentation) -> None:
     hangs Cloud's exporter; it does not mint spans.
     """
     # The class itself has run_in_new_span, so a forgotten () would pass a
-    # Protocol check and then die inside OTel on the first span.
+    # Protocol check and then fail on the first span.
     if isinstance(instrumentation, type) or not isinstance(instrumentation, Instrumentation):
         raise TypeError(
             'configure_instrumentation expected an Instrumentation instance, got ' + describe_value(instrumentation)
