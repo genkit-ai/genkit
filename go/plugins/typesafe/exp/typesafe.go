@@ -327,7 +327,10 @@ var answerFields = map[string][]string{
 // question ID whose values are the answers projected onto the fields the
 // output type declares. A score's legend is rebuilt from the rubric's
 // strings: for a level sent with guidance the API echoes the guidance,
-// which the legend's strings cannot hold.
+// which the legend's strings cannot hold. A score is clamped to the rubric,
+// since float rounding in the expected level can land a hair past the top
+// level, which the schema's bounds would reject along with every other
+// answer in the call.
 func answersText(resp *response, questions map[string]question, enum bool) (string, error) {
 	answers := make(map[string]map[string]any, len(questions))
 	for _, id := range questionIDs(questions) {
@@ -344,6 +347,9 @@ func answersText(resp *response, questions map[string]question, enum bool) (stri
 		}
 		if q := questions[id]; q.labels != nil {
 			projected["legend"] = q.legend()
+			if score, ok := projected["score"].(float64); ok {
+				projected["score"] = min(max(score, 0), float64(len(q.labels)-1))
+			}
 		}
 		answers[id] = projected
 	}

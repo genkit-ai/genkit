@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -508,5 +509,31 @@ func TestLegendKeepsTheRubricStrings(t *testing.T) {
 	}
 	if out.Frustration.Legend["2"] != "Very angry" || out.Frustration.Label() != "Very angry" {
 		t.Errorf("legend = %v, label = %q, want the rubric strings", out.Frustration.Legend, out.Frustration.Label())
+	}
+}
+
+func TestScoreClampedToTheRubric(t *testing.T) {
+	schema := triageSchema(t)
+	questions, err := compileQuestions(schema, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, score := range []float64{2.0000000000000004, -1e-17} {
+		var resp response
+		answers := strings.Replace(triageAnswers, `"score": 1.3`, `"score": `+strconv.FormatFloat(score, 'g', -1, 64), 1)
+		if err := json.Unmarshal([]byte(`{"answers":`+answers+`}`), &resp); err != nil {
+			t.Fatal(err)
+		}
+		text, err := answersText(&resp, questions, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		if err := base.ValidateValue(parsed, schema); err != nil {
+			t.Errorf("score %v: answers do not validate: %v", score, err)
+		}
 	}
 }
