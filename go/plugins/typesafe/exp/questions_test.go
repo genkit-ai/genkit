@@ -58,10 +58,10 @@ var triageQuestions = map[string]question{
 	"department": {
 		Type:         kindChoice,
 		Instructions: "Which team should handle this?",
-		Criteria: map[string]any{
-			"billing":   "Payments, invoicing, refunds",
-			"technical": "Bugs, outages, integrations",
-			"other":     "None of the above",
+		Criteria: criteria{
+			{"billing", "Payments, invoicing, refunds"},
+			{"other", "None of the above"},
+			{"technical", "Bugs, outages, integrations"},
 		},
 	},
 	"is_urgent": {
@@ -168,7 +168,7 @@ func TestPreambleLeadsEveryQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, q := range got {
-		if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions; q.Instructions != want {
+		if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions.(string); q.Instructions != want {
 			t.Errorf("%s instructions = %q, want %q", id, q.Instructions, want)
 		}
 	}
@@ -181,7 +181,7 @@ func TestPreambleLeadsEveryQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, q := range got {
-		if want := "The state is a support ticket.\n\nTriage a ticket for the support queue.\n\n" + triageQuestions[id].Instructions; q.Instructions != want {
+		if want := "The state is a support ticket.\n\nTriage a ticket for the support queue.\n\n" + triageQuestions[id].Instructions.(string); q.Instructions != want {
 			t.Errorf("%s instructions = %q, want %q", id, q.Instructions, want)
 		}
 	}
@@ -326,14 +326,15 @@ func TestAnswersTextRejectsMissingAnswer(t *testing.T) {
 }
 
 func TestEnumQuestion(t *testing.T) {
-	got, err := enumQuestion(map[string]any{"enum": []string{"billing", "technical"}, "description": "Which team?"}, "")
+	// The options keep the order the values were given in.
+	got, err := enumQuestion(map[string]any{"enum": []string{"technical", "billing"}, "description": "Which team?"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]question{enumQuestionID: {
 		Type:         kindChoice,
 		Instructions: "Which team?",
-		Criteria:     map[string]string{"billing": "billing", "technical": "technical"},
+		Criteria:     criteria{{"technical", "technical"}, {"billing", "billing"}},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("enum question = %s, want %s", base.JSONString(got), base.JSONString(want))
@@ -548,5 +549,115 @@ func TestScoreClampedToTheRubric(t *testing.T) {
 		if err := base.ValidateValue(parsed, schema); err != nil {
 			t.Errorf("score %v: answers do not validate: %v", score, err)
 		}
+	}
+}
+
+func TestRuntimeQuestions(t *testing.T) {
+	schema := Schema(map[string]Question{
+		"tool": ChoiceQuestion{
+			Instructions: "Which tool serves the request?",
+			Options: []ChoiceOption{
+				{Name: "search", Criteria: "Look something up on the web"},
+				{Name: "calendar", Criteria: "Read or change the user's calendar", Guidance: map[string]any{"not_for": "Reminders"}},
+				{Name: "none"},
+			},
+		},
+		"effort": ScoreQuestion{
+			Instructions: map[string]any{"field": map[string]any{"name": "request", "description": "What the user asked for"}},
+			Levels:       []string{"Trivial", "Some work", "A project"},
+			Guidance:     map[int]any{2: map[string]any{"signals": []string{"several steps"}}},
+		},
+		"personal": NoulQuestion{
+			Instructions: "Does the request involve the user's own data?",
+			Yes:          "Names the user's files, mail, or calendar",
+			No:           "Asks about the world at large",
+		},
+	})
+
+	questions, err := compileQuestions(schema, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		// The options keep the order given, not the sorted one.
+		"tool": `{"type":"choice","instructions":"Which tool serves the request?",` +
+			`"criteria":{"search":"Look something up on the web","calendar":{"not_for":"Reminders","what":"Read or change the user's calendar"},"none":"none"}}`,
+		"effort": `{"type":"score","instructions":{"field":{"description":"What the user asked for","name":"request"}},` +
+			`"criteria":["Trivial","Some work",{"signals":["several steps"],"what":"A project"}]}`,
+		"personal": `{"type":"noul","instructions":"Does the request involve the user's own data?",` +
+			`"criteria":{"false":"Asks about the world at large","true":"Names the user's files, mail, or calendar"}}`,
+	}
+	for id, wire := range want {
+		if got := base.JSONString(questions[id]); got != wire {
+			t.Errorf("%s on the wire:\n got %s\nwant %s", id, got, wire)
+		}
+	}
+
+	// A preamble goes beside structured instructions, and in front of text.
+	questions, err = compileQuestions(schema, "The state is a user request.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := base.JSONString(questions["effort"].Instructions); got != `["The state is a user request.",{"field":{"description":"What the user asked for","name":"request"}}]` {
+		t.Errorf("structured instructions with a preamble = %s", got)
+	}
+	if got := questions["tool"].Instructions; got != "The state is a user request.\n\nWhich tool serves the request?" {
+		t.Errorf("text instructions with a preamble = %q", got)
+	}
+
+	// The answers fill a map of Answer.
+	var resp response
+	if err := json.Unmarshal([]byte(`{"answers":{`+
+		`"tool":{"type":"choice","choice":"calendar","probabilities":{"search":0.1,"calendar":0.85,"none":0.05},"confidence":0.7},`+
+		`"effort":{"type":"score","score":0.4,"probabilities":{"0":0.6,"1":0.4,"2":0},"confidence":0.3,"legend":{"0":"Trivial","1":"Some work","2":{"what":"A project"}}},`+
+		`"personal":{"type":"noul","noul":0.91}}}`), &resp); err != nil {
+		t.Fatal(err)
+	}
+	text, err := answersText(&resp, questions, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.ValidateValue(parsed, schema); err != nil {
+		t.Fatalf("answers do not validate against the runtime schema: %v\n%s", err, text)
+	}
+	var answers map[string]Answer
+	if err := json.Unmarshal([]byte(text), &answers); err != nil {
+		t.Fatal(err)
+	}
+	if a := answers["tool"]; a.Choice != "calendar" || a.Probabilities["calendar"] != 0.85 || a.Confidence != 0.7 {
+		t.Errorf("tool = %+v", a)
+	}
+	if a := answers["effort"]; a.Score != 0.4 || a.Legend["2"] != "A project" {
+		t.Errorf("effort = %+v, want the level strings in the legend", a)
+	}
+	if a := answers["personal"]; a.Probability != 0.91 {
+		t.Errorf("personal = %+v", a)
+	}
+}
+
+func TestRuntimeQuestionsRejects(t *testing.T) {
+	tests := []struct {
+		name      string
+		questions map[string]Question
+		want      string
+	}{
+		{"nil question", map[string]Question{"q": nil}, "not a question"},
+		{"no instructions", map[string]Question{"q": NoulQuestion{}}, "no instructions"},
+		{"no options", map[string]Question{"q": ChoiceQuestion{Instructions: "d"}}, "no options"},
+		{"option twice", map[string]Question{"q": ChoiceQuestion{Instructions: "d", Options: []ChoiceOption{{Name: "a"}, {Name: "a"}}}}, "twice"},
+		{"one level", map[string]Question{"q": ScoreQuestion{Instructions: "d", Levels: []string{"only"}}}, "two levels"},
+		{"half criteria", map[string]Question{"q": NoulQuestion{Instructions: "d", Yes: "y"}}, "only one side"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := compileQuestions(Schema(tt.questions), "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want one containing %q", err, tt.want)
+			}
+		})
 	}
 }

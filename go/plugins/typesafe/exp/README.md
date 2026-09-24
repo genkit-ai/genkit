@@ -136,6 +136,49 @@ team := Dept(resp.Text())
 What the enum format does not give is criteria per option or a probability per
 option; a `Choice` field in a decision type gives both.
 
+## Questions built at run time
+
+A question whose options come from data, such as the tools on hand, a
+tenant's categories, or the nodes of a taxonomy, has no type to declare it
+with. `typesafex.Schema` builds the output schema from values instead, and the
+answers come back as a map of `typesafex.Answer`:
+
+```go
+options := make([]typesafex.ChoiceOption, 0, len(tools))
+for _, tool := range tools {
+	options = append(options, typesafex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
+}
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModelName("typesafe/jev-1.13.0"),
+	ai.WithOutputSchema(typesafex.Schema(map[string]typesafex.Question{
+		"tool": typesafex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+		"personal": typesafex.NoulQuestion{
+			Instructions: "Does the request involve the user's own data?",
+			Yes:          "Names the user's files, mail, or calendar",
+			No:           "Asks about the world at large",
+		},
+	})),
+	ai.WithPrompt(request))
+if err != nil {
+	return err
+}
+var answers map[string]typesafex.Answer
+if err := resp.Output(&answers); err != nil {
+	return err
+}
+if a := answers["tool"]; a.Confidence >= 0.8 {
+	return run(a.Choice)
+}
+```
+
+`ChoiceQuestion`, `ScoreQuestion`, and `NoulQuestion` take what the question
+types take from their type parameters: options with criteria and guidance,
+levels with guidance by index, and yes and no criteria. A choice's options go
+out in the order given. Instructions can be a string or any JSON value, such
+as an object that describes the field of the state a question is about; a
+system message goes beside structured instructions as the first element of an
+array.
+
 ## State
 
 The state is built from the user and model messages, with no instruction text
@@ -216,10 +259,11 @@ builds one.
 
 - No per-item questions. Score a list of passages with one call per passage.
 - No nested decision types: a question is a top-level field.
-- Instructions are strings, since a field's description is a tag. Data a
-  question compares against goes in the state, under a name the question
-  can refer to.
-- Text only, English mostly, 32k tokens of state per request.
+- The instructions of a field in a decision type are a string, since a
+  field's description is a tag. Structured instructions need a runtime
+  question.
+- Text only, English mostly. A request takes up to 64k tokens of state and
+  questions together, and up to 32k of state and its longest question.
 - No streaming; the answer arrives whole.
 
 ## Tests

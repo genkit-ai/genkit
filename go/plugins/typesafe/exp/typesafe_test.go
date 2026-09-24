@@ -388,7 +388,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 		}
 		for id, raw := range body["questions"].(map[string]any) {
 			q := raw.(map[string]any)
-			if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions; q["instructions"] != want {
+			if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions.(string); q["instructions"] != want {
 				t.Errorf("%s instructions = %q, want %q", id, q["instructions"], want)
 			}
 		}
@@ -411,6 +411,47 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 			t.Errorf("error = %v", err)
 		}
 	})
+}
+
+func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
+	// Options known only at run time: the schema is built from data, and
+	// the answers come back as a map of Answer.
+	fake := &fakeJev{}
+	g := newGenkit(t, fake, nil)
+	tools := []struct{ name, description string }{
+		{"search", "Look something up on the web"},
+		{"calendar", "Read or change the user's calendar"},
+	}
+	options := make([]ChoiceOption, 0, len(tools))
+	for _, tool := range tools {
+		options = append(options, ChoiceOption{Name: tool.name, Criteria: tool.description})
+	}
+	resp, err := genkit.Generate(t.Context(), g,
+		ai.WithModelName("typesafe/jev-latest"),
+		ai.WithOutputSchema(Schema(map[string]Question{
+			"tool":     ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+			"personal": NoulQuestion{Instructions: "Does the request involve the user's own data?"},
+		})),
+		ai.WithPrompt("What is on my calendar tomorrow?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var answers map[string]Answer
+	if err := resp.Output(&answers); err != nil {
+		t.Fatal(err)
+	}
+	_, body := fake.last(t)
+	tool, _ := body["questions"].(map[string]any)["tool"].(map[string]any)
+	if got := base.JSONString(tool["criteria"]); got != `{"calendar":"Read or change the user's calendar","search":"Look something up on the web"}` {
+		t.Errorf("tool criteria on the wire = %s", got)
+	}
+	// The fake picks the first option by name.
+	if a := answers["tool"]; a.Choice != "calendar" || a.Confidence != 0.6 {
+		t.Errorf("tool = %+v", a)
+	}
+	if a := answers["personal"]; a.Probability != 0.93 {
+		t.Errorf("personal = %+v", a)
+	}
 }
 
 func TestOpenRouterThroughGenerate(t *testing.T) {

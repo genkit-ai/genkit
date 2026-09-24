@@ -50,7 +50,9 @@
 //
 // Criteria and levels are strings on their types. [GuidedOption],
 // [GuidedRubric], and [GuidedYesNo] add the structured form the wire
-// format also takes, such as examples per option.
+// format also takes, such as examples per option. Questions whose options
+// or instructions come from data are built at run time with [Schema] and
+// answered as a map of [Answer].
 //
 // The state is built from the user and model messages: one message is sent
 // as its value, a string for a text part or the JSON of a data part;
@@ -249,7 +251,7 @@ type model struct {
 // generate answers the questions the request's output schema encodes.
 func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	if req.Output == nil || (req.Output.Schema == nil && req.Output.Format != ai.OutputFormatEnum) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: the model answers questions encoded in an output type; call GenerateData with a decision type or pass ai.WithOutputType")
+		return nil, status.Errorf(status.ErrInvalidArgument, "typesafe: the model answers questions encoded in an output type; call GenerateData with a decision type, or pass ai.WithOutputSchema(typesafex.Schema(questions)) for questions built at run time")
 	}
 	enum := req.Output.Format == ai.OutputFormatEnum
 	preamble, err := systemPreamble(req.Messages)

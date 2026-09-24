@@ -17,6 +17,7 @@
 package exp
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"maps"
@@ -25,6 +26,7 @@ import (
 	"strconv"
 
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/invopop/jsonschema"
 )
 
@@ -46,6 +48,10 @@ const (
 	// Guided companions, keyed as on the wire: by option, by level index,
 	// or by "true" and "false".
 	guidanceKeyword = "x-guidance"
+	// instructionsKeyword carries a runtime question's instructions when
+	// they are structured rather than text, which a description cannot
+	// hold.
+	instructionsKeyword = "x-instructions"
 )
 
 // The question types, as the API names them.
@@ -58,8 +64,9 @@ const (
 // Option is the key type of a [Choice]: a string type that lists its own
 // options and what each one means. The criteria are what the model
 // chooses among, so they belong to the type rather than to any one call.
-// A description is a string; the wire format also takes an object with
-// named parts, such as examples, which this type does not express.
+// A description is a string; [GuidedOption] adds the structured form the
+// wire format also takes. Options known only at run time are asked with a
+// [ChoiceQuestion] instead.
 //
 //	type Dept string
 //
@@ -97,21 +104,38 @@ type Choice[T Option[T]] struct {
 
 // JSONSchema encodes the question: the options and their criteria as a
 // oneOf of constants, marked as a choice question for [compileQuestions].
+// The options go out sorted by name, since a map has no order of its own.
 func (Choice[T]) JSONSchema() *jsonschema.Schema {
 	var zero T
 	criteria := zero.Criteria()
-	options := make([]*jsonschema.Schema, 0, len(criteria))
+	options := make([]ChoiceOption, 0, len(criteria))
 	for _, key := range slices.Sorted(maps.Keys(criteria)) {
-		options = append(options, &jsonschema.Schema{Const: string(key), Description: criteria[key]})
+		options = append(options, ChoiceOption{Name: string(key), Criteria: criteria[key]})
 	}
-	props := jsonschema.NewProperties()
-	props.Set("choice", &jsonschema.Schema{Type: "string", OneOf: options})
-	props.Set("probabilities", probabilitiesSchema())
-	props.Set("confidence", &jsonschema.Schema{Type: "number"})
-	s := answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
+	s := choiceSchema(options)
 	if g, ok := any(zero).(GuidedOption[T]); ok {
 		setGuidance(s, g.Guidance(), func(key T) string { return string(key) })
 	}
+	return s
+}
+
+// choiceSchema encodes a choice question's options, in order, with the
+// guidance any of them carries.
+func choiceSchema(options []ChoiceOption) *jsonschema.Schema {
+	oneOf := make([]*jsonschema.Schema, 0, len(options))
+	guidance := make(map[string]any)
+	for _, option := range options {
+		oneOf = append(oneOf, &jsonschema.Schema{Const: option.Name, Description: option.Criteria})
+		if option.Guidance != nil {
+			guidance[option.Name] = option.Guidance
+		}
+	}
+	props := jsonschema.NewProperties()
+	props.Set("choice", &jsonschema.Schema{Type: "string", OneOf: oneOf})
+	props.Set("probabilities", probabilitiesSchema())
+	props.Set("confidence", &jsonschema.Schema{Type: "number"})
+	s := answerSchema(kindChoice, &jsonschema.Schema{Properties: props}, "choice")
+	setGuidance(s, guidance, func(name string) string { return name })
 	return s
 }
 
@@ -207,18 +231,26 @@ type Noul = NoulOf[NoCriteria]
 // [compileQuestions], with C's criteria on the x-true and x-false keywords
 // when it has any.
 func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
+	var zero C
+	yes, no := zero.Criteria()
+	var yesGuidance, noGuidance any
+	if g, ok := any(zero).(GuidedYesNo); ok {
+		yesGuidance, noGuidance = g.Guidance()
+	}
+	return noulSchema(yes, no, yesGuidance, noGuidance)
+}
+
+// noulSchema encodes a noul question with its optional criteria and
+// guidance for each side.
+func noulSchema(yes, no string, yesGuidance, noGuidance any) *jsonschema.Schema {
 	props := jsonschema.NewProperties()
 	props.Set("noul", &jsonschema.Schema{Type: "number", Minimum: "0", Maximum: "1"})
 	s := answerSchema(kindNoul, &jsonschema.Schema{Properties: props}, "noul")
-	var zero C
-	if yes, no := zero.Criteria(); yes != "" || no != "" {
+	if yes != "" || no != "" {
 		s.Extras[trueKeyword] = yes
 		s.Extras[falseKeyword] = no
 	}
-	if g, ok := any(zero).(GuidedYesNo); ok {
-		yes, no := g.Guidance()
-		setGuidance(s, map[bool]any{true: yes, false: no}, strconv.FormatBool)
-	}
+	setGuidance(s, map[bool]any{true: yesGuidance, false: noGuidance}, strconv.FormatBool)
 	return s
 }
 
@@ -239,7 +271,16 @@ type Score[L Rubric] struct {
 // x-levels keyword, since a fractional score cannot be a oneOf of levels.
 func (Score[L]) JSONSchema() *jsonschema.Schema {
 	var zero L
-	levels := zero.Levels()
+	var guidance map[int]any
+	if g, ok := any(zero).(GuidedRubric); ok {
+		guidance = g.Guidance()
+	}
+	return scoreSchema(zero.Levels(), guidance)
+}
+
+// scoreSchema encodes a score question's ordered levels and the guidance
+// keyed by level index.
+func scoreSchema(levels []string, guidance map[int]any) *jsonschema.Schema {
 	props := jsonschema.NewProperties()
 	props.Set("score", &jsonschema.Schema{
 		Type:    "number",
@@ -251,9 +292,7 @@ func (Score[L]) JSONSchema() *jsonschema.Schema {
 	props.Set("legend", &jsonschema.Schema{Type: "object", AdditionalProperties: &jsonschema.Schema{Type: "string"}})
 	s := answerSchema(kindScore, &jsonschema.Schema{Properties: props}, "score")
 	s.Extras[levelsKeyword] = levels
-	if g, ok := any(zero).(GuidedRubric); ok {
-		setGuidance(s, g.Guidance(), strconv.Itoa)
-	}
+	setGuidance(s, guidance, strconv.Itoa)
 	return s
 }
 
@@ -276,6 +315,136 @@ func (s Score[L]) Label() string {
 		return ""
 	}
 	return levels[s.Level()]
+}
+
+// Question is one question of a set built at run time, for questions whose
+// options, levels, or instructions come from data: the tools or products
+// on hand, the nodes of a taxonomy, a tenant's own categories.
+// [ChoiceQuestion], [ScoreQuestion], and [NoulQuestion] implement it, and
+// [Schema] turns a set of them into an output schema. A question known
+// when the code is written reads better as a field of an output type.
+type Question interface {
+	schema() *jsonschema.Schema
+}
+
+// ChoiceQuestion asks for one of its options, which go out in the order
+// given.
+type ChoiceQuestion struct {
+	// Instructions is the question: a string, or any JSON value, such as
+	// an object that names the field of the state the question is about.
+	Instructions any
+	Options      []ChoiceOption
+}
+
+// ChoiceOption is one option of a [ChoiceQuestion]: the name that is the
+// answer when it is chosen, what it means, and optionally the structured
+// form of that meaning, as [GuidedOption] gives it for a [Choice]. An
+// option with neither criteria nor guidance is described by its name.
+type ChoiceOption struct {
+	Name     string
+	Criteria string
+	Guidance any
+}
+
+// ScoreQuestion rates the state on its levels, lowest first, as a [Rubric]
+// gives them, with guidance keyed by level index as [GuidedRubric] gives
+// it.
+type ScoreQuestion struct {
+	// Instructions is the question: a string, or any JSON value.
+	Instructions any
+	Levels       []string
+	Guidance     map[int]any
+}
+
+// NoulQuestion asks whether a statement is true, with what yes and no mean
+// as [YesNo] and [GuidedYesNo] give them for a [NoulOf]: each side needs a
+// string or guidance, or neither does.
+type NoulQuestion struct {
+	// Instructions is the question: a string, or any JSON value.
+	Instructions            any
+	Yes, No                 string
+	YesGuidance, NoGuidance any
+}
+
+func (q ChoiceQuestion) schema() *jsonschema.Schema {
+	return withInstructions(choiceSchema(q.Options), q.Instructions)
+}
+
+func (q ScoreQuestion) schema() *jsonschema.Schema {
+	return withInstructions(scoreSchema(q.Levels, q.Guidance), q.Instructions)
+}
+
+func (q NoulQuestion) schema() *jsonschema.Schema {
+	return withInstructions(noulSchema(q.Yes, q.No, q.YesGuidance, q.NoGuidance), q.Instructions)
+}
+
+// withInstructions puts a runtime question's instructions on its schema:
+// text as the description, as a field's tag gives it, and any other value
+// on the x-instructions keyword.
+func withInstructions(s *jsonschema.Schema, instructions any) *jsonschema.Schema {
+	switch v := instructions.(type) {
+	case nil:
+	case string:
+		s.Description = v
+	default:
+		s.Extras[instructionsKeyword] = v
+	}
+	return s
+}
+
+// Schema is the output schema that asks the given questions, each answered
+// under its key. Pass it with [ai.WithOutputSchema] and read the answers as
+// a map of [Answer]:
+//
+//	options := make([]typesafex.ChoiceOption, 0, len(tools))
+//	for _, tool := range tools {
+//		options = append(options, typesafex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
+//	}
+//	resp, err := genkit.Generate(ctx, g,
+//		ai.WithModelName("typesafe/jev-1.13.0"),
+//		ai.WithOutputSchema(typesafex.Schema(map[string]typesafex.Question{
+//			"tool": typesafex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+//		})),
+//		ai.WithPrompt(request))
+//	if err != nil {
+//		return err
+//	}
+//	var answers map[string]typesafex.Answer
+//	if err := resp.Output(&answers); err != nil {
+//		return err
+//	}
+//	tool := answers["tool"].Choice
+func Schema(questions map[string]Question) map[string]any {
+	ids := slices.Sorted(maps.Keys(questions))
+	props := jsonschema.NewProperties()
+	for _, id := range ids {
+		if q := questions[id]; q != nil {
+			props.Set(id, q.schema())
+		} else {
+			// Left unmarked, so the request is refused as asking nothing.
+			props.Set(id, &jsonschema.Schema{})
+		}
+	}
+	return base.SchemaAsMap(&jsonschema.Schema{
+		Type:                 "object",
+		Properties:           props,
+		Required:             ids,
+		AdditionalProperties: jsonschema.FalseSchema,
+	})
+}
+
+// Answer is the answer to a question of a [Schema], with the fields of its
+// kind set. A choice sets Choice, Probabilities over the options, and
+// Confidence; a score sets Score, Probabilities keyed by level number,
+// Confidence, and Legend; a noul sets Probability alone. They mean what
+// the same fields of [Choice], [Score], and [NoulOf] mean.
+type Answer struct {
+	Choice        string             `json:"choice,omitempty"`
+	Score         float64            `json:"score,omitzero"`
+	Probability   float64            `json:"noul,omitzero"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+	Confidence    float64            `json:"confidence,omitzero"`
+	Legend        map[string]string  `json:"legend,omitempty"`
 }
 
 func probabilitiesSchema() *jsonschema.Schema {
@@ -309,17 +478,53 @@ func answerSchema(kind string, s *jsonschema.Schema, required ...string) *jsonsc
 
 // question is one question on the wire.
 type question struct {
-	Type         string `json:"type"`
-	Instructions string `json:"instructions"`
-	// Criteria is a map of option to description for choice and noul
-	// questions and an ordered list of level descriptions for score
-	// questions. A description is a string, or the guidance that replaces
-	// it on the wire.
+	Type string `json:"type"`
+	// Instructions is the question's text, or the structured value a
+	// runtime question gives, after the preamble.
+	Instructions any `json:"instructions"`
+	// Criteria is the options and their descriptions for a choice question,
+	// in order; a map of side to description for a noul question; and an
+	// ordered list of level descriptions for a score question. A
+	// description is a string, or the guidance that replaces it on the wire.
 	Criteria any `json:"criteria,omitempty"`
 
 	// labels are a score question's level strings, which the legend is
 	// built from whatever form the levels take on the wire.
 	labels []string
+}
+
+// criteria is a choice question's options with their descriptions, in the
+// order they were declared. It encodes as a JSON object whose keys keep
+// that order, where a Go map would sort them.
+type criteria []criterion
+
+type criterion struct {
+	option      string
+	description any
+}
+
+// MarshalJSON implements [json.Marshaler].
+func (c criteria) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, entry := range c {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, err := json.Marshal(entry.option)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(entry.description)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }
 
 // legend maps each level number to its label, the shape of [Score.Legend].
@@ -348,15 +553,14 @@ func compileQuestions(schema map[string]any, preamble string) (map[string]questi
 	for id, raw := range props {
 		prop, _ := raw.(map[string]any)
 		kind, _ := prop[kindKeyword].(string)
-		instructions, _ := prop["description"].(string)
 		if kind == "" {
 			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: field %q is not a question; use a Choice, Score, or Noul field", id)
 		}
-		if instructions == "" {
-			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: question %q has no instructions; set jsonschema_description on the field", id)
+		instructions, err := questionInstructions(id, prop, preamble)
+		if err != nil {
+			return nil, err
 		}
-		q := question{Type: kind, Instructions: joinInstructions(preamble, instructions)}
-		var err error
+		q := question{Type: kind, Instructions: instructions}
 		switch kind {
 		case kindChoice:
 			q.Criteria, err = choiceCriteria(id, prop)
@@ -381,11 +585,30 @@ func compileQuestions(schema map[string]any, preamble string) (map[string]questi
 	return questions, nil
 }
 
+// questionInstructions reads a question's instructions: the structured
+// value a runtime question carries on the x-instructions keyword, or the
+// property's description. The preamble goes in front: as a paragraph of
+// the text, or as the first element beside a structured value.
+func questionInstructions(id string, prop map[string]any, preamble string) (any, error) {
+	if structured := prop[instructionsKeyword]; structured != nil {
+		if preamble == "" {
+			return structured, nil
+		}
+		return []any{preamble, structured}, nil
+	}
+	text, _ := prop["description"].(string)
+	if text == "" {
+		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: question %q has no instructions; set jsonschema_description on the field, or Instructions on a runtime question", id)
+	}
+	return joinInstructions(preamble, text), nil
+}
+
 // choiceCriteria reads the options back out of the oneOf a [Choice] emits,
-// with the guidance of a [GuidedOption] in place of an option's string. An
-// option with neither is described by its own name, since the wire format
-// takes a description per option and some gateways reject a null one.
-func choiceCriteria(id string, prop map[string]any) (map[string]any, error) {
+// in order, with the guidance of a [GuidedOption] in place of an option's
+// string. An option with neither is described by its own name, since the
+// wire format takes a description per option and some gateways reject a
+// null one.
+func choiceCriteria(id string, prop map[string]any) (criteria, error) {
 	props, _ := prop["properties"].(map[string]any)
 	choice, _ := props["choice"].(map[string]any)
 	oneOf, _ := choice["oneOf"].([]any)
@@ -393,26 +616,31 @@ func choiceCriteria(id string, prop map[string]any) (map[string]any, error) {
 		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q lists no options", id)
 	}
 	guidance, _ := prop[guidanceKeyword].(map[string]any)
-	criteria := make(map[string]any, len(oneOf))
+	options := make(criteria, 0, len(oneOf))
+	seen := make(map[string]bool, len(oneOf))
 	for _, raw := range oneOf {
 		option, _ := raw.(map[string]any)
 		key, _ := option["const"].(string)
 		if key == "" {
 			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q has an option without a const", id)
 		}
+		if seen[key] {
+			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q lists option %q twice", id, key)
+		}
+		seen[key] = true
 		description, _ := option["description"].(string)
 		value := withWhat(guidance[key], description)
 		if value == "" {
 			value = key
 		}
-		criteria[key] = value
+		options = append(options, criterion{option: key, description: value})
 	}
 	for _, key := range slices.Sorted(maps.Keys(guidance)) {
-		if _, ok := criteria[key]; !ok {
+		if !seen[key] {
 			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: choice question %q has guidance for %q, which is not one of its options", id, key)
 		}
 	}
-	return criteria, nil
+	return options, nil
 }
 
 // scoreCriteria reads the ordered levels off the x-levels keyword, with
@@ -491,8 +719,9 @@ const enumQuestionID = "choice"
 // enumQuestion turns an enum output schema into a single choice question,
 // so the built-in enum format works on the model with no decision type.
 // The instructions are the preamble, the request's system text, followed
-// by the schema's description when it has one; an option's description is
-// its own name, since an enum carries none.
+// by the schema's description when it has one; the options keep the order
+// the values were given in, and an option's description is its own name,
+// since an enum carries none.
 func enumQuestion(schema map[string]any, preamble string) (map[string]question, error) {
 	values, ok := stringList(schema["enum"])
 	if !ok || slices.Contains(values, "") {
@@ -501,9 +730,12 @@ func enumQuestion(schema map[string]any, preamble string) (map[string]question, 
 	if len(values) == 0 {
 		return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: the enum output schema lists no values")
 	}
-	criteria := make(map[string]string, len(values))
+	options := make(criteria, 0, len(values))
 	for _, v := range values {
-		criteria[v] = v
+		if slices.ContainsFunc(options, func(c criterion) bool { return c.option == v }) {
+			return nil, status.Errorf(status.ErrInvalidSchema, "typesafe: the enum output schema lists %q twice", v)
+		}
+		options = append(options, criterion{option: v, description: v})
 	}
 	description, _ := schema["description"].(string)
 	instructions := joinInstructions(preamble, description)
@@ -511,7 +743,7 @@ func enumQuestion(schema map[string]any, preamble string) (map[string]question, 
 		instructions = "Choose the option that best describes the state."
 	}
 	return map[string]question{
-		enumQuestionID: {Type: kindChoice, Instructions: instructions, Criteria: criteria},
+		enumQuestionID: {Type: kindChoice, Instructions: instructions, Criteria: options},
 	}, nil
 }
 
