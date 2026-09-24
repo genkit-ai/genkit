@@ -40,6 +40,22 @@ import {
   VeoConfigSchema,
 } from '../../src/googleai/veo.js';
 
+describe('GemmaConfigSchema', () => {
+  it('accepts temperatures through 2.0', () => {
+    for (const temperature of [1.5, 2.0]) {
+      const result = GemmaConfigSchema.safeParse({ temperature });
+
+      assert.strictEqual(result.success, true, `${temperature} should be valid`);
+    }
+  });
+
+  it('rejects temperatures above 2.0', () => {
+    const result = GemmaConfigSchema.safeParse({ temperature: 2.01 });
+
+    assert.strictEqual(result.success, false);
+  });
+});
+
 describe('GoogleAI Plugin', () => {
   let originalEnv: NodeJS.ProcessEnv;
   let fetchMock: any;
