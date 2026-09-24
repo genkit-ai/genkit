@@ -67,7 +67,7 @@ func errorMessage(t *testing.T, p *ai.Part) string {
 	return msg
 }
 
-func TestToolErrorsReturnsErrorsOnEveryTurn(t *testing.T) {
+func TestSoftToolErrorsReturnsErrorsOnEveryTurn(t *testing.T) {
 	r := newTestRegistry(t)
 	var got []*ai.Part
 	m := defineToolModel(t, r, "test/loop", toolLoopModel(&got, "flaky", "missing", "flaky"))
@@ -77,7 +77,7 @@ func TestToolErrorsReturnsErrorsOnEveryTurn(t *testing.T) {
 		ai.WithModel(m),
 		ai.WithPrompt("go"),
 		ai.WithTools(flaky),
-		ai.WithUse(&ToolErrors{}),
+		ai.WithUse(&SoftToolErrors{}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestToolErrorsReturnsErrorsOnEveryTurn(t *testing.T) {
 	}
 }
 
-func TestToolErrorsLimitedToListedTools(t *testing.T) {
+func TestSoftToolErrorsLimitedToListedTools(t *testing.T) {
 	r := newTestRegistry(t)
 	var got []*ai.Part
 	m := defineToolModel(t, r, "test/loop", toolLoopModel(&got, "covered", "uncovered"))
@@ -106,7 +106,7 @@ func TestToolErrorsLimitedToListedTools(t *testing.T) {
 		ai.WithModel(m),
 		ai.WithPrompt("go"),
 		ai.WithTools(covered, uncovered),
-		ai.WithUse(&ToolErrors{Tools: []string{"covered"}}),
+		ai.WithUse(&SoftToolErrors{Tools: []string{"covered"}}),
 	)
 	if !errors.Is(err, ai.ErrToolFailed) {
 		t.Fatalf("err = %v, want ErrToolFailed from the uncovered tool", err)
@@ -116,7 +116,7 @@ func TestToolErrorsLimitedToListedTools(t *testing.T) {
 	}
 }
 
-func TestToolErrorsCombineAcrossInstances(t *testing.T) {
+func TestSoftToolErrorsCombineAcrossInstances(t *testing.T) {
 	r := newTestRegistry(t)
 	var got []*ai.Part
 	m := defineToolModel(t, r, "test/loop", toolLoopModel(&got, "a", "b"))
@@ -127,7 +127,7 @@ func TestToolErrorsCombineAcrossInstances(t *testing.T) {
 		ai.WithModel(m),
 		ai.WithPrompt("go"),
 		ai.WithTools(a, b),
-		ai.WithUse(&ToolErrors{Tools: []string{"a"}}, &ToolErrors{Tools: []string{"b"}}),
+		ai.WithUse(&SoftToolErrors{Tools: []string{"a"}}, &SoftToolErrors{Tools: []string{"b"}}),
 	)
 	if err != nil {
 		t.Fatalf("err = %v, want each tool covered by one of the two instances", err)
@@ -137,7 +137,7 @@ func TestToolErrorsCombineAcrossInstances(t *testing.T) {
 	}
 }
 
-func TestToolErrorsKeepsApprovalInterrupts(t *testing.T) {
+func TestSoftToolErrorsKeepsApprovalInterrupts(t *testing.T) {
 	r := newTestRegistry(t)
 	var got []*ai.Part
 	m := defineToolModel(t, r, "test/loop", toolLoopModel(&got, "dangerous"))
@@ -147,7 +147,7 @@ func TestToolErrorsKeepsApprovalInterrupts(t *testing.T) {
 		ai.WithModel(m),
 		ai.WithPrompt("go"),
 		ai.WithTools(dangerous),
-		ai.WithUse(&ToolErrors{}, &ToolApproval{}),
+		ai.WithUse(&SoftToolErrors{}, &ToolApproval{}),
 	)
 	if err != nil {
 		t.Fatal(err)

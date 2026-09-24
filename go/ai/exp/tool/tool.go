@@ -105,7 +105,7 @@ func Resume[Res any](interruptedPart *ai.Part, data Res) (*ai.Part, error) {
 //
 // Use it for errors the model can act on, such as invalid input or a missing
 // record. A WrapTool hook may also return it. To return every error of a
-// tool you do not own to the model, use the ToolErrors middleware in
+// tool you do not own to the model, use the SoftToolErrors middleware in
 // plugins/middleware instead.
 //
 // Example:
