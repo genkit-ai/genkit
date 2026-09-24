@@ -18,8 +18,8 @@ import pytest
 from genkit_otel import GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import GenAiAttr, GenAiMetric
 
-from genkit import FinishReason, Part, Role
-from genkit.model import Message, ModelResponse, ModelUsage
+from genkit import FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import ModelUsage
 from genkit.telemetry import SpanMetadata
 
 

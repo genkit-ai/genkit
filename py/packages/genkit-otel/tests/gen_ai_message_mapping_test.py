@@ -25,8 +25,8 @@ from genkit_otel._gen_ai_message_mapping import (
     resolve_response_message,
 )
 
-from genkit import FinishReason, Part, Role
-from genkit.model import Candidate, Message, ModelResponse
+from genkit import FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import Candidate
 
 
 def test_map_role_remaps_model_to_assistant() -> None:

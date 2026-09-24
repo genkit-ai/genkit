@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit
 from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
@@ -40,6 +40,7 @@ from genkit._core._telemetry._instrumentation import (
 )
 from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit._core._telemetry.http import GenkitBuiltinInstrumentation
+from genkit.plugin_api import ActionKind
 from genkit.telemetry import configure_instrumentation
 
 T = TypeVar('T')

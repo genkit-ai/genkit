@@ -26,8 +26,7 @@ from typing import Any, NamedTuple
 
 from pydantic import BaseModel
 
-from genkit import Role
-from genkit.model import Message, ModelResponse
+from genkit import Message, ModelResponse, Role
 
 
 class NormalizedMessages(NamedTuple):
