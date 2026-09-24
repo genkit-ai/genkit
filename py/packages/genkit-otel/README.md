@@ -51,7 +51,7 @@ When the SDK is not initialized, the provider is effectively a no-op.
 ### Content capture (PII)
 
 Prompt and response content may contain PII, so capture is off by default.
-`content_capturing_mode` mirrors the OTel GenAI `ContentCapturingMode`:
+`content_capturing_mode` is one of the spec tokens:
 
 | Mode | Where content goes |
 | --- | --- |
@@ -61,11 +61,9 @@ Prompt and response content may contain PII, so capture is off by default.
 | `SPAN_AND_EVENT` | both |
 
 ```python
-from genkit_otel import ContentCapturingMode, GenAiInstrumentation
+from genkit_otel import GenAiInstrumentation
 
-GenAiInstrumentation(
-    content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
-)
+GenAiInstrumentation(content_capturing_mode='SPAN_ONLY')
 ```
 
 When not supplied, the env var `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`

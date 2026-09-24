@@ -88,9 +88,11 @@ class GenAiInstrumentation:
         meter: Meter | None = None,
         otel_logger: object | None = None,
     ) -> None:
-        self.content_capturing_mode = (
-            content_capturing_mode if content_capturing_mode is not None else _content_capturing_mode_from_env()
-        )
+        if content_capturing_mode is None:
+            self.content_capturing_mode = _content_capturing_mode_from_env()
+        else:
+            parsed = parse_content_capturing_mode(content_capturing_mode)
+            self.content_capturing_mode = parsed if parsed is not None else 'NO_CONTENT'
         self.capture_action_io = capture_action_io
         self.emit_tool_spans = emit_tool_spans
         self.emit_metrics = emit_metrics
@@ -105,17 +107,11 @@ class GenAiInstrumentation:
 
     @property
     def _capture_on_span(self) -> bool:
-        return self.content_capturing_mode in {
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        }
+        return self.content_capturing_mode in {'SPAN_ONLY', 'SPAN_AND_EVENT'}
 
     @property
     def _capture_on_event(self) -> bool:
-        return self.content_capturing_mode in {
-            ContentCapturingMode.EVENT_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        }
+        return self.content_capturing_mode in {'EVENT_ONLY', 'SPAN_AND_EVENT'}
 
     @property
     def _tracer(self) -> Tracer:
@@ -183,7 +179,7 @@ class GenAiInstrumentation:
                 response = output if isinstance(output, ModelResponse) else None
                 if response is not None:
                     self._add_response_attributes(span, response)
-                if self.content_capturing_mode != ContentCapturingMode.NO_CONTENT:
+                if self.content_capturing_mode != 'NO_CONTENT':
                     self._record_content(span, request, response)
                 self._maybe_capture_action_io(span, metadata.input, output)
                 if self.emit_metrics:
@@ -311,7 +307,9 @@ class GenAiInstrumentation:
         request: ModelRequest | None,
         response: ModelResponse | None,
     ) -> None:
-        input_messages = normalize_messages(request.messages) if request is not None else None
+        input_messages = (
+            normalize_messages(request.messages) if request is not None and request.messages is not None else None
+        )
         output_messages: list[dict[str, object]] = []
         output_message = resolve_response_message(response) if response is not None else None
         if output_message is not None and response is not None:
@@ -416,7 +414,7 @@ def _content_capturing_mode_from_env() -> ContentCapturingMode:
         CAPTURE_CONTENT_ENV_VAR,
         raw,
     )
-    return ContentCapturingMode.NO_CONTENT
+    return 'NO_CONTENT'
 
 
 def _add_request_config_attributes(attrs: dict[str, AttributeValue], request: ModelRequest) -> None:
