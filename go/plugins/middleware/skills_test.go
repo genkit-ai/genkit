@@ -620,7 +620,7 @@ func TestSkillsRequiresExactSkillMdCasing(t *testing.T) {
 	}
 	writeSkill(t, skillsDir, "upper", "---\nname: upper\ndescription: d\n---\n")
 
-	info := scanSkills(ctx, []string{skillsDir}, true)
+	info := scanSkills(ctx, []string{skillsDir}, true, nil)
 	if _, ok := info["lower"]; ok {
 		t.Error("skill.md should not be discovered; SKILL.md is matched case-exactly")
 	}
@@ -651,7 +651,7 @@ func TestSkillsCollisionLaterPathWins(t *testing.T) {
 	writeSkill(t, first, "dup", "---\nname: dup\ndescription: from first\n---\nfirst body")
 	writeSkill(t, second, "dup", "---\nname: dup\ndescription: from second\n---\nsecond body")
 
-	info := scanSkills(ctx, []string{first, second}, true)
+	info := scanSkills(ctx, []string{first, second}, true, nil)
 	if got := info["dup"].Description; got != "from second" {
 		t.Errorf("description = %q, want the later path to win", got)
 	}
@@ -663,7 +663,7 @@ func TestSkillsSkipsOversizedSkillMd(t *testing.T) {
 	writeSkill(t, skillsDir, "big", big)
 	writeSkill(t, skillsDir, "small", "---\nname: small\ndescription: d\n---\nbody")
 
-	info := scanSkills(ctx, []string{skillsDir}, true)
+	info := scanSkills(ctx, []string{skillsDir}, true, nil)
 	if _, ok := info["big"]; ok {
 		t.Error("an oversized SKILL.md should be skipped, not truncated")
 	}
@@ -690,7 +690,7 @@ func TestSkillsSkipsSymlinkedSkillDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if info := scanSkills(ctx, []string{skillsDir}, true); len(info) != 0 {
+	if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
 		t.Errorf("scanned %v, want no skills: a symlinked skill directory is not followed", sortedNames(info))
 	}
 }
@@ -1169,33 +1169,38 @@ func TestSkillsSkipsSymlinkedSkillMd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if info := scanSkills(ctx, []string{skillsDir}, true); len(info) != 0 {
+	if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
 		t.Errorf("scanned %v, want none: a symlinked SKILL.md is not followed", sortedNames(info))
 	}
 }
 
-// A preloaded skill whose file cannot be read must stay loadable rather than
-// be reported as already present.
-func TestSkillsPreloadReadFailureLeavesSkillLoadable(t *testing.T) {
-	skillsDir := setupSkillsDir(t)
-	s := &Skills{SkillPaths: []string{skillsDir}, Preload: []string{"python"}}
+// A preload delivers the bytes the scan read, so a file that changes or
+// disappears mid-call cannot leave the model with neither the instructions nor
+// a tool to load them. The only skill is preloaded, so no use_skill exists to
+// fall back on.
+func TestSkillsPreloadInjectsScannedContent(t *testing.T) {
+	skillsDir := filepath.Join(t.TempDir(), "skills")
+	pyDir := writeSkill(t, skillsDir, "python", "---\nname: python\ndescription: A python expert skill\n---\nPython prompt content")
 
-	h := mustHooks(t, s)
-	if err := os.Remove(filepath.Join(skillsDir, "python", "SKILL.md")); err != nil {
+	h := mustHooks(t, &Skills{SkillPaths: []string{skillsDir}, Preload: []string{"python"}})
+	if len(h.Tools) != 0 {
+		t.Fatalf("tools = %v, want none when the only skill is preloaded", toolNames(h))
+	}
+	if err := os.Remove(filepath.Join(pyDir, "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	seed(t, h)
 
-	// The tool is the fallback path, so it must not answer with the stub.
-	if out := activate(t, h, "python"); strings.Contains(out, "already loaded") {
-		t.Errorf("a preload that never landed was reported as loaded: %q", out)
+	var seen []*ai.Message
+	_, err := h.WrapGenerate(ctx, &ai.GenerateParams{Request: &ai.ModelRequest{}},
+		func(_ context.Context, p *ai.GenerateParams) (*ai.ModelResponse, error) {
+			seen = p.Request.Messages
+			return &ai.ModelResponse{}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Control: with the file intact the preload does mark the skill.
-	h2 := mustHooks(t, &Skills{SkillPaths: []string{setupSkillsDir(t)}, Preload: []string{"python"}})
-	seed(t, h2)
-	if out := activate(t, h2, "python"); !strings.Contains(out, "already loaded") {
-		t.Errorf("a landed preload should stub the activation: %q", out)
+	if text := systemText(seen); !strings.Contains(text, "Python prompt content") {
+		t.Errorf("the preload should inject what the scan read after the file is gone: %q", text)
 	}
 }
 

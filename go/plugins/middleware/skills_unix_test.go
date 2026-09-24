@@ -44,7 +44,7 @@ func TestSkillsSkipsFifoSkillMd(t *testing.T) {
 	}
 
 	mustNotBlock(t, "scanSkills", func() error {
-		if info := scanSkills(ctx, []string{skillsDir}, true); len(info) != 0 {
+		if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
 			t.Errorf("scanned %v, want none", sortedNames(info))
 		}
 		return nil
