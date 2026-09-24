@@ -155,9 +155,12 @@ type Skills struct {
 	// applies.
 	//
 	// Preloaded skills are left out of the catalog's list of loadable skills.
-	// A name matching no discovered skill is logged and ignored: skills are
-	// rescanned on every request, so a temporarily unreadable directory must
-	// not fail the request.
+	// A preload injects the SKILL.md bytes the scan read, so a skill that was
+	// discovered is always delivered, with the same content on every turn. A
+	// name matching no discovered skill, including one whose SKILL.md could
+	// not be read, is logged and ignored: skills are rescanned on every
+	// request, so a temporarily unreadable directory must not fail the
+	// request.
 	Preload []string `json:"preload,omitempty" jsonschema_description:"Skills whose instructions are injected before the first model turn, without waiting for the model to load them. Names matching no discovered skill are logged and ignored."`
 
 	// AllowResourceAccess registers read_skill_file, which reads files bundled
@@ -187,6 +190,10 @@ type skillInfo struct {
 	Dir         string
 	Path        string
 	Description string
+
+	// body holds the SKILL.md bytes the scan read. It is kept only for the
+	// skills the scan was asked to retain, which are the preloaded ones.
+	body []byte
 }
 
 // skillFrontmatter mirrors the YAML block expected at the top of a SKILL.md.
@@ -210,7 +217,7 @@ func (s Skills) Name() string { return provider + "/skills" }
 // requires. Unreadable paths, malformed frontmatter, and oversized files are
 // logged and skipped rather than reported as errors.
 func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
-	info := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0)
+	info := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0, s.Preload)
 	if len(info) == 0 {
 		return &ai.Hooks{}, nil
 	}
@@ -242,9 +249,8 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		// Inject first, then read the activation set back out of the result:
 		// a preloaded skill marks itself through the metadata on the part that
-		// carries it, so one whose file could not be read stays loadable
-		// instead of being reported as already present.
-		params.Request = s.injectSkills(ctx, params.Request, catalog, info, preload)
+		// carries it.
+		params.Request = s.injectSkills(params.Request, catalog, preload)
 		act.reset(params.Request.Messages)
 		return next(ctx, params)
 	}
@@ -293,22 +299,25 @@ func (s *Skills) paths() []string {
 // toolName returns suffix prefixed with s.ToolNamePrefix.
 func (s *Skills) toolName(suffix string) string { return s.ToolNamePrefix + suffix }
 
-// resolvePreload maps Skills.Preload onto the discovered skills. An unknown
-// name is logged and dropped: New runs on the request path, so a name that
-// fails to resolve because a directory was briefly unreadable must not fail
-// the request.
-func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) map[string]bool {
+// resolvePreload renders each skill in Skills.Preload from the bytes the scan
+// read, keyed by skill name. Rendering from the scan rather than from disk
+// means a discovered skill cannot fail to preload, so no skill is left out of
+// both the catalog and the request. An unknown name is logged and dropped: New
+// runs on the request path, so a name that fails to resolve because a
+// directory was briefly unreadable must not fail the request.
+func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) map[string]string {
 	if len(s.Preload) == 0 {
 		return nil
 	}
-	preload := make(map[string]bool, len(s.Preload))
+	preload := make(map[string]string, len(s.Preload))
 	for _, name := range s.Preload {
-		if _, ok := info[name]; !ok {
+		si, ok := info[name]
+		if !ok {
 			logger.Warn(ctx, "preloaded skill not found, ignoring",
 				"skill", name, "available", sortedNames(info))
 			continue
 		}
-		preload[name] = true
+		preload[name] = s.skillContent(ctx, si, si.body)
 	}
 	return preload
 }
@@ -352,19 +361,25 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 	)
 }
 
-// renderSkill reads a skill and returns the instructions to place in the
-// conversation. Both entry points go through it, so an activation and a
-// preload deliver byte-identical content.
+// renderSkill reads a skill from disk and returns the instructions to place in
+// the conversation.
 func (s *Skills) renderSkill(ctx context.Context, si skillInfo) (string, error) {
 	data, err := readSkillFile(si.Path)
 	if err != nil {
 		return "", err
 	}
+	return s.skillContent(ctx, si, data), nil
+}
+
+// skillContent renders a skill's SKILL.md bytes as the instructions to place
+// in the conversation. An activation and a preload both go through it, so the
+// two deliver the same content.
+func (s *Skills) skillContent(ctx context.Context, si skillInfo, body []byte) string {
 	var resources string
 	if s.AllowResourceAccess {
 		resources = listSkillResources(ctx, si.Dir, s.toolName(SkillResourceToolName))
 	}
-	return wrapSkillContent(si, string(data), resources), nil
+	return wrapSkillContent(si, string(body), resources)
 }
 
 // activationSet is the per-call view of which skills are already loaded into
@@ -535,7 +550,9 @@ func checkReadable(st os.FileInfo, name string, maxBytes int64) error {
 }
 
 // scanSkills enumerates SKILL.md files under each path and returns a map keyed
-// by the skill's directory name. Missing or unreadable paths are skipped; a
+// by the skill's directory name. It keeps the SKILL.md bytes of each skill
+// named in retain, so those skills can be delivered without a second read that
+// could fail. Missing or unreadable paths are skipped; a
 // skipped path is a warning when the caller configured it explicitly (a likely
 // misconfiguration) and debug noise when it is only the unset default.
 //
@@ -543,7 +560,7 @@ func checkReadable(st os.FileInfo, name string, maxBytes int64) error {
 // the catalog, or silently changes which instructions the model receives, is a
 // warning. Advisory lint that changes nothing is debug, so that a warning
 // remains worth reading.
-func scanSkills(ctx context.Context, paths []string, explicit bool) map[string]skillInfo {
+func scanSkills(ctx context.Context, paths []string, explicit bool, retain []string) map[string]skillInfo {
 	result := make(map[string]skillInfo)
 	skipped := func(p string, err error) {
 		if explicit {
@@ -569,7 +586,7 @@ func scanSkills(ctx context.Context, paths []string, explicit bool) map[string]s
 			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
-			si, ok := readSkillDir(ctx, abs, entry.Name())
+			si, ok := readSkillDir(ctx, abs, entry.Name(), slices.Contains(retain, entry.Name()))
 			if !ok {
 				continue
 			}
@@ -583,9 +600,10 @@ func scanSkills(ctx context.Context, paths []string, explicit bool) map[string]s
 	return result
 }
 
-// readSkillDir loads one candidate skill directory. It reports false when the
-// directory holds no SKILL.md, or holds one that cannot be used.
-func readSkillDir(ctx context.Context, parent, name string) (skillInfo, bool) {
+// readSkillDir loads one candidate skill directory, keeping the SKILL.md bytes
+// when retain is set. It reports false when the directory holds no SKILL.md,
+// or holds one that cannot be used.
+func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillInfo, bool) {
 	dir := filepath.Join(parent, name)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -649,7 +667,11 @@ func readSkillDir(ctx context.Context, parent, name string) (skillInfo, bool) {
 	}
 
 	validateSkillMetadata(ctx, name, fm, desc, skillMd)
-	return skillInfo{Name: name, Dir: dir, Path: skillMd, Description: desc}, true
+	si := skillInfo{Name: name, Dir: dir, Path: skillMd, Description: desc}
+	if retain {
+		si.body = data
+	}
+	return si, true
 }
 
 // validateSkillMetadata reports specification violations that do not stop the
@@ -1000,7 +1022,7 @@ func activatedSkills(msgs []*ai.Message) map[string]bool {
 // instructions of any preloaded skill. The catalog is marked by skillsMarker so
 // a later tool-loop iteration refreshes it in place instead of appending a
 // second copy; preloaded parts are recognized by their activation metadata.
-func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog string, info map[string]skillInfo, preload map[string]bool) *ai.ModelRequest {
+func (s *Skills) injectSkills(req *ai.ModelRequest, catalog string, preload map[string]string) *ai.ModelRequest {
 	newReq := *req
 	newReq.Messages = append([]*ai.Message(nil), req.Messages...)
 
@@ -1013,19 +1035,11 @@ func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog
 
 	present := activatedSkills(newReq.Messages)
 	var parts []*ai.Part
-	for _, name := range sortedNames(info) {
-		if !preload[name] || present[name] {
+	for _, name := range slices.Sorted(maps.Keys(preload)) {
+		if present[name] {
 			continue
 		}
-		content, err := s.renderSkill(ctx, info[name])
-		if err != nil {
-			// The skill stays loadable through the activation tool, so this
-			// degrades preloading rather than losing the skill.
-			logger.Warn(ctx, "preloaded SKILL.md could not be read, skipping the preload",
-				"skill", name, "path", info[name].Path, "error", err)
-			continue
-		}
-		p := ai.NewTextPart(content)
+		p := ai.NewTextPart(preload[name])
 		p.Metadata = map[string]any{SkillActivationMetadataKey: name}
 		parts = append(parts, p)
 	}
@@ -1110,10 +1124,10 @@ func sortedNames(info map[string]skillInfo) []string {
 
 // loadableNames returns the skills the model may activate: everything
 // discovered, less anything already injected by Preload.
-func loadableNames(info map[string]skillInfo, preload map[string]bool) []string {
+func loadableNames(info map[string]skillInfo, preload map[string]string) []string {
 	names := make([]string, 0, len(info))
 	for _, name := range sortedNames(info) {
-		if !preload[name] {
+		if _, ok := preload[name]; !ok {
 			names = append(names, name)
 		}
 	}
