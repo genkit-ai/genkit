@@ -374,7 +374,8 @@ func responseError(cause error) *status.Error {
 
 // callerStopped reports whether the loop ended because the caller stopped it
 // rather than because something inside it broke: it cancelled the context, its
-// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded]).
+// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded],
+// [ErrBudgetExceeded]).
 // Those report [FinishReasonAborted]; everything else reports
 // [FinishReasonFailed].
 //
@@ -387,7 +388,8 @@ func callerStopped(ctx context.Context, cause error) bool {
 	return ctx.Err() != nil ||
 		errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) ||
-		errors.Is(cause, ErrMaxTurnsExceeded)
+		errors.Is(cause, ErrMaxTurnsExceeded) ||
+		errors.Is(cause, ErrBudgetExceeded)
 }
 
 // failurePartial builds the partial [ModelResponse] that accompanies the

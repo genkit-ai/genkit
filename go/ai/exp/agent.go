@@ -1716,9 +1716,10 @@ func convertKeepText(cause error) *status.Error {
 // the abort companion action, which cancels the work context on the status
 // flip.
 //
-// Or the run reached a limit the caller set ([ai.ErrMaxTurnsExceeded]). A turn
-// that propagates such an error unchanged is stopped, not broken, and reports
-// so without having to say it in a [TurnResult].
+// Or the run reached a limit the caller set ([ai.ErrMaxTurnsExceeded],
+// [ai.ErrBudgetExceeded]). A turn that propagates such an error unchanged is
+// stopped, not broken, and reports so without having to say it in a
+// [TurnResult].
 //
 // Both roads are read from the context and the sentinels, never from the
 // classified status, which is a wider set than the caller's own doing: a
@@ -1732,7 +1733,8 @@ func callerStopped(ctxErr error, cause error) bool {
 	return ctxErr != nil ||
 		errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) ||
-		errors.Is(cause, ai.ErrMaxTurnsExceeded)
+		errors.Is(cause, ai.ErrMaxTurnsExceeded) ||
+		errors.Is(cause, ai.ErrBudgetExceeded)
 }
 
 // terminalReason is how an invocation or turn that ended with cause reports
