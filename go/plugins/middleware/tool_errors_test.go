@@ -60,7 +60,11 @@ func errorMessage(t *testing.T, p *ai.Part) string {
 	if !p.IsToolError() {
 		t.Fatalf("part %+v is not a tool error response", p)
 	}
-	msg, _ := p.ToolResponse.Output.(map[string]any)["error"].(string)
+	out, ok := p.ToolResponse.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("tool error output = %T, want map[string]any", p.ToolResponse.Output)
+	}
+	msg, _ := out["error"].(string)
 	return msg
 }
 
