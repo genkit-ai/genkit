@@ -28,9 +28,12 @@ from typing import Any
 
 import structlog
 from genkit_otel import GenAiInstrumentation
-from opentelemetry import metrics, trace as trace_api
+from opentelemetry import _logs, metrics, trace as trace_api
+from opentelemetry.exporter.cloud_logging import CloudLoggingExporter  # ty: ignore[deprecated]
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
 from opentelemetry.resourcedetector.gcp_resource_detector import GoogleCloudResourceDetector
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_INSTANCE_ID, SERVICE_NAME, Resource
@@ -49,7 +52,7 @@ from .constants import (
     MIN_METRIC_EXPORT_INTERVAL_MS,
     PROJECT_ID_ENV_VARS,
 )
-from .exporters import handle_metric_error, handle_tracing_error
+from .exporters import handle_logging_error, handle_metric_error, handle_tracing_error
 from .metrics_exporter import GenkitMetricExporter
 from .trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 
@@ -69,6 +72,21 @@ def _hang_exporter_on_process_tracer(*, exporter: SpanExporter) -> None:
         trace_api.set_tracer_provider(provider)
     processor = SimpleSpanProcessor(exporter) if is_dev_environment() else BatchSpanProcessor(exporter)
     provider.add_span_processor(processor)
+
+
+def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
+    """Attach Cloud Logging to the process logger they already registered, if any.
+
+    ``GenAiInstrumentation`` emits on this logger when content capture is
+    ``EVENT_ONLY`` / ``SPAN_AND_EVENT``. Default enable() does not write
+    prompt text.
+    """
+    provider = _logs.get_logger_provider()
+    if not isinstance(provider, LoggerProvider):
+        provider = LoggerProvider()
+        _logs.set_logger_provider(provider)
+    processor = SimpleLogRecordProcessor(exporter) if is_dev_environment() else BatchLogRecordProcessor(exporter)
+    provider.add_log_record_processor(processor)
 
 
 def resolve_project_id(
@@ -121,7 +139,6 @@ class GcpTelemetry:
         project_id: str | None = None,
         credentials: dict[str, Any] | None = None,
         sampler: Sampler | None = None,
-        log_input_and_output: bool = False,
         force_dev_export: bool = False,
         disable_metrics: bool = False,
         disable_traces: bool = False,
@@ -134,7 +151,6 @@ class GcpTelemetry:
             project_id: GCP project ID.
             credentials: Optional credentials dict.
             sampler: Trace sampler.
-            log_input_and_output: If False, hides sensitive data.
             force_dev_export: Check to force export in dev environment.
             disable_metrics: If True, metrics are not exported.
             disable_traces: If True, traces are not exported.
@@ -143,7 +159,6 @@ class GcpTelemetry:
         """
         self.credentials = credentials
         self.sampler = sampler
-        self.log_input_and_output = log_input_and_output
         self.force_dev_export = force_dev_export
         self.disable_metrics = disable_metrics
         self.disable_traces = disable_traces
@@ -195,6 +210,7 @@ class GcpTelemetry:
         if should_export:
             self._configure_tracing()
             self._configure_metrics()
+            self._configure_otel_logs()
             logger.info(
                 'Telemetry fully initialized',
                 project_id=self.project_id,
@@ -237,26 +253,33 @@ class GcpTelemetry:
             logger.warning('Failed to configure structlog for trace correlation', error=str(e))
 
     def _configure_tracing(self) -> None:
-        if self.disable_traces:
-            return
-
         try:
-            exporter_kwargs = self._build_exporter_kwargs()
-            base_exporter = GenkitGCPExporter(**exporter_kwargs) if exporter_kwargs else GenkitGCPExporter()
+            if not self.disable_traces:
+                exporter_kwargs = self._build_exporter_kwargs()
+                base_exporter = GenkitGCPExporter(**exporter_kwargs) if exporter_kwargs else GenkitGCPExporter()
 
-            trace_exporter = GcpAdjustingTraceExporter(
-                exporter=base_exporter,
-                log_input_and_output=self.log_input_and_output,
-                project_id=self.project_id,
-                error_handler=handle_tracing_error,
-            )
+                trace_exporter = GcpAdjustingTraceExporter(
+                    exporter=base_exporter,
+                    project_id=self.project_id,
+                    error_handler=handle_tracing_error,
+                )
 
-            _hang_exporter_on_process_tracer(exporter=trace_exporter)
+                _hang_exporter_on_process_tracer(exporter=trace_exporter)
             if is_instrumented_by(GenAiInstrumentation):
                 return
             configure_instrumentation(GenAiInstrumentation())
         except Exception as e:
             handle_tracing_error(e)
+
+    def _configure_otel_logs(self) -> None:
+        try:
+            exporter = CloudLoggingExporter(  # ty: ignore[deprecated]
+                project_id=self.project_id,
+                default_log_name='genkit',
+            )
+            _hang_exporter_on_process_logger(exporter=exporter)
+        except Exception as e:
+            handle_logging_error(e)
 
     def _configure_metrics(self) -> None:
         if self.disable_metrics:

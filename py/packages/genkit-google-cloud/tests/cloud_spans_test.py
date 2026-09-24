@@ -87,6 +87,7 @@ def _cloud_enable(**kwargs: Any) -> Generator[InMemorySpanExporter, None, None]:
         patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
+        patch('genkit_google_cloud.telemetry.config.CloudLoggingExporter'),
     ):
         enable_google_cloud_telemetry(**kwargs)
         yield cloud
@@ -164,6 +165,18 @@ async def test_configure_genai_on_a_private_tracer_then_enable_does_not_send_tha
         names = [span.name for span in cloud.get_finished_spans()]
         assert 'joke' not in names
     private.shutdown()
+
+
+def test_enable_when_process_tracer_cannot_attach_does_not_raise() -> None:
+    """A dead process tracer stays a log line so enable() does not crash the process."""
+    global_provider = trace_api.get_tracer_provider()
+
+    def boom(_processor: object) -> None:
+        raise RuntimeError('processor dead')
+
+    global_provider.add_span_processor = boom  # type: ignore[method-assign]
+    with _cloud_enable():
+        pass
 
 
 @pytest.mark.asyncio
