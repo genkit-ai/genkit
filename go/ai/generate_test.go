@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -4685,5 +4686,148 @@ func TestResumedToolMessageOrder(t *testing.T) {
 	}
 	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
 		t.Errorf("resumed tool message order = %v, want %v", names, want)
+	}
+}
+
+func TestGenerateTotalUsage(t *testing.T) {
+	t.Parallel()
+
+	// usageModel answers with a tool request for its first `turns` calls and
+	// with text after that. Call n reports n input tokens, one output token,
+	// and half a unit of custom cost.
+	usageModel := func(turns int) func(context.Context, *ModelRequest, ModelStreamCallback) (*ModelResponse, error) {
+		loop := loopingToolModel("myTool", turns)
+		call := 0
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			call++
+			resp, err := loop(ctx, req, cb)
+			resp.Usage = &GenerationUsage{InputTokens: call, OutputTokens: 1, Custom: map[string]float64{"cost": 0.5}}
+			return resp, err
+		}
+	}
+	setup := func(t *testing.T, turns int) api.Registry {
+		t.Helper()
+		r := newTestRegistry(t)
+		defineFakeModel(t, r, fakeModelConfig{name: "test/usageModel", handler: usageModel(turns)})
+		defineTool(r, "myTool", "A test tool",
+			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
+		return r
+	}
+
+	t.Run("sums every model call while Usage stays the last call's", func(t *testing.T) {
+		r := setup(t, 2)
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/usageModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The model action also fills in character counts, so compare only
+		// the fields the model reported.
+		total := resp.TotalUsage
+		if total == nil || total.InputTokens != 1+2+3 || total.OutputTokens != 3 || total.Custom["cost"] != 1.5 {
+			t.Errorf("TotalUsage = %+v, want InputTokens 6, OutputTokens 3, Custom cost 1.5", total)
+		}
+		if resp.Usage.InputTokens != 3 {
+			t.Errorf("Usage.InputTokens = %d, want 3 (the last call only)", resp.Usage.InputTokens)
+		}
+	})
+
+	t.Run("counts each call a hook makes to the model", func(t *testing.T) {
+		r := setup(t, 0)
+		retry := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+					if _, err := next(ctx, p); err != nil {
+						return nil, err
+					}
+					return next(ctx, p)
+				},
+			}, nil
+		})
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/usageModel"),
+			WithPrompt("start"),
+			WithUse(retry),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The discarded first call was billed too.
+		if resp.TotalUsage == nil || resp.TotalUsage.InputTokens != 1+2 {
+			t.Errorf("TotalUsage = %+v, want InputTokens 3 from both calls", resp.TotalUsage)
+		}
+	})
+
+	t.Run("a budget stop is aborted and keeps what the run spent", func(t *testing.T) {
+		r := setup(t, 100)
+		budget := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			spent := 0
+			return &Hooks{
+				WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+					if spent >= 3 {
+						return nil, status.Errorf(ErrBudgetExceeded, "spent %d of 3 input tokens", spent)
+					}
+					resp, err := next(ctx, p)
+					if resp != nil && resp.Usage != nil {
+						spent += resp.Usage.InputTokens
+					}
+					return resp, err
+				},
+			}, nil
+		})
+		resp, err := Generate(testCtx, r,
+			WithModelName("test/usageModel"),
+			WithPrompt("start"),
+			WithTools(LookupTool(r, "myTool")),
+			WithUse(budget),
+		)
+		if !errors.Is(err, ErrBudgetExceeded) {
+			t.Fatalf("err = %v, want ErrBudgetExceeded", err)
+		}
+		// The caller set the limit, so reaching it stopped the run rather
+		// than breaking it.
+		if resp.FinishReason != FinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", resp.FinishReason, FinishReasonAborted)
+		}
+		if resp.TotalUsage == nil || resp.TotalUsage.InputTokens != 1+2 {
+			t.Errorf("TotalUsage = %+v, want InputTokens 3 from the two calls that ran", resp.TotalUsage)
+		}
+	})
+}
+
+// A field added to GenerationUsage in the schema must also be added to
+// addUsage, or run totals silently drop it.
+func TestAddUsageSumsEveryField(t *testing.T) {
+	var u GenerationUsage
+	v := reflect.ValueOf(&u).Elem()
+	for i := range v.NumField() {
+		switch f := v.Field(i); f.Kind() {
+		case reflect.Int:
+			f.SetInt(1)
+		case reflect.Map:
+			f.Set(reflect.ValueOf(map[string]float64{"k": 1}))
+		default:
+			t.Fatalf("GenerationUsage.%s has kind %s, which addUsage does not handle", v.Type().Field(i).Name, f.Kind())
+		}
+	}
+	sum := reflect.ValueOf(addUsage(&u, &u)).Elem()
+	for i := range sum.NumField() {
+		name := sum.Type().Field(i).Name
+		switch f := sum.Field(i); f.Kind() {
+		case reflect.Int:
+			if f.Int() != 2 {
+				t.Errorf("sum.%s = %d, want 2", name, f.Int())
+			}
+		case reflect.Map:
+			if got := f.Interface().(map[string]float64)["k"]; got != 2 {
+				t.Errorf("sum.%s[k] = %v, want 2", name, got)
+			}
+		}
+	}
+	if u.InputTokens != 1 || u.Custom["k"] != 1 {
+		t.Errorf("addUsage mutated its argument: %+v", u)
 	}
 }

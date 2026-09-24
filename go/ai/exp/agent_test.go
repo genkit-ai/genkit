@@ -1427,6 +1427,21 @@ func TestAgent_SwallowedTurnErrorIsTheOutcome(t *testing.T) {
 		}
 	})
 
+	t.Run("a turn stopped by a budget reports aborted", func(t *testing.T) {
+		overBudget := func(context.Context) (*TurnResult, error) {
+			return nil, status.Errorf(ai.ErrBudgetExceeded, "spent 10 of 5 tokens")
+		}
+		af := swallowing(t, "swallowBudget", newTestInMemStore[testState](), overBudget)
+		out, err := af.RunText(t.Context(), "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		// A limit the caller set stopped the turn; nothing broke.
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
+		}
+	})
+
 	t.Run("a detached run lands the failed turn", func(t *testing.T) {
 		release := make(chan struct{})
 		af := swallowing(t, "swallowDetached", newTestInMemStore[testState](), func(ctx context.Context) (*TurnResult, error) {
