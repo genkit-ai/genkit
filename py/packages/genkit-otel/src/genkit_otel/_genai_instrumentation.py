@@ -34,6 +34,7 @@ from genkit._core._telemetry._instrumentation import SpanNext
 from genkit.model import ModelRequest, ModelResponse
 from genkit.telemetry import SpanMetadata
 from genkit_otel._gen_ai_attributes import (
+    _CONTENT_CAPTURING_MODES,
     CAPTURE_CONTENT_ENV_VAR,
     GEN_AI_OPERATION_DETAILS_EVENT,
     ContentCapturingMode,
@@ -79,7 +80,7 @@ class GenAiInstrumentation:
     def __init__(
         self,
         *,
-        content_capturing_mode: ContentCapturingMode | None = None,
+        content_capturing_mode: ContentCapturingMode = 'NO_CONTENT',
         capture_action_io: bool = False,
         emit_tool_spans: bool = False,
         emit_metrics: bool = True,
@@ -88,11 +89,10 @@ class GenAiInstrumentation:
         meter: Meter | None = None,
         otel_logger: object | None = None,
     ) -> None:
-        if content_capturing_mode is None:
+        if content_capturing_mode == 'NO_CONTENT':
             self.content_capturing_mode = _content_capturing_mode_from_env()
         else:
-            parsed = parse_content_capturing_mode(content_capturing_mode)
-            self.content_capturing_mode = parsed if parsed is not None else 'NO_CONTENT'
+            self.content_capturing_mode = content_capturing_mode
         self.capture_action_io = capture_action_io
         self.emit_tool_spans = emit_tool_spans
         self.emit_metrics = emit_metrics
@@ -405,16 +405,17 @@ def _action_kind(metadata: SpanMetadata) -> str | None:
 
 
 def _content_capturing_mode_from_env() -> ContentCapturingMode:
-    raw = os.environ.get(CAPTURE_CONTENT_ENV_VAR)
-    parsed = parse_content_capturing_mode(raw)
-    if parsed is not None:
-        return parsed
-    logger.warning(
-        'Invalid %s=%r; expected one of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT. Defaulting to NO_CONTENT.',
-        CAPTURE_CONTENT_ENV_VAR,
-        raw,
-    )
-    return 'NO_CONTENT'
+    raw = os.environ.get(CAPTURE_CONTENT_ENV_VAR, '')
+    token = raw.strip().upper()
+    if token and token not in _CONTENT_CAPTURING_MODES:
+        logger.warning(
+            'Invalid %s=%r; expected one of NO_CONTENT, SPAN_ONLY, '
+            'EVENT_ONLY, SPAN_AND_EVENT. Defaulting to NO_CONTENT.',
+            CAPTURE_CONTENT_ENV_VAR,
+            raw,
+        )
+        return 'NO_CONTENT'
+    return parse_content_capturing_mode(raw)
 
 
 def _add_request_config_attributes(attrs: dict[str, AttributeValue], request: ModelRequest) -> None:

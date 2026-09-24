@@ -424,8 +424,8 @@ async def test_classifies_action_subtype_model_as_chat(harness) -> None:
 
 @pytest.mark.asyncio
 async def test_explicit_mode_overrides_env(harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'SPAN_ONLY')
-    instr = harness.instrumentation(content_capturing_mode='NO_CONTENT')
+    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'EVENT_ONLY')
+    instr = harness.instrumentation(content_capturing_mode='SPAN_ONLY')
     await _run_model(
         instr,
         'googleai/gemini-flash-latest',
@@ -434,7 +434,27 @@ async def test_explicit_mode_overrides_env(harness, monkeypatch: pytest.MonkeyPa
     )
     span = harness.span_named('chat gemini-flash-latest')
     assert span is not None
-    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+    assert 'secret' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
+    assert GEN_AI_OPERATION_DETAILS_EVENT not in _event_names(harness)
+
+
+@pytest.mark.asyncio
+async def test_omitted_mode_uses_env(harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'SPAN_ONLY')
+    instr = GenAiInstrumentation(
+        tracer=harness.tracer_provider.get_tracer('test'),
+        meter=harness.meter_provider.get_meter('test'),
+        otel_logger=harness.logger_provider.get_logger('test'),
+    )
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('secret')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert 'secret' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
 
 
 @pytest.mark.asyncio

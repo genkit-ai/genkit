@@ -82,7 +82,7 @@ token logs a one-time warning and falls back to `NO_CONTENT`.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `content_capturing_mode` | env or `NO_CONTENT` | Where spec-shaped `gen_ai.*` message content is recorded. |
+| `content_capturing_mode` | `NO_CONTENT` | Where spec-shaped `gen_ai.*` message content is recorded. |
 | `capture_action_io` | `False` | Capture raw Genkit input/output as `genkit.input`/`genkit.output` on every span (debugging / Dev UI). |
 | `emit_metrics` | `True` | Emit token-usage and operation-duration metrics. |
 | `emit_tool_spans` | `False` | Emit `execute_tool` spans for tool actions. |
