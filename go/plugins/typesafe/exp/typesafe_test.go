@@ -230,16 +230,26 @@ func TestStateShapes(t *testing.T) {
 			ai.WithDocs(
 				ai.DocumentFromText("Refunds within 30 days.", map[string]any{"id": "policy-1"}),
 				ai.DocumentFromText("Shipping takes a week.", nil),
+				&ai.Document{Content: []*ai.Part{ai.NewDataPart(map[string]any{"sku": "A-1", "stock": 3})}},
 			))
 		want := map[string]any{
 			"messages": []any{map[string]any{"role": "user", "content": "Is the refund policy 30 days?"}},
 			"context": []any{
 				map[string]any{"content": "Refunds within 30 days.", "metadata": map[string]any{"id": "policy-1"}},
 				"Shipping takes a week.",
+				map[string]any{"sku": "A-1", "stock": float64(3)},
 			},
 		}
 		if !reflect.DeepEqual(state, want) {
 			t.Errorf("state = %s, want %s", base.JSONString(state), base.JSONString(want))
+		}
+	})
+	t.Run("document with media", func(t *testing.T) {
+		_, err := genkit.Generate(t.Context(), g, ai.WithModelName(model), ai.WithOutputType(triage{}),
+			ai.WithPrompt("Is this the product?"),
+			ai.WithDocs(&ai.Document{Content: []*ai.Part{ai.NewMediaPart("image/png", "data:image/png;base64,AAAA")}}))
+		if err == nil || !strings.Contains(err.Error(), "media") {
+			t.Errorf("error = %v, want the media part refused", err)
 		}
 	})
 	t.Run("stateJSON", func(t *testing.T) {

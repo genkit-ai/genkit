@@ -152,7 +152,8 @@ out of the messages.
   included, so a question can refer to what the user said and what the model
   said.
 - With documents attached, the state is `{messages, context}`, each document as
-  its text or as `{content, metadata}` when it has metadata.
+  its content, read as a message's is, or as `{content, metadata}` when it has
+  metadata.
 
 A prompt template renders text, so a template that renders JSON needs
 `stateJSON: true` in its config to produce an object state.

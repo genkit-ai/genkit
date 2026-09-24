@@ -420,7 +420,11 @@ func buildState(req *ai.ModelRequest, cfg *Config) (any, error) {
 	if len(req.Docs) > 0 {
 		docs := make([]any, 0, len(req.Docs))
 		for _, doc := range req.Docs {
-			docs = append(docs, documentValue(doc))
+			value, err := documentValue(doc)
+			if err != nil {
+				return nil, err
+			}
+			docs = append(docs, value)
 		}
 		return map[string]any{"messages": records, "context": docs}, nil
 	}
@@ -490,20 +494,20 @@ func isFormatInstructions(part *ai.Part) bool {
 	return purpose == "output"
 }
 
-// documentValue is a document's contribution to the context: its text, or
-// its text with its metadata when it has any, so a passage keeps its
-// title and source for a question to refer to.
-func documentValue(doc *ai.Document) any {
-	var sb strings.Builder
-	for _, part := range doc.Content {
-		if part.IsText() {
-			sb.WriteString(part.Text)
-		}
+// documentValue is a document's contribution to the context: its content,
+// read as a message's is, or its content with its metadata when it has
+// any, so a passage keeps its title and source for a question to refer
+// to. Text stays text whatever the config says, since a retrieved passage
+// is prose, not a rendered template.
+func documentValue(doc *ai.Document) (any, error) {
+	content, err := messageValue(&ai.Message{Content: doc.Content}, nil)
+	if err != nil {
+		return nil, err
 	}
 	if len(doc.Metadata) == 0 {
-		return sb.String()
+		return content, nil
 	}
-	return map[string]any{"content": sb.String(), "metadata": doc.Metadata}
+	return map[string]any{"content": content, "metadata": doc.Metadata}, nil
 }
 
 // partKindName names a part's kind for an error message.
