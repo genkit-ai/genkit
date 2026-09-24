@@ -543,7 +543,11 @@ func toolErrorIn(msgs []*ai.Message, tool string) (string, bool) {
 				return "", false
 			}
 			if p.IsToolError() && p.ToolResponse.Name == tool {
-				msg, _ := p.ToolResponse.Output.(map[string]any)["error"].(string)
+				out, ok := p.ToolResponse.Output.(map[string]any)
+				if !ok {
+					return "", false
+				}
+				msg, _ := out["error"].(string)
 				return msg, true
 			}
 		}

@@ -4725,8 +4725,8 @@ func softFailModel(t *testing.T, r api.Registry, toolName string, got **Part) {
 }
 
 // assertToolError fails t unless p answers its call with an error whose
-// message contains want.
-func assertToolError(t *testing.T, p *Part, want string) {
+// message contains want, and returns the message.
+func assertToolError(t *testing.T, p *Part, want string) string {
 	t.Helper()
 	if p == nil {
 		t.Fatal("the model never received a tool response")
@@ -4735,9 +4735,11 @@ func assertToolError(t *testing.T, p *Part, want string) {
 		t.Fatalf("IsToolError() = false for %+v, want true", p)
 	}
 	out, _ := p.ToolResponse.Output.(map[string]any)
-	if msg, _ := out["error"].(string); !strings.Contains(msg, want) {
+	msg, _ := out["error"].(string)
+	if !strings.Contains(msg, want) {
 		t.Errorf("Output = %v, want an error containing %q", p.ToolResponse.Output, want)
 	}
+	return msg
 }
 
 func TestToolErrorsReturnedToModel(t *testing.T) {
@@ -4756,10 +4758,9 @@ func TestToolErrorsReturnedToModel(t *testing.T) {
 		if resp.Text() != "done" {
 			t.Errorf("Text() = %q, want %q", resp.Text(), "done")
 		}
-		assertToolError(t, got, "no such city")
 		// The model reads the message the tool wrote, not the context the
 		// tool action added around it.
-		if msg := got.ToolResponse.Output.(map[string]any)["error"]; msg != "no such city" {
+		if msg := assertToolError(t, got, "no such city"); msg != "no such city" {
 			t.Errorf("error message = %q, want %q", msg, "no such city")
 		}
 	})
@@ -4785,10 +4786,9 @@ func TestToolErrorsReturnedToModel(t *testing.T) {
 		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
 			WithUse(softToolErrors()))
 		assertNoError(t, err)
-		assertToolError(t, got, "boom")
 		// The response already names the call, so the model reads the tool's
 		// error without the tool action's "error calling tool" prefix.
-		if msg := got.ToolResponse.Output.(map[string]any)["error"]; msg != "boom" {
+		if msg := assertToolError(t, got, "boom"); msg != "boom" {
 			t.Errorf("error message = %q, want %q", msg, "boom")
 		}
 	})
