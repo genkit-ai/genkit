@@ -535,14 +535,13 @@ func TestGenerate(t *testing.T) {
 			t.Fatalf("expected 1 content part, got %d", len(res.Message.Content))
 		}
 
-		metadata := res.Message.Content[0].Metadata
-		if metadata == nil {
-			t.Fatal("expected metadata in content part")
+		if !res.Message.Content[0].IsInterrupt() {
+			t.Fatal("expected an interrupted tool request")
 		}
 
-		interrupt, ok := metadata["interrupt"].(map[string]any)
+		interrupt, ok := res.Message.Content[0].Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata")
+			t.Fatalf("interrupt data = %T, want map[string]any", res.Message.Content[0].Interrupt.Data)
 		}
 
 		reason, ok := interrupt["reason"].(string)
@@ -1104,9 +1103,12 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Fatal("expected second part to be a tool request")
 		}
 
-		interruptMeta, ok := interruptedPart.Metadata["interrupt"].(map[string]any)
+		if !interruptedPart.IsInterrupt() {
+			t.Fatal("expected the tool request to be interrupted")
+		}
+		interruptMeta, ok := interruptedPart.Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata in tool request")
+			t.Fatalf("interrupt data = %T, want map[string]any", interruptedPart.Interrupt.Data)
 		}
 
 		if reason, ok := interruptMeta["reason"].(string); !ok || reason != "user_intervention_required" {
@@ -1204,13 +1206,16 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Errorf("expected interrupt to be false, got %v", replacedInput.Interrupt)
 		}
 
-		if _, hasInterrupt := restartPart.Metadata["interrupt"]; hasInterrupt {
-			t.Error("expected interrupt metadata to be removed")
+		if restartPart.Interrupt != nil {
+			t.Error("expected the interrupt state to be dropped from the restart part")
 		}
 
-		resumedMeta, ok := restartPart.Metadata["resumed"].(map[string]any)
+		if restartPart.Restart == nil {
+			t.Fatal("expected restart state on the restart part")
+		}
+		resumedMeta, ok := restartPart.Restart.Resume.(map[string]any)
 		if !ok {
-			t.Fatal("expected resumed metadata")
+			t.Fatalf("resume data = %T, want map[string]any", restartPart.Restart.Resume)
 		}
 
 		if resumedMeta["data"] != "resumed_data" {
@@ -2591,7 +2596,7 @@ func TestModelResponseInterrupts(t *testing.T) {
 			Name:  "confirmAction",
 			Input: map[string]any{},
 		})
-		interruptPart.Metadata = map[string]any{"interrupt": true}
+		interruptPart.Interrupt = &ToolInterrupt{}
 
 		resp := &ModelResponse{
 			Message: &Message{
@@ -4772,5 +4777,107 @@ func TestResumeRejectsToolRequestPartWithoutRequest(t *testing.T) {
 		WithToolResponses(tool.Respond(res.Message.Content[0], "answer", nil)))
 	if !errors.Is(err, ErrInvalidPart) {
 		t.Errorf("resume error = %v, want ErrInvalidPart", err)
+	}
+}
+
+// jsRestartOf builds the restart part the JS runtime's restartTool builds for
+// an interrupted request: the interrupted part's metadata spread onto the
+// restart, "interrupt" key included, with "resumed" added. It goes through
+// JSON so the part is exactly what a peer runtime would send.
+func jsRestartOf(t *testing.T, interrupt *Part, resumed any) *Part {
+	t.Helper()
+	raw, err := json.Marshal(interrupt)
+	assertNoError(t, err)
+	var wire map[string]any
+	assertNoError(t, json.Unmarshal(raw, &wire))
+	meta, _ := wire["metadata"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+		wire["metadata"] = meta
+	}
+	meta["resumed"] = resumed
+	raw, err = json.Marshal(wire)
+	assertNoError(t, err)
+	var restart Part
+	assertNoError(t, json.Unmarshal(raw, &restart))
+	return &restart
+}
+
+// TestResumeReadsJSRestartMarkers pins how the loop reads a restart part as a
+// peer runtime sends it. The part still carries the interrupt it resolves,
+// and the restart supersedes it. The resumed marker is read by truthiness, as
+// the JS runtime reads it: an object is the payload, false is no resumption,
+// and any other value is a bare restart, delivered as an empty payload.
+func TestResumeReadsJSRestartMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		marker      any
+		wantResumed map[string]any // nil: the tool re-executes afresh
+	}{
+		{"object", map[string]any{"approved": true}, map[string]any{"approved": true}},
+		{"true", true, map[string]any{}},
+		{"string", "approved", map[string]any{}},
+		{"number", 1.0, map[string]any{}},
+		{"array", []any{"a"}, map[string]any{}},
+		{"false", false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/jsRestart",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if req.Messages[len(req.Messages)-1].Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+					return &ModelResponse{Request: req, Message: &Message{Role: RoleModel, Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "confirm", Input: map[string]any{}}),
+					}}}, nil
+				},
+			})
+			var resumed []map[string]any
+			confirm := defineTool(r, "confirm", "asks to confirm",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					resumed = append(resumed, ctx.Resumed)
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					return "confirmed", nil
+				})
+
+			res, err := Generate(testCtx, r, WithModelName("test/jsRestart"), WithPrompt("go"), WithTools(confirm))
+			assertNoError(t, err)
+			restart := jsRestartOf(t, res.Interrupts()[0], tc.marker)
+			if !restart.IsInterrupt() {
+				t.Fatalf("restart = %+v, want the interrupt it resolves still on it", restart)
+			}
+
+			_, err = Generate(testCtx, r, WithModelName("test/jsRestart"),
+				WithMessages(res.History()...), WithTools(confirm), WithToolRestarts(restart))
+			if tc.wantResumed == nil {
+				if !errors.Is(err, status.ErrFailedPrecondition) {
+					t.Fatalf("resume error = %v, want the tool's fresh interrupt", err)
+				}
+			} else {
+				assertNoError(t, err)
+			}
+			if len(resumed) != 2 {
+				t.Fatalf("tool ran %d times, want 2", len(resumed))
+			}
+			if diff := cmp.Diff(tc.wantResumed, resumed[1]); diff != "" {
+				t.Errorf("Resumed on re-execution mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestResumeReportsNilPart pins that a nil in the resume list, which the
+// deprecated verbs return for a part they cannot restart, is reported as
+// such rather than as a part of the wrong kind.
+func TestResumeReportsNilPart(t *testing.T) {
+	r, tool, res := interruptedForResume(t)
+	_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithMessages(res.History()...), WithTools(tool), WithToolRestarts(nil))
+	if err == nil || !strings.Contains(err.Error(), "part is nil") {
+		t.Errorf("error = %v, want it to report the nil part", err)
 	}
 }
