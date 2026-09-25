@@ -23,8 +23,8 @@ for it.
 Both inputs arrive as media parts on the last message, tagged so the model
 knows which is which::
 
-    Part.from_media(person_url, metadata={'type': 'personImage'})
-    Part.from_media(shirt_url, metadata={'type': 'productImage'})
+    Part.from_media(person_url, content_type='image/png', metadata={'type': 'personImage'})
+    Part.from_media(shirt_url, content_type='image/png', metadata={'type': 'productImage'})
 
 Each url is either a ``data:`` url, a bare base64 payload, or a ``gs://``
 Cloud Storage path.
