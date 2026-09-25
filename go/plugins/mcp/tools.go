@@ -173,7 +173,7 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 		// MCP reports the errors a model can act on inside the result, so
 		// they answer the call rather than failing the generation.
 		if mcpResult.IsError {
-			return nil, tool.Fail(errors.New(resultText(mcpResult)))
+			return nil, tool.Fail(ctx, errors.New(resultText(mcpResult)))
 		}
 
 		return mcpResult, nil

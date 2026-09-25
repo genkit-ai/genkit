@@ -160,7 +160,7 @@ func main() {
 			// A wrong name is a mistake the model can fix, so it answers the
 			// call rather than failing the flow. Any other error still would.
 			if !slices.Contains(services, input.Service) {
-				return nil, tool.Fail(fmt.Errorf("no service named %q; the services are %s",
+				return nil, tool.Fail(ctx, fmt.Errorf("no service named %q; the services are %s",
 					input.Service, strings.Join(services, ", ")))
 			}
 

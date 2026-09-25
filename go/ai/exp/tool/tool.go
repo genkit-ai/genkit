@@ -22,7 +22,6 @@ package tool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 
@@ -107,27 +106,23 @@ func Resume[Res any](interruptedPart *ai.Part, data Res) (*ai.Part, error) {
 // Use it for errors the model can act on, such as invalid input or a missing
 // record. A WrapTool hook may also return it. To return every error of a
 // tool you do not own to the model, use the SoftToolErrors middleware in
-// plugins/middleware instead.
+// plugins/middleware instead. [ai.IsToolFailError] reports whether an error
+// was made with Fail.
+//
+// ctx is the context the tool function or hook received, as for [Interrupt].
 //
 // Example:
 //
 //	rows, err := db.Query(ctx, in.SQL)
 //	if errors.Is(err, ErrSyntax) {
-//		return nil, tool.Fail(err) // the model fixes the query
+//		return nil, tool.Fail(ctx, err) // the model fixes the query
 //	}
 //	return rows, err // a lost connection stops the loop
-func Fail(err error) error {
+func Fail(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
 	return &base.ToolFailError{Err: err}
-}
-
-// IsFail reports whether err, or any error it wraps, was made with [Fail].
-// Use it to check in a test that a tool returns its error to the model.
-func IsFail(err error) bool {
-	var fail *base.ToolFailError
-	return errors.As(err, &fail)
 }
 
 // --- Respond ---
