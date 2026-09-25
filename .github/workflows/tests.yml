@@ -18,19 +18,36 @@ name: Run Tests
 
 on: pull_request
 
+permissions:
+  contents: read
+
 env:
   GITHUB_PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   GITHUB_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
 jobs:
+  changes:
+    uses: ./.github/workflows/changes.yml
+    permissions:
+      pull-requests: read
+
   build:
     name: Run Tests (just DevUI tests for now)
+    needs: changes
+    # Builds and tests genkit-tools/ only.
+    # A failed detection still runs the tests; see changes.yml.
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.tools == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: pnpm/action-setup@v4
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        persist-credentials: false
+    - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
     - name: Set up node v20
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: 20.x
         cache: pnpm
