@@ -771,6 +771,10 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			return resp, nil
 		}
 
+		// The next turn runs inside this one's context, so context a
+		// WrapGenerate hook set on turn 0 (such as the SoftToolErrors
+		// policy) reaches every later turn. A loop that ran turns from a
+		// shared outer context would drop it after the first turn.
 		return generate(ctx, newReq, currentTurn+1, currentIndex+1)
 	}
 
@@ -1102,6 +1106,11 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // reason, and a resume whose restarted tool interrupted again, which keeps
 // FinishReason interrupted under its FAILED_PRECONDITION error and is
 // answered with [WithResume] rather than re-sent.
+//
+// A tool error the model can act on does not stop the loop: an error made
+// with tool.Fail (ai/exp/tool), or one that the SoftToolErrors middleware
+// (plugins/middleware) covers, answers the call with a response for which
+// [Part.IsToolError] is true, and the loop continues.
 //
 // Errors reported before a request is made (unknown model or tool, invalid
 // options) carry a nil response.
@@ -1568,10 +1577,11 @@ func answerToolError(ctx context.Context, name string, resp *MultipartToolRespon
 // a missing tool counts) and the soft-failure policy on ctx covers the tool.
 // Neither interrupts nor anything once the caller has stopped do.
 //
-// The model reads the tool's own words: a ToolFailError answers with its
-// message, which its author wrote for the model, and a [toolCallError] no hook
-// changed loses the tool-name prefix the response already carries. Context a
-// hook added stays.
+// The model reads the tool's own words. A ToolFailError answers with its own
+// message, which its author wrote for the model, even when a hook wrapped it:
+// the hook's text is for logs. Any other error answers with its full message,
+// so context a hook added by wrapping stays; only a [toolCallError] no hook
+// changed loses the tool-name prefix the response already carries.
 func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool) *MultipartToolResponse {
 	var tie *toolInterruptError
 	if ctx.Err() != nil || errors.As(err, &tie) {
@@ -1583,7 +1593,9 @@ func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool)
 		msg = fail.Error()
 	} else if !fromTool || !base.SoftToolErrorsKey.FromContext(ctx).Allows(name) {
 		return nil
-	} else if call, ok := err.(*toolCallError); ok { // Unwrapped on purpose: a hook's wrapping keeps the whole message.
+	} else if call, ok := err.(*toolCallError); ok {
+		// A type assertion rather than errors.As, so a hook's wrapping keeps
+		// the whole message.
 		msg = call.err.Error()
 	}
 	logger.Debug(ctx, "tool failed, returning the error to the model", "tool", name, "error", err)
@@ -2302,6 +2314,8 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				restartPart.ToolRequest.Ref == toolReq.Ref {
 				tool := LookupTool(r, restartPart.ToolRequest.Name)
 				if tool == nil {
+					// Not answered under a soft-failure policy: the caller
+					// named this tool in the restart, not the model.
 					return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", restartPart.ToolRequest.Name)
 				}
 
