@@ -1129,6 +1129,22 @@ func LookupPrompt(g *Genkit, name string) ai.Prompt {
 	return ai.LookupPrompt(g.reg, name)
 }
 
+// ListPromptDescriptors returns descriptors for executable prompts registered
+// with g, including prompts defined in Go and loaded from .prompt files.
+// Named input schemas are resolved where possible.
+func ListPromptDescriptors(g *Genkit) []api.ActionDesc {
+	var prompts []api.ActionDesc
+	for _, desc := range listActions(g) {
+		if desc.Type == api.ActionTypeExecutablePrompt {
+			if resolved, err := core.ResolveSchema(g.reg, desc.InputSchema); err == nil {
+				desc.InputSchema = resolved
+			}
+			prompts = append(prompts, desc)
+		}
+	}
+	return prompts
+}
+
 // DefineSchema defines a named JSON schema and registers it in the registry.
 //
 // Registered schemas can be referenced by name in prompts (both `.prompt` files
