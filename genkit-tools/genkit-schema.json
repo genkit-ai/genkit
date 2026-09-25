@@ -1095,6 +1095,9 @@
         },
         "cachedContentTokens": {
           "type": "number"
+        },
+        "cacheWriteTokens": {
+          "type": "number"
         }
       },
       "additionalProperties": false

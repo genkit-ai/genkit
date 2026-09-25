@@ -272,6 +272,7 @@ export const GenerationUsageSchema = z.object({
   custom: z.record(z.number()).optional(),
   thoughtsTokens: z.number().optional(),
   cachedContentTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
 });
 
 /**
