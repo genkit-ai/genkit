@@ -885,7 +885,7 @@ lookupTool := genkitx.DefineTool(g, "cityPopulation",
     func(ctx context.Context, input CityInput) (int, error) {
         pop, err := db.Population(ctx, input.City)
         if errors.Is(err, ErrNoSuchCity) {
-            return 0, tool.Fail(err) // the model tries another spelling
+            return 0, tool.Fail(ctx, err) // the model tries another spelling
         }
         return pop, err // a lost connection stops the loop
     },
@@ -927,7 +927,7 @@ response, _ := genkit.Generate(ctx, g,
 The `middleware` plugin also ships with:
 
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
-- [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(err)` (`ai/exp/tool`).
+- [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/exp/tool`).
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
 

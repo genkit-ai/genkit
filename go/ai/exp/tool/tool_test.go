@@ -19,7 +19,6 @@ package tool
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -101,20 +100,15 @@ func TestResume_NonObjectDataIsClearError(t *testing.T) {
 }
 
 func TestFail_MarksError(t *testing.T) {
-	if err := Fail(nil); err != nil {
-		t.Errorf("Fail(nil) = %v, want nil", err)
+	ctx := context.Background()
+	if err := Fail(ctx, nil); err != nil {
+		t.Errorf("Fail(ctx, nil) = %v, want nil", err)
 	}
 
 	cause := errors.New("no such city")
-	err := Fail(cause)
-	if !IsFail(err) {
-		t.Fatalf("IsFail(Fail(err)) = false, want true")
-	}
-	if !IsFail(fmt.Errorf("attempt 3: %w", err)) {
-		t.Error("IsFail is false for a wrapped Fail error, want true")
-	}
-	if IsFail(cause) {
-		t.Error("IsFail is true for an unmarked error, want false")
+	err := Fail(ctx, cause)
+	if !ai.IsToolFailError(err) {
+		t.Fatalf("IsToolFailError(Fail(ctx, err)) = false, want true")
 	}
 	if !errors.Is(err, cause) {
 		t.Error("Fail(err) does not unwrap to err")

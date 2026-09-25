@@ -132,6 +132,15 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 	return false, nil
 }
 
+// IsToolFailError reports whether err, or any error it wraps, was made with
+// tool.Fail (ai/exp/tool): an error the loop returns to the model as the
+// tool's response instead of failing the generation. Use it to check in a
+// test that a tool returns its error to the model.
+func IsToolFailError(err error) bool {
+	var fail *base.ToolFailError
+	return errors.As(err, &fail)
+}
+
 // NewToolInterruptError creates a tool interrupt error with the given metadata.
 // This is intended for use in middleware that needs to interrupt tool execution
 // without calling the tool itself.
