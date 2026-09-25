@@ -27,6 +27,7 @@
  * @module agent-core
  */
 
+import type { ActionContext } from '@genkit-ai/core';
 import type {
   AgentInit,
   AgentInput,
@@ -59,21 +60,54 @@ import type {
 export type SnapshotLookup = { snapshotId: string } | { sessionId: string };
 
 /**
+ * Per-turn options common to every agent transport (in-process and remote).
+ *
+ * This is the base surface for {@link AgentChat}'s `send`/`sendStream`/`resume`/
+ * `resumeStream` calls; a specific transport may widen it (see
+ * {@link AgentServerTurnOptions}).
+ */
+export interface AgentTurnOptions {
+  /** Aborts the in-flight turn. */
+  abortSignal?: AbortSignal;
+}
+
+/**
+ * Per-turn options for an in-process (server-side) agent.
+ *
+ * Extends {@link AgentTurnOptions} with a `context`: the {@link ActionContext}
+ * to run the turn under (e.g. auth/session data an in-process caller wants the
+ * agent handler to observe via `getContext()`). This is meaningful only for the
+ * in-process agent - a remote agent derives its context server-side from the
+ * incoming HTTP request (headers, auth, etc.), so its surface stays the base
+ * {@link AgentTurnOptions}.
+ */
+export interface AgentServerTurnOptions extends AgentTurnOptions {
+  /** Context to run the turn under (in-process only). */
+  context?: ActionContext;
+}
+
+/**
  * The transport-agnostic surface for talking to an agent. The same shape is
  * returned by `ai.defineAgent(...)` on the server and by `remoteAgent(...)` on
  * the client.
+ *
+ * `Opts` parameterizes the per-turn options exposed by the returned chats.
+ * Remote agents use the base {@link AgentTurnOptions}; the in-process agent
+ * widens it to {@link AgentServerTurnOptions} to accept a `context`.
  */
-
-export interface AgentAPI<State = unknown> {
+export interface AgentAPI<
+  State = unknown,
+  Opts extends AgentTurnOptions = AgentTurnOptions,
+> {
   /** Starts a new chat, or attaches to one via init. */
-  chat(init?: AgentInit<State>): AgentChat<State>;
+  chat(init?: AgentInit<State>): AgentChat<State, Opts>;
 
   /**
    * Loads a server snapshot and returns a chat with history restored. Accepts
    * either a `snapshotId` (an exact snapshot) or a `sessionId` (the session's
    * latest snapshot).
    */
-  loadChat(opts: SnapshotLookup): Promise<AgentChat<State>>;
+  loadChat(opts: SnapshotLookup): Promise<AgentChat<State, Opts>>;
 
   /**
    * Reads a snapshot without starting a chat. Requires a server store. Accepts
@@ -91,41 +125,40 @@ export interface AgentAPI<State = unknown> {
 /**
  * A stateful conversation with an agent. Tracks state across turns so callers
  * do not have to thread `snapshotId`/`state` by hand.
+ *
+ * `Opts` is the per-turn options accepted by `send`/`sendStream`/`resume`/
+ * `resumeStream`. It defaults to the base {@link AgentTurnOptions}; the
+ * in-process agent widens it to {@link AgentServerTurnOptions} to accept a
+ * `context`.
  */
-export interface AgentChat<State = unknown> {
+export interface AgentChat<
+  State = unknown,
+  Opts extends AgentTurnOptions = AgentTurnOptions,
+> {
   /**
    * Runs a single turn and resolves with the completed {@link AgentResponse}.
    * The non-streaming analog of {@link generate}; for incremental chunks use
    * {@link sendStream}.
    */
-  send(
-    input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
-  ): Promise<AgentResponse<State>>;
+  send(input: string | AgentInput, opts?: Opts): Promise<AgentResponse<State>>;
 
   /**
    * Runs a single turn and returns an {@link AgentTurn} exposing `.stream` and
    * `.response`. The streaming analog of {@link generateStream}.
    */
-  sendStream(
-    input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State>;
+  sendStream(input: string | AgentInput, opts?: Opts): AgentTurn<State>;
 
   /** Resumes after an interrupt. Sugar for `send({ resume })`. */
   resume(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: Opts
   ): Promise<AgentResponse<State>>;
 
   /** Streaming resume. Sugar for `sendStream({ resume })`. */
-  resumeStream(
-    resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State>;
+  resumeStream(resume: AgentInput['resume'], opts?: Opts): AgentTurn<State>;
 
   /** Submits a detached (background) turn. */
-  detach(input: string | AgentInput): Promise<DetachedTask<State>>;
+  detach(input: string | AgentInput, opts?: Opts): Promise<DetachedTask<State>>;
 
   /** Aborts the current snapshot. */
   abort(): Promise<SessionSnapshot['status'] | undefined>;
@@ -283,11 +316,15 @@ export interface AgentTransport {
    * Runs a single turn. Returns the streamed chunks plus a promise for the
    * final, non-throwing {@link AgentOutput} (failures resolve with
    * `finishReason: 'failed'`).
+   *
+   * `opts.context` is only meaningful for the in-process transport (it runs the
+   * turn under that {@link ActionContext}); the remote transport ignores it, as
+   * a remote agent derives its context server-side from the request.
    */
   runTurn(
     input: AgentInput,
     init: AgentInit,
-    opts: { abortSignal: AbortSignal }
+    opts: { abortSignal: AbortSignal; context?: ActionContext }
   ): {
     stream: AsyncIterable<AgentStreamChunk>;
     output: Promise<AgentOutput>;
@@ -604,7 +641,9 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
 // AgentChat
 // ---------------------------------------------------------------------------
 
-export class AgentChatImpl<State = unknown> implements AgentChat<State> {
+export class AgentChatImpl<State = unknown>
+  implements AgentChat<State, AgentServerTurnOptions>
+{
   snapshotId?: string;
   sessionId?: string;
   messages: MessageData[] = [];
@@ -789,7 +828,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   async send(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentServerTurnOptions
   ): Promise<AgentResponse<State>> {
     // `send()` is a non-streaming veneer over the streaming path: we run the
     // turn via `sendStream` and drain its stream internally before resolving.
@@ -813,7 +852,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   sendStream(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentServerTurnOptions
   ): AgentTurn<State> {
     const agentInput = toAgentInput(input);
 
@@ -853,7 +892,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     const { stream: rawStream, output } = this.transport.runTurn(
       agentInput,
       init,
-      { abortSignal: controller.signal }
+      { abortSignal: controller.signal, context: opts?.context }
     );
 
     const responsePromise = this.buildResponse(
@@ -905,14 +944,14 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   resume(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentServerTurnOptions
   ): Promise<AgentResponse<State>> {
     return this.send({ resume }, opts);
   }
 
   resumeStream(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentServerTurnOptions
   ): AgentTurn<State> {
     return this.sendStream({ resume }, opts);
   }
@@ -940,7 +979,10 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     }
   }
 
-  async detach(input: string | AgentInput): Promise<DetachedTask<State>> {
+  async detach(
+    input: string | AgentInput,
+    opts?: AgentServerTurnOptions
+  ): Promise<DetachedTask<State>> {
     const agentInput: AgentInput = { ...toAgentInput(input), detach: true };
     if (agentInput.message) {
       this.messages.push(agentInput.message);
@@ -949,6 +991,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     const controller = new AbortController();
     const { output } = this.transport.runTurn(agentInput, init, {
       abortSignal: controller.signal,
+      context: opts?.context,
     });
     const raw = (await output) as AgentOutput<State>;
     this.applyOutput(raw);
@@ -1001,16 +1044,24 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
  * Composes the {@link AgentAPI} surface (`chat`/`loadChat`/`getSnapshot`/
  * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent
  * and the HTTP `remoteAgent`.
+ *
+ * `Opts` is the per-turn options the returned chats expose. The in-process
+ * agent passes {@link AgentServerTurnOptions} (to accept a `context`); the
+ * remote agent leaves it at the base {@link AgentTurnOptions}.
  */
-export function createAgentAPI<State = unknown>(
-  transport: AgentTransport
-): AgentAPI<State> {
+export function createAgentAPI<
+  State = unknown,
+  Opts extends AgentTurnOptions = AgentTurnOptions,
+>(transport: AgentTransport): AgentAPI<State, Opts> {
   return {
-    chat(init?: AgentInit<State>): AgentChat<State> {
-      return new AgentChatImpl<State>(transport, init);
+    chat(init?: AgentInit<State>): AgentChat<State, Opts> {
+      return new AgentChatImpl<State>(transport, init) as unknown as AgentChat<
+        State,
+        Opts
+      >;
     },
 
-    async loadChat(opts: SnapshotLookup): Promise<AgentChat<State>> {
+    async loadChat(opts: SnapshotLookup): Promise<AgentChat<State, Opts>> {
       const snapshot = (await transport.getSnapshot(opts)) as
         | SessionSnapshot<State>
         | undefined;
@@ -1021,7 +1072,7 @@ export function createAgentAPI<State = unknown>(
       }
       const chat = new AgentChatImpl<State>(transport);
       chat._loadFromSnapshot(snapshot);
-      return chat;
+      return chat as unknown as AgentChat<State, Opts>;
     },
 
     getSnapshot(
