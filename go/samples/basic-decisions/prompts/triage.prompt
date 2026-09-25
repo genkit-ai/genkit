@@ -1,0 +1,22 @@
+---
+# The triage decision from a prompt file. The questions are still the Triage
+# type, registered by name in main.go; the file owns the model, the preamble,
+# and how the input becomes the state.
+model: typesafe/jev-latest
+config:
+  # A template renders text. This parses it as JSON, so the state is an
+  # object with named fields, the same state that triageFlow sends.
+  stateJSON: true
+input:
+  schema: TicketRequest
+output:
+  schema: Triage
+---
+{{role "system"}}
+The state is a support ticket from a customer of an online store; accountTier is the customer's plan.
+
+{{role "user"}}
+{
+  "ticket": {{json ticket}},
+  "accountTier": {{json accountTier}}
+}
