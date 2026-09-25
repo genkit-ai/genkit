@@ -47,7 +47,7 @@ members = [
     "prompts",
     "tool-interrupts",
     "tracing",
-    "vertexai-imagen",
+    "vertexai-image",
 ]
 overrides = [{ name = "werkzeug", specifier = ">=3.1.6" }]
 
@@ -6887,9 +6887,9 @@ wheels = [
 ]
 
 [[package]]
-name = "vertexai-imagen"
+name = "vertexai-image"
 version = "0.2.0"
-source = { editable = "samples/vertexai-imagen" }
+source = { editable = "samples/vertexai-image" }
 dependencies = [
     { name = "genkit" },
     { name = "genkit-google-genai" },

@@ -158,7 +158,7 @@ output-formats       = { workspace = true }
 prompts              = { workspace = true }
 tool-interrupts      = { workspace = true }
 tracing              = { workspace = true }
-vertexai-imagen      = { workspace = true }
+vertexai-image       = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
