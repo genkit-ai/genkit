@@ -207,7 +207,7 @@ is how a caller narrows one. Follow that shape for a gateway, and the curated
 shape above for a vendor.
 
 See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
-`xai`, and `zai` directories for complete implementations.
+`orcarouter`, `xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -221,6 +221,7 @@ export KIMI_API_KEY=<your-kimi-key>
 export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
 export OPENROUTER_API_KEY=<your-openrouter-key>
+export ORCAROUTER_API_KEY=<your-orcarouter-key>
 ```
 
 Run all tests:
@@ -253,6 +254,9 @@ go test -v ./deepseek
 
 # OpenRouter tests
 go test -v ./openrouter
+
+# OrcaRouter tests
+go test -v ./orcarouter
 ```
 
 Note: Tests will be skipped if the required API keys are not set.
