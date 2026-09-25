@@ -42,7 +42,7 @@ func main() {
   }
 
   // Get all available tools
-  tools, err := client.GetActiveTools(ctx, g)
+  tools, err := client.ActiveTools(ctx)
   if err != nil {
     log.Fatal(err)
   }
@@ -119,9 +119,9 @@ func main() {
 }
 ```
 
-## GenkitMCPServer - Expose Genkit Tools
+## MCPHost - Multiple Server Connections
 
-Turn your Genkit app into an MCP server:
+Connect to multiple MCP servers:
 
 ```go
 package main
@@ -130,16 +130,14 @@ import (
   "context"
   "log"
 
-  "github.com/firebase/genkit/go/genkit"
   "github.com/firebase/genkit/go/plugins/mcp"
 )
 
 func main() {
   ctx := context.Background()
-  g := genkit.Init(ctx)
 
   // Create a host with multiple servers
-  host, err := mcp.NewMCPHost(g, mcp.MCPHostOptions{
+  host, err := mcp.NewHost(mcp.MCPHostOptions{
     Name: "my-app",
     MCPServers: []mcp.MCPServerConfig{
       {
@@ -169,7 +167,7 @@ func main() {
   }
 
   // Connect to new server at runtime
-  err = host.Connect(ctx, g, "weather", mcp.MCPClientOptions{
+  err = host.ConnectServer(ctx, "weather", mcp.MCPClientOptions{
     Name: "weather-server",
     Stdio: &mcp.StdioConfig{
       Command: "python",
@@ -187,13 +185,18 @@ func main() {
   host.Disconnect(ctx, "weather")
 
   // Get tools from all active servers
-  tools, err := host.GetActiveTools(ctx, g)
+  tools, err := host.ActiveTools(ctx)
   if err != nil {
     log.Fatal(err)
   }
+  log.Printf("Found %d tools", len(tools))
 }
 
 ```
+
+`ActiveTools` returns detached tools; it does not register them with a Genkit
+instance. After initializing `g`, register a tool with
+`genkit.RegisterAction(g, tool)` when you want it available by name.
 
 ## Testing Your Server
 
