@@ -151,6 +151,7 @@ gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
 google-genai-deep-research = { workspace = true }
 google-genai-media   = { workspace = true }
+mcp-hello            = { workspace = true }
 middleware           = { workspace = true }
 middleware-coding-agent = { workspace = true }
 ollama-sample        = { workspace = true }
