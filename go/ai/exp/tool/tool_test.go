@@ -19,6 +19,7 @@ package tool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -106,9 +107,14 @@ func TestFail_MarksError(t *testing.T) {
 
 	cause := errors.New("no such city")
 	err := Fail(cause)
-	var fail *base.ToolFailError
-	if !errors.As(err, &fail) {
-		t.Fatalf("Fail(err) = %T, want a *base.ToolFailError", err)
+	if !IsFail(err) {
+		t.Fatalf("IsFail(Fail(err)) = false, want true")
+	}
+	if !IsFail(fmt.Errorf("attempt 3: %w", err)) {
+		t.Error("IsFail is false for a wrapped Fail error, want true")
+	}
+	if IsFail(cause) {
+		t.Error("IsFail is true for an unmarked error, want false")
 	}
 	if !errors.Is(err, cause) {
 		t.Error("Fail(err) does not unwrap to err")

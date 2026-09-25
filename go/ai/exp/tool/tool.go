@@ -22,6 +22,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -120,6 +121,13 @@ func Fail(err error) error {
 		return nil
 	}
 	return &base.ToolFailError{Err: err}
+}
+
+// IsFail reports whether err, or any error it wraps, was made with [Fail].
+// Use it to check in a test that a tool returns its error to the model.
+func IsFail(err error) bool {
+	var fail *base.ToolFailError
+	return errors.As(err, &fail)
 }
 
 // --- Respond ---
