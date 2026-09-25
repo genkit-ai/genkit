@@ -24,7 +24,6 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
-import json
 from functools import cached_property
 from typing import Any, Literal, TypeAlias
 
@@ -43,7 +42,8 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit.plugin_api import ActionRunContext, tracer, wrap_http_error
+from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit.plugin_api import ActionRunContext, wrap_http_error
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
@@ -199,22 +199,22 @@ class ImagenModel:
         if request.tools:
             raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
-        with tracer.start_as_current_span('generate_images') as span:
-            span.set_attribute(
-                'genkit:input',
-                json.dumps({
-                    'config': _to_dict(config),
-                    'contents': prompt,
-                    'model': self._version,
-                }),
-            )
+        async def call_imagen(_span: object) -> genai_types.GenerateImagesResponse:
             try:
-                response = await self._client.aio.models.generate_images(
-                    model=self._version, prompt=prompt, config=config
-                )
+                return await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
             except APIError as e:
                 raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-            span.set_attribute('genkit:output', json.dumps(_to_dict(response), default=str))
+
+        response = await run_in_new_span(
+            'generate_images',
+            call_imagen,
+            action_type='util',
+            input={
+                'config': _to_dict(config),
+                'contents': prompt,
+                'model': self._version,
+            },
+        )
 
         content = self._contents_from_response(response)
 

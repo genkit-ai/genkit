@@ -24,13 +24,13 @@ from typing import Any, ClassVar
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.types import Attributes, AttributeValue
 
 from genkit._core._compat import override
+from genkit._core._telemetry._attrs import Attr, Subtype
 
-from ._attrs import Attr, Subtype
 
-
-def _copy_attrs(span: ReadableSpan) -> dict[str, Any]:
+def _copy_attrs(span: ReadableSpan) -> dict[str, AttributeValue]:
     """Return a mutable copy of span attributes."""
     return dict(span.attributes) if span.attributes else {}
 
@@ -39,9 +39,9 @@ class RedactedSpan(ReadableSpan):
     """A span wrapper that overrides attributes while delegating everything else."""
 
     # pyrefly:ignore[bad-override]
-    _attributes: dict[str, Any]
+    _attributes: dict[str, AttributeValue]
 
-    def __init__(self, span: ReadableSpan, attributes: dict[str, Any]) -> None:
+    def __init__(self, span: ReadableSpan, attributes: dict[str, AttributeValue]) -> None:
         self._span = span
         self._attributes = attributes
 
@@ -49,9 +49,8 @@ class RedactedSpan(ReadableSpan):
         return getattr(self._span, name)
 
     @property
-    def attributes(self) -> dict[str, Any]:
+    def attributes(self) -> Attributes:
         """The modified attributes."""
-        # pyrefly: ignore[bad-return] - dict[str, Any] is compatible with Mapping at runtime
         return self._attributes
 
 

@@ -36,9 +36,7 @@ from genkit._core._middleware import new_middleware
 from genkit._core._model import ModelConfig
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
-from genkit._core._trace._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
-from genkit._core._trace._path import to_display_path
-from genkit._core._tracing import add_custom_exporter, tracer
+from genkit._core._telemetry._path import to_display_path
 from genkit._core._typing import ActionMetadata
 
 # Embedder domain re-exports
@@ -87,10 +85,6 @@ __all__ = [
     # Loop-local caching
     'loop_local_client',
     # Tracing
-    'tracer',
-    'add_custom_exporter',
-    'AdjustingTraceExporter',
-    'RedactedSpan',
     'to_display_path',
     # Schema utilities
     'to_json_schema',
