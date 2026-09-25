@@ -590,12 +590,28 @@ export function maybeRegisterDynamicMiddlewareTools(
   });
 }
 
-function maybeRegisterDynamicTools<
+export function maybeRegisterDynamicTools<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.tools?.forEach((t) => {
     if (isDynamicTool(t)) {
+      // A plugin init() may return tool() actions that are already registered
+      // in this registry. They bypass defineTool(), which clears the dynamic
+      // flag, so without this guard they are re-registered on every generate,
+      // tripping "already registered" errors for what is a no-op overwrite.
+      // See genkit-ai/genkit#6381.
+      //
+      // generate() wraps the registry in a child registry before calling us,
+      // so the tool's __registry (the parent where it was first registered)
+      // is never strictly equal to the child. Walk the parent chain instead.
+      let r: Registry | undefined = registry;
+      while (r && (t as Action).__registry !== r) {
+        r = r.parent;
+      }
+      if (r) {
+        return;
+      }
       if (isMultipartTool(t)) {
         registry.registerAction('tool.v2', t);
       } else {
