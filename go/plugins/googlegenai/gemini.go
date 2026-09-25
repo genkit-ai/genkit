@@ -89,6 +89,17 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 			})
 	}
 
+	// Lyria posts to a Vertex-only predict endpoint - the genai SDK has no
+	// music method - so it takes neither the generateContent path nor the
+	// media-download middleware. generateMusic reads the config off the
+	// request, which normalizeConfig has already converted to LyriaConfig.
+	if mt == ModelTypeLyria {
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
+			func(ctx context.Context, input *ai.ModelRequest, _ LyriaConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return generateMusic(ctx, client, id, input, cb)
+			})
+	}
+
 	// The gemini api doesn't support downloading media from http(s).
 	var download ai.ModelMiddleware
 	if opts.Supports != nil && opts.Supports.Media {
