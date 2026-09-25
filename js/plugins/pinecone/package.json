@@ -20,7 +20,8 @@
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
-    "build:watch": "tsup-node --watch"
+    "build:watch": "tsup-node --watch",
+    "test": "node --import tsx --test tests/*_test.ts"
   },
   "repository": {
     "type": "git",
