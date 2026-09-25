@@ -343,18 +343,14 @@ func triageResult(decision *Triage, resp *ai.ModelResponse) TriageResult {
 // same policy routes them; what moved into the file is the model, the
 // preamble, and how the input becomes the state.
 func DefineTriageFromPrompt(g *genkit.Genkit) {
-	prompt := genkit.LookupPrompt(g, "triage")
+	prompt := genkit.LookupDataPrompt[TicketRequest, Triage](g, "triage")
 	if prompt == nil {
 		log.Fatal("prompts/triage.prompt was not loaded")
 	}
 	genkit.DefineFlow(g, "triagePromptFlow", func(ctx context.Context, input TicketRequest) (TriageResult, error) {
-		resp, err := prompt.Execute(ctx, ai.WithInput(input))
+		decision, resp, err := prompt.Execute(ctx, input)
 		if err != nil {
 			return TriageResult{}, fmt.Errorf("could not triage: %w", err)
-		}
-		var decision Triage
-		if err := resp.Output(&decision); err != nil {
-			return TriageResult{}, fmt.Errorf("could not read the decision: %w", err)
 		}
 		return triageResult(&decision, resp), nil
 	})
