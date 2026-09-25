@@ -56,3 +56,23 @@ func TestCheckObjectPayload(t *testing.T) {
 		})
 	}
 }
+
+func TestToolInterruptError_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		want string
+	}{
+		{"object data", map[string]any{"key": "value"}, "tool execution interrupted: \n\n{\n  \"key\": \"value\"\n}"},
+		{"bare interrupt", nil, "tool execution interrupted"},
+		{"unmarshalable data", func() {}, "tool execution interrupted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &ToolInterruptError{Data: tt.data}
+			if got := err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

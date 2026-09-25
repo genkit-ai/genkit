@@ -84,7 +84,7 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic‑media](samples/basic-media) | Reading, drawing, and redrawing pictures, plus generating video with a polled background model |
 | [basic‑prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files, shared partials and helpers, and prompts embedded in the binary |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content computed from your data, with media and retrieved docs |
-| [basic‑tools](samples/basic-tools/main.go) | A slow tool whose answer is more than one value, returned as a multipart response |
+| [basic‑tools](samples/basic-tools/main.go) | A slow tool that streams progress and attaches a chart to its answer |
 | [basic‑tools‑exp](samples/basic-tools-exp/main.go) | The same program on the in-preview tools API, so the diff between the two is the API |
 | [basic‑agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Serving store-backed and stateless agents over HTTP |
@@ -711,16 +711,16 @@ fmt.Println(response.Text())
 
 A tool error fails the whole generation rather than being reported to the model, so a miss the model could work around (no such city, no rows matched) belongs in the result rather than in an `error`.
 
-`genkit.DefineMultipartTool` is for a result that is more than one value. It returns an `ai.MultipartToolResponse` instead: `Output` is what a plain tool would have returned, and `Content` carries parts that are not values, such as an image or a document. Those parts reach the model and the client both, and must be media or data parts.
+The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the model and the client both, and must be media or data parts. `tool.SendPartial` streams progress to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative), and `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool built itself, for when the update is a line of prose. `*ai.ToolContext` embeds the context they take:
 
 ```go
-chartTool := genkit.DefineMultipartTool(g, "chartWeather",
-    "Charts a location's temperatures for the last week",
-    func(ctx *ai.ToolContext, input WeatherInput) (*ai.MultipartToolResponse, error) {
-        return &ai.MultipartToolResponse{
-            Output:  Trend{Low: 61, High: 78},
-            Content: []*ai.Part{ai.NewMediaPart("image/png", chartDataURI)},
-        }, nil
+analyzeTool := genkit.DefineTool(g, "analyzeStock",
+    "Analyzes a stock and returns a summary with a chart.",
+    func(ctx *ai.ToolContext, input AnalyzeInput) (string, error) {
+        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
+
+        tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
+        return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
     },
 )
 ```
