@@ -76,10 +76,11 @@ func configureLogging() {
 }
 
 // FromContext returns the [*Genkit] instance stored in the context.
-// This is set automatically by [Generate] and related functions, and seeded
-// into each agent turn by the agent constructors in
-// [github.com/firebase/genkit/go/genkit/exp]. Middleware implementations can
-// use this to access the Genkit instance during generation.
+// This is set automatically by [Generate] and related functions, by the
+// generate action that the Dev UI runs, and in each agent turn by the agent
+// constructors in [github.com/firebase/genkit/go/genkit/exp]. Middleware
+// implementations can use this to access the Genkit instance during
+// generation.
 func FromContext(ctx context.Context) *Genkit {
 	return genkitCtxKey.FromContext(ctx)
 }
