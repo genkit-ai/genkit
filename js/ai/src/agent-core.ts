@@ -22,7 +22,8 @@
  * no Node-specific APIs. Both the in-process server agent (`ai.defineAgent`)
  * and the HTTP `remoteAgent` client compose the same {@link AgentChatImpl} /
  * {@link createAgentAPI} core over a transport that implements
- * {@link AgentTransport}.
+ * {@link AgentTransport}. Custom transports plug in the same way (both are
+ * re-exported from `genkit/beta/client`).
  *
  * @module agent-core
  */
@@ -298,21 +299,51 @@ export class AgentError<State = unknown> extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * The pluggable backend the agent-client core runs over. Implementations exist
- * for the in-process server agent (driving the agent action directly) and for
- * the HTTP `remoteAgent` (driving `streamFlow`/`runFlow`).
+ * The pluggable backend the agent-client core runs over. Genkit ships two: the
+ * in-process one behind `ai.defineAgent` (drives the agent action directly)
+ * and the HTTP one behind `remoteAgent` (drives `streamFlow`/`runFlow`).
+ * Implement it to talk to an agent over anything else (WebSocket, a callable
+ * function, a queue, ...) and wrap it with {@link createAgentAPI}.
  *
  * `Opts` are the transport-specific call options it accepts (see
  * {@link AgentAPI}). The core passes them through untouched.
+ *
+ * ```ts
+ * const transport: AgentTransport<{ traceId?: string }> = {
+ *   runTurn(input, init, { abortSignal, traceId }) {
+ *     const call = socket.startTurn({ input, init, traceId, abortSignal });
+ *     return { stream: call.chunks, output: call.result };
+ *   },
+ *   getSnapshot: (lookup, opts) => socket.getSnapshot(lookup, opts?.traceId),
+ *   abort: (snapshotId, opts) => socket.abort(snapshotId, opts?.traceId),
+ * };
+ * const agent = createAgentAPI<MyState, { traceId?: string }>(transport);
+ * ```
+ *
+ * Error contract: a turn the agent itself failed should resolve `output` with
+ * `finishReason: 'failed'` (and `error`), which surfaces as an
+ * {@link AgentError}. Transport-level failures (network, auth, ...) may reject
+ * `output` / throw from `stream`; an error message of the form
+ * `STATUS: message` (ex. `UNAUTHENTICATED: bad token`) populates
+ * `AgentError.status`.
  */
 export interface AgentTransport<Opts extends object = never> {
-  /** Declares server- vs client-managed state; auto-detected when omitted. */
-  stateManagement?: 'server' | 'client';
+  /**
+   * Declares server- vs client-managed state. Advisory metadata: the core
+   * derives each turn's `init` from what the previous turn returned
+   * (`snapshotId` or `state`), so it never reads (or writes) this field.
+   */
+  readonly stateManagement?: 'server' | 'client';
 
   /**
    * Runs a single turn. Returns the streamed chunks plus a promise for the
-   * final, non-throwing {@link AgentOutput} (failures resolve with
-   * `finishReason: 'failed'`).
+   * final {@link AgentOutput}.
+   *
+   * - `init` is always an object: `{ snapshotId }`, `{ state }`, or the chat's
+   *   initial init (`{}` for a fresh session).
+   * - `opts.abortSignal` is always present; stop the turn when it fires.
+   * - `stream` MUST deliver chunks in order without loss: `customPatch` chunks
+   *   are applied positionally to the chat's tracked state.
    */
   runTurn(
     input: AgentInput,
@@ -323,11 +354,14 @@ export interface AgentTransport<Opts extends object = never> {
     output: Promise<AgentOutput>;
   };
 
-  /** Reads a snapshot. Requires a server store. */
+  /**
+   * Reads a snapshot, or resolves `undefined` if it does not exist. Requires a
+   * server store.
+   */
   getSnapshot(
     lookup: SnapshotLookup,
     opts?: Opts
-  ): Promise<SessionSnapshot<any> | undefined>;
+  ): Promise<SessionSnapshot<unknown> | undefined>;
 
   /** Aborts a running snapshot. Requires a server store. */
   abort(
@@ -733,13 +767,6 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
     if (raw.state !== undefined) {
       this.clientState = raw.state;
     }
-    if (this.transport.stateManagement === undefined) {
-      if (raw.snapshotId !== undefined) {
-        this.transport.stateManagement = 'server';
-      } else if (raw.state !== undefined) {
-        this.transport.stateManagement = 'client';
-      }
-    }
     if (raw.state?.messages !== undefined) {
       this.messages = [...raw.state.messages];
     } else if (raw.message) {
@@ -1069,8 +1096,17 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
 
 /**
  * Composes the {@link AgentAPI} surface (`chat`/`loadChat`/`getSnapshot`/
- * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent
- * and the HTTP `remoteAgent`.
+ * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent,
+ * the HTTP `remoteAgent`, and any custom transport.
+ *
+ * When passing type arguments, pass both: `createAgentAPI<MyState>(t)` resets
+ * `Opts` to `never` (TypeScript does not infer the remaining ones), which
+ * rejects the transport's options.
+ *
+ * ```ts
+ * const agent = createAgentAPI<MyState, MyOpts>(myTransport);
+ * const chat = agent.chat({}, { traceId: 'abc' });
+ * ```
  */
 export function createAgentAPI<State = unknown, Opts extends object = never>(
   transport: AgentTransport<Opts>

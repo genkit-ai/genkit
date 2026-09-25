@@ -116,7 +116,8 @@ app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header(
     'Access-Control-Allow-Headers',
-    'Content-Type, Accept, X-Genkit-Stream-Id'
+    // X-Request-Id: sent by the custom transport sample (custom-transport-client.ts).
+    'Content-Type, Accept, X-Genkit-Stream-Id, X-Request-Id'
   );
   res.header('Access-Control-Expose-Headers', 'X-Genkit-Stream-Id');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

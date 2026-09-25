@@ -30,18 +30,22 @@ import type {
 import type { SessionSnapshot } from '@genkit-ai/ai/session';
 import { runFlow, streamFlow } from './client.js';
 
-// Re-export the transport-agnostic agent-client surface so existing imports
-// from `genkit/beta/client` keep working.
+// Re-export the transport-agnostic agent-client surface, including the pieces
+// needed to build an `AgentAPI` over a custom transport (`createAgentAPI`,
+// `AgentTransport`, `SnapshotLookup`).
 export {
   AgentError,
+  createAgentAPI,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
   type AgentTurnOptions,
   type DetachedTask,
+  type SnapshotLookup,
 } from '@genkit-ai/ai/agent-core';
 
 // Re-export the JSON Patch helper so apps can apply a chunk's `customPatch` to
@@ -91,6 +95,28 @@ export interface RemoteAgentOptions {
 export function remoteAgent<State = unknown>(
   options: RemoteAgentOptions
 ): AgentAPI<State> {
+  return createAgentAPI<State>(remoteAgentTransport(options));
+}
+
+/**
+ * The HTTP {@link AgentTransport} behind {@link remoteAgent}. Useful for
+ * decorating the HTTP transport (logging, retries, ...) before wrapping it
+ * with {@link createAgentAPI}:
+ *
+ * ```ts
+ * const http = remoteAgentTransport({ url: '/api/weatherAgent' });
+ * const agent = createAgentAPI<WeatherState>({
+ *   ...http,
+ *   runTurn(input, init, opts) {
+ *     console.log('turn from', init.snapshotId ?? 'new session');
+ *     return http.runTurn(input, init, opts);
+ *   },
+ * });
+ * ```
+ */
+export function remoteAgentTransport(
+  options: RemoteAgentOptions
+): AgentTransport {
   const { url } = options;
   const getSnapshotUrl = options.getSnapshotUrl ?? `${url}/getSnapshot`;
   const abortUrl = options.abortUrl ?? `${url}/abort`;
@@ -105,7 +131,7 @@ export function remoteAgent<State = unknown>(
     return options.headers;
   };
 
-  const transport: AgentTransport = {
+  return {
     stateManagement: options.stateManagement,
 
     runTurn(
@@ -140,7 +166,7 @@ export function remoteAgent<State = unknown>(
 
     async getSnapshot(lookup: SnapshotLookup) {
       const headers = await resolveHeaders();
-      return runFlow<SessionSnapshot<State> | undefined>({
+      return runFlow<SessionSnapshot<unknown> | undefined>({
         url: getSnapshotUrl,
         input: lookup,
         headers,
@@ -160,6 +186,4 @@ export function remoteAgent<State = unknown>(
       return result?.status;
     },
   };
-
-  return createAgentAPI<State>(transport);
 }
