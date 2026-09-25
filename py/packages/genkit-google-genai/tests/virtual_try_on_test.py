@@ -517,6 +517,14 @@ class TestRequestClient:
                 VirtualTryOnOutputOptions.model_validate({'compressionQuality': quality})
         assert VirtualTryOnOutputOptions.model_validate({'compressionQuality': 100}).compression_quality == 100
 
+    def test_person_and_safety_levels_are_closed(self) -> None:
+        """A misspelled level fails validation before the request is built."""
+        for field, bad in (('personGeneration', 'dont-allow'), ('safetySetting', 'nope')):
+            with pytest.raises(ValidationError):
+                VirtualTryOnConfig.model_validate({field: bad})
+        config = VirtualTryOnConfig.model_validate({'personGeneration': 'dont_allow', 'safetySetting': 'block_most'})
+        assert (config.person_generation, config.safety_setting) == ('dont_allow', 'block_most')
+
     def test_client_knobs_are_typed(self) -> None:
         """The knobs are declared fields, so a wrong type fails validation before it reaches the SDK."""
         with pytest.raises(ValidationError):

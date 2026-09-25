@@ -124,15 +124,15 @@ class VirtualTryOnConfig(BaseModel):
     base_steps: int | None = Field(
         default=None, alias='baseSteps', ge=1, le=100, description='Number of denoising steps.'
     )
-    person_generation: str | None = Field(
+    person_generation: Literal['dont_allow', 'allow_adult', 'allow_all'] | None = Field(
         default=None,
         alias='personGeneration',
-        description='Control if/how images of people are generated: "dont_allow", "allow_adult" or "allow_all".',
+        description='Control if/how images of people are generated.',
     )
-    safety_setting: str | None = Field(
+    safety_setting: Literal['block_most', 'block_some', 'block_few', 'block_fewest'] | None = Field(
         default=None,
         alias='safetySetting',
-        description='Safety filter level: "block_most", "block_some", "block_few" or "block_fewest".',
+        description='Safety filter level.',
     )
     storage_uri: str | None = Field(
         default=None, alias='storageUri', description='Cloud Storage URI to store the generated images.'
