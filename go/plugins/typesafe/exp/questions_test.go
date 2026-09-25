@@ -604,6 +604,16 @@ func TestRuntimeQuestions(t *testing.T) {
 	if got := questions["tool"].Instructions; got != "The state is a user request.\n\nWhich tool serves the request?" {
 		t.Errorf("text instructions with a preamble = %q", got)
 	}
+	// An array takes the preamble as its first element rather than nested.
+	listed, err := compileQuestions(Schema(map[string]Question{
+		"q": NoulQuestion{Instructions: []any{"Is the request urgent?", map[string]any{"field": "deadline"}}},
+	}), "The state is a user request.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := base.JSONString(listed["q"].Instructions); got != `["The state is a user request.","Is the request urgent?",{"field":"deadline"}]` {
+		t.Errorf("array instructions with a preamble = %s", got)
+	}
 
 	// The answers fill a map of Answer.
 	var resp response

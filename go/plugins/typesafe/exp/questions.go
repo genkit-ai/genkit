@@ -588,11 +588,15 @@ func compileQuestions(schema map[string]any, preamble string) (map[string]questi
 // questionInstructions reads a question's instructions: the structured
 // value a runtime question carries on the x-instructions keyword, or the
 // property's description. The preamble goes in front: as a paragraph of
-// the text, or as the first element beside a structured value.
+// the text, as the first element of an array, or as the first element
+// beside any other structured value.
 func questionInstructions(id string, prop map[string]any, preamble string) (any, error) {
 	if structured := prop[instructionsKeyword]; structured != nil {
 		if preamble == "" {
 			return structured, nil
+		}
+		if items, ok := structured.([]any); ok {
+			return append([]any{preamble}, items...), nil
 		}
 		return []any{preamble, structured}, nil
 	}
