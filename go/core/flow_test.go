@@ -278,15 +278,7 @@ func (c *stepSpanCollector) byName(name string) *tracing.SpanData {
 
 func collectStepSpans(t *testing.T) *stepSpanCollector {
 	t.Helper()
-	client := tracing.NewTestOnlyTelemetryClient()
-	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
-	// Restore the package-wide default (see TestMain) rather than clearing it,
-	// so later tests still capture spans.
-	t.Cleanup(func() {
-		tracing.ConfigureInstrumentation(
-			tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
-	})
-	return &stepSpanCollector{client: client}
+	return &stepSpanCollector{client: captureTraces(t)}
 }
 
 // TestRunWithContextNesting is the reason RunWithContext exists: work started

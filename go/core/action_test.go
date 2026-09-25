@@ -26,6 +26,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -200,23 +201,32 @@ func TestActionStreaming(t *testing.T) {
 
 func TestActionTracing(t *testing.T) {
 	r := registry.New()
-	// Traces are captured by the package-wide Direct client wired in TestMain.
-	tc := testTelemetryClient
+	// An isolated client, so the assertions hold under -count=N.
+	tc := captureTraces(t)
 	name := api.NewName("test", "TestTracing-inc")
 	a := defineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The package-wide client captures every test's spans, so filter to this
-	// action's uniquely named span. Expect exactly one.
-	var got int
-	for _, s := range tc.Spans() {
-		if s.DisplayName == name {
-			got++
-		}
+	if len(tc.Traces) != 1 {
+		t.Fatalf("got %d traces, want 1", len(tc.Traces))
 	}
-	if got != 1 {
-		t.Fatalf("got %d spans named %q, want 1", got, name)
+	for _, td := range tc.Traces {
+		if len(td.Spans) != 1 {
+			t.Fatalf("got %d spans, want 1", len(td.Spans))
+		}
+		var span *tracing.SpanData
+		for _, s := range td.Spans {
+			span = s
+		}
+		// The root span sets the trace envelope.
+		if td.DisplayName != name {
+			t.Errorf("trace DisplayName = %q, want %q", td.DisplayName, name)
+		}
+		if td.StartTime != span.StartTime || td.EndTime != span.EndTime || td.EndTime == 0 {
+			t.Errorf("trace times = [%v, %v], want the root span's [%v, %v]",
+				td.StartTime, td.EndTime, span.StartTime, span.EndTime)
+		}
 	}
 }
 
