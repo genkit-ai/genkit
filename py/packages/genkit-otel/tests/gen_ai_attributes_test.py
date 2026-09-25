@@ -21,6 +21,7 @@ from genkit_otel._gen_ai_attributes import (
     derive_output_type,
     derive_provider_name,
     map_finish_reason,
+    parse_content_capturing_mode,
     split_model_name,
 )
 
@@ -118,3 +119,20 @@ def test_as_string_list() -> None:
     assert as_string_list([1, 2]) == ['1', '2']
     assert as_string_list('a') == ['a']
     assert as_string_list(None) is None
+
+
+def test_parse_known_content_tokens() -> None:
+    assert parse_content_capturing_mode('NO_CONTENT') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('span_only') == 'SPAN_ONLY'
+    assert parse_content_capturing_mode('Event_Only') == 'EVENT_ONLY'
+    assert parse_content_capturing_mode('  SPAN_AND_EVENT  ') == 'SPAN_AND_EVENT'
+
+
+def test_parse_empty_is_no_content() -> None:
+    assert parse_content_capturing_mode('') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('   ') == 'NO_CONTENT'
+
+
+def test_parse_unknown_token_is_no_content() -> None:
+    assert parse_content_capturing_mode('true') == 'NO_CONTENT'
+    assert parse_content_capturing_mode('bogus') == 'NO_CONTENT'

@@ -20,6 +20,8 @@ Provider, model, finish reason, and output type are plain functions, so
 tests can check them without a tracer.
 """
 
+from typing import Literal
+
 
 class GenAiAttr:
     """Canonical ``gen_ai.*`` attribute names."""
@@ -83,6 +85,32 @@ class GenAiMetric:
 
     TOKEN_USAGE = 'gen_ai.client.token.usage'
     OPERATION_DURATION = 'gen_ai.client.operation.duration'
+
+
+GEN_AI_OPERATION_DETAILS_EVENT = 'gen_ai.client.inference.operation.details'
+
+CAPTURE_CONTENT_ENV_VAR = 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
+
+
+ContentCapturingMode = Literal['NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT']
+
+_CONTENT_CAPTURING_MODES: dict[str, ContentCapturingMode] = {
+    'NO_CONTENT': 'NO_CONTENT',
+    'SPAN_ONLY': 'SPAN_ONLY',
+    'EVENT_ONLY': 'EVENT_ONLY',
+    'SPAN_AND_EVENT': 'SPAN_AND_EVENT',
+}
+
+
+def parse_content_capturing_mode(raw: str) -> ContentCapturingMode:
+    """Parse a spec content-capturing token.
+
+    Empty or unknown → ``NO_CONTENT``. A known token (case-insensitive,
+    surrounding whitespace ignored) → that mode.
+    """
+    if not raw.strip():
+        return 'NO_CONTENT'
+    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper(), 'NO_CONTENT')
 
 
 def split_model_name(name: str) -> tuple[str | None, str]:
