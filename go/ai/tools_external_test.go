@@ -364,8 +364,6 @@ func TestSendPartial_StreamsPartialToolResponse(t *testing.T) {
 }
 
 // TestSendPartial_StreamsFromARestartedTool pins that a restarted tool
-
-// TestSendPartial_StreamsFromARestartedTool pins that a restarted tool
 // streams as a tool of a model turn does: its SendPartial calls arrive on the
 // resumed generation's stream, tagged with the request they belong to.
 func TestSendPartial_StreamsFromARestartedTool(t *testing.T) {

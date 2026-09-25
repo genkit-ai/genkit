@@ -476,7 +476,7 @@ func newToolContext(ctx context.Context) *ToolContext {
 // sink, folded here, and none of the enclosing call's restart state, so the
 // enclosing call's attachments and resume stay with that call.
 func runToolFunc(ctx context.Context, name string, run func(ctx context.Context) (*MultipartToolResponse, error)) (*MultipartToolResponse, error) {
-	if base.ToolCallKey.FromContext(ctx).Claim(name) && base.ToolPartSinkKey.FromContext(ctx) != nil {
+	if base.ToolPartSinkKey.FromContext(ctx) != nil && base.ToolCallKey.FromContext(ctx).Claim(name) {
 		resp, err := run(ctx)
 		if err != nil {
 			return nil, err
