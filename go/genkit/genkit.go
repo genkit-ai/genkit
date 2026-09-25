@@ -50,8 +50,8 @@ var genkitCtxKey = base.NewContextKey[*Genkit]()
 var configureLoggingOnce sync.Once
 
 // configureLogging applies GENKIT_LOG_LEVEL to the console handler and, in the
-// dev environment, installs the handler that streams logs to the Dev UI's
-// telemetry server, correlated with the active trace span.
+// dev environment, wires trace and log export to the Dev UI's telemetry server
+// (logs are correlated with the active trace span).
 func configureLogging() {
 	if v := os.Getenv("GENKIT_LOG_LEVEL"); v != "" {
 		var lvl slog.Level
@@ -70,8 +70,11 @@ func configureLogging() {
 		logger.AddHandler(tracing.LogExportHandler())
 		// The CLI normally provides the telemetry server URL in the
 		// environment; when it arrives later via the reflection API instead,
-		// configureTelemetry enables export at that point.
-		tracing.EnableLogExport(os.Getenv("GENKIT_TELEMETRY_SERVER"))
+		// configureTelemetry enables export at that point. Read once here,
+		// not per span.
+		url := os.Getenv("GENKIT_TELEMETRY_SERVER")
+		tracing.EnableDevInstrumentation(url)
+		tracing.EnableLogExport(url)
 	}
 }
 

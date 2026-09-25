@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/internal"
-	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // The dev log exporter forwards slog records to the telemetry server used by
@@ -199,10 +198,12 @@ func (h *logExportHandler) Handle(ctx context.Context, r slog.Record) error {
 	// The span active when the log statement ran determines where the record
 	// appears in the Dev UI, which looks logs up by exact trace and span ID.
 	// A record logged outside any span is still stored, just not shown on a
-	// span.
-	if sc := otrace.SpanContextFromContext(ctx); sc.IsValid() {
-		rec.TraceID = sc.TraceID().String()
-		rec.SpanID = sc.SpanID().String()
+	// span. Correlation reads Genkit's own span metadata (the composite ids,
+	// Direct-wins in dev) rather than the OTel active context, so logs land on
+	// the same ids the Dev UI trace uses even with no OTel SDK on the dev path.
+	if ti := SpanTraceInfo(ctx); ti.TraceID != "" {
+		rec.TraceID = ti.TraceID
+		rec.SpanID = ti.SpanID
 	}
 	h.exporter.enqueue(rec)
 	return nil

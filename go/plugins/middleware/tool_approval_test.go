@@ -18,14 +18,12 @@ package middleware
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
@@ -45,43 +43,43 @@ func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
 		})
 }
 
-// spanCollector is a minimal sdktrace.SpanExporter that records finished
-// spans so a test can assert on them.
+// spanCollector records the spans a run produces via the Direct
+// instrumentation, so a test can assert on their genkit attributes without an
+// OpenTelemetry SDK.
 type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
+	client *tracing.TestOnlyTelemetryClient
 }
 
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
+// collectSpans routes the run's spans through a Direct instrumentation over an
+// in-memory client for the duration of the test. Reset on cleanup.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	client := tracing.NewTestOnlyTelemetryClient()
+	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	t.Cleanup(tracing.ResetInstrumentation)
+	return &spanCollector{client: client}
 }
 
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// byName returns every recorded span with the given name.
-func (c *spanCollector) byName(name string) []sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var out []sdktrace.ReadOnlySpan
-	for _, s := range c.spans {
-		if s.Name() == name {
+// byName returns every recorded span with the given display name.
+func (c *spanCollector) byName(name string) []*tracing.SpanData {
+	var out []*tracing.SpanData
+	for _, s := range c.client.Spans() {
+		if s.DisplayName == name {
 			out = append(out, s)
 		}
 	}
 	return out
 }
 
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
+// spanAttr returns the string value of the named genkit span attribute, if
+// present.
+func spanAttr(span *tracing.SpanData, key string) (string, bool) {
+	v, ok := span.Attributes[key]
+	if !ok {
+		return "", false
 	}
-	return "", false
+	s, ok := v.(string)
+	return s, ok
 }
 
 // twoToolModelHandler returns a model handler that requests two tools on the first call,
@@ -191,11 +189,7 @@ func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
 	safe := defineTool(t, r, "safe")
 	dangerous := defineTool(t, r, "dangerous")
 
-	collector := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(collector)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	collector := collectSpans(t)
 
 	ta := &ToolApproval{AllowedTools: []string{"safe"}}
 	if _, err := ai.Generate(ctx, r,

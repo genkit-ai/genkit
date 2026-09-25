@@ -34,6 +34,8 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func inc(_ context.Context, x int) (int, error) {
@@ -44,12 +46,21 @@ func dec(_ context.Context, x int) (int, error) {
 	return x - 1, nil
 }
 
+// TestMain routes every test's spans through a Direct instrumentation over an
+// in-memory client, so runs carry real trace ids without an OpenTelemetry SDK.
+// Configured package-wide (rather than per test) because the instrumentation
+// registry is a global and TestServeMux runs parallel; per-test reset would
+// race it. TestRunActionWithoutProviderIDs swaps it out temporarily; it is not
+// parallel.
+func TestMain(m *testing.M) {
+	tracing.ConfigureInstrumentation(
+		tracing.NewDirectTelemetryInstrumentation(tracing.NewTestOnlyTelemetryClient()))
+	os.Exit(m.Run())
+}
+
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
 		g := Init(context.Background())
-
-		tc := tracing.NewTestOnlyTelemetryClient()
-		tracing.WriteTelemetryImmediate(tc)
 
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
@@ -86,9 +97,6 @@ func TestReflectionServer(t *testing.T) {
 
 func TestServeMux(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
@@ -348,8 +356,6 @@ func TestServeMux(t *testing.T) {
 // This allows clients to get the trace ID immediately for cancellation or logging.
 func TestEarlyTraceIDTransmission(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
@@ -490,8 +496,6 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 //  3. Verify: cancel endpoint returns 200, action's ctx.Done() fires, response has error code 1 (gRPC CANCELLED)
 func TestActionCancellation(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	gotTraceID := make(chan string, 1)
 	gotCancelled := make(chan struct{})
@@ -567,6 +571,81 @@ func TestActionCancellation(t *testing.T) {
 	}
 	if !strings.Contains(responseBody, "Action was cancelled") {
 		t.Errorf("Expected 'Action was cancelled' message in response, got: %s", responseBody)
+	}
+}
+
+// TestRunActionWithoutProviderIDs covers a chain where no provider supplies
+// ids: the default OTel instrumentation over OTel's no-op provider (e.g. under
+// `genkit start --use-otel` with no OTel SDK configured). The trace headers
+// and cancellation must still work, on the ids the dispatcher mints.
+func TestRunActionWithoutProviderIDs(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	tracing.ResetInstrumentation()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		tracing.ConfigureInstrumentation(
+			tracing.NewDirectTelemetryInstrumentation(tracing.NewTestOnlyTelemetryClient()))
+	})
+
+	g := Init(context.Background())
+	gotTraceID := make(chan string, 1)
+	defineTestAction(g.reg, "test/blocking", api.ActionTypeCustom, nil, nil,
+		func(ctx context.Context, _ any) (any, error) {
+			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+
+	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
+	ts := httptest.NewServer(serveMux(g, s))
+	defer ts.Close()
+
+	type result struct {
+		traceID string
+		body    string
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/runAction",
+			strings.NewReader(`{"key":"/custom/test/blocking","input":null}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- result{}
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		done <- result{resp.Header.Get("X-Genkit-Trace-Id"), string(body)}
+	}()
+	traceID := <-gotTraceID
+	if traceID == "" {
+		t.Fatal("span has no trace id")
+	}
+	if _, ok := s.activeActions.Get(traceID); !ok {
+		t.Fatal("running action is not registered for cancellation")
+	}
+	cancelResp, err := http.Post(ts.URL+"/api/cancelAction", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"traceId":%q}`, traceID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelResp.Body.Close()
+	if cancelResp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", cancelResp.StatusCode)
+	}
+
+	select {
+	case r := <-done:
+		if r.traceID != traceID {
+			t.Errorf("X-Genkit-Trace-Id = %q, want %q", r.traceID, traceID)
+		}
+		if !strings.Contains(r.body, "Action was cancelled") {
+			t.Errorf("response body = %s, want a cancellation error", r.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("action did not finish after cancel")
 	}
 }
 
@@ -671,9 +750,6 @@ func TestCancelActionEndpoint(t *testing.T) {
 // init on an action without init support fails loudly.
 func TestRunActionWithInit(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	type initConfig struct {
 		Prefix string `json:"prefix"`
@@ -878,8 +954,6 @@ func TestReflectionErrorCodeYieldsValidHTTPStatus(t *testing.T) {
 // server mid-response. That is every unclassified failure, which is the common
 // one: a provider SDK rejecting a request reaches here as its own error type.
 func TestRunActionPlainErrorResponse(t *testing.T) {
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	g := Init(context.Background())
 	defineTestAction(g.reg, "test/boom", api.ActionTypeCustom, nil, nil,
