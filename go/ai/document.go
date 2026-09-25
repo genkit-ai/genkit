@@ -57,7 +57,8 @@ type Part struct {
 // or [ToolAction.RespondWith].
 //
 // On the wire it is carried in the part's metadata map (under "interrupt", or
-// "resolvedInterrupt" once resolved) for compatibility with the JS runtime;
+// "resolvedInterrupt" once resolved, plus "interruptedBy" when a hook raised
+// it) for compatibility with the JS runtime;
 // marshaling folds it in and unmarshaling lifts it back out. In process the
 // state lives on [Part.Interrupt] alone: the generate loop and unmarshaling
 // set the field and leave the metadata map to user and plugin metadata, so
@@ -74,6 +75,20 @@ type ToolInterrupt struct {
 	// that re-executed the tool or by a caller-provided response). A resolved
 	// interrupt is kept for history; the part no longer awaits resolution.
 	Resolved bool
+	// RaisedBy names the WrapTool hook that raised the interrupt, as the
+	// middleware's name (suffixed "#n" when the name repeats in the chain), and
+	// is empty when the tool itself did. A restart answers the stage named
+	// here: the hook reads the payload with
+	// [github.com/firebase/genkit/go/ai/tool.ResumeData] and the tool then runs
+	// as a fresh call. Carried on the wire as "interruptedBy".
+	RaisedBy string
+	// ReleasedBy names, in chain order, the WrapTool hooks that let the call
+	// through before it interrupted. A restart that keeps the call's input
+	// reports [github.com/firebase/genkit/go/ai/tool.Released] to exactly
+	// these hooks, so a hook that approved the call is not asked again, while
+	// a hook added to the chain since, or one facing a replaced input, decides
+	// afresh. Carried on the wire as "releasedBy".
+	ReleasedBy []string
 }
 
 // ToolRestart marks a tool request [Part] as a restart of an interrupted call,
@@ -118,6 +133,7 @@ func (p *Part) Clone() *Part {
 	if p.Interrupt != nil {
 		i := *p.Interrupt
 		i.Data = cloneContainer(i.Data)
+		i.ReleasedBy = slices.Clone(i.ReleasedBy)
 		cp.Interrupt = &i
 	}
 	if p.Restart != nil {
@@ -467,6 +483,15 @@ const (
 	// metaReplacedInput preserves the original input on a restart part when
 	// the caller replaced it.
 	metaReplacedInput = "replacedInput"
+	// metaInterruptedBy names, on an interrupted tool request part, the
+	// WrapTool hook that raised the interrupt (ToolInterrupt.RaisedBy);
+	// absent when the tool itself did. A Go-only key: the JS runtime has no
+	// tool hooks and carries it through untouched.
+	metaInterruptedBy = "interruptedBy"
+	// metaReleasedBy lists, on an interrupted tool request part, the WrapTool
+	// hooks that let the call through before it interrupted
+	// (ToolInterrupt.ReleasedBy). A Go-only key, like metaInterruptedBy.
+	metaReleasedBy = "releasedBy"
 	// metaInterruptResponse marks a caller-provided tool response part that
 	// resolves an interrupt in place of re-executing the tool.
 	metaInterruptResponse = "interruptResponse"
@@ -493,6 +518,16 @@ func (p *Part) wireMetadata() map[string]any {
 		}
 		m[key] = orTrue(it.Data)
 		delete(m, stale)
+		if it.RaisedBy != "" {
+			m[metaInterruptedBy] = it.RaisedBy
+		} else {
+			delete(m, metaInterruptedBy)
+		}
+		if len(it.ReleasedBy) > 0 {
+			m[metaReleasedBy] = it.ReleasedBy
+		} else {
+			delete(m, metaReleasedBy)
+		}
 	}
 	if rs := p.Restart; rs != nil {
 		m[metaResumed] = orTrue(rs.Resume)
@@ -535,6 +570,28 @@ func wirePayload(v any) (payload any, set bool) {
 	return v, true
 }
 
+// wireStrings reads a list of strings a wire key carries: a []string set in
+// process or the []any a JSON decode yields. Entries that are not strings are
+// dropped, and an empty or absent list is nil.
+func wireStrings(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		if len(l) == 0 {
+			return nil
+		}
+		return slices.Clone(l)
+	case []any:
+		var out []string
+		for _, e := range l {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // interruptState returns the interrupt state of a tool request part: the
 // typed field, or the state a part hand-assembled with the wire keys
 // describes. Every reader of interrupt state goes through it, so such a part
@@ -548,11 +605,13 @@ func (p *Part) interruptState() *ToolInterrupt {
 	if p.Interrupt != nil {
 		return p.Interrupt
 	}
+	raisedBy, _ := p.Metadata[metaInterruptedBy].(string)
+	releasedBy := wireStrings(p.Metadata[metaReleasedBy])
 	if v, ok := wirePayload(p.Metadata[metaInterrupt]); ok {
-		return &ToolInterrupt{Data: v}
+		return &ToolInterrupt{Data: v, RaisedBy: raisedBy, ReleasedBy: releasedBy}
 	}
 	if v, ok := wirePayload(p.Metadata[metaResolvedInterrupt]); ok {
-		return &ToolInterrupt{Data: v, Resolved: true}
+		return &ToolInterrupt{Data: v, Resolved: true, RaisedBy: raisedBy, ReleasedBy: releasedBy}
 	}
 	return nil
 }
@@ -590,7 +649,7 @@ func (p *Part) liftWireMetadata() {
 // stripWireKeys deletes the wire keys from m in place and returns m, or nil
 // when nothing is left.
 func stripWireKeys(m map[string]any) map[string]any {
-	for _, key := range [...]string{metaInterrupt, metaResolvedInterrupt, metaResumed, metaReplacedInput} {
+	for _, key := range [...]string{metaInterrupt, metaResolvedInterrupt, metaInterruptedBy, metaReleasedBy, metaResumed, metaReplacedInput} {
 		delete(m, key)
 	}
 	if len(m) == 0 {

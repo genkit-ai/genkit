@@ -44,6 +44,14 @@ type Hooks struct {
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
 	// be guarded with sync primitives.
+	//
+	// An interrupt the hook raises with tool.Interrupt, to hold the call
+	// without running the tool, is the hook's own: the restart that answers
+	// it reaches this hook through tool.ResumeData, and the tool then runs
+	// as a fresh call that may interrupt in turn. A restart answering a
+	// later stage, such an interrupt of the tool's included, reports
+	// tool.Released here when the interrupted call records that this hook
+	// let it through and the restart keeps the call's input.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 

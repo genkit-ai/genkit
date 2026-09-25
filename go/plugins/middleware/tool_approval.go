@@ -38,6 +38,15 @@ import (
 // must opt in so that unrelated resume flows (e.g. respond-only turns) cannot
 // bypass approval.
 //
+// The hold is the middleware's own interrupt, so the approval is read here,
+// never by the tool: once approved, the tool runs as a fresh call and may
+// interrupt with a question of its own, which the caller answers as usual.
+// That restart passes the gate, since the call records that the gate let it
+// through, unless it replaces the call's input, which the gate then holds for
+// approval again. A hold that does not record which stage raised it, such as
+// one stored before stages were recorded, is approved the same way, with
+// "toolApproved" on the restart.
+//
 // Usage:
 //
 //	resp, err := ai.Generate(ctx, r,
@@ -77,6 +86,12 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 		return next(ctx, params)
 	}
 
+	// A restart answers the stage that raised the interrupt: one answering
+	// a later stage, the tool's own question after this hook released the
+	// call, passes through; one answering this hook carries the approval.
+	if tool.Released(ctx) {
+		return next(ctx, params)
+	}
 	if resume, ok := tool.ResumeData[toolApprovalResume](ctx); ok && resume.ToolApproved {
 		return next(ctx, params)
 	}

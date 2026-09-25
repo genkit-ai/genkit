@@ -23,6 +23,8 @@ package ai_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,6 +33,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
 )
@@ -640,4 +643,285 @@ func TestToolCall_RetriedToolStageKeepsTheRestart(t *testing.T) {
 	if diff := cmp.Diff([]bool{true, true}, runs); diff != "" {
 		t.Errorf("resume per run (-want +got):\n%s", diff)
 	}
+}
+
+// pauseOnce defines "transfer", a tool that pauses on its first pass and,
+// when restarted, records the resume data it read and completes.
+func pauseOnce(t *testing.T, reg *registry.Registry) (*ai.ToolAction[transferIn, string], func() *confirmation) {
+	t.Helper()
+	var got *confirmation
+	tl := defineTestTool(reg, "transfer", "transfers money",
+		func(ctx context.Context, in transferIn) (string, error) {
+			res, ok := tool.ResumeData[confirmation](ctx)
+			if !ok {
+				return "", tool.Interrupt(ctx, transferInterrupt{Reason: "large_amount", Amount: in.Amount})
+			}
+			got = &res
+			return "completed", nil
+		})
+	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{
+		Name: "transfer", Input: map[string]any{"amount": 200},
+	}))
+	return tl, func() *confirmation { return got }
+}
+
+// restartWith builds the restart part that re-executes the interrupted call
+// to tl with resume as its resume data.
+func restartWith[In, Out any](t *testing.T, tl *ai.ToolAction[In, Out], interrupt *ai.Part, resume map[string]any, opts ...ai.RestartWithOption[In]) *ai.Part {
+	t.Helper()
+	restart, err := tl.RestartWith(interrupt, append(opts, ai.WithResumedMetadata[In](resume))...)
+	if err != nil {
+		t.Fatalf("RestartWith: %v", err)
+	}
+	return restart
+}
+
+// gate is an inline WrapTool middleware that holds every call until a restart
+// answers it with {"ok": true}, logging what each invocation saw: "held",
+// "answered", or "released". Two gates in one chain share the inline name,
+// which the chain tells apart.
+func gate(log *[]string) ai.MiddlewareFunc {
+	return func(ctx context.Context) (*ai.Hooks, error) {
+		return &ai.Hooks{
+			WrapTool: func(ctx context.Context, p *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
+				if tool.Released(ctx) {
+					*log = append(*log, "released")
+					return next(ctx, p)
+				}
+				if answer, ok := tool.ResumeData[map[string]any](ctx); ok {
+					*log = append(*log, "answered")
+					if answer["ok"] == true {
+						return next(ctx, p)
+					}
+				}
+				*log = append(*log, "held")
+				return nil, tool.Interrupt(ctx, map[string]any{"gate": "held"})
+			},
+		}, nil
+	}
+}
+
+// viaJSON round-trips messages through JSON, as a client that stores or
+// forwards a conversation does, so a test can pin what survives the wire.
+func viaJSON(t *testing.T, msgs []*ai.Message) []*ai.Message {
+	t.Helper()
+	raw, err := json.Marshal(msgs)
+	if err != nil {
+		t.Fatalf("marshal history: %v", err)
+	}
+	var out []*ai.Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal history: %v", err)
+	}
+	return out
+}
+
+// TestRestart_AnswersTheStageThatInterrupted pins that a restart answers
+// whoever interrupted. A WrapTool hook that holds a call raises its own
+// interrupt: the restart that answers it is read by the hook alone, and the
+// tool then runs as a fresh call, asks its own question with no resume data,
+// and gets that answer while the hook, which released the call before, lets
+// the restart through. The stage rides on the interrupted request in
+// history, so the flow survives a wire hop.
+func TestRestart_AnswersTheStageThatInterrupted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hop  func(t *testing.T, msgs []*ai.Message) []*ai.Message
+	}{
+		{"in process", func(_ *testing.T, msgs []*ai.Message) []*ai.Message { return msgs }},
+		{"after a wire hop", viaJSON},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newToolTestRegistry(t)
+			transfer, saw := pauseOnce(t, reg)
+			var log []string
+			hold := gate(&log)
+			resume := func(history []*ai.Message, part *ai.Part) (*ai.ModelResponse, error) {
+				return ai.Generate(context.Background(), reg,
+					ai.WithModelName("test/model"),
+					ai.WithMessages(tc.hop(t, history)...),
+					ai.WithTools(transfer),
+					ai.WithUse(hold),
+					ai.WithToolRestarts(part))
+			}
+
+			resp, err := ai.Generate(context.Background(), reg,
+				ai.WithModelName("test/model"),
+				ai.WithPrompt("transfer 200"),
+				ai.WithTools(transfer),
+				ai.WithUse(hold))
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			held := singleInterrupt(t, resp)
+			if held.Interrupt == nil || held.Interrupt.RaisedBy != "inline" {
+				t.Fatalf("held part interrupt = %+v, want one raised by the inline hook", held.Interrupt)
+			}
+
+			// Answering the hook releases the call: the tool runs afresh,
+			// with no resume, and asks its own question, which the loop
+			// reports as a re-interrupt next to the partial response.
+			resp2, err := resume(resp.History(), restartWith(t, transfer, held, map[string]any{"ok": true}))
+			if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
+				t.Fatalf("resume = (%v, %v), want the tool's own interrupt under FAILED_PRECONDITION", resp2, err)
+			}
+			if res := saw(); res != nil {
+				t.Fatalf("tool saw resume = %+v, want none: the answer to the hook must not reach it", *res)
+			}
+			asked := singleInterrupt(t, resp2)
+			if asked.Interrupt == nil || asked.Interrupt.RaisedBy != "" {
+				t.Fatalf("re-interrupt = %+v, want one the tool raised", asked.Interrupt)
+			}
+
+			// Answering the tool passes the hook, which released the call.
+			resp3, err := resume(resp2.History(), restartWith(t, transfer, asked, map[string]any{"approved": true}))
+			if err != nil {
+				t.Fatalf("second resume: %v", err)
+			}
+			if resp3.Text() != "done" {
+				t.Errorf("Text() = %q, want done", resp3.Text())
+			}
+			if res := saw(); res == nil || !res.Approved {
+				t.Errorf("tool saw resume = %+v, want approved", res)
+			}
+			if diff := cmp.Diff([]string{"held", "answered", "released"}, log); diff != "" {
+				t.Errorf("hook saw (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRestart_TwoGatesAnswerInTurn pins the chain positions a restart is
+// delivered by: with two holding hooks, answering the first reaches it alone
+// and the second then holds; answering the second reaches it while the first,
+// which released the call, lets it through; and answering the tool's own
+// question passes both. Both hooks are inline, so they share a name and the
+// chain tells them apart.
+func TestRestart_TwoGatesAnswerInTurn(t *testing.T) {
+	reg := newToolTestRegistry(t)
+	transfer, saw := pauseOnce(t, reg)
+	var logA, logB []string
+	a, b := gate(&logA), gate(&logB)
+	generate := func(opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+		return ai.Generate(context.Background(), reg, append([]ai.GenerateOption{
+			ai.WithModelName("test/model"), ai.WithTools(transfer), ai.WithUse(a, b),
+		}, opts...)...)
+	}
+	answer := func(t *testing.T, part *ai.Part) ai.GenerateOption {
+		t.Helper()
+		return ai.WithToolRestarts(restartWith(t, transfer, part, map[string]any{"ok": true}))
+	}
+
+	resp, err := generate(ai.WithPrompt("transfer 200"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	heldA := singleInterrupt(t, resp)
+	if heldA.Interrupt.RaisedBy != "inline" {
+		t.Fatalf("first hold raised by %q, want the first inline hook", heldA.Interrupt.RaisedBy)
+	}
+
+	resp2, err := generate(ai.WithMessages(resp.History()...), answer(t, heldA))
+	if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
+		t.Fatalf("answering the first hook = (%v, %v), want the second hook's hold", resp2, err)
+	}
+	heldB := singleInterrupt(t, resp2)
+	if heldB.Interrupt.RaisedBy != "inline#2" {
+		t.Fatalf("second hold raised by %q, want the second inline hook", heldB.Interrupt.RaisedBy)
+	}
+
+	resp3, err := generate(ai.WithMessages(resp2.History()...), answer(t, heldB))
+	if !errors.Is(err, status.ErrFailedPrecondition) || resp3 == nil {
+		t.Fatalf("answering the second hook = (%v, %v), want the tool's own interrupt", resp3, err)
+	}
+	asked := singleInterrupt(t, resp3)
+	if asked.Interrupt.RaisedBy != "" {
+		t.Fatalf("re-interrupt raised by %q, want the tool", asked.Interrupt.RaisedBy)
+	}
+	if res := saw(); res != nil {
+		t.Fatalf("tool saw resume = %+v before it was answered", *res)
+	}
+
+	resp4, err := generate(ai.WithMessages(resp3.History()...),
+		ai.WithToolRestarts(restartWith(t, transfer, asked, map[string]any{"approved": true})))
+	if err != nil {
+		t.Fatalf("answering the tool: %v", err)
+	}
+	if resp4.Text() != "done" {
+		t.Errorf("Text() = %q, want done", resp4.Text())
+	}
+	if res := saw(); res == nil || !res.Approved {
+		t.Errorf("tool saw resume = %+v, want approved", res)
+	}
+	if diff := cmp.Diff([]string{"held", "answered", "released", "released"}, logA); diff != "" {
+		t.Errorf("first hook saw (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"held", "answered", "released"}, logB); diff != "" {
+		t.Errorf("second hook saw (-want +got):\n%s", diff)
+	}
+}
+
+// TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough pins that a restart
+// answering the tool releases only the hooks the interrupted call records
+// letting it through, and only while the input stands: a gate added to the
+// chain since holds the call, and so does the recorded gate once the restart
+// replaces the input.
+func TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough(t *testing.T) {
+	setup := func(t *testing.T) (*registry.Registry, *ai.ToolAction[transferIn, string], ai.MiddlewareFunc, *[]string, *ai.ModelResponse, *ai.Part) {
+		t.Helper()
+		reg := newToolTestRegistry(t)
+		transfer, _ := pauseOnce(t, reg)
+		var log []string
+		a := gate(&log)
+		generate := func(opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+			return ai.Generate(context.Background(), reg, append([]ai.GenerateOption{
+				ai.WithModelName("test/model"), ai.WithTools(transfer), ai.WithUse(a),
+			}, opts...)...)
+		}
+		resp, err := generate(ai.WithPrompt("transfer 200"))
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		restart := restartWith(t, transfer, singleInterrupt(t, resp), map[string]any{"ok": true})
+		resp, err = generate(ai.WithMessages(resp.History()...), ai.WithToolRestarts(restart))
+		if !errors.Is(err, status.ErrFailedPrecondition) || resp == nil {
+			t.Fatalf("answering the gate = (%v, %v), want the tool's own interrupt", resp, err)
+		}
+		asked := singleInterrupt(t, resp)
+		if diff := cmp.Diff([]string{"inline"}, asked.Interrupt.ReleasedBy); diff != "" {
+			t.Fatalf("ReleasedBy (-want +got):\n%s", diff)
+		}
+		return reg, transfer, a, &log, resp, asked
+	}
+
+	t.Run("a gate added since holds", func(t *testing.T) {
+		reg, transfer, a, _, resp, asked := setup(t)
+		var logB []string
+		b := gate(&logB)
+		_, err := ai.Generate(context.Background(), reg,
+			ai.WithModelName("test/model"), ai.WithMessages(viaJSON(t, resp.History())...),
+			ai.WithTools(transfer), ai.WithUse(a, b),
+			ai.WithToolRestarts(restartWith(t, transfer, asked, map[string]any{"approved": true})))
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Fatalf("resume = %v, want the new gate's hold", err)
+		}
+		if diff := cmp.Diff([]string{"held"}, logB); diff != "" {
+			t.Errorf("new gate saw (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("a replaced input faces the gate again", func(t *testing.T) {
+		reg, transfer, a, log, resp, asked := setup(t)
+		_, err := ai.Generate(context.Background(), reg,
+			ai.WithModelName("test/model"), ai.WithMessages(resp.History()...),
+			ai.WithTools(transfer), ai.WithUse(a),
+			ai.WithToolRestarts(restartWith(t, transfer, asked, map[string]any{"approved": true},
+				ai.WithNewInput(transferIn{Amount: 5000}))))
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Fatalf("resume = %v, want the gate's hold on the new input", err)
+		}
+		if got := (*log)[len(*log)-1]; got != "held" {
+			t.Errorf("gate's last decision = %q, want held; log %v", got, *log)
+		}
+	})
 }

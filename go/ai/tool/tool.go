@@ -16,9 +16,9 @@
 
 // Package tool provides the runtime verbs called from inside a running tool
 // function or WrapTool hook: [Interrupt], [AttachParts], [SendPartial],
-// [SendChunk], [ResumeData], and [OriginalInput]. They take a
-// [context.Context], so they work in every tool: [ai.ToolContext] embeds the
-// context they take.
+// [SendChunk], [ResumeData], [OriginalInput], and, in a hook, [Released].
+// They take a [context.Context], so they work in every tool: [ai.ToolContext]
+// embeds the context they take.
 //
 // Everything for building and wiring a tool (constructors and types) lives in
 // package [ai], and everything that acts on a value you already hold lives on
@@ -49,6 +49,12 @@ import (
 //		...
 //	}
 //
+// ctx is the context the tool function or hook received. It names the stage
+// raising the interrupt, and the restart that answers it reaches that stage
+// alone: for a tool function, [ai.ToolContext.Resumed] and [ResumeData]; for
+// a WrapTool hook, [ResumeData] in that hook, after which the tool runs as a
+// fresh call and may interrupt on its own (see [Released]).
+//
 // data must serialize to a JSON object (a struct or a map): it lands on the
 // interrupted tool request as [ai.ToolInterrupt] data, which the wire protocol
 // encodes as a JSON object, and it is converted to that object here, so the
@@ -62,7 +68,7 @@ func Interrupt(ctx context.Context, data any) error {
 	if err != nil {
 		return fmt.Errorf("tool.Interrupt: %w", err)
 	}
-	ie := &base.ToolInterruptError{}
+	ie := &base.ToolInterruptError{RaisedBy: base.ToolHookKey.FromContext(ctx)}
 	if m != nil {
 		ie.Data = m
 	}
@@ -141,9 +147,11 @@ func OriginalInput[In any](ctx context.Context) (In, bool) {
 }
 
 // ResumeData extracts typed resume data (sent via [ai.WithResumedMetadata])
-// from the context of a restarted tool call, in the tool function or in a
-// WrapTool hook around it. Returns the zero value and false if the call is
-// not a resumption or the data does not decode into T.
+// from the context of a restarted tool call, in the stage the restart
+// answers: the tool function when the tool interrupted, or the WrapTool hook
+// that raised the interrupt. Returns the zero value and false if the call is
+// not a resumption, the restart answers another stage, or the data does not
+// decode into T.
 //
 // Data the caller built as a T is returned as is. Any other data is read by
 // its JSON shape, so a struct of another type with the same fields decodes
@@ -163,4 +171,17 @@ func ResumeData[T any](ctx context.Context) (T, bool) {
 		return zero, false
 	}
 	return base.ConvertTo[T](m)
+}
+
+// Released reports, in a WrapTool hook, whether the call is a restart that
+// answers a later stage, a hook after this one or the tool's own interrupt,
+// and the interrupted call records that this hook let it through (see
+// [ai.ToolInterrupt.ReleasedBy]). A hook that holds calls for approval passes
+// such a restart on rather than holding it again. False in a fresh call, in
+// the hook the restart answers (see [ResumeData]), in a hook the interrupted
+// call does not record, such as one added to the chain since, in every hook
+// when the restart replaced the call's input, and for an interrupt that does
+// not record which stage raised it, whose answer every stage reads instead.
+func Released(ctx context.Context) bool {
+	return base.ToolReleasedKey.FromContext(ctx)
 }
