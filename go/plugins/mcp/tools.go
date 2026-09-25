@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
