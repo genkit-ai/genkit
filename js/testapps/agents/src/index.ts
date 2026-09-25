@@ -49,6 +49,12 @@ import {
   testCodingAgent,
 } from './coding-agent.js';
 import {
+  customerServiceAgent,
+  testCustomerServiceAgent,
+  testCustomerServiceConversation,
+} from './customer-service-agent.js';
+
+import {
   orchestratorAgent,
   testOrchestratorAgent,
   testOrchestratorAgentSimple,
@@ -93,6 +99,9 @@ void [
   testCodingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
+  customerServiceAgent,
+  testCustomerServiceAgent,
+  testCustomerServiceConversation,
 ];
 
 export * from './background-agent.js';
@@ -155,6 +164,7 @@ exposeAgent('taskAgent', taskAgent);
 exposeAgent('orchestratorAgent', orchestratorAgent);
 exposeAgent('tripPlannerAgent', tripPlannerAgent, { snapshot: true });
 exposeAgent('codingAgent', codingAgent, { snapshot: true });
+exposeAgent('customerServiceAgent', customerServiceAgent);
 
 // Workspace browser — exposed as Genkit flows via expressHandler
 app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));

@@ -26,6 +26,7 @@ import BankingInterrupt from './pages/BankingInterrupt';
 import BranchingChat from './pages/BranchingChat';
 import ClientState from './pages/ClientState';
 import CodingAgent from './pages/CodingAgent';
+import CustomerService from './pages/CustomerService';
 import ResearchAgent from './pages/ResearchAgent';
 import SubAgentChat from './pages/SubAgentChat';
 import TaskTracker from './pages/TaskTracker';
@@ -50,6 +51,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="tasks" element={<TaskTracker />} />
           <Route path="research" element={<ResearchAgent />} />
           <Route path="subagents" element={<SubAgentChat />} />
+          <Route path="customer-service" element={<CustomerService />} />
           <Route path="trip-planner" element={<TripPlanner />} />
           <Route path="trip-planner/:snapshotId" element={<TripPlanner />} />
           <Route path="coding-agent" element={<CodingAgent />} />

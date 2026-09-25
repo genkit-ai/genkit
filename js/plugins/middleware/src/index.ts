@@ -18,6 +18,7 @@ export { agents } from './agents.js';
 export { artifacts } from './artifacts.js';
 export { fallback } from './fallback.js';
 export { filesystem } from './filesystem.js';
+export { handoff } from './handoff.js';
 export { retry } from './retry.js';
 export { skills } from './skills.js';
 export { toolApproval } from './tool-approval.js';
