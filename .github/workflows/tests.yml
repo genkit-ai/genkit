@@ -23,8 +23,18 @@ env:
   GITHUB_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
 jobs:
+  changes:
+    uses: ./.github/workflows/changes.yml
+
   build:
     name: Run Tests (just DevUI tests for now)
+    needs: changes
+    # Builds and tests genkit-tools/ only.
+    # A failed detection still runs the tests; see changes.yml.
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.tools == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5

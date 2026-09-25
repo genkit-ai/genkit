@@ -23,8 +23,20 @@ env:
   GITHUB_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
 jobs:
+  changes:
+    uses: ./.github/workflows/changes.yml
+
   build:
     name: Run build tasks
+    needs: changes
+    # Builds js/ and genkit-tools/, then runs the JS tests (which read tests/specs).
+    # A failed detection still runs the build; see changes.yml.
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.js == 'true' ||
+      needs.changes.outputs.tools == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
