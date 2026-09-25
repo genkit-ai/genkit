@@ -1405,16 +1405,13 @@ describe('contextCompression middleware', () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
 
-    const pm = ai.defineModel(
-      { name: 'reconcileNoticeModel' },
-      async (req) => {
-        capturedRequest = req;
-        return {
-          message: { role: 'model', content: [{ text: 'ok' }] },
-          usage: { inputTokens: 20 },
-        };
-      }
-    );
+    const pm = ai.defineModel({ name: 'reconcileNoticeModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        usage: { inputTokens: 20 },
+      };
+    });
 
     const mw = contextCompression({
       maxMessages: 4,
@@ -1465,13 +1462,10 @@ describe('contextCompression middleware', () => {
 
   it('reports non-zero inputTokensBefore when safety cap fires with maxInputTokens unset', async () => {
     const ai = genkit({});
-    const pm = ai.defineModel(
-      { name: 'safetyCapTokensModel' },
-      async () => ({
-        message: { role: 'model', content: [{ text: 'ok' }] },
-        usage: { inputTokens: 300 },
-      })
-    );
+    const pm = ai.defineModel({ name: 'safetyCapTokensModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+      usage: { inputTokens: 300 },
+    }));
 
     const response = (await ai.generate({
       model: pm,
@@ -1500,4 +1494,3 @@ describe('contextCompression middleware', () => {
     assert.ok(response.custom?.contextCompression?.inputTokensBefore > 0);
   });
 });
-

@@ -243,7 +243,11 @@ function reconcileStandaloneNotices(
     hasCompressionFlag(m, 'standaloneNotice')
   ).length;
 
-  if (!hasRealSystem && standaloneCount === 1 && messages[0]?.role === 'system') {
+  if (
+    !hasRealSystem &&
+    standaloneCount === 1 &&
+    messages[0]?.role === 'system'
+  ) {
     return { messages, reconciled: false };
   }
 
