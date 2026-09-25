@@ -1,0 +1,108 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Reports which areas of the repo a pull request touches, one boolean output
+# per area. Any path outside the named areas sets `other`, so root config,
+# workflows, and new top-level directories run everything.
+#
+# Use this for jobs that back required status checks. A workflow skipped by
+# `on.<event>.paths` leaves its required checks pending forever, while a job
+# skipped by `if:` reports success. Workflows without required checks should
+# keep using `on.<event>.paths`.
+#
+# Usage:
+#
+#   jobs:
+#     changes:
+#       uses: ./.github/workflows/changes.yml
+#     build:
+#       needs: changes
+#       if: >-
+#         ${{ !cancelled() && (needs.changes.result != 'success' ||
+#         needs.changes.outputs.js == 'true' ||
+#         needs.changes.outputs.other == 'true') }}
+#
+# Checking `needs.changes.result` makes a detection failure run the job
+# instead of skipping it, which would otherwise pass the required check.
+
+name: Changed areas
+
+on:
+  workflow_call:
+    outputs:
+      go:
+        description: "go/**"
+        value: ${{ jobs.detect.outputs.go }}
+      js:
+        description: "js/**"
+        value: ${{ jobs.detect.outputs.js }}
+      python:
+        description: "py/**"
+        value: ${{ jobs.detect.outputs.python }}
+      tools:
+        description: "genkit-tools/** (CLI, Dev UI server, telemetry server)"
+        value: ${{ jobs.detect.outputs.tools }}
+      samples:
+        description: "samples/**"
+        value: ${{ jobs.detect.outputs.samples }}
+      specs:
+        description: "tests/specs/** (cross-runtime conformance specs)"
+        value: ${{ jobs.detect.outputs.specs }}
+      other:
+        description: "Any path outside the areas above."
+        value: ${{ jobs.detect.outputs.other }}
+
+jobs:
+  detect:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      go: ${{ steps.areas.outputs.go }}
+      js: ${{ steps.areas.outputs.js }}
+      python: ${{ steps.areas.outputs.python }}
+      tools: ${{ steps.areas.outputs.tools }}
+      samples: ${{ steps.areas.outputs.samples }}
+      specs: ${{ steps.areas.outputs.specs }}
+      other: ${{ steps.other.outputs.other }}
+    steps:
+      - id: areas
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            go: go/**
+            js: js/**
+            python: py/**
+            tools: genkit-tools/**
+            samples: samples/**
+            specs: tests/specs/**
+
+      # Keep the exclusions in sync with the areas above. `every` means a file
+      # counts only if it matches `**` and none of the exclusions.
+      - id: other
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: every
+          filters: |
+            other:
+              - "**"
+              - "!go/**"
+              - "!js/**"
+              - "!py/**"
+              - "!genkit-tools/**"
+              - "!samples/**"
+              - "!tests/specs/**"
