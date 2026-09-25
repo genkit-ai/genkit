@@ -17,14 +17,17 @@
 // Package tool provides the runtime verbs called from inside a running tool
 // function or WrapTool hook: [Interrupt], [AttachParts], [SendPartial],
 // [SendChunk], [ResumeData], [OriginalInput], and, in a hook, [Released].
-// They take a [context.Context], so they work in every tool: [ai.ToolContext]
-// embeds the context they take.
+// They take a [context.Context], so they
+// work in every tool: one written against [ai.ToolContext] (which embeds the
+// context) as well as one created with [ai.NewResumableTool].
 //
 // Everything for building and wiring a tool (constructors and types) lives in
 // package [ai], and everything that acts on a value you already hold lives on
-// that value: to resolve an interrupted tool request, use
-// [ai.ToolAction.RestartWith] or [ai.ToolAction.RespondWith]. Read the
-// interrupt data itself with [ai.InterruptAs].
+// that value: to resolve an interrupted tool request, claim it with
+// [ai.ResumableToolAction.Interrupted] and use the verbs of the
+// [ai.InterruptedCall], or, holding only the part, use [ai.Part.ToToolRestart]
+// and [ai.Part.ToToolResponse]. Read the interrupt data itself with
+// [ai.InterruptAs].
 package tool
 
 import (
@@ -37,13 +40,14 @@ import (
 
 // Interrupt returns the error a tool function returns to pause generation and
 // send data to the caller. The interrupted tool request surfaces in
-// [ai.ModelResponse.Interrupts]; the caller reads the data with
-// [ai.InterruptAs] and restarts the tool with [ai.ToolAction.RestartWith] or
-// answers it with [ai.ToolAction.RespondWith]. Middleware returns it from a
+// [ai.ModelResponse.Interrupts]; the caller claims it with
+// [ai.ResumableToolAction.Interrupted], reads the data with
+// [ai.InterruptAs], and restarts the tool with [ai.InterruptedCall.Restart] or
+// answers it with [ai.InterruptedCall.Respond]. Middleware returns it from a
 // WrapTool hook to hold a tool call without executing it.
 //
-//	func(ctx *ai.ToolContext, in TransferInput) (*TransferOutput, error) {
-//		if !ctx.IsResumed() {
+//	func(ctx context.Context, in TransferInput, resume *Confirmation) (*TransferOutput, error) {
+//		if resume == nil {
 //			return nil, tool.Interrupt(ctx, TransferInterrupt{Reason: "large_amount", Amount: in.Amount})
 //		}
 //		...
@@ -51,9 +55,9 @@ import (
 //
 // ctx is the context the tool function or hook received. It names the stage
 // raising the interrupt, and the restart that answers it reaches that stage
-// alone: for a tool function, [ai.ToolContext.Resumed] and [ResumeData]; for
-// a WrapTool hook, [ResumeData] in that hook, after which the tool runs as a
-// fresh call and may interrupt on its own (see [Released]).
+// alone: for a tool function, its resume parameter; for a WrapTool hook,
+// [ResumeData] in that hook, after which the tool runs as a fresh call and may
+// interrupt on its own (see [Released]).
 //
 // data must serialize to a JSON object (a struct or a map): it lands on the
 // interrupted tool request as [ai.ToolInterrupt] data, which the wire protocol
@@ -134,7 +138,8 @@ func AttachParts(ctx context.Context, parts ...*ai.Part) {
 }
 
 // OriginalInput extracts the typed original input if the caller provided a new
-// one when restarting the call (via [ai.WithNewInput]). Returns the zero value
+// one when restarting the call (via [ai.InterruptedCall.RestartWithInput] or
+// [ai.Part.ToToolRestartWithInput]). Returns the zero value
 // and false if no new input was provided, the tool is not being resumed, or the
 // type doesn't match.
 func OriginalInput[In any](ctx context.Context) (In, bool) {
@@ -146,17 +151,20 @@ func OriginalInput[In any](ctx context.Context) (In, bool) {
 	return base.ConvertTo[In](v)
 }
 
-// ResumeData extracts typed resume data (sent via [ai.WithResumedMetadata])
-// from the context of a restarted tool call, in the stage the restart
-// answers: the tool function when the tool interrupted, or the WrapTool hook
-// that raised the interrupt. Returns the zero value and false if the call is
-// not a resumption, the restart answers another stage, or the data does not
-// decode into T.
+// ResumeData extracts typed resume data (sent via [ai.InterruptedCall.Restart]
+// or [ai.Part.ToToolRestart]) from the context of a restarted tool call, in
+// the stage the restart answers: the tool function when the tool interrupted,
+// or the WrapTool hook that raised the interrupt. Returns the zero value and
+// false if the call is not a resumption, the restart answers another stage,
+// or the data does not decode into T.
 //
 // Data the caller built as a T is returned as is. Any other data is read by
 // its JSON shape, so a struct of another type with the same fields decodes
-// the same in process as after a wire hop. It is what middleware reads
-// (e.g. a WrapTool hook deciding whether the call it held was approved).
+// the same in process as after a wire hop.
+//
+// Tool functions created with [ai.NewResumableTool] receive the resume
+// data as a parameter and don't need this; it is for middleware (e.g. a
+// WrapTool hook deciding whether the call it held was approved).
 func ResumeData[T any](ctx context.Context) (T, bool) {
 	var zero T
 	v := base.ToolResumeKey.FromContext(ctx)

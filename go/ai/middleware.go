@@ -31,7 +31,10 @@ import (
 type Hooks struct {
 	// Tools are additional tools to register during the generation this
 	// middleware is attached to. They are available to the model alongside
-	// any user-supplied tools.
+	// any user-supplied tools. Every tool constructor's result is a [Tool],
+	// so a middleware can contribute one that interrupts; the application,
+	// which holds only the part, resolves the interrupt with
+	// [Part.ToToolRestart] and [Part.ToToolResponse].
 	Tools []Tool
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.

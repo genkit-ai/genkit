@@ -2187,7 +2187,9 @@ func (m *Message) MediaParts() []*Part {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [ToolAction.RestartWith] or [ToolAction.RespondWith].
+// produced by [InterruptedCall.Restart] and [InterruptedCall.Respond], or
+// [Part.ToToolRestart] and [Part.ToToolResponse]. [WithResume] is the
+// same for [Generate].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
@@ -2284,8 +2286,9 @@ type resumeStep struct {
 // Respond or Restart directive in genOpts.Resume that matches it. It runs for
 // every pending request before any tool runs, and so does everything that can
 // reject the resume without running a tool: a request with no resolution, a
-// tool that is not found, and a response that does not match the tool's
-// output schema. A rejected resume thus leaves no tool half-run next to it.
+// tool that is not found, a response that does not match the tool's output
+// schema, and a restart payload for the tool that does not match its resume
+// schema. A rejected resume thus leaves no tool half-run next to it.
 func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *Part) (*resumeStep, error) {
 	if p == nil || !p.IsToolRequest() {
 		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
@@ -2310,7 +2313,15 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 		if toolReq.Ref != "" {
 			refStr += "#" + toolReq.Ref
 		}
-		return nil, status.Errorf(ErrUnresolvedToolRequest, "unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call", refStr)
+		// A hold a WrapTool hook raised is the one interrupt the tool's
+		// typed claim declines, so a claim loop over the tools skips it
+		// silently; say so, since that is the likeliest reason it went
+		// unanswered.
+		hint := ""
+		if it := p.interruptState(); it != nil && it.RaisedBy != "" {
+			hint = fmt.Sprintf(" The interrupt is a hold by middleware %q, which the tool's Interrupted does not claim; answer it with Part.ToToolRestart or Part.ToToolResponse.", it.RaisedBy)
+		}
+		return nil, status.Errorf(ErrUnresolvedToolRequest, "unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call.%s", refStr, hint)
 	}
 
 	tool := LookupTool(r, toolReq.Name)
@@ -2324,6 +2335,27 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 			}
 		}
 		return &resumeStep{request: p, tool: tool, respond: respondPart}, nil
+	}
+
+	// A payload that reaches the tool, rather than a hook that held the call,
+	// is checked by its JSON shape against the schema the tool advertises for
+	// its resume type. The tool reads it the same way when it runs; checking
+	// here as well is what keeps a bad payload from failing the resume after
+	// a sibling ran. A tool that advertises none (one behind a foreign
+	// action) is not checked.
+	if rs := restartPart.restartState(); rs != nil {
+		if it := p.interruptState(); it == nil || it.RaisedBy == "" {
+			if schema, ok := tool.Definition().Metadata[toolResumeSchemaKey].(map[string]any); ok {
+				payload, _ := resumePayload(rs)
+				m, err := base.ObjectPayload(payload, "resume data")
+				if err == nil {
+					err = base.ValidateValue(m, schema)
+				}
+				if err != nil {
+					return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q resume data validation failed: %w", tool.Name(), err)
+				}
+			}
+		}
 	}
 	return &resumeStep{request: p, tool: tool, restart: restartPart}, nil
 }
@@ -2370,6 +2402,10 @@ func handleResumedToolRequest(ctx context.Context, step *resumeStep, runTool too
 		}, nil
 	}
 
+	// History records the request as it ran, so a restart that replaced the
+	// input amends the request, whether the tool then completes or
+	// interrupts again.
+	p = withRestartInput(p, step.restart)
 	newToolResp, interrupt, err := restartedToolResponse(ctx, step.tool, p, step.restart, runTool, stream)
 	if interrupt != nil {
 		return &resumedToolRequestOutput{interrupt: interrupt}, nil
@@ -2402,6 +2438,22 @@ func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
 	return nil
 }
 
+// withRestartInput returns tool request p as restartPart re-executes it: p
+// itself, or, when the restart replaced the input, a copy of p carrying the
+// new input. The original input is not recorded on the copy: on a tool
+// request in history that key would read as a restart.
+func withRestartInput(p, restartPart *Part) *Part {
+	rs := restartPart.restartState()
+	if rs == nil || rs.OriginalInput == nil {
+		return p
+	}
+	revised := p.typedClone()
+	req := *p.ToolRequest
+	req.Input = restartPart.ToolRequest.Input
+	revised.ToolRequest = &req
+	return revised
+}
+
 // resumePayload returns the payload restart rs delivers: its resume data when
 // that is a JSON object, and an empty map for a bare restart, so the call
 // still reads as a resumption. ok is false when rs carries a marker that is
@@ -2424,9 +2476,9 @@ func resumePayload(rs *ToolRestart) (payload any, ok bool) {
 // payload it was given (an empty map for a bare restart, so the call still
 // reads as a resumption) and, when the caller replaced the input, the
 // original one. The payload rides as given, a map or the caller's struct, and
-// each reader converts it to what it returns. A restarted tool streams and
-// attaches parts as the tools of a model turn do. A tool that interrupts
-// again returns the interrupted copy of p instead of a response.
+// each reader converts it to what it returns, so a typed restart reaches the
+// tool's resume parameter without a conversion. A tool that interrupts again
+// returns the interrupted copy of p instead of a response.
 func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc, stream *toolStreamer) (resp, interrupt *Part, err error) {
 	name := restartPart.ToolRequest.Name
 	resumedCtx := stream.context(ctx, restartPart.ToolRequest)
@@ -2440,12 +2492,19 @@ func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part,
 		// WrapTool hook the interrupted request in history names, or the
 		// tool itself. The hook chain delivers the payload to that stage
 		// alone (see toolStageContext), so a hook's hold never reaches the
-		// tool: the tool re-executes as a fresh call that may interrupt on
-		// its own.
-		restart = &base.ToolRestart{Resume: resume, OriginalInput: rs.OriginalInput}
+		// tool's resume parameter: the tool re-executes as a fresh call
+		// that may interrupt on its own.
+		var (
+			raisedBy string
+			released []string
+		)
 		if it := p.interruptState(); it != nil {
-			restart.RaisedBy, restart.Released = it.RaisedBy, it.ReleasedBy
+			raisedBy, released = it.RaisedBy, it.ReleasedBy
 		}
+		// The payload is not checked here: a tool with a resume type knows
+		// whether it arrived as that type, and validates it against its
+		// resume schema when it did not (see NewResumableTool).
+		restart = &base.ToolRestart{Resume: resume, OriginalInput: rs.OriginalInput, RaisedBy: raisedBy, Released: released}
 	}
 	// Set even when nil, so a restart an enclosing tool call was answering
 	// does not reach this one.

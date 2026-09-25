@@ -61,9 +61,10 @@ var ToolChunkSenderKey = NewContextKey[func(context.Context, any)]()
 // stage the restart answers (see [ToolRestart]); each reader converts it to
 // what it returns with [ConvertTo], so a value that is already the wanted
 // type is handed over untouched, with its Go types intact: ai (ToolContext.Resumed,
-// IsToolResumed, ResumedValue) and ai/tool (ResumeData). A bare restart
-// stores an empty map, so presence of the key, not its contents, marks a
-// call as resumed.
+// IsToolResumed, ResumedValue), ai/tool (ResumeData), and the resume
+// parameter of an ai.NewResumableTool tool. A bare restart stores an
+// empty map, so presence of the key, not its contents, marks a call as
+// resumed.
 var ToolResumeKey = NewContextKey[any]()
 
 // ToolOriginalInputKey is the context key holding a tool call's pre-replacement

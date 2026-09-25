@@ -14,8 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for tools.go that drive tools the way callers do, through the ai/tool
-// runtime verbs. They live in package
+// Tests for tools.go, the resumable tool surface included, that drive tools
+// the way callers do, through the ai/tool runtime verbs. They live in package
 // ai_test rather than in tools_test.go because ai/tool imports ai: an internal
 // test file importing it would close an import cycle, so the external test
 // package is the escape hatch.
@@ -26,12 +26,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -64,6 +67,14 @@ func defineTestTool[In, Out any](reg api.Registry, name, description string, fn 
 	tl := ai.NewTool(name, description, func(tc *ai.ToolContext, in In) (Out, error) {
 		return fn(tc, in)
 	})
+	tl.Register(reg)
+	return tl
+}
+
+// defineTestResumableTool builds and registers a resumable tool, the
+// two steps genkit.DefineResumableTool fuses for an application.
+func defineTestResumableTool[In, Out, Res any](reg api.Registry, name, description string, fn ai.ResumableToolFunc[In, Out, Res], opts ...ai.ToolOption) *ai.ResumableToolAction[In, Out, Res] {
+	tl := ai.NewResumableTool(name, description, fn, opts...)
 	tl.Register(reg)
 	return tl
 }
@@ -295,12 +306,18 @@ func TestInterruptAs_DecodesIntoAnyMatchingType(t *testing.T) {
 
 // TestInterrupt_NonObjectData_ReturnsClearError pins that interrupting with a
 // scalar fails the call with a clear error when the loop records the
-// interrupt.
+// interrupt, for both kinds of tool.
 func TestInterrupt_NonObjectData_ReturnsClearError(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		define func(reg *registry.Registry) ai.Tool
 	}{
+		{"resumable", func(reg *registry.Registry) ai.Tool {
+			return defineTestResumableTool(reg, "bad", "interrupts with a scalar",
+				func(ctx context.Context, _ struct{}, _ *struct{}) (string, error) {
+					return "", tool.Interrupt(ctx, "not an object")
+				})
+		}},
 		{"plain", func(reg *registry.Registry) ai.Tool {
 			return defineTestTool(reg, "bad", "interrupts with a scalar",
 				func(ctx context.Context, _ struct{}) (string, error) {
@@ -924,4 +941,851 @@ func TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough(t *testing.T) {
 			t.Errorf("gate's last decision = %q, want held; log %v", got, *log)
 		}
 	})
+}
+
+type reportItem struct {
+	Name string `json:"name"`
+}
+
+type reportOut struct {
+	Title string       `json:"title"`
+	Items []reportItem `json:"items"`
+}
+
+// TestResumableTool_OutputSchemaMatchesNewTool guards against the multipart
+// envelope leaking into the tool definition: a resumable tool must
+// advertise the same output schema NewTool would for the same Out, including a
+// pointer Out (whose zero value is a nil pointer) and a nested struct that
+// exercises schema inlining.
+func TestResumableTool_OutputSchemaMatchesNewTool(t *testing.T) {
+	classic := ai.NewTool("classic", "d",
+		func(tc *ai.ToolContext, _ weatherIn) (reportOut, error) { return reportOut{}, nil })
+	want := classic.Definition().OutputSchema
+	if want == nil {
+		t.Fatal("ai.NewTool unexpectedly produced a nil output schema")
+	}
+
+	resumable := ai.NewResumableTool("resumable", "d",
+		func(ctx context.Context, _ weatherIn, _ *confirmation) (reportOut, error) { return reportOut{}, nil })
+	pointer := ai.NewResumableTool("pointer", "d",
+		func(ctx context.Context, _ weatherIn, _ *confirmation) (*reportOut, error) { return nil, nil })
+
+	for _, tc := range []struct {
+		name string
+		got  any
+	}{
+		{"struct output", resumable.Definition().OutputSchema},
+		{"pointer output", pointer.Definition().OutputSchema},
+	} {
+		if !reflect.DeepEqual(tc.got, want) {
+			t.Errorf("%s output schema = %#v\nwant %#v (matching ai.NewTool)", tc.name, tc.got, want)
+		}
+		props, _ := tc.got.(map[string]any)["properties"].(map[string]any)
+		if _, ok := props["title"]; !ok {
+			t.Errorf("%s output schema missing the real %q field: %#v", tc.name, "title", tc.got)
+		}
+		if _, ok := props["content"]; ok {
+			t.Errorf("%s output schema leaked the multipart envelope (has %q): %#v", tc.name, "content", tc.got)
+		}
+	}
+}
+
+// TestResumableTool_OutputSchemaSurvivesLookup is the test that matters for
+// what the model actually receives: the generate loop resolves tools by name
+// out of the registry, so the real output schema has to survive that type
+// erasure.
+func TestResumableTool_OutputSchemaSurvivesLookup(t *testing.T) {
+	reg := newToolTestRegistry(t)
+
+	var gotTools []*ai.ToolDefinition
+	defineTestModel(reg, "test/model",
+		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			gotTools = req.Tools
+			return &ai.ModelResponse{
+				Request:      req,
+				Message:      ai.NewModelTextMessage("done"),
+				FinishReason: ai.FinishReasonStop,
+			}, nil
+		})
+
+	report := defineTestResumableTool(reg, "report", "builds a report",
+		func(ctx context.Context, _ weatherIn, _ *confirmation) (reportOut, error) { return reportOut{}, nil })
+
+	if _, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("report"),
+		ai.WithTools(report)); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if len(gotTools) != 1 {
+		t.Fatalf("model saw %d tools, want 1", len(gotTools))
+	}
+	props, _ := gotTools[0].OutputSchema["properties"].(map[string]any)
+	if _, ok := props["title"]; !ok {
+		t.Errorf("model saw output schema %#v, want the real Out type", gotTools[0].OutputSchema)
+	}
+	if _, ok := props["content"]; ok {
+		t.Errorf("model saw the multipart envelope as the output schema: %#v", gotTools[0].OutputSchema)
+	}
+}
+
+// TestResumableTool_ResumeSchemaAdvertised pins that a tool advertises the
+// schema of its resume type, the one it validates a payload against:
+// inferred from Res with its fields widened to accept null, surfaced as the
+// definition's "resumeSchema" metadata, and intact after a registry lookup. A
+// tool without a resume type advertises the object schema, since the loop
+// delivers its resume payload as a map.
+func TestResumableTool_ResumeSchemaAdvertised(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, _ := interruptOnce(t, reg)
+
+	want := core.InferSchemaMap(confirmation{})
+	want["properties"].(map[string]any)["approved"] = map[string]any{"type": []any{"boolean", "null"}}
+	for _, tc := range []struct {
+		name string
+		tool ai.Tool
+	}{
+		{"defined", transfer},
+		{"looked up", ai.LookupTool(reg, "transfer")},
+	} {
+		if diff := cmp.Diff(want, tc.tool.Definition().Metadata["resumeSchema"]); diff != "" {
+			t.Errorf("%s: resumeSchema mismatch (-want +got):\n%s", tc.name, diff)
+		}
+	}
+
+	plain := defineTestTool(reg, "plain", "no resume type",
+		func(ctx context.Context, _ struct{}) (string, error) { return "", nil })
+	if diff := cmp.Diff(map[string]any{"type": "object"}, plain.Definition().Metadata["resumeSchema"]); diff != "" {
+		t.Errorf("plain tool resumeSchema mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestResumableTool_OutputSchemaOptions pins that NewResumableTool
+// runs the output schema check NewTool runs (tools_test.go covers the option
+// itself; both constructors share newTool): with a concrete Out the
+// constructor panics, naming itself, rather than advertising a schema that
+// disagrees with the type.
+func TestResumableTool_OutputSchemaOptions(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for an output schema option with concrete Out")
+		}
+		err, ok := r.(error)
+		if !ok || !strings.Contains(err.Error(), "ai.NewResumableTool") {
+			t.Errorf("panic = %v, want it to name ai.NewResumableTool", r)
+		}
+	}()
+	ai.NewResumableTool("t", "d",
+		func(ctx context.Context, input any, res *struct{}) (string, error) { return "", nil },
+		ai.WithOutputSchemaName("Answer"))
+}
+
+type transferOut struct {
+	Status string `json:"status"`
+}
+
+// interruptOnce returns a resumable tool that pauses on its first pass and
+// records what it saw when it re-executes, plus accessors for those recordings.
+func interruptOnce(t *testing.T, reg *registry.Registry) (
+	*ai.ResumableToolAction[transferIn, transferOut, confirmation],
+	func() (*confirmation, transferIn, any),
+) {
+	t.Helper()
+	var (
+		gotResume   *confirmation
+		gotInput    transferIn
+		gotOriginal any
+	)
+	tl := defineTestResumableTool(reg, "transfer", "transfers money",
+		func(ctx context.Context, in transferIn, res *confirmation) (transferOut, error) {
+			if res == nil {
+				return transferOut{}, tool.Interrupt(ctx, transferInterrupt{Reason: "large_amount", Amount: in.Amount})
+			}
+			gotResume, gotInput = res, in
+			if orig, ok := tool.OriginalInput[transferIn](ctx); ok {
+				gotOriginal = orig
+			}
+			if !res.Approved {
+				return transferOut{Status: "cancelled"}, nil
+			}
+			return transferOut{Status: "completed"}, nil
+		})
+	return tl, func() (*confirmation, transferIn, any) { return gotResume, gotInput, gotOriginal }
+}
+
+// generateUntilInterrupt runs the first turn and returns the response plus its
+// single interrupt part.
+func generateUntilInterrupt(t *testing.T, reg *registry.Registry, tl ai.ToolRef) (*ai.ModelResponse, *ai.Part) {
+	t.Helper()
+	resp, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("transfer 200"),
+		ai.WithTools(tl))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt, got %d (finish=%s)", len(interrupts), resp.FinishReason)
+	}
+	return resp, interrupts[0]
+}
+
+// resumeWith continues an interrupted generation with the given restart or
+// response parts and returns the final text.
+func resumeWith(t *testing.T, reg *registry.Registry, resp *ai.ModelResponse, tl ai.ToolRef, opt ai.GenerateOption) string {
+	t.Helper()
+	resp2, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(tl),
+		opt)
+	if err != nil {
+		t.Fatalf("resume Generate: %v", err)
+	}
+	return resp2.Text()
+}
+
+// bareConfirmation is confirmation with its field optional, so the resume
+// schema inferred from it admits the empty payload a bare restart delivers.
+type bareConfirmation struct {
+	Approved bool `json:"approved,omitempty"`
+}
+
+// interruptOnceBare is interruptOnce for a tool that accepts a bare restart:
+// its resume type has no required field, where interruptOnce's has one and
+// the loop rejects a bare restart of it (see TestRestart_ResumeDataValidated).
+func interruptOnceBare(t *testing.T, reg *registry.Registry) (
+	*ai.ResumableToolAction[transferIn, transferOut, bareConfirmation],
+	func() *bareConfirmation,
+) {
+	t.Helper()
+	var gotResume *bareConfirmation
+	tl := defineTestResumableTool(reg, "transfer", "transfers money",
+		func(ctx context.Context, in transferIn, res *bareConfirmation) (transferOut, error) {
+			if res == nil {
+				return transferOut{}, tool.Interrupt(ctx, nil)
+			}
+			gotResume = res
+			return transferOut{Status: "completed"}, nil
+		})
+	return tl, func() *bareConfirmation { return gotResume }
+}
+
+func newTransferTestRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	reg := newToolTestRegistry(t)
+	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{
+		Name: "transfer", Input: map[string]any{"amount": 200},
+	}))
+	return reg
+}
+
+// claim is Interrupted with a failed claim fatal, for the tests that assert
+// what follows the claim.
+func claim[In, Out, Res any](t *testing.T, tl *ai.ResumableToolAction[In, Out, Res], part *ai.Part) *ai.InterruptedCall[In, Out, Res] {
+	t.Helper()
+	call, ok := tl.Interrupted(part)
+	if !ok {
+		t.Fatalf("%s.Interrupted did not claim the tool's own interrupt", tl.Name())
+	}
+	return call
+}
+
+// TestResumableTool_TypedRestart pins the core interrupt/resume contract:
+// the tool interrupts with typed data on the first pass, the caller claims the
+// part with Interrupted and reads the input typed, reads the interrupt data
+// with ai.InterruptAs, restarts with a typed value, and the value reaches the
+// function's *Res parameter on re-execution.
+func TestResumableTool_TypedRestart(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, recorded := interruptOnce(t, reg)
+	resp, interrupt := generateUntilInterrupt(t, reg, transfer)
+
+	call := claim(t, transfer, interrupt)
+	if call.Input.Amount != 200 {
+		t.Errorf("call.Input = %+v, want the input decoded from the wire {200}", call.Input)
+	}
+	if call.Part == nil || !call.Part.IsInterrupt() {
+		t.Errorf("call.Part = %+v, want the interrupted part", call.Part)
+	}
+	meta, ok := ai.InterruptAs[transferInterrupt](call.Part)
+	if !ok {
+		t.Fatal("InterruptAs failed to decode the typed interrupt data")
+	}
+	if meta.Reason != "large_amount" || meta.Amount != 200 {
+		t.Errorf("interrupt data = %+v, want {large_amount 200}", meta)
+	}
+
+	restart := call.Restart(confirmation{Approved: true})
+	if got := resumeWith(t, reg, resp, transfer, ai.WithResume(restart)); got != "done" {
+		t.Errorf("final text after restart = %q, want %q", got, "done")
+	}
+	gotResume, _, _ := recorded()
+	if gotResume == nil || !gotResume.Approved {
+		t.Errorf("resumed tool saw %+v, want Approved=true", gotResume)
+	}
+}
+
+// TestResumableTool_BareRestart documents what a restart with the zero
+// value delivers: the tool re-executes with a non-nil, zero-valued resume
+// parameter, which is what makes a bare restart read as approval for tools
+// that key on the presence of a resume.
+func TestResumableTool_BareRestart(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, recorded := interruptOnce(t, reg)
+	resp, interrupt := generateUntilInterrupt(t, reg, transfer)
+
+	restart := claim(t, transfer, interrupt).Restart(confirmation{})
+	if got := resumeWith(t, reg, resp, transfer, ai.WithResume(restart)); got != "done" {
+		t.Errorf("final text after bare restart = %q, want %q", got, "done")
+	}
+
+	gotResume, _, _ := recorded()
+	if gotResume == nil {
+		t.Fatal("a bare restart must still deliver a non-nil resume parameter")
+	}
+	if gotResume.Approved {
+		t.Errorf("bare restart resume = %+v, want the zero value", *gotResume)
+	}
+}
+
+// TestResumableTool_RestartWithInput covers the caller revising the
+// arguments before approving: the tool re-executes with the new input and can
+// still read what it was originally called with.
+func TestResumableTool_RestartWithInput(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, recorded := interruptOnce(t, reg)
+	resp, interrupt := generateUntilInterrupt(t, reg, transfer)
+
+	restart := claim(t, transfer, interrupt).RestartWithInput(transferIn{Amount: 50}, confirmation{Approved: true})
+	if got := resumeWith(t, reg, resp, transfer, ai.WithResume(restart)); got != "done" {
+		t.Errorf("final text = %q, want %q", got, "done")
+	}
+
+	_, gotInput, gotOriginal := recorded()
+	if gotInput.Amount != 50 {
+		t.Errorf("re-executed tool saw amount %v, want the new input 50", gotInput.Amount)
+	}
+	orig, ok := gotOriginal.(transferIn)
+	if !ok || orig.Amount != 200 {
+		t.Errorf("tool.OriginalInput = %+v (%T), want transferIn{200}", gotOriginal, gotOriginal)
+	}
+}
+
+// TestResumableTool_RestartWithInputAmendsHistory pins that history
+// records the request as a restart with a new input ran it: a second
+// interrupt claims the new input, so restarting it runs that input again,
+// and the completed call reads the new input in history, while the caller's
+// history is left as it was.
+func TestResumableTool_RestartWithInputAmendsHistory(t *testing.T) {
+	type note struct {
+		Note string `json:"note,omitempty"`
+	}
+	reg := newTransferTestRegistry(t)
+	var ran []float64
+	transfer := defineTestResumableTool(reg, "transfer", "transfers money",
+		func(ctx context.Context, in transferIn, res *note) (transferOut, error) {
+			if res == nil || res.Note == "" {
+				return transferOut{}, tool.Interrupt(ctx, nil)
+			}
+			ran = append(ran, in.Amount)
+			return transferOut{Status: "completed"}, nil
+		})
+	generate := func(opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+		return ai.Generate(context.Background(), reg, append([]ai.GenerateOption{
+			ai.WithModelName("test/model"), ai.WithTools(transfer),
+		}, opts...)...)
+	}
+	resp, err := generate(ai.WithPrompt("transfer 200"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	original := resp.History()
+
+	restart := claim(t, transfer, singleInterrupt(t, resp)).RestartWithInput(transferIn{Amount: 50}, note{})
+	resp, err = generate(ai.WithMessages(original...), ai.WithResume(restart))
+	if !errors.Is(err, status.ErrFailedPrecondition) || resp == nil {
+		t.Fatalf("resume = (%v, %v), want the tool to interrupt again", resp, err)
+	}
+	again := claim(t, transfer, singleInterrupt(t, resp))
+	if again.Input.Amount != 50 {
+		t.Fatalf("second interrupt claims amount %v, want the new input 50", again.Input.Amount)
+	}
+	for _, m := range original {
+		for _, p := range m.Content {
+			if p.IsToolRequest() && fmt.Sprint(p.ToolRequest.Input) != "map[amount:200]" {
+				t.Errorf("caller's history request = %v, want it untouched", p.ToolRequest.Input)
+			}
+		}
+	}
+
+	resp, err = generate(ai.WithMessages(resp.History()...), ai.WithResume(again.Restart(note{Note: "ok"})))
+	if err != nil {
+		t.Fatalf("second resume: %v", err)
+	}
+	if diff := cmp.Diff([]float64{50}, ran); diff != "" {
+		t.Errorf("tool ran with (-want +got):\n%s", diff)
+	}
+	var recorded any
+	for _, m := range resp.History() {
+		for _, p := range m.Content {
+			if p.IsToolRequest() {
+				recorded = p.ToolRequest.Input
+			}
+		}
+	}
+	if in, ok := recorded.(transferIn); !ok || in.Amount != 50 {
+		t.Errorf("history records input %#v, want transferIn{50}", recorded)
+	}
+}
+
+// TestResumableTool_Respond resolves an interrupt with a pre-computed
+// result instead of re-executing the tool. The output is validated against the
+// tool's advertised output schema on the way through, so this also covers the
+// schema surviving the registry lookup.
+func TestResumableTool_Respond(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, recorded := interruptOnce(t, reg)
+	resp, interrupt := generateUntilInterrupt(t, reg, transfer)
+
+	response := claim(t, transfer, interrupt).Respond(transferOut{Status: "manually approved"})
+	if got := resumeWith(t, reg, resp, transfer, ai.WithResume(response)); got != "done" {
+		t.Errorf("final text after respond = %q, want %q", got, "done")
+	}
+	if gotResume, _, _ := recorded(); gotResume != nil {
+		t.Error("Respond must resolve the interrupt without re-executing the tool")
+	}
+}
+
+// TestPartToRestart_Flow covers the ai.Part verbs used by callers that don't
+// have the tool value in scope (e.g. a UI handler holding only the part): they
+// build the same parts as the typed verbs of a claimed call, so the loop run
+// in TestResumableTool_TypedRestart covers both.
+func TestPartToRestart_Flow(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, _ := interruptOnce(t, reg)
+	_, interrupt := generateUntilInterrupt(t, reg, transfer)
+	call := claim(t, transfer, interrupt)
+
+	restart, err := interrupt.ToToolRestart(confirmation{Approved: true})
+	if err != nil {
+		t.Fatalf("ToToolRestart: %v", err)
+	}
+	if diff := cmp.Diff(call.Restart(confirmation{Approved: true}), restart); diff != "" {
+		t.Errorf("ToToolRestart differs from InterruptedCall.Restart (-typed +part):\n%s", diff)
+	}
+
+	response, err := interrupt.ToToolResponse(transferOut{Status: "manually approved"})
+	if err != nil {
+		t.Fatalf("ToToolResponse: %v", err)
+	}
+	if diff := cmp.Diff(call.Respond(transferOut{Status: "manually approved"}), response); diff != "" {
+		t.Errorf("ToToolResponse differs from InterruptedCall.Respond (-typed +part):\n%s", diff)
+	}
+}
+
+type question struct {
+	Text string `json:"text"`
+}
+
+// newQuestionTool builds and registers the pure-question tool: it always
+// pauses, without data, and the answer is its output.
+func newQuestionTool(reg api.Registry) *ai.ResumableToolAction[question, string, struct{}] {
+	return defineTestResumableTool(reg, "askUser", "asks the user a question",
+		func(ctx context.Context, _ question, _ *struct{}) (string, error) {
+			return "", tool.Interrupt(ctx, nil)
+		})
+}
+
+// TestResumableTool_QuestionPattern covers a tool whose whole job is to
+// ask: the model's input is the question, the interrupt carries no data of
+// its own, and Respond on the claimed call is the answer the model then sees.
+// A restart re-asks, which the loop reports rather than repeating silently.
+func TestResumableTool_QuestionPattern(t *testing.T) {
+	reg := newToolTestRegistry(t)
+	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{
+		Name: "askUser", Input: map[string]any{"text": "proceed?"},
+	}))
+	askUser := newQuestionTool(reg)
+
+	resp, interrupt := generateUntilInterrupt(t, reg, askUser)
+	call := claim(t, askUser, interrupt)
+	if call.Input.Text != "proceed?" {
+		t.Errorf("call.Input = %+v, want the question the model asked", call.Input)
+	}
+	if _, ok := ai.InterruptAs[map[string]any](interrupt); ok {
+		t.Error("a question tool's interrupt must carry no data of its own")
+	}
+
+	if got := resumeWith(t, reg, resp, askUser, ai.WithResume(call.Respond("yes"))); got != "done" {
+		t.Errorf("final text after respond = %q, want %q", got, "done")
+	}
+
+	_, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(askUser),
+		ai.WithResume(call.Restart(struct{}{})))
+	if !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Errorf("restarting a question tool: err = %v, want FAILED_PRECONDITION for the repeated interrupt", err)
+	}
+}
+
+// TestWithResume_MixedKinds resumes two interrupts from one turn with a
+// single WithResume: one restarted, one answered.
+func TestWithResume_MixedKinds(t *testing.T) {
+	reg := newToolTestRegistry(t)
+	defineToolThenFinishModel(reg,
+		ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "a", Input: map[string]any{"amount": 200}}),
+		ai.NewToolRequestPart(&ai.ToolRequest{Name: "askUser", Ref: "b", Input: map[string]any{"text": "sure?"}}))
+	transfer, recorded := interruptOnce(t, reg)
+	askUser := newQuestionTool(reg)
+
+	resp, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("go"),
+		ai.WithTools(transfer, askUser))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 2 {
+		t.Fatalf("got %d interrupts, want 2", len(interrupts))
+	}
+
+	var parts []*ai.Part
+	for _, part := range interrupts {
+		if call, ok := transfer.Interrupted(part); ok {
+			parts = append(parts, call.Restart(confirmation{Approved: true}))
+		}
+		if call, ok := askUser.Interrupted(part); ok {
+			parts = append(parts, call.Respond("yes"))
+		}
+	}
+	if len(parts) != 2 {
+		t.Fatalf("claimed %d parts, want each interrupt claimed by exactly one tool", len(parts))
+	}
+
+	resumed, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transfer, askUser),
+		ai.WithResume(parts...))
+	if err != nil {
+		t.Fatalf("resume Generate: %v", err)
+	}
+	if resumed.Text() != "done" {
+		t.Errorf("final text = %q, want %q", resumed.Text(), "done")
+	}
+	if gotResume, _, _ := recorded(); gotResume == nil || !gotResume.Approved {
+		t.Errorf("restarted tool saw %+v, want Approved=true", gotResume)
+	}
+}
+
+// TestInterrupted_ClaimsOnlyOwnUnresolvedInterrupts checks that Interrupted
+// reports false for everything that is not an unresolved interrupt the tool
+// raised itself, a hold its middleware raised included, and on a nil tool.
+func TestInterrupted_ClaimsOnlyOwnUnresolvedInterrupts(t *testing.T) {
+	mine := ai.NewResumableTool("mine", "d",
+		func(ctx context.Context, _ struct{}, _ *confirmation) (string, error) { return "", nil })
+
+	foreign := ai.NewToolRequestPart(&ai.ToolRequest{Name: "other"})
+	foreign.Interrupt = &ai.ToolInterrupt{}
+	resolved := ai.NewToolRequestPart(&ai.ToolRequest{Name: "mine"})
+	resolved.Interrupt = &ai.ToolInterrupt{Resolved: true}
+	plain := ai.NewToolRequestPart(&ai.ToolRequest{Name: "mine"})
+	held := ai.NewToolRequestPart(&ai.ToolRequest{Name: "mine"})
+	held.Interrupt = &ai.ToolInterrupt{RaisedBy: "genkit-middleware/toolApproval"}
+
+	for name, part := range map[string]*ai.Part{
+		"another tool's interrupt": foreign,
+		"a resolved interrupt":     resolved,
+		"a hook's hold":            held,
+		"a plain tool request":     plain,
+		"a text part":              ai.NewTextPart("hi"),
+		"a nil part":               nil,
+	} {
+		if _, ok := mine.Interrupted(part); ok {
+			t.Errorf("Interrupted claimed %s", name)
+		}
+	}
+
+	own := ai.NewToolRequestPart(&ai.ToolRequest{Name: "mine"})
+	own.Interrupt = &ai.ToolInterrupt{}
+	if _, ok := mine.Interrupted(own); !ok {
+		t.Error("Interrupted did not claim the tool's own interrupt")
+	}
+	var nilTool *ai.ResumableToolAction[struct{}, string, confirmation]
+	if _, ok := nilTool.Interrupted(own); ok {
+		t.Error("a nil tool claimed a part")
+	}
+}
+
+// TestNewResumableTool_RejectsNonObjectResumeType covers the documented
+// constraint: resume data must serialize to a JSON object. A resume type that
+// cannot is rejected at definition, which is what lets Restart on a claimed
+// call return the part without an error.
+func TestNewResumableTool_RejectsNonObjectResumeType(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		define func()
+	}{
+		{"a string", func() {
+			ai.NewResumableTool("scalar", "d",
+				func(ctx context.Context, _ struct{}, _ *string) (string, error) { return "", nil })
+		}},
+		// A struct by kind, but it encodes itself as a JSON string.
+		{"time.Time", func() {
+			ai.NewResumableTool("when", "d",
+				func(ctx context.Context, _ struct{}, _ *time.Time) (string, error) { return "", nil })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("expected a panic defining a tool whose resume type is %s", tc.name)
+				}
+				err, ok := r.(error)
+				if !ok || !strings.Contains(err.Error(), "ai.NewResumableTool") || !strings.Contains(err.Error(), "JSON object") {
+					t.Errorf("panic = %v, want it to name ai.NewResumableTool and the JSON object constraint", r)
+				}
+			}()
+			tc.define()
+		})
+	}
+}
+
+// TestResume_ReadByJSONShape pins that a resume payload reads the same
+// whether it stayed in process or crossed the wire: a Res with nil slice and
+// pointer fields reaches the tool as built, since the compiler checked it; a
+// struct of another type with the same fields decodes by its shape; and a
+// named map type decodes from the plain map a wire hop yields.
+func TestResume_ReadByJSONShape(t *testing.T) {
+	type detail struct {
+		Reason string `json:"reason"`
+	}
+	type answer struct {
+		Approved bool     `json:"approved"`
+		Notes    []string `json:"notes"`
+		Detail   *detail  `json:"detail"`
+	}
+	type approval map[string]any
+
+	for _, hop := range []struct {
+		name string
+		fn   func(t *testing.T, msgs []*ai.Message) []*ai.Message
+	}{
+		{"in process", func(_ *testing.T, msgs []*ai.Message) []*ai.Message { return msgs }},
+		{"after a wire hop", viaJSON},
+	} {
+		t.Run(hop.name, func(t *testing.T) {
+			// resumeOnce defines a tool with resume type Res that interrupts
+			// once, restarts it with the part restart builds, and returns
+			// the resume the tool saw.
+			resumeOnce := func(t *testing.T, define func(reg *registry.Registry, saw func(any)) ai.Tool, restart func(*ai.Part) *ai.Part) any {
+				t.Helper()
+				reg := newTransferTestRegistry(t)
+				var seen any
+				tl := define(reg, func(v any) { seen = v })
+				resp, err := ai.Generate(context.Background(), reg,
+					ai.WithModelName("test/model"), ai.WithPrompt("go"), ai.WithTools(tl))
+				if err != nil {
+					t.Fatalf("Generate: %v", err)
+				}
+				history := resp.History()
+				part := restart(singleInterrupt(t, resp))
+				if hop.name != "in process" {
+					history = hop.fn(t, history)
+					part = hop.fn(t, []*ai.Message{{Role: ai.RoleTool, Content: []*ai.Part{part}}})[0].Content[0]
+				}
+				if _, err := ai.Generate(context.Background(), reg,
+					ai.WithModelName("test/model"), ai.WithMessages(history...),
+					ai.WithTools(tl), ai.WithResume(part)); err != nil {
+					t.Fatalf("resume: %v", err)
+				}
+				return seen
+			}
+			defineAnswer := func(reg *registry.Registry, saw func(any)) ai.Tool {
+				return defineTestResumableTool(reg, "transfer", "transfers money",
+					func(ctx context.Context, _ transferIn, res *answer) (string, error) {
+						if res == nil {
+							return "", tool.Interrupt(ctx, nil)
+						}
+						saw(*res)
+						return "ok", nil
+					})
+			}
+
+			t.Run("a Res with nil fields", func(t *testing.T) {
+				var tl *ai.ResumableToolAction[transferIn, string, answer]
+				got := resumeOnce(t, func(reg *registry.Registry, saw func(any)) ai.Tool {
+					tl = defineAnswer(reg, saw).(*ai.ResumableToolAction[transferIn, string, answer])
+					return tl
+				}, func(p *ai.Part) *ai.Part {
+					return claim(t, tl, p).Restart(answer{Approved: true})
+				})
+				if a, ok := got.(answer); !ok || !a.Approved {
+					t.Errorf("tool saw %#v, want an approved answer", got)
+				}
+			})
+
+			t.Run("a struct of another type", func(t *testing.T) {
+				got := resumeOnce(t, defineAnswer, func(p *ai.Part) *ai.Part {
+					restart, err := p.ToToolRestart(struct {
+						Approved bool     `json:"approved"`
+						Notes    []string `json:"notes"`
+						Detail   *detail  `json:"detail"`
+					}{Approved: true, Notes: []string{}, Detail: &detail{Reason: "ok"}})
+					if err != nil {
+						t.Fatalf("ToToolRestart: %v", err)
+					}
+					return restart
+				})
+				if a, ok := got.(answer); !ok || !a.Approved || a.Detail == nil || a.Detail.Reason != "ok" {
+					t.Errorf("tool saw %#v, want the answer decoded by shape", got)
+				}
+			})
+
+			t.Run("a named map", func(t *testing.T) {
+				var tl *ai.ResumableToolAction[transferIn, string, approval]
+				got := resumeOnce(t, func(reg *registry.Registry, saw func(any)) ai.Tool {
+					tl = defineTestResumableTool(reg, "transfer", "transfers money",
+						func(ctx context.Context, _ transferIn, res *approval) (string, error) {
+							if res == nil {
+								return "", tool.Interrupt(ctx, nil)
+							}
+							saw(*res)
+							return "ok", nil
+						})
+					return tl
+				}, func(p *ai.Part) *ai.Part {
+					return claim(t, tl, p).Restart(approval{"approved": true})
+				})
+				if a, ok := got.(approval); !ok || a["approved"] != true {
+					t.Errorf("tool saw %#v, want the approval", got)
+				}
+			})
+		})
+	}
+}
+
+// TestRestart_ResumeDataValidated pins that a restart's payload is validated
+// against the schema inferred from Res before the tool re-executes, as the
+// model's input is against In: a mistyped or missing field fails the resume
+// with an error naming the field, and the tool never runs. The untyped verb is
+// the path a payload from the wire takes; the typed Restart cannot build these
+// payloads.
+func TestRestart_ResumeDataValidated(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		resume any
+		want   string
+	}{
+		{"mistyped field", map[string]any{"approved": "yes"}, "approved"},
+		{"missing field on a bare restart", nil, "approved is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newTransferTestRegistry(t)
+			transfer, recorded := interruptOnce(t, reg)
+			resp, interrupt := generateUntilInterrupt(t, reg, transfer)
+
+			restart, err := interrupt.ToToolRestart(tc.resume)
+			if err != nil {
+				t.Fatalf("ToToolRestart: %v", err)
+			}
+			_, err = ai.Generate(context.Background(), reg,
+				ai.WithModelName("test/model"),
+				ai.WithMessages(resp.History()...),
+				ai.WithTools(transfer),
+				ai.WithResume(restart))
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Fatalf("resume error = %v, want status.ErrInvalidArgument", err)
+			}
+			if !strings.Contains(err.Error(), "resume data") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to name the resume data and %q", err, tc.want)
+			}
+			if gotResume, _, _ := recorded(); gotResume != nil {
+				t.Errorf("tool re-executed with %+v; a rejected payload must not reach it", *gotResume)
+			}
+		})
+	}
+}
+
+// TestResumableTool_UnregisteredViaWithTools passes a resumable tool
+// created with ai.NewResumableTool, never registered, straight to Generate.
+// It is an ai.Tool, so the loop registers it for the call the way it does an
+// unregistered ai.NewTool.
+func TestResumableTool_UnregisteredViaWithTools(t *testing.T) {
+	reg := newToolTestRegistry(t)
+	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "unregistered", Input: map[string]any{"city": "Lima"}}))
+
+	ran := false
+	tl := ai.NewResumableTool("unregistered", "d",
+		func(ctx context.Context, in weatherIn, _ *confirmation) (reportOut, error) {
+			ran = true
+			return reportOut{}, nil
+		})
+
+	resp, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("weather"),
+		ai.WithTools(tl))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !ran {
+		t.Error("the unregistered resumable tool did not run")
+	}
+	if got := resp.Text(); got != "done" {
+		t.Errorf("Text() = %q, want done", got)
+	}
+}
+
+// TestResume_PayloadReachesEveryReaderAlike pins that one restart reads the
+// same through every reader: a map restarted in process keeps its Go types
+// in the tool's resume parameter, in tool.ResumeData and in ai.ResumedValue,
+// rather than widening to float64 in one of them.
+func TestResume_PayloadReachesEveryReaderAlike(t *testing.T) {
+	reg := newToolTestRegistry(t)
+	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "count", Input: map[string]any{}}))
+
+	var (
+		paramType, dataType string
+		viaValue            int
+	)
+	count := defineTestResumableTool(reg, "count", "d",
+		func(ctx context.Context, _ struct{}, res *map[string]any) (string, error) {
+			if res == nil {
+				return "", tool.Interrupt(ctx, nil)
+			}
+			paramType = fmt.Sprintf("%T", (*res)["n"])
+			rd, _ := tool.ResumeData[map[string]any](ctx)
+			dataType = fmt.Sprintf("%T", rd["n"])
+			viaValue, _ = ai.ResumedValue[int](ctx, "n")
+			return "ok", nil
+		})
+
+	resp, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("count"),
+		ai.WithTools(count))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt, got %d", len(interrupts))
+	}
+	call := claim(t, count, interrupts[0])
+	if got := resumeWith(t, reg, resp, count, ai.WithResume(call.Restart(map[string]any{"n": 5}))); got != "done" {
+		t.Errorf("Text() = %q, want done", got)
+	}
+	if paramType != "int" || dataType != "int" || viaValue != 5 {
+		t.Errorf("resume parameter saw %s, tool.ResumeData saw %s, ai.ResumedValue saw %d; want int, int, 5", paramType, dataType, viaValue)
+	}
 }
