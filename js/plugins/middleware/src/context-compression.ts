@@ -51,6 +51,38 @@ export const ToolResponsesOptionsSchema = z.object({
     .describe("Don't truncate the last N tool response messages. Default: 2."),
 });
 
+export const DeduplicateToolResponsesOptionsSchema = z.object({
+  /**
+   * How to identify duplicates:
+   * - `'name-and-input'`: Match by tool name and exact arguments (default).
+   * - `'name-only'`: Match by tool name only.
+   */
+  matchBy: z
+    .enum(['name-and-input', 'name-only'])
+    .optional()
+    .describe(
+      'Match by tool name and arguments ("name-and-input") or name only ("name-only"). Default: "name-and-input".'
+    ),
+
+  /**
+   * Number of most recent responses to leave untouched per tool/args group.
+   * Older duplicates are replaced with `notice`.
+   * @default 1
+   */
+  keepRecent: z
+    .number()
+    .optional()
+    .describe('Number of recent duplicates to keep untouched. Default: 1.'),
+
+  /**
+   * Replacement text for deduplicated tool responses.
+   */
+  notice: z
+    .string()
+    .optional()
+    .describe('Replacement text for deduplicated tool responses.'),
+});
+
 export const ContextCompressionOptionsSchema = z.object({
   /**
    * Compression triggers when the previous turn's `inputTokens` exceeds
@@ -83,6 +115,15 @@ export const ContextCompressionOptionsSchema = z.object({
     .optional()
     .describe(
       'Hard cap on any single tool response size. Set negative to disable. Default: 400000 chars.'
+    ),
+
+  /**
+   * Deduplicate repeated tool calls with the same arguments.
+   * Replaces older duplicate outputs with a short notice.
+   */
+  deduplicateToolResponses:
+    DeduplicateToolResponsesOptionsSchema.optional().describe(
+      'Deduplicate repeated tool calls with same arguments.'
     ),
 
   /**
@@ -138,6 +179,10 @@ export type ContextCompressionOptions = z.infer<
 
 const DEFAULT_MAX_TOOL_RESPONSE_CHARS = 400_000;
 const DEFAULT_TOOL_RESPONSE_PRESERVE_RECENT = 2;
+const DEFAULT_DEDUP_KEEP_RECENT = 1;
+const DEFAULT_DEDUP_NOTICE =
+  '[Deduplicated: This tool response has been removed to save context. ' +
+  'See the most recent call of this tool for current output.]';
 const DEFAULT_TRUNCATION_NOTICE =
   '[NOTE] Some earlier messages in this conversation have been removed to stay within ' +
   'context limits. The most recent messages are preserved. Pay close attention to the ' +
@@ -188,7 +233,7 @@ function sliceCodePointSafe(str: string, limit: number): string {
 
 function hasCompressionFlag(
   target: { metadata?: Record<string, unknown> },
-  flag: 'truncated' | 'capped' | 'notice' | 'standaloneNotice'
+  flag: 'truncated' | 'capped' | 'deduplicated' | 'notice' | 'standaloneNotice'
 ): boolean {
   const ccMeta = target.metadata?.contextCompression as
     | Record<string, unknown>
@@ -388,6 +433,12 @@ export const contextCompression: GenerateMiddleware<
     const maxToolResponseChars =
       rawMaxToolResponseChars <= 0 ? Infinity : rawMaxToolResponseChars;
 
+    const dedupConfig = config?.deduplicateToolResponses;
+    const dedupMatchBy = dedupConfig?.matchBy ?? 'name-and-input';
+    const dedupKeepRecent =
+      dedupConfig?.keepRecent ?? DEFAULT_DEDUP_KEEP_RECENT;
+    const dedupNotice = dedupConfig?.notice ?? DEFAULT_DEDUP_NOTICE;
+
     const toolResponseConfig = config?.toolResponses;
     const toolMaxChars = toolResponseConfig?.maxChars;
     const toolPreserveRecent =
@@ -396,6 +447,7 @@ export const contextCompression: GenerateMiddleware<
 
     let lastInputTokens: number | undefined;
     let cumulativeCapped = 0;
+    let cumulativeDeduplicated = 0;
     let cumulativeTruncated = 0;
     let latestCompressionMeta: Record<string, unknown> | null = null;
 
@@ -403,6 +455,114 @@ export const contextCompression: GenerateMiddleware<
     const insertTruncationNotice = config?.insertTruncationNotice !== false;
     const truncationNoticeText =
       config?.truncationNotice ?? DEFAULT_TRUNCATION_NOTICE;
+
+    function applyToolResponseDeduplication(messages: MessageData[]): {
+      messages: MessageData[];
+      deduplicated: number;
+    } {
+      if (!dedupConfig) return { messages, deduplicated: 0 };
+
+      // Map tool call IDs to tool request input across model messages
+      const toolInputByRef = new Map<string, unknown>();
+      for (const msg of messages) {
+        if (msg.role === 'model') {
+          for (const part of msg.content) {
+            if (part.toolRequest?.ref) {
+              toolInputByRef.set(part.toolRequest.ref, part.toolRequest.input);
+            }
+          }
+        }
+      }
+
+      const groups = new Map<string, { msgIdx: number; partIdx: number }[]>();
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (msg.role !== 'tool') continue;
+
+        for (let j = 0; j < msg.content.length; j++) {
+          const part = msg.content[j];
+          if (!part.toolResponse) continue;
+
+          let toolInput = part.toolResponse.ref
+            ? toolInputByRef.get(part.toolResponse.ref)
+            : undefined;
+
+          // If no ref was matched, check if preceding model message had a matching toolRequest with input
+          if (
+            toolInput === undefined &&
+            i > 0 &&
+            messages[i - 1]?.role === 'model'
+          ) {
+            const prevParts = messages[i - 1].content;
+            const positionalPart =
+              prevParts[j]?.toolRequest?.name === part.toolResponse.name
+                ? prevParts[j]
+                : prevParts.find(
+                    (p) => p.toolRequest?.name === part.toolResponse?.name
+                  );
+            if (positionalPart?.toolRequest) {
+              toolInput = positionalPart.toolRequest.input;
+            }
+          }
+
+          const key =
+            dedupMatchBy === 'name-only'
+              ? part.toolResponse.name
+              : JSON.stringify({
+                  name: part.toolResponse.name,
+                  input: toolInput,
+                });
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push({ msgIdx: i, partIdx: j });
+        }
+      }
+
+      const partsToReplace = new Set<string>();
+      for (const occurrences of groups.values()) {
+        if (occurrences.length > dedupKeepRecent) {
+          const toRemove = occurrences.slice(
+            0,
+            occurrences.length - dedupKeepRecent
+          );
+          for (const occ of toRemove) {
+            partsToReplace.add(`${occ.msgIdx}-${occ.partIdx}`);
+          }
+        }
+      }
+
+      if (partsToReplace.size === 0) {
+        return { messages, deduplicated: 0 };
+      }
+
+      let deduplicatedCount = 0;
+      const result = messages.map((msg, i) => {
+        if (msg.role !== 'tool') return msg;
+
+        let changed = false;
+        const newContent = msg.content.map((part, j): Part => {
+          if (
+            part.toolResponse &&
+            partsToReplace.has(`${i}-${j}`) &&
+            !hasCompressionFlag(part, 'deduplicated')
+          ) {
+            deduplicatedCount++;
+            changed = true;
+            return {
+              ...part,
+              metadata: withCompressionMetadata(part, { deduplicated: true }),
+              toolResponse: {
+                ...part.toolResponse,
+                output: dedupNotice,
+              },
+            };
+          }
+          return part;
+        });
+        return changed ? { ...msg, content: newContent } : msg;
+      });
+
+      return { messages: result, deduplicated: deduplicatedCount };
+    }
 
     function applyToolLimits(
       messages: MessageData[],
@@ -441,8 +601,11 @@ export const contextCompression: GenerateMiddleware<
             return part;
           }
 
-          // Skip if this part was already truncated to toolResponses.maxChars
-          if (hasCompressionFlag(part, 'truncated')) {
+          // Skip if this part was already truncated to toolResponses.maxChars or deduplicated
+          if (
+            hasCompressionFlag(part, 'truncated') ||
+            hasCompressionFlag(part, 'deduplicated')
+          ) {
             return part;
           }
 
@@ -673,6 +836,7 @@ export const contextCompression: GenerateMiddleware<
           latestCompressionMeta = null;
           lastInputTokens = undefined;
           cumulativeCapped = 0;
+          cumulativeDeduplicated = 0;
           cumulativeTruncated = 0;
         }
 
@@ -750,6 +914,7 @@ export const contextCompression: GenerateMiddleware<
 
         const {
           toolResponsesSafetyCapped,
+          toolResponsesDeduplicated,
           toolResponsesTruncated,
           truncationNoticeInserted,
         } = await ai.run(
@@ -758,16 +923,24 @@ export const contextCompression: GenerateMiddleware<
           async () => {
             let messages = [...rawMessages];
             let capped = 0;
+            let deduplicated = 0;
             let truncated = 0;
             let noticeInserted = false;
 
-            // 1. Tool response limits (Safety cap always; Truncation when shouldCompress is true)
+            // 1. Tool response deduplication (when shouldCompress is true)
+            if (shouldCompress && dedupConfig) {
+              const dedupResult = applyToolResponseDeduplication(messages);
+              messages = dedupResult.messages;
+              deduplicated = dedupResult.deduplicated;
+            }
+
+            // 2. Tool response limits (Safety cap always; Truncation when shouldCompress is true)
             const toolResult = applyToolLimits(messages, shouldCompress);
             messages = toolResult.messages;
             capped = toolResult.capped;
             truncated = toolResult.truncated;
 
-            // 2. Message truncation
+            // 3. Message truncation
             if (
               shouldCompress &&
               maxMessages &&
@@ -783,6 +956,7 @@ export const contextCompression: GenerateMiddleware<
             return {
               messagesAfter: messages.length,
               toolResponsesSafetyCapped: capped,
+              toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
               truncationNoticeInserted: noticeInserted,
             };
@@ -792,6 +966,7 @@ export const contextCompression: GenerateMiddleware<
         const compressedCount = compressedMessages.length;
         const wasCompressed =
           toolResponsesSafetyCapped > 0 ||
+          toolResponsesDeduplicated > 0 ||
           toolResponsesTruncated > 0 ||
           compressedCount < originalCount ||
           truncationNoticeInserted;
@@ -799,6 +974,7 @@ export const contextCompression: GenerateMiddleware<
         let turnCompressionMeta: Record<string, unknown> | null = null;
         if (wasCompressed) {
           cumulativeCapped += toolResponsesSafetyCapped;
+          cumulativeDeduplicated += toolResponsesDeduplicated;
           cumulativeTruncated += toolResponsesTruncated;
           turnCompressionMeta = {
             triggered: true,
@@ -806,6 +982,7 @@ export const contextCompression: GenerateMiddleware<
             messagesOriginal: originalCount,
             messagesAfter: compressedCount,
             toolResponsesSafetyCapped: cumulativeCapped,
+            toolResponsesDeduplicated: cumulativeDeduplicated,
             toolResponsesTruncated: cumulativeTruncated,
             truncationNoticeInserted:
               truncationNoticeInserted ||

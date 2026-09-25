@@ -1343,6 +1343,351 @@ describe('contextCompression middleware', () => {
     assert.ok(output.startsWith('abcd\n\n[Truncated '));
   });
 
+  it('compresses tool responses with deduplication and truncation', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'A'.repeat(500)}`
+    );
+
+    const pm = ai.defineModel({ name: 'loopModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'test' } } },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'search', input: { query: 'test' } } },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'Search multiple times',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'finished');
+    assert.strictEqual(capturedRequests.length, 3);
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.ok(toolMessages.length >= 2);
+    const firstToolOutput = toolMessages[0].content[0].toolResponse?.output;
+    assert.match(String(firstToolOutput), /Deduplicated/);
+  });
+
+  it('deduplicates tool responses by correlating tool call IDs (ref) to tool inputs', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'A'.repeat(200)}`
+    );
+
+    const pm = ai.defineModel({ name: 'refDedupModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  ref: 'call_unique_1',
+                  input: { query: 'same-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  ref: 'call_unique_2', // Distinct call id, but identical tool input
+                  input: { query: 'same-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'Search multiple times with refs',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'finished');
+    assert.strictEqual(capturedRequests.length, 3);
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.ok(toolMessages.length >= 2);
+    const firstToolOutput = toolMessages[0].content[0].toolResponse?.output;
+    assert.match(String(firstToolOutput), /Deduplicated/);
+  });
+
+  it('preserves distinct calls with different arguments when matchBy is name-and-input', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const searchTool = ai.defineTool(
+      {
+        name: 'search',
+        description: 'search tool',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `Result for ${input.query}: ${'B'.repeat(50)}`
+    );
+
+    const pm = ai.defineModel({ name: 'distinctArgsModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  input: { query: 'first-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 200 },
+        };
+      }
+      if (turn === 2) {
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'search',
+                  input: { query: 'second-query' },
+                },
+              },
+            ],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'finished' }] },
+        usage: { inputTokens: 100 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      prompt: 'Search with distinct queries',
+      tools: [searchTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+        }),
+      ],
+    });
+
+    const turn3Messages = capturedRequests[2].messages;
+    const toolMessages = turn3Messages.filter((m) => m.role === 'tool');
+    assert.strictEqual(toolMessages.length, 2);
+    // Neither should be deduplicated because arguments differ
+    assert.strictEqual(
+      String(toolMessages[0].content[0].toolResponse?.output).includes(
+        'Deduplicated'
+      ),
+      false
+    );
+    assert.strictEqual(
+      String(toolMessages[1].content[0].toolResponse?.output).includes(
+        'Deduplicated'
+      ),
+      false
+    );
+  });
+
+  it('deduplicates only duplicate parts in parallel tool calls without replacing unique sibling parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'parallelDedupModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run parallel tools' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_1',
+                input: { id: 'shared' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_2',
+                input: { id: 'unique' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_1',
+                output: 'Shared output 1 ' + 'X'.repeat(200),
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_2',
+                output: 'Unique output 2 ' + 'Y'.repeat(200),
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetch',
+                ref: 'call_3',
+                input: { id: 'shared' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetch',
+                ref: 'call_3',
+                output: 'Shared output 3 ' + 'Z'.repeat(200),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          deduplicateToolResponses: { matchBy: 'name-and-input' },
+        }),
+      ],
+    });
+
+    const toolMessages = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(toolMessages.length, 2);
+    // First tool message: part 0 ('shared') is deduplicated, part 1 ('unique') is preserved intact
+    assert.match(
+      String(toolMessages[0].content[0].toolResponse?.output),
+      /Deduplicated/
+    );
+    assert.ok(
+      String(toolMessages[0].content[1].toolResponse?.output).startsWith(
+        'Unique output 2 '
+      )
+    );
+    // Second tool message: newest occurrence of 'shared' is preserved intact
+    assert.ok(
+      String(toolMessages[1].content[0].toolResponse?.output).startsWith(
+        'Shared output 3 '
+      )
+    );
+  });
+
   it('preserves the latest [model, tool] turn when maxMessages is 3 (keepCount: 2) in a tool loop', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
