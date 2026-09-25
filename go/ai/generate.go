@@ -39,6 +39,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/genkitbridge"
 )
 
 // Model represents a model that can generate content based on a request. It
@@ -194,9 +195,17 @@ type ModelOptions struct {
 }
 
 // DefineGenerateAction defines a utility generate action.
+//
+// The Dev UI and other reflection clients run generation through this action
+// rather than through genkit.Generate, so it seeds the *genkit.Genkit backing r
+// into the context itself. Middleware that resolves other actions through
+// genkit.FromContext then works the same on both paths.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
+			if seed := genkitbridge.SeedContextForRegistry; seed != nil {
+				ctx = seed(ctx, r)
+			}
 			// The action's own span records the request and response, and
 			// stands in for the first turn's: opening one would nest a
 			// duplicate "generate" span directly inside it.
