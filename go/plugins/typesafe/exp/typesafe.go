@@ -130,7 +130,10 @@ type Config struct {
 
 	// Extra is merged over the top-level fields of the request body, last
 	// write wins. It reaches fields this package does not model, such as
-	// OpenRouter's provider, session_id, and trace.
+	// OpenRouter's provider, session_id, and trace. It wins over the fields
+	// the plugin builds too, model included, so it is the way to send a
+	// model ID the endpoint's translation would refuse. On Cloudflare it
+	// merges into input, the native body, not the envelope around it.
 	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, merged over the ones the plugin builds."`
 }
 
