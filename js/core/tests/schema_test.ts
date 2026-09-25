@@ -29,6 +29,30 @@ import {
 } from '../src/schema.js';
 
 describe('validate()', () => {
+  it('accepts an unknown format while enforcing other schema constraints', () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        depth: { type: 'integer', format: 'uint', minimum: 0 },
+      },
+      required: ['depth'],
+    };
+
+    assert.strictEqual(
+      validateSchema({ depth: 1 }, { jsonSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema({ depth: -1 }, { jsonSchema }).valid,
+      false
+    );
+  });
+
+  it('continues to validate known formats', () => {
+    const jsonSchema = { type: 'string', format: 'email' };
+    assert.strictEqual(validateSchema('invalid', { jsonSchema }).valid, false);
+  });
+
   const tests = [
     {
       it: 'should return true for a valid json schema',
