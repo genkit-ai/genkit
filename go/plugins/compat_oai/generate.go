@@ -729,50 +729,7 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 
 	choice := completion.Choices[0]
 
-	// Build usage information with detailed token breakdown
-	usage := &ai.GenerationUsage{
-		InputTokens:  int(completion.Usage.PromptTokens),
-		OutputTokens: int(completion.Usage.CompletionTokens),
-		TotalTokens:  int(completion.Usage.TotalTokens),
-	}
-
-	// Add reasoning tokens (thoughts tokens) if available
-	if completion.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
-		usage.ThoughtsTokens = int(completion.Usage.CompletionTokensDetails.ReasoningTokens)
-	}
-
-	// Add cached tokens if available. DeepSeek reports its cache hits as a
-	// usage field of its own and returns no prompt_tokens_details at all, so
-	// that field stands in when OpenAI's breakdown is absent.
-	if completion.Usage.PromptTokensDetails.CachedTokens > 0 {
-		usage.CachedContentTokens = int(completion.Usage.PromptTokensDetails.CachedTokens)
-	} else if cached := extractTokenCount(
-		completion.Usage.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw(),
-	); cached > 0 {
-		usage.CachedContentTokens = cached
-	}
-
-	// Add the token counts Genkit has no field of its own for.
-	addCustomTokens(usage, "audioTokens", int(completion.Usage.CompletionTokensDetails.AudioTokens))
-	addCustomTokens(usage, "acceptedPredictionTokens", int(completion.Usage.CompletionTokensDetails.AcceptedPredictionTokens))
-	addCustomTokens(usage, "rejectedPredictionTokens", int(completion.Usage.CompletionTokensDetails.RejectedPredictionTokens))
-	// xAI counts the live-search sources it consulted and breaks image tokens
-	// out of the prompt, neither of which is in OpenAI's usage shape.
-	addCustomTokens(usage, "numSourcesUsed", extractTokenCount(
-		completion.Usage.JSON.ExtraFields["num_sources_used"].Raw()))
-	addCustomTokens(usage, "imageTokens", extractTokenCount(
-		completion.Usage.PromptTokensDetails.JSON.ExtraFields["image_tokens"].Raw()))
-	// A gateway prices the request it routed and reports what it charged, which
-	// is a main reason to route through one. Unlike the counts above, presence
-	// decides rather than the value: a free-tier request is priced at an
-	// explicit zero, which is an answer, while a provider that does not price
-	// requests has no cost field at all.
-	if cost, ok := extractJSONValue(completion.Usage.JSON.ExtraFields["cost"].Raw()).(float64); ok {
-		if usage.Custom == nil {
-			usage.Custom = make(map[string]float64)
-		}
-		usage.Custom["cost"] = cost
-	}
+	usage := convertUsage(completion.Usage)
 
 	resp := &ai.ModelResponse{
 		Usage: usage,
@@ -875,6 +832,63 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	}
 
 	return resp, nil
+}
+
+// convertUsage maps a chat completion's usage onto [ai.GenerationUsage]'s
+// convention: output excludes the reasoning reported beside it, and the total
+// is input + output + thoughts.
+func convertUsage(u openai.CompletionUsage) *ai.GenerationUsage {
+	usage := &ai.GenerationUsage{InputTokens: int(u.PromptTokens)}
+
+	// OpenAI and most providers count reasoning inside completion_tokens. xAI
+	// counts it beside them, and its total_tokens adds it on top, which is how
+	// the two are told apart. A completion count below the reasoning count
+	// cannot contain it either.
+	completion := int(u.CompletionTokens)
+	reasoning := int(u.CompletionTokensDetails.ReasoningTokens)
+	if reasoning > 0 && completion >= reasoning &&
+		int(u.TotalTokens) != int(u.PromptTokens)+completion+reasoning {
+		completion -= reasoning
+	}
+	usage.OutputTokens = completion
+	usage.ThoughtsTokens = reasoning
+
+	// DeepSeek reports its cache hits as a usage field of its own and, on
+	// older models, returns no prompt_tokens_details at all, so that field
+	// stands in when OpenAI's breakdown is absent. OpenRouter reports cache
+	// writes, which OpenAI's shape has no field for.
+	if u.PromptTokensDetails.CachedTokens > 0 {
+		usage.CachedContentTokens = int(u.PromptTokensDetails.CachedTokens)
+	} else {
+		usage.CachedContentTokens = extractTokenCount(
+			u.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw())
+	}
+	usage.CacheWriteTokens = extractTokenCount(
+		u.PromptTokensDetails.JSON.ExtraFields["cache_write_tokens"].Raw())
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
+
+	// Add the token counts Genkit has no field of its own for.
+	addCustomTokens(usage, "audioTokens", int(u.CompletionTokensDetails.AudioTokens))
+	addCustomTokens(usage, "acceptedPredictionTokens", int(u.CompletionTokensDetails.AcceptedPredictionTokens))
+	addCustomTokens(usage, "rejectedPredictionTokens", int(u.CompletionTokensDetails.RejectedPredictionTokens))
+	// xAI counts the live-search sources it consulted and breaks image tokens
+	// out of the prompt, neither of which is in OpenAI's usage shape.
+	addCustomTokens(usage, "numSourcesUsed", extractTokenCount(
+		u.JSON.ExtraFields["num_sources_used"].Raw()))
+	addCustomTokens(usage, "imageTokens", extractTokenCount(
+		u.PromptTokensDetails.JSON.ExtraFields["image_tokens"].Raw()))
+	// A gateway prices the request it routed and reports what it charged, which
+	// is a main reason to route through one. Unlike the counts above, presence
+	// decides rather than the value: a free-tier request is priced at an
+	// explicit zero, which is an answer, while a provider that does not price
+	// requests has no cost field at all.
+	if cost, ok := extractJSONValue(u.JSON.ExtraFields["cost"].Raw()).(float64); ok {
+		if usage.Custom == nil {
+			usage.Custom = make(map[string]float64)
+		}
+		usage.Custom["cost"] = cost
+	}
+	return usage
 }
 
 // addCustomTokens records a token count Genkit has no [ai.GenerationUsage]

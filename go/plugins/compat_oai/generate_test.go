@@ -228,6 +228,57 @@ func TestConvertChatCompletionToModelResponseCachedTokens(t *testing.T) {
 	}
 }
 
+// TestConvertUsage pins how each provider's usage maps onto the
+// [ai.GenerationUsage] convention, from usage the providers returned live.
+// OpenAI and DeepSeek count reasoning inside completion_tokens, so passing
+// that through beside ThoughtsTokens counted reasoning twice; xAI counts it
+// beside completion_tokens, so subtracting it there would count it never.
+func TestConvertUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage string
+		want  ai.GenerationUsage
+	}{
+		{
+			name:  "openai reasoning inside completion",
+			usage: `{"prompt_tokens":4806,"completion_tokens":76,"total_tokens":4882,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":64,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}`,
+			want:  ai.GenerationUsage{InputTokens: 4806, OutputTokens: 12, ThoughtsTokens: 64, TotalTokens: 4882},
+		},
+		{
+			name:  "xai reasoning beside completion",
+			usage: `{"prompt_tokens":5294,"completion_tokens":3,"total_tokens":5508,"prompt_tokens_details":{"text_tokens":5294,"audio_tokens":0,"image_tokens":0,"cached_tokens":5248},"completion_tokens_details":{"reasoning_tokens":211,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0},"num_sources_used":0}`,
+			want:  ai.GenerationUsage{InputTokens: 5294, OutputTokens: 3, ThoughtsTokens: 211, CachedContentTokens: 5248, TotalTokens: 5508},
+		},
+		{
+			name:  "deepseek cache hit",
+			usage: `{"prompt_tokens":4826,"completion_tokens":71,"total_tokens":4897,"prompt_tokens_details":{"cached_tokens":4608},"completion_tokens_details":{"reasoning_tokens":67},"prompt_cache_hit_tokens":4608,"prompt_cache_miss_tokens":218}`,
+			want:  ai.GenerationUsage{InputTokens: 4826, OutputTokens: 4, ThoughtsTokens: 67, CachedContentTokens: 4608, TotalTokens: 4897},
+		},
+		{
+			name:  "openrouter cache write",
+			usage: `{"prompt_tokens":194,"completion_tokens":2,"total_tokens":196,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":100,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}`,
+			want:  ai.GenerationUsage{InputTokens: 194, OutputTokens: 2, CacheWriteTokens: 100, TotalTokens: 196},
+		},
+		{
+			name:  "no total reported",
+			usage: `{"prompt_tokens":10,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":5}}`,
+			want:  ai.GenerationUsage{InputTokens: 10, OutputTokens: 2, ThoughtsTokens: 5, TotalTokens: 17},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var u openai.CompletionUsage
+			if err := json.Unmarshal([]byte(tc.usage), &u); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			got := convertUsage(u)
+			got.Custom = nil
+			if !reflect.DeepEqual(*got, tc.want) {
+				t.Errorf("convertUsage() = %+v, want %+v", *got, tc.want)
+			}
+		})
+	}
+}
+
 // TestConvertChatCompletionToModelResponseCitations pins that the sources
 // behind a live-search answer survive the conversion. They arrive in a
 // response field of xAI's own that the SDK does not model, and a caller who
@@ -505,7 +556,7 @@ func TestGenerateStreamReportsUsage(t *testing.T) {
 		want  int
 	}{
 		{"InputTokens", resp.Usage.InputTokens, 10},
-		{"OutputTokens", resp.Usage.OutputTokens, 7},
+		{"OutputTokens", resp.Usage.OutputTokens, 2},
 		{"TotalTokens", resp.Usage.TotalTokens, 17},
 		{"ThoughtsTokens", resp.Usage.ThoughtsTokens, 5},
 		{"CachedContentTokens", resp.Usage.CachedContentTokens, 6},
