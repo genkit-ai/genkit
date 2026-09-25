@@ -227,6 +227,24 @@ export const ContextCompressionOptionsSchema = z.object({
     .string()
     .optional()
     .describe('Custom notice text for when messages are dropped.'),
+
+  /**
+   * Store compressed messages on `message.metadata.compressedHistory` of the
+   * last compressed message, keeping original uncompressed messages in
+   * `request.messages` and `response.messages`.
+   *
+   * The middleware automatically resolves `compressedHistory` on subsequent turns.
+   * Use `resolveCompressedHistory(messages)` to resolve the active messages yourself.
+   *
+   * Set to `false` to overwrite `request.messages` directly (destructive).
+   * @default true
+   */
+  preserveOriginalMessages: z
+    .boolean()
+    .optional()
+    .describe(
+      'Preserve original messages and store compressed history in metadata. Default: true.'
+    ),
 });
 
 export type ContextCompressionOptions = z.infer<
@@ -272,6 +290,25 @@ const DATA_URI_APPROX_CHARS = 1000;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolves active messages by scanning bottom-up for `message.metadata.compressedHistory`.
+ * When found, replaces messages from index 0 up to that message with the compressedHistory.
+ */
+export function resolveCompressedHistory(
+  messages: MessageData[]
+): MessageData[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const meta = messages[i]?.metadata;
+    if (meta && Array.isArray(meta.compressedHistory)) {
+      return [
+        ...(meta.compressedHistory as MessageData[]),
+        ...messages.slice(i + 1),
+      ];
+    }
+  }
+  return messages;
+}
 
 /**
  * Stringify tool output, avoiding re-stringifying if already a string.
@@ -571,6 +608,7 @@ export const contextCompression: GenerateMiddleware<
     const basePreserveRecent =
       config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
     const preserveSystem = config?.preserveSystem !== false;
+    const preserveOriginalMessages = config?.preserveOriginalMessages !== false;
     const rawMaxToolResponseChars =
       config?.maxToolResponseChars ?? DEFAULT_MAX_TOOL_RESPONSE_CHARS;
     const maxToolResponseChars =
@@ -855,6 +893,8 @@ export const contextCompression: GenerateMiddleware<
         kept.shift();
       }
 
+      let tailCount: number | undefined;
+
       // If keepCount was too small to capture the preceding model message for a
       // trailing tool turn (e.g. keepCount === 1), rescue the final [model, ...tool] group.
       if (
@@ -905,12 +945,14 @@ export const contextCompression: GenerateMiddleware<
               tail = kept;
             }
             kept = [anchorUser, ...tail];
+            tailCount = tail.length;
           } else {
             kept = [];
           }
         }
       }
 
+      const finalTailCount = tailCount ?? kept.length;
       const dropped = nonSystemMessages.length - kept.length;
 
       let noticeInserted = false;
@@ -938,7 +980,7 @@ export const contextCompression: GenerateMiddleware<
             messages: [...updatedSystemMessages, ...kept],
             dropped,
             noticeInserted,
-            tailCount: kept.length,
+            tailCount: finalTailCount,
           };
         } else {
           const notice: MessageData = {
@@ -953,7 +995,7 @@ export const contextCompression: GenerateMiddleware<
             messages: [notice, ...kept],
             dropped,
             noticeInserted,
-            tailCount: kept.length,
+            tailCount: finalTailCount,
           };
         }
       }
@@ -962,7 +1004,7 @@ export const contextCompression: GenerateMiddleware<
         messages: [...systemMessages, ...kept],
         dropped,
         noticeInserted,
-        tailCount: kept.length,
+        tailCount: finalTailCount,
       };
     }
 
@@ -1031,7 +1073,17 @@ export const contextCompression: GenerateMiddleware<
 
     return {
       model: async (req, ctx, next) => {
-        const result = await next(req, ctx);
+        const { messages: resolvedMessages } = reconcileStandaloneNotices(
+          resolveCompressedHistory(req.messages || []),
+          preserveSystem,
+          truncationNoticeText
+        );
+        const modifiedReq =
+          resolvedMessages !== req.messages
+            ? { ...req, messages: resolvedMessages }
+            : req;
+
+        const result = await next(modifiedReq, ctx);
         if (result.usage?.inputTokens !== undefined) {
           lastInputTokens = result.usage.inputTokens;
           if (result.message && result.usage.inputTokens > 0) {
@@ -1058,21 +1110,31 @@ export const contextCompression: GenerateMiddleware<
           cumulativeTruncated = 0;
         }
 
+        const { messages: rawMessages, reconciled: reconciledRawNotices } =
+          reconcileStandaloneNotices(
+            envelope.request.messages || [],
+            preserveSystem,
+            truncationNoticeText
+          );
         const {
-          messages: rawMessages,
-          reconciled: reconciledStandaloneNotices,
+          messages: activeMessages,
+          reconciled: reconciledActiveNotices,
         } = reconcileStandaloneNotices(
-          envelope.request.messages || [],
+          resolveCompressedHistory(rawMessages),
           preserveSystem,
           truncationNoticeText
         );
+        const reconciledStandaloneNotices =
+          reconciledRawNotices || reconciledActiveNotices;
         const stampedTokens =
-          lastInputTokens ?? lastReportedInputTokens(rawMessages);
+          lastInputTokens ??
+          lastReportedInputTokens(activeMessages) ??
+          lastReportedInputTokens(rawMessages);
         const estimatedTokens =
           maxInputTokens === Infinity
             ? 0
             : Math.ceil(
-                estimateMessageChars(rawMessages) / CHARS_PER_TOKEN_ESTIMATE
+                estimateMessageChars(activeMessages) / CHARS_PER_TOKEN_ESTIMATE
               );
         const effectiveTokens = Math.max(stampedTokens ?? 0, estimatedTokens);
 
@@ -1080,11 +1142,11 @@ export const contextCompression: GenerateMiddleware<
           effectiveTokens > maxInputTokens ||
           (maxMessages !== undefined &&
             maxMessages > 0 &&
-            rawMessages.length > maxMessages);
+            activeMessages.length > maxMessages);
 
         const hasOversizedToolResponse =
           maxToolResponseChars !== Infinity &&
-          rawMessages.some(
+          activeMessages.some(
             (m) =>
               m.role === 'tool' &&
               m.content.some(
@@ -1120,14 +1182,14 @@ export const contextCompression: GenerateMiddleware<
           return response;
         }
 
-        const charsBefore = estimateMessageChars(rawMessages);
-        const originalCount = rawMessages.length;
+        const charsBefore = estimateMessageChars(activeMessages);
+        const originalCount = activeMessages.length;
         const inputTokensBefore =
           effectiveTokens > 0
             ? effectiveTokens
             : Math.ceil(charsBefore / CHARS_PER_TOKEN_ESTIMATE);
 
-        let compressedMessages: MessageData[] = rawMessages;
+        let compressedMessages: MessageData[] = activeMessages;
 
         const overshootRatio =
           maxInputTokens !== Infinity && maxInputTokens > 0
@@ -1146,18 +1208,24 @@ export const contextCompression: GenerateMiddleware<
           toolResponsesDeduplicated,
           toolResponsesTruncated,
           truncationNoticeInserted,
+          messagesTruncated,
+          truncTailCount,
           summarized,
+          summaryTailCount,
           summarizationSkipped,
         } = await ai.run(
           'contextCompression',
           { messageCount: originalCount, effectiveTokens: inputTokensBefore },
           async () => {
-            let messages = [...rawMessages];
+            let messages = [...activeMessages];
             let capped = 0;
             let deduplicated = 0;
             let truncated = 0;
             let noticeInserted = false;
+            let msgTruncated = false;
+            let mTailCount = 0;
             let isSummarized = false;
+            let sTailCount = 0;
             let skippedSummary = false;
 
             // 1. Tool response deduplication (when shouldCompress is true)
@@ -1195,6 +1263,9 @@ export const contextCompression: GenerateMiddleware<
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;
+                  if (isSummarized) {
+                    sTailCount = sumResult.tailCount;
+                  }
                 }
               }
 
@@ -1220,6 +1291,10 @@ export const contextCompression: GenerateMiddleware<
                 );
                 messages = msgResult.messages;
                 noticeInserted = msgResult.noticeInserted;
+                if (msgResult.dropped > 0) {
+                  msgTruncated = true;
+                  mTailCount = msgResult.tailCount;
+                }
               }
             }
 
@@ -1231,7 +1306,10 @@ export const contextCompression: GenerateMiddleware<
               toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
               truncationNoticeInserted: noticeInserted,
+              messagesTruncated: msgTruncated,
+              truncTailCount: mTailCount,
               summarized: isSummarized,
+              summaryTailCount: sTailCount,
               summarizationSkipped: skippedSummary,
             };
           }
@@ -1269,14 +1347,62 @@ export const contextCompression: GenerateMiddleware<
           latestCompressionMeta = turnCompressionMeta;
         }
 
+        let outgoingMessages: MessageData[];
+        if (wasCompressed && preserveOriginalMessages) {
+          let tailCount = 0;
+          if (messagesTruncated) {
+            tailCount = truncTailCount;
+          } else if (summarized) {
+            tailCount = summaryTailCount;
+          } else {
+            tailCount = 0;
+          }
+
+          const cutIndex =
+            tailCount > 0
+              ? Math.max(0, rawMessages.length - tailCount - 1)
+              : rawMessages.length - 1;
+
+          const compressedPrefix =
+            tailCount > 0
+              ? compressedMessages.slice(
+                  0,
+                  Math.max(0, compressedMessages.length - tailCount)
+                )
+              : compressedMessages;
+
+          outgoingMessages = rawMessages.map((m, idx) => {
+            if (idx === cutIndex) {
+              return {
+                ...m,
+                metadata: {
+                  ...m.metadata,
+                  compressedHistory: structuredClone(compressedPrefix),
+                },
+              };
+            }
+            if (m.metadata && 'compressedHistory' in m.metadata) {
+              const { compressedHistory, ...restMeta } = m.metadata;
+              return {
+                ...m,
+                metadata:
+                  Object.keys(restMeta).length > 0 ? restMeta : undefined,
+              };
+            }
+            return m;
+          });
+        } else {
+          outgoingMessages =
+            wasCompressed || reconciledStandaloneNotices
+              ? compressedMessages
+              : rawMessages;
+        }
+
         const modifiedEnvelope = {
           ...envelope,
           request: {
             ...envelope.request,
-            messages:
-              wasCompressed || reconciledStandaloneNotices
-                ? compressedMessages
-                : rawMessages,
+            messages: outgoingMessages,
           },
         };
 

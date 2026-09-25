@@ -256,12 +256,13 @@ Compresses conversation context when it grows too large, reducing token usage an
 3. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent tool response messages and appending a `[Truncated N characters]` marker.
 4. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, preserving system messages and ensuring conversation history begins with a user turn.
 5. **Summarization**: Summarizes older conversation history using an LLM (`summarize`), with optional threshold skipping (`skipSummarizationThreshold`) and dynamic overshoot adjustment.
+6. **Non-destructive session history**: By default (`preserveOriginalMessages: true`), compressed history is saved in message metadata (`message.metadata.compressedHistory`) rather than modifying original messages in place. Model calls receive the compressed view while session and UI logs retain full original messages. Use `resolveCompressedHistory(messages)` to extract active messages.
 
 > **Ordering note:** When combining `contextCompression` with context-injecting middleware (such as `filesystem()`, `skills()`, or `artifacts()`), place `contextCompression` **after** those middlewares in `use: [...]` so their injected instructions and tool outputs are accounted for during compression.
 
 ```typescript
 import { genkit } from 'genkit';
-import { contextCompression } from '@genkit-ai/middleware';
+import { contextCompression, resolveCompressedHistory } from '@genkit-ai/middleware';
 
 const ai = genkit({ ... });
 
@@ -279,10 +280,17 @@ const response = await ai.generate({
         preserveRecent: 6,
       },
       skipSummarizationThreshold: 0.25, // Skip LLM summary if cheap strategies save >= 25%
+      preserveOriginalMessages: true, // Non-destructive (default)
       maxMessages: 20,
     }),
   ],
 });
+
+// Original uncompressed history is preserved in response.messages:
+console.log(response.messages.length);
+
+// Resolve the active compressed messages sent to the model:
+const activeMessages = resolveCompressedHistory(response.messages);
 ```
 
 #### Options
