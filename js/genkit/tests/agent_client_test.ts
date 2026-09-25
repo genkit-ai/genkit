@@ -17,6 +17,19 @@
 import * as assert from 'assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { AgentError, remoteAgent } from '../src/client/agent';
+// Custom-transport tests import from the public entry point on purpose, to
+// verify everything needed is exported from `genkit/beta/client`.
+import {
+  createAgentAPI,
+  remoteAgentTransport,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+  type AgentStreamChunk,
+  type AgentTransport,
+  type SessionSnapshot,
+  type SnapshotLookup,
+} from '../src/client/index';
 
 // ---------------------------------------------------------------------------
 // Test transport: a fake `fetch` that drives the streamFlow/runFlow protocol.
@@ -493,5 +506,170 @@ describe('remoteAgent', () => {
       headers: async () => ({ Authorization: 'Bearer xyz' }),
     });
     await agent.chat().send('hi');
+  });
+});
+
+describe('custom transport', () => {
+  interface TagOptions {
+    tag?: string;
+  }
+
+  interface RecordedTurn {
+    input: AgentInput;
+    init: AgentInit;
+    tag?: string;
+  }
+
+  /**
+   * An in-memory server-managed transport: each turn echoes the input text and
+   * returns a new snapshotId; getSnapshot/abort serve from a map.
+   */
+  function fakeTransport() {
+    const turns: RecordedTurn[] = [];
+    const snapshotCalls: Array<{ lookup: SnapshotLookup; tag?: string }> = [];
+    const abortCalls: Array<{ snapshotId: string; tag?: string }> = [];
+    const snapshots = new Map<string, SessionSnapshot<{ count: number }>>();
+    let n = 0;
+
+    const transport: AgentTransport<TagOptions> = {
+      stateManagement: 'server',
+      runTurn(input, init, { tag }) {
+        turns.push({ input, init, tag });
+        const snapshotId = `snap-${++n}`;
+        const text = input.message?.content[0]?.text ?? '';
+        snapshots.set(snapshotId, {
+          snapshotId,
+          createdAt: new Date(0).toISOString(),
+          status: input.detach ? 'completed' : undefined,
+          state: { custom: { count: n }, messages: [], artifacts: [] },
+        });
+        const chunk: AgentStreamChunk = {
+          modelChunk: { role: 'model', content: [{ text }] },
+        };
+        const output: AgentOutput = {
+          snapshotId,
+          message: { role: 'model', content: [{ text: `echo: ${text}` }] },
+          finishReason: 'stop',
+        };
+        return {
+          stream: (async function* () {
+            yield chunk;
+          })(),
+          output: Promise.resolve(output),
+        };
+      },
+      async getSnapshot(lookup, opts) {
+        snapshotCalls.push({ lookup, tag: opts?.tag });
+        return 'snapshotId' in lookup
+          ? snapshots.get(lookup.snapshotId)
+          : undefined;
+      },
+      async abort(snapshotId, opts) {
+        abortCalls.push({ snapshotId, tag: opts?.tag });
+        return 'aborted';
+      },
+    };
+    return { transport, turns, snapshotCalls, abortCalls };
+  }
+
+  it('runs multi-turn chats, threading snapshotId through init', async () => {
+    const { transport, turns } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const chat = agent.chat();
+    const turn = chat.sendStream('one');
+    const chunks: string[] = [];
+    for await (const c of turn.stream) chunks.push(c.text);
+    const res1 = await turn.response;
+    const res2 = await chat.send('two');
+
+    assert.deepEqual(chunks, ['one']);
+    assert.equal(res1.text, 'echo: one');
+    assert.equal(res2.text, 'echo: two');
+    assert.equal(chat.snapshotId, 'snap-2');
+    assert.deepEqual(
+      turns.map((t) => t.init),
+      [{}, { snapshotId: 'snap-1' }]
+    );
+  });
+
+  it('passes bound and per-call options to the transport', async () => {
+    const { transport, turns, snapshotCalls, abortCalls } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const chat = agent.chat({}, { tag: 'bound' });
+    await chat.send('a');
+    await chat.send('b', { tag: 'per-call' });
+    await chat.abort();
+    assert.deepEqual(
+      turns.map((t) => t.tag),
+      ['bound', 'per-call']
+    );
+    assert.deepEqual(abortCalls, [{ snapshotId: 'snap-2', tag: 'bound' }]);
+
+    const loaded = await agent.loadChat(
+      { snapshotId: 'snap-2' },
+      { tag: 'load' }
+    );
+    assert.deepEqual(loaded.state, { count: 2 });
+    await loaded.send('c');
+    assert.equal(turns[2].tag, 'load');
+    assert.deepEqual(turns[2].init, { snapshotId: 'snap-2' });
+
+    // Detached tasks keep the chat's bound options for polling.
+    const task = await loaded.detach('d');
+    const snap = await task.wait({ intervalMs: 1 });
+    assert.equal(snap.status, 'completed');
+    assert.deepEqual(
+      snapshotCalls.map((c) => c.tag),
+      ['load', 'load']
+    );
+  });
+
+  it('does not mutate the transport', async () => {
+    const { transport } = fakeTransport();
+    // Frozen: any write by the core would throw (modules run in strict mode).
+    const agent = createAgentAPI<{ count: number }, TagOptions>(
+      Object.freeze({ ...transport, stateManagement: undefined })
+    );
+    const res = await agent.chat().send('hi');
+    assert.equal(res.snapshotId, 'snap-1');
+  });
+
+  it('rejects options the transport does not declare', () => {
+    const { transport } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+    // @ts-expect-error `context` is not a TagOptions key.
+    agent.chat({}, { context: {} });
+    // `abortSignal` is always accepted alongside transport options.
+    void agent
+      .chat()
+      .send('hi', { tag: 'x', abortSignal: new AbortController().signal });
+  });
+
+  it('can decorate the HTTP transport', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return sseResponse([{ result: { finishReason: 'stop' } }]);
+    };
+    try {
+      const http = remoteAgentTransport({ url: '/api/a' });
+      const inits: AgentInit[] = [];
+      const agent = createAgentAPI({
+        ...http,
+        runTurn(input, init, opts) {
+          inits.push(init);
+          return http.runTurn(input, init, opts);
+        },
+      });
+      const res = await agent.chat().send('hi');
+      assert.equal(res.finishReason, 'stop');
+      assert.deepEqual(inits, [{}]);
+      assert.deepEqual(urls, ['/api/a']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

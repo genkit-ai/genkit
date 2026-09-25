@@ -21,9 +21,19 @@ import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
-import { GenkitError, z } from '@genkit-ai/core';
+import {
+  GenkitError,
+  getContext,
+  runWithContext,
+  z,
+  type ActionContext,
+} from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
-import { AgentError } from '../src/agent-core.js';
+import {
+  AgentError,
+  createAgentAPI,
+  type AgentTransport,
+} from '../src/agent-core.js';
 import {
   AgentStreamChunk,
   SessionRunner,
@@ -36,7 +46,10 @@ import { InMemorySessionStore } from '../src/session-stores.js';
 import {
   Session,
   reserveSnapshotId,
+  type GetSnapshotOptions,
   type SessionSnapshot,
+  type SessionStoreOptions,
+  type SnapshotMutator,
 } from '../src/session.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import {
@@ -4167,6 +4180,209 @@ Now respond to the latest message.`,
       assert.ok(task.snapshotId);
       const snap = await task.wait({ intervalMs: 1 });
       assert.ok(snap.status);
+    });
+
+    describe('context', () => {
+      type Ctx = ActionContext | undefined;
+
+      /** An in-memory store that records the context of every call. */
+      class RecordingStore extends InMemorySessionStore<{}> {
+        reads: Ctx[] = [];
+        writes: Ctx[] = [];
+
+        override getSnapshot(opts: GetSnapshotOptions) {
+          this.reads.push(opts.context);
+          return super.getSnapshot(opts);
+        }
+
+        override saveSnapshot(
+          snapshotId: string | undefined,
+          mutator: SnapshotMutator<{}>,
+          options?: SessionStoreOptions
+        ) {
+          this.writes.push(options?.context);
+          return super.saveSnapshot(snapshotId, mutator, options);
+        }
+      }
+
+      /** An agent that echoes the uid it sees via `options.context`. */
+      function defineUidAgent(name: string, store?: RecordingStore) {
+        const seen: Ctx[] = [];
+        const agent = defineCustomAgent<{}>(
+          new Registry(),
+          { name, store },
+          async (sess, { context }) => {
+            seen.push(context);
+            await sess.run(async () => ({ finishReason: 'stop' as const }));
+            return {
+              message: {
+                role: 'model',
+                content: [{ text: `uid=${context?.auth?.uid ?? 'none'}` }],
+              },
+              finishReason: 'stop' as const,
+            };
+          }
+        );
+        return { agent, seen };
+      }
+
+      const alice: ActionContext = { auth: { uid: 'alice' } };
+      const bob: ActionContext = { auth: { uid: 'bob' } };
+      // Compare by uid: actions copy the context (merging in registry context),
+      // so the store does not always see the same object reference.
+      const uids = (ctxs: Ctx[]) => ctxs.map((c) => c?.auth?.uid);
+
+      it('passes chat-bound context to every turn', async () => {
+        const { agent } = defineUidAgent('ctxBound');
+
+        const chat = agent.chat({}, { context: alice });
+        assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+        const turn = chat.sendStream('again');
+        for await (const _ of turn.stream) {
+          // drain
+        }
+        assert.strictEqual((await turn.response).text, 'uid=alice');
+      });
+
+      it('per-call context replaces the chat-bound one', async () => {
+        const { agent } = defineUidAgent('ctxOverride');
+
+        const chat = agent.chat({}, { context: alice });
+        const res = await chat.send('hi', { context: bob });
+        assert.strictEqual(res.text, 'uid=bob');
+        // The override is per call; the bound context still applies after.
+        assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+      });
+
+      it('makes context visible to tools via getContext()', async () => {
+        const registry = new Registry();
+        registry.apiStability = 'beta';
+        const pm = defineProgrammableModel(registry, undefined, 'ctxModel');
+        defineTool(
+          registry,
+          {
+            name: 'whoami',
+            description: 'returns the caller uid',
+            outputSchema: z.string(),
+          },
+          async () => String(getContext()?.auth?.uid ?? 'none')
+        );
+        let toolOutput: unknown;
+        pm.handleResponse = async (req) => {
+          const toolResp = req.messages
+            .flatMap((m) => m.content)
+            .find((p) => p.toolResponse);
+          if (toolResp) {
+            toolOutput = toolResp.toolResponse?.output;
+            return {
+              message: { role: 'model', content: [{ text: 'done' }] },
+              finishReason: 'stop',
+            };
+          }
+          return {
+            message: {
+              role: 'model',
+              content: [{ toolRequest: { name: 'whoami', input: {} } }],
+            },
+            finishReason: 'stop',
+          };
+        };
+        definePrompt(registry, {
+          name: 'ctxPrompt',
+          model: 'ctxModel',
+          tools: ['whoami'],
+        });
+        const agent = definePromptAgent(registry, { promptName: 'ctxPrompt' });
+
+        await agent.chat({}, { context: alice }).send('who am i?');
+        assert.strictEqual(toolOutput, 'alice');
+      });
+
+      it('passes context to store calls (loadChat, getSnapshot, abort, detach)', async () => {
+        const store = new RecordingStore();
+        const { agent } = defineUidAgent('ctxStore', store);
+
+        const chat = agent.chat({}, { context: alice });
+        await chat.send('hi');
+        const snapshotId = chat.snapshotId!;
+        assert.ok(store.writes.length > 0);
+        assert.ok(uids(store.writes).every((u) => u === 'alice'));
+
+        store.reads = [];
+        const restored = await agent.loadChat({ snapshotId }, { context: bob });
+        await agent.getSnapshot(snapshotId, { context: bob });
+        assert.deepStrictEqual(uids(store.reads), ['bob', 'bob']);
+
+        // The loaded chat is bound to the context it was loaded with.
+        assert.strictEqual((await restored.send('hi')).text, 'uid=bob');
+
+        store.writes = [];
+        await chat.abort();
+        await chat.abort({ context: bob });
+        assert.deepStrictEqual(uids(store.writes), ['alice', 'bob']);
+
+        store.reads = [];
+        store.writes = [];
+        const task = await chat.detach('long job');
+        await task.wait({ intervalMs: 1 });
+        await task.abort();
+        assert.ok(store.reads.length > 0);
+        assert.ok(uids(store.reads).every((u) => u === 'alice'));
+        assert.ok(uids(store.writes).every((u) => u === 'alice'));
+      });
+
+      it('falls back to the ambient context when none is passed', async () => {
+        const store = new RecordingStore();
+        const { agent, seen } = defineUidAgent('ctxAmbient', store);
+
+        await runWithContext(alice, async () => {
+          const chat = agent.chat();
+          assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+          store.reads = [];
+          store.writes = [];
+          await agent.loadChat({ snapshotId: chat.snapshotId! });
+          await agent.getSnapshot(chat.snapshotId!);
+          await chat.abort();
+        });
+
+        assert.deepStrictEqual(uids(seen), ['alice']);
+        assert.deepStrictEqual(uids(store.reads), ['alice', 'alice']);
+        assert.deepStrictEqual(uids(store.writes), ['alice']);
+      });
+
+      it('explicit context wins over the ambient one', async () => {
+        const { agent } = defineUidAgent('ctxExplicitWins');
+
+        const res = await runWithContext(alice, () =>
+          agent.chat({}, { context: bob }).send('hi')
+        );
+        assert.strictEqual(res.text, 'uid=bob');
+      });
+
+      it('rejects context on transports that do not declare it', () => {
+        // Type-level check: a transport with the default (no) options, like
+        // `remoteAgent`, must not accept `context`.
+        const transport: AgentTransport = {
+          runTurn: () => ({
+            stream: (async function* () {})(),
+            output: Promise.resolve({ finishReason: 'stop' as const }),
+          }),
+          getSnapshot: async () => undefined,
+          abort: async () => undefined,
+        };
+        const api = createAgentAPI(transport);
+        // @ts-expect-error `context` is not a remote option.
+        api.chat({}, { context: alice });
+        // @ts-expect-error `context` is not a remote option.
+        void api.getSnapshot('id', { context: alice });
+        const chat = api.chat();
+        // @ts-expect-error `context` is not a remote option.
+        void chat.send('hi', { context: alice }).catch(() => {});
+        // `abortSignal` is always accepted.
+        void chat
+          .send('hi', { abortSignal: new AbortController().signal })
+          .catch(() => {});
+      });
     });
   });
 });

@@ -42,16 +42,21 @@
 export {
   AgentError,
   applyPatch,
+  createAgentAPI,
   remoteAgent,
+  remoteAgentTransport,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
   type JsonPatch,
   type RemoteAgentOptions,
+  type SnapshotLookup,
 } from './agent.js';
 
 export { runFlow, streamFlow } from './client.js';

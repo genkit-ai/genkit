@@ -39,15 +39,20 @@ export {
 export { Session, type Artifact } from '@genkit-ai/ai/session';
 export {
   AgentError,
+  createAgentAPI,
   remoteAgent,
+  remoteAgentTransport,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
   type RemoteAgentOptions,
+  type SnapshotLookup,
 } from './client/agent.js';
 
 export type { AgentFinishReason } from './client/types.js';
@@ -76,6 +81,7 @@ export {
   type GenkitBetaOptions,
   type JsonPatch,
   type JsonPatchOperation,
+  type LocalAgentOptions,
   type SessionSnapshot,
   type SessionSnapshotInput,
   type SessionState,
