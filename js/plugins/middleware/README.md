@@ -244,3 +244,52 @@ const response = await ai.generate({
   ]
 });
 ```
+
+### 8. Context Compression Middleware (`contextCompression`)
+
+Compresses conversation context when it grows too large, reducing token usage and costs in agentic workflows and tool loops. Compression triggers when estimated tokens or previous turn usage exceeds `maxInputTokens`.
+
+**Strategies applied:**
+
+1. **Safety cap**: Hard-truncates any single oversized tool response (`maxToolResponseChars`, default: 400,000 chars) on every turn with a `[TRUNCATED: ...]` marker.
+2. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent tool response messages and appending a `[Truncated N characters]` marker.
+3. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, preserving system messages and ensuring conversation history begins with a user turn.
+
+> **Ordering note:** When combining `contextCompression` with context-injecting middleware (such as `filesystem()`, `skills()`, or `artifacts()`), place `contextCompression` **after** those middlewares in `use: [...]` so their injected instructions and tool outputs are accounted for during compression.
+
+```typescript
+import { genkit } from 'genkit';
+import { contextCompression } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Research and summarize...',
+  tools: [searchTool],
+  use: [
+    contextCompression({
+      maxInputTokens: 80000,
+      toolResponses: { maxChars: 2000, preserveRecent: 2 },
+      maxMessages: 20,
+    }),
+  ],
+});
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
+| `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
+| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. Set negative to disable. |
+| `toolResponses` | `object` | — | Truncation settings for older tool responses. |
+| `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
+| `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool response messages to keep untruncated. |
+| `maxMessages` | `number` | — | Maximum message count target. Drops older non-system messages, ensuring history begins with a user turn. |
+| `insertTruncationNotice` | `boolean` | `true` | Inserts an advisory notice when messages are dropped. |
+| `truncationNotice` | `string` | standard text | Custom notice text to use when messages are dropped. |
+
+
+
