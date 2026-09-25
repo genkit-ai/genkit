@@ -53,8 +53,9 @@ type Part struct {
 
 // ToolInterrupt is the interrupt state of a tool request [Part]. A non-nil
 // Interrupt on a tool request part means the tool paused execution and returned
-// control to the caller; the caller resolves it with [ToolAction.RestartWith]
-// or [ToolAction.RespondWith].
+// control to the caller; the caller resolves it through the tool, with
+// [ResumableToolAction.Interrupted], or on the part, with
+// [Part.ToToolRestart] and [Part.ToToolResponse].
 //
 // On the wire it is carried in the part's metadata map (under "interrupt", or
 // "resolvedInterrupt" once resolved, plus "interruptedBy" when a hook raised
@@ -63,9 +64,9 @@ type Part struct {
 // state lives on [Part.Interrupt] alone: the generate loop and unmarshaling
 // set the field and leave the metadata map to user and plugin metadata, so
 // the key is not on Metadata in process. A part assembled with the key
-// instead of the field reads as the same state through [Part.IsInterrupt]
-// and [InterruptAs], while its field stays nil, so read the state through
-// those rather than through the field.
+// instead of the field reads as the same state through [Part.IsInterrupt],
+// [InterruptAs] and [ResumableToolAction.Interrupted], while its field
+// stays nil, so read the state through those rather than through the field.
 type ToolInterrupt struct {
 	// Data is the payload the tool interrupted with, e.g. the question it
 	// needs answered. It must serialize to a JSON object (a struct or a map);
@@ -80,7 +81,8 @@ type ToolInterrupt struct {
 	// is empty when the tool itself did. A restart answers the stage named
 	// here: the hook reads the payload with
 	// [github.com/firebase/genkit/go/ai/tool.ResumeData] and the tool then runs
-	// as a fresh call. Carried on the wire as "interruptedBy".
+	// as a fresh call, while [ResumableToolAction.Interrupted] claims only
+	// the tool's own interrupts. Carried on the wire as "interruptedBy".
 	RaisedBy string
 	// ReleasedBy names, in chain order, the WrapTool hooks that let the call
 	// through before it interrupted. A restart that keeps the call's input
@@ -100,13 +102,17 @@ type ToolInterrupt struct {
 // assembled with the keys reads as the same state through [Part.IsRestart]
 // and the generate loop while its [Part.Restart] field stays nil.
 type ToolRestart struct {
-	// Resume is the payload the restarted tool reads from [ToolContext.Resumed],
+	// Resume is the payload delivered to the tool function's resume parameter,
 	// e.g. the user's answer to the question the tool interrupted with. It must
 	// serialize to a JSON object (a struct or a map); nil means a bare restart,
-	// i.e. restarting is itself the approval.
+	// i.e. restarting is itself the approval. A tool with a resume type takes
+	// a value of that type as is and validates anything else against its
+	// resume schema (see [ResumableToolAction.Definition]) before it
+	// re-executes.
 	Resume any
 	// OriginalInput preserves the tool's original input when the caller
-	// provided a new one for re-execution (via [WithNewInput]). On the wire it
+	// provided a new one for re-execution (via [InterruptedCall.RestartWithInput]
+	// or [Part.ToToolRestartWithInput]). On the wire it
 	// is carried under the metadata key "replacedInput" for compatibility with
 	// the JS runtime.
 	OriginalInput any

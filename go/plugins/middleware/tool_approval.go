@@ -28,24 +28,24 @@ import (
 // ToolApproval is a middleware that interrupts tool execution unless the tool
 // is in [AllowedTools] or the call has been explicitly approved on resume.
 //
-// To approve on resume, attach a "toolApproved" flag to the restart metadata:
+// To approve on resume, attach a "toolApproved" flag to the resume data of the
+// restart part:
 //
-//	restart := tool.Restart(interruptPart, &ai.RestartOptions{
-//	    ResumedMetadata: map[string]any{"toolApproved": true},
-//	})
+//	restart, err := interruptPart.ToToolRestart(map[string]any{"toolApproved": true})
 //
 // A bare restart, resumed with no payload, is NOT treated as approval; callers
 // must opt in so that unrelated resume flows (e.g. respond-only turns) cannot
 // bypass approval.
 //
-// The hold is the middleware's own interrupt, so the approval is read here,
-// never by the tool: once approved, the tool runs as a fresh call and may
-// interrupt with a question of its own, which the caller answers as usual.
-// That restart passes the gate, since the call records that the gate let it
-// through, unless it replaces the call's input, which the gate then holds for
-// approval again. A hold that does not record which stage raised it, such as
-// one stored before stages were recorded, is approved the same way, with
-// "toolApproved" on the restart.
+// The hold is the middleware's own interrupt, so a tool's
+// [ai.ResumableToolAction.Interrupted] declines it and the approval is
+// read here, never by the tool: once approved, the tool runs as a fresh call
+// and may interrupt with a question of its own, which the caller answers
+// through the tool as usual. That restart passes the gate, since the call
+// records that the gate let it through, unless it replaces the call's input,
+// which the gate then holds for approval again. A hold that does not record
+// which stage raised it, such as one stored before stages were recorded, is
+// approved the same way, with "toolApproved" on the restart.
 //
 // Usage:
 //
@@ -56,7 +56,7 @@ import (
 //	    ai.WithUse(&middleware.ToolApproval{AllowedTools: []string{"toolA"}}),
 //	)
 //	// toolA runs; toolB triggers an interrupt.
-//	// Resume with ai.WithToolRestarts carrying {"toolApproved": true} to re-execute.
+//	// Resume with ai.WithResume(restart), the restart carrying {"toolApproved": true}.
 type ToolApproval struct {
 	// AllowedTools is the list of tool names pre-approved to run without
 	// interruption. Tools not in this list trigger an interrupt. An empty

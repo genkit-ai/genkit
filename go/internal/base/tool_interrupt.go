@@ -23,7 +23,7 @@ import (
 )
 
 // ToolInterruptError is the error a tool call returns to pause generation and
-// hand control back to the caller. ai/tool.Interrupt is the public way to
+// hand control back to the caller. ai/tool.Interrupt is the one public way to
 // raise it; ai recognizes it with errors.As when the tool returns, records Data
 // on the interrupted tool request part, and reports it through
 // ai.IsToolInterruptError. The type is internal so that raising an interrupt
