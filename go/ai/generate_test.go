@@ -4687,3 +4687,90 @@ func TestResumedToolMessageOrder(t *testing.T) {
 		t.Errorf("resumed tool message order = %v, want %v", names, want)
 	}
 }
+
+// TestResumeRejectedBeforeAnyToolRuns pins that a resume is checked as a
+// whole before any tool runs: when one pending request has no resolution, or
+// a response that does not match the tool's output schema, the resume fails
+// and a sibling with a valid restart has not run.
+func TestResumeRejectedBeforeAnyToolRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want error
+		// resolve returns the directives for the second request, "confirm".
+		resolve func(confirm *ToolAction[map[string]any, string], part *Part) []GenerateOption
+	}{
+		{"no resolution", ErrUnresolvedToolRequest, func(*ToolAction[map[string]any, string], *Part) []GenerateOption { return nil }},
+		{"mistyped response", status.ErrInvalidArgument, func(confirm *ToolAction[map[string]any, string], part *Part) []GenerateOption {
+			return []GenerateOption{WithToolResponses(confirm.Respond(part, map[string]any{"not": "a string"}, nil))}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/twoInterrupts",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					return &ModelResponse{Request: req, Message: &Message{
+						Role: RoleModel,
+						Content: []*Part{
+							NewToolRequestPart(&ToolRequest{Name: "charge", Ref: "1", Input: map[string]any{}}),
+							NewToolRequestPart(&ToolRequest{Name: "confirm", Ref: "2", Input: map[string]any{}}),
+						},
+					}}, nil
+				},
+			})
+			charges := 0
+			interruptOnce := func(ctx *ToolContext, _ map[string]any) (string, error) {
+				if !ctx.IsResumed() {
+					return "", ctx.Interrupt(nil)
+				}
+				charges++
+				return "charged", nil
+			}
+			charge := defineTool(r, "charge", "charges a card", interruptOnce)
+			confirm := defineTool(r, "confirm", "asks to confirm",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					return "", ctx.Interrupt(nil)
+				})
+
+			res, err := Generate(testCtx, r,
+				WithModelName("test/twoInterrupts"), WithPrompt("go"), WithTools(charge, confirm))
+			assertNoError(t, err)
+			opts := []GenerateOption{
+				WithModelName("test/twoInterrupts"),
+				WithMessages(res.History()...),
+				WithTools(charge, confirm),
+			}
+			for _, part := range res.Interrupts() {
+				if part.ToolRequest.Name == "charge" {
+					opts = append(opts, WithToolRestarts(charge.Restart(part, nil)))
+				} else {
+					opts = append(opts, tc.resolve(confirm, part)...)
+				}
+			}
+			_, err = Generate(testCtx, r, opts...)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("resume error = %v, want %v", err, tc.want)
+			}
+			if charges != 0 {
+				t.Errorf("charge ran %d times before the resume was rejected, want 0", charges)
+			}
+		})
+	}
+}
+
+// TestResumeRejectsToolRequestPartWithoutRequest pins that a tool request
+// part with no request in the last model message, which the kind check alone
+// lets through, fails the resume with ErrInvalidPart rather than panicking
+// when the resume is planned.
+func TestResumeRejectsToolRequestPartWithoutRequest(t *testing.T) {
+	r, tool, res := interruptedForResume(t)
+	history := res.History()
+	last := history[len(history)-1]
+	last.Content = append(last.Content, NewToolRequestPart(nil))
+	_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithMessages(history...), WithTools(tool),
+		WithToolResponses(tool.Respond(res.Message.Content[0], "answer", nil)))
+	if !errors.Is(err, ErrInvalidPart) {
+		t.Errorf("resume error = %v, want ErrInvalidPart", err)
+	}
+}
