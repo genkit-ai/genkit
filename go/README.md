@@ -877,6 +877,23 @@ if len(restarts) > 0 {
 }
 ```
 
+`tool.Fail` follows the same pattern as `tool.Interrupt`, but hands control to the model instead of the caller. The error answers the call as `{"error": "..."}` and the loop continues, so the model can correct its input. Any other error still stops the generation:
+
+```go
+lookupTool := genkitx.DefineTool(g, "cityPopulation",
+    "Returns the population of a city.",
+    func(ctx context.Context, input CityInput) (int, error) {
+        pop, err := db.Population(ctx, input.City)
+        if errors.Is(err, ErrNoSuchCity) {
+            return 0, tool.Fail(ctx, err) // the model tries another spelling
+        }
+        return pop, err // a lost connection stops the loop
+    },
+)
+```
+
+To return every error of a tool you do not own, such as an MCP tool, use the `SoftToolErrors` middleware below.
+
 `tool.SendChunk` is the third helper: where `tool.SendPartial` wraps a value as a partial tool response, `SendChunk` hands the caller an `ai.ModelResponseChunk` the tool built itself, which is what to reach for when the update is a line of prose. Both are best-effort, so a tool that reports progress through them still works when the caller is not streaming, and neither is written to history.
 
 [See full example](samples/basic-tool-interrupts-exp/main.go), which is the HITL sample above rewritten against this API, or [the banker example](samples/basic-agents) for an interruptible tool wired into an agent.
@@ -910,6 +927,7 @@ response, _ := genkit.Generate(ctx, g,
 The `middleware` plugin also ships with:
 
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
+- [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/exp/tool`).
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
 

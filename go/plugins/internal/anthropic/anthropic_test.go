@@ -461,6 +461,22 @@ func TestToAnthropicParts(t *testing.T) {
 			},
 		},
 		{
+			name: "tool error response sets is_error",
+			parts: []*ai.Part{
+				{
+					Kind: ai.PartToolResponse,
+					ToolResponse: &ai.ToolResponse{
+						Ref:    "ref1",
+						Output: map[string]any{"error": "no such city"},
+					},
+					Metadata: map[string]any{"isError": true},
+				},
+			},
+			expected: []anthropic.ContentBlockParamUnion{
+				anthropic.NewToolResultBlock("ref1", `{"error":"no such city"}`, true),
+			},
+		},
+		{
 			name: "multipart tool response keeps output and content parts",
 			parts: []*ai.Part{
 				ai.NewToolResponsePart(&ai.ToolResponse{

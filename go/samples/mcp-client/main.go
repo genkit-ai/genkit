@@ -24,6 +24,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/mcp"
+	"github.com/firebase/genkit/go/plugins/middleware"
 )
 
 // MCP Client Example - connects to time server
@@ -31,7 +32,7 @@ func clientExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
 
 	// Create and connect to MCP time server
 	client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
@@ -61,6 +62,11 @@ func clientExample() {
 		ai.WithPrompt("Convert the current time from New York to London timezone."),
 		ai.WithTools(toolRefs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
+		// An error the server reports in its result already answers the call.
+		// SoftToolErrors also returns the rest to the model: arguments that
+		// fail the tool's schema, a tool name the server does not have, and a
+		// failed call to the server.
+		ai.WithUse(&middleware.SoftToolErrors{}),
 	)
 	if err != nil {
 		logger.FromContext(ctx).Error("Generation failed", "error", err)
@@ -79,7 +85,7 @@ func managerExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
 
 	// Create and connect to MCP time server
 	host, _ := mcp.NewMCPHost(g, mcp.MCPHostOptions{
@@ -113,6 +119,7 @@ func managerExample() {
 		ai.WithPrompt("What time is it in New York and Tokyo?"),
 		ai.WithTools(toolRefs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
+		ai.WithUse(&middleware.SoftToolErrors{}),
 	)
 	if err != nil {
 		logger.FromContext(ctx).Error("Generation failed", "error", err)
