@@ -45,7 +45,11 @@ describe('GemmaConfigSchema', () => {
     for (const temperature of [1.5, 2.0]) {
       const result = GemmaConfigSchema.safeParse({ temperature });
 
-      assert.strictEqual(result.success, true, `${temperature} should be valid`);
+      assert.strictEqual(
+        result.success,
+        true,
+        `${temperature} should be valid`
+      );
     }
   });
 
