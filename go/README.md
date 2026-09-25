@@ -957,7 +957,7 @@ response, _ := genkit.Generate(ctx, g,
 
 The `middleware` plugin also ships with:
 
-- [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
+- [`ToolApproval`](plugins/middleware/tool_approval.go) — holds any tool call not on an allow list until a restart approves it; the tool then runs afresh, and a restart answering the tool's own interrupt passes.
 - [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/tool`).
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files following the [Agent Skills](https://agentskills.io) specification, so a skill written for any compliant agent works here. Scans `.agents/skills` and `skills` by default, on disk or inside `SkillFS`, so skills can ship in the binary through `//go:embed`. The model sees each skill's name and description, loads one on demand through `use_skill`, and reads the files a skill bundles through `read_skill_file` when `AllowResourceAccess` is set. `Preload` injects a skill up front when the application, rather than the model, decides it applies.
