@@ -698,11 +698,14 @@ func translateResponse(resp *genai.GenerateContentResponse) (*ai.ModelResponse, 
 	}
 
 	if u := resp.UsageMetadata; u != nil {
-		r.Usage.InputTokens = int(u.PromptTokenCount)
+		// Tool results fed back to the model, as code execution and search
+		// do, are input that Gemini counts apart from the prompt and bills
+		// as input. Its total adds them in, and so does InputTokens.
+		r.Usage.InputTokens = int(u.PromptTokenCount) + int(u.ToolUsePromptTokenCount)
 		r.Usage.OutputTokens = int(u.CandidatesTokenCount)
-		r.Usage.TotalTokens = int(u.TotalTokenCount)
-		r.Usage.CachedContentTokens = int(u.CachedContentTokenCount)
 		r.Usage.ThoughtsTokens = int(u.ThoughtsTokenCount)
+		r.Usage.CachedContentTokens = int(u.CachedContentTokenCount)
+		r.Usage.TotalTokens = r.Usage.InputTokens + r.Usage.OutputTokens + r.Usage.ThoughtsTokens
 		custom["usageMetadata"] = resp.UsageMetadata
 	}
 
