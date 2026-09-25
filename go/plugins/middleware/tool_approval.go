@@ -219,7 +219,7 @@ func (t *ToolApproval) judge(ctx context.Context, params *ai.ToolParams) (string
 	}
 	msgs, _ := ctx.Value(judgeMessagesKey{}).([]*ai.Message)
 	for _, m := range msgs {
-		if m.Role != ai.RoleUser {
+		if m == nil || m.Role != ai.RoleUser {
 			continue
 		}
 		if text := m.Text(); text != "" {
