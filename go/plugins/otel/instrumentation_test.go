@@ -19,15 +19,20 @@ package otel
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/plugins/otel/genai"
 )
@@ -172,7 +177,7 @@ func TestToolSpanDisabledByDefault(t *testing.T) {
 	if span.SpanKind() != oteltrace.SpanKindInternal {
 		t.Errorf("span kind = %v, want internal", span.SpanKind())
 	}
-	if attrMap(span)[genai.AttrGenkitActionType].AsString() != "tool" {
+	if attrMap(span)[genai.AttrGenkitActionType].AsString() != "tool.v2" {
 		t.Errorf("action type attr = %v", attrMap(span)[genai.AttrGenkitActionType].AsString())
 	}
 }
@@ -264,15 +269,109 @@ func TestModelSpanError(t *testing.T) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
 	span := findSpan(t, sr, "chat gemini-flash-latest")
-	if attrMap(span)[genai.AttrErrorType].AsString() == "" {
-		t.Error("expected error.type attribute on failed span")
+	if span.Status().Code != codes.Error {
+		t.Errorf("status = %v, want error", span.Status().Code)
+	}
+	a := attrMap(span)
+	// An unclassified error reports INTERNAL.
+	if got := a[genai.AttrErrorType].AsString(); got != string(status.Internal) {
+		t.Errorf("error.type = %q, want %q", got, status.Internal)
+	}
+	if _, ok := a[genai.AttrResponseFinishReasons]; ok {
+		t.Error("finish reasons should be absent without a response")
+	}
+}
+
+func TestErrorTypeIsStatusName(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want status.Name
+	}{
+		{"status error", status.Errorf(status.ErrInvalidArgument, "bad"), status.InvalidArgument},
+		{"wrapped status error", fmt.Errorf("calling model: %w", status.Errorf(status.ErrResourceExhausted, "quota")), status.ResourceExhausted},
+		{"deadline", fmt.Errorf("x: %w", context.DeadlineExceeded), status.DeadlineExceeded},
+		{"plain error", errors.New("boom"), status.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := errorTypeOf(tt.err); got != string(tt.want) {
+				t.Errorf("errorTypeOf() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestModelSpanPartialResponse covers a call that fails after the model ran
+// (e.g. output schema validation): the response it returned alongside the
+// error is still recorded, with an error finish reason.
+func TestModelSpanPartialResponse(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{ContentCapturingMode: genai.SpanOnly, CaptureActionIO: true})
+
+	resp := &ai.ModelResponse{
+		Message:      ai.NewModelTextMessage("not json"),
+		FinishReason: ai.FinishReasonOther,
+		Usage:        &ai.GenerationUsage{InputTokens: 2000, OutputTokens: 100},
+	}
+	_, err := tracing.RunInNewSpan(context.Background(),
+		&tracing.SpanMetadata{Name: "googleai/gemini-flash-latest", Type: "action", Subtype: "model"},
+		modelRequest(),
+		func(ctx context.Context, _ *ai.ModelRequest) (*ai.ModelResponse, error) {
+			return resp, status.Errorf(status.ErrInvalidOutput, "invalid output")
+		})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	a := attrMap(findSpan(t, sr, "chat gemini-flash-latest"))
+	if got := a[genai.AttrUsageInputTokens].AsInt64(); got != 2000 {
+		t.Errorf("input tokens = %d, want 2000", got)
+	}
+	if got := a[genai.AttrResponseFinishReasons].AsStringSlice(); len(got) != 1 || got[0] != "error" {
+		t.Errorf("finish reasons = %v, want [error]", got)
+	}
+	if !strings.Contains(a[genai.AttrOutputMessages].AsString(), `"finish_reason":"error"`) {
+		t.Errorf("output messages = %s", a[genai.AttrOutputMessages].AsString())
+	}
+	if a[genai.AttrGenkitOutput].AsString() == "" {
+		t.Error("expected genkit.output for the partial response")
+	}
+	if got := a[genai.AttrErrorType].AsString(); got != string(status.Internal) {
+		t.Errorf("error.type = %q, want %q", got, status.Internal)
+	}
+}
+
+func TestGenericSpanErrorKeepsOutput(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{CaptureActionIO: true})
+
+	_, err := tracing.RunInNewSpan(context.Background(),
+		&tracing.SpanMetadata{Name: "myFlow", Type: "action", Subtype: "flow"},
+		"in",
+		func(ctx context.Context, _ string) (string, error) { return "partial", errors.New("boom") })
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	a := attrMap(findSpan(t, sr, "myFlow"))
+	if got := a[genai.AttrGenkitOutput].AsString(); got != `"partial"` {
+		t.Errorf("genkit.output = %q, want %q", got, `"partial"`)
+	}
+}
+
+func TestGenericSpanErrorOmitsNilOutput(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{CaptureActionIO: true})
+
+	_, _ = tracing.RunInNewSpan(context.Background(),
+		&tracing.SpanMetadata{Name: "myFlow", Type: "action", Subtype: "flow"},
+		"in",
+		func(ctx context.Context, _ string) (*ai.ModelResponse, error) { return nil, errors.New("boom") })
+	if _, ok := attrMap(findSpan(t, sr, "myFlow"))[genai.AttrGenkitOutput]; ok {
+		t.Error("genkit.output should be absent for a nil output")
 	}
 }
 
 func runTool(t *testing.T, name string) {
 	t.Helper()
 	_, err := tracing.RunInNewSpan(context.Background(),
-		&tracing.SpanMetadata{Name: name, Type: "action", Subtype: "tool"},
+		&tracing.SpanMetadata{Name: name, Type: "action", Subtype: string(api.ActionTypeToolV2)},
 		"in",
 		func(ctx context.Context, _ string) (string, error) { return "out", nil })
 	if err != nil {

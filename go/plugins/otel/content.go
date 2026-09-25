@@ -22,7 +22,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
-	otellogglobal "go.opentelemetry.io/otel/log/global"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/ai"
@@ -31,7 +30,7 @@ import (
 
 // recordContent attaches spec-shaped message content to the span (SPAN modes)
 // and/or emits a dedicated operation.details event (EVENT modes).
-func (g *GenAiInstrumentation) recordContent(ctx context.Context, span oteltrace.Span, request *ai.ModelRequest, response *ai.ModelResponse) {
+func (g *GenAiInstrumentation) recordContent(ctx context.Context, span oteltrace.Span, request *ai.ModelRequest, response *ai.ModelResponse, failed bool) {
 	var input *genai.NormalizedMessages
 	if request != nil {
 		nm := genai.NormalizeMessages(request.Messages)
@@ -40,7 +39,7 @@ func (g *GenAiInstrumentation) recordContent(ctx context.Context, span oteltrace
 	var outputMessages []map[string]any
 	if msg := resolveMessage(response); msg != nil {
 		// resolveFinishReasons always returns exactly one element.
-		reason := resolveFinishReasons(response, false)[0]
+		reason := resolveFinishReasons(response, failed)[0]
 		outputMessages = append(outputMessages, genai.MapOutputMessage(msg, reason))
 	}
 
@@ -76,34 +75,22 @@ func (g *GenAiInstrumentation) emitOperationDetails(ctx context.Context, input *
 	if len(outputMessages) > 0 {
 		rec.AddAttributes(attribute.String(genai.AttrOutputMessages, jsonString(outputMessages)))
 	}
-	otellogglobal.Logger(g.scopeName).Emit(ctx, rec)
+	g.logger.Emit(ctx, rec)
 }
 
 // recordModelMetrics records the token-usage and operation-duration metrics for
-// a model call. errorType is non-empty for a failed call.
-func (g *GenAiInstrumentation) recordModelMetrics(ctx context.Context, start time.Time, base []attribute.KeyValue, response *ai.ModelResponse, errorType string) {
-	m := g.genAiMetrics()
-	if m == nil {
-		return
-	}
+// a model call. Token usage is recorded for a failed call too when it returned
+// a response: those tokens were billed. The duration point of a failed call
+// carries error.type.
+func (g *GenAiInstrumentation) recordModelMetrics(ctx context.Context, start time.Time, base []attribute.KeyValue, response *ai.ModelResponse, err error) {
 	if response != nil && response.Usage != nil {
-		var in, out *int
-		if response.Usage.InputTokens != 0 {
-			v := response.Usage.InputTokens
-			in = &v
-		}
-		if response.Usage.OutputTokens != 0 {
-			v := response.Usage.OutputTokens
-			out = &v
-		}
-		m.RecordTokenUsage(ctx, base, in, out)
+		g.metrics.RecordTokenUsage(ctx, base, response.Usage.InputTokens, response.Usage.OutputTokens)
 	}
-	seconds := time.Since(start).Seconds()
 	attrs := base
-	if errorType != "" {
-		attrs = append(append([]attribute.KeyValue{}, base...), attribute.String(genai.AttrErrorType, errorType))
+	if err != nil {
+		attrs = append(append([]attribute.KeyValue{}, base...), attribute.String(genai.AttrErrorType, errorTypeOf(err)))
 	}
-	m.RecordDuration(ctx, seconds, attrs)
+	g.metrics.RecordDuration(ctx, time.Since(start).Seconds(), attrs)
 }
 
 // maybeCaptureActionIO records raw Genkit input/output on span as genkit.* JSON
