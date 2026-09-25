@@ -455,11 +455,7 @@ export declare interface DeepResearchAgentConfig {
 /**
  * Service Tier
  */
-const SERVICE_TIERS = ['flex', 'standard', 'priority'] as const;
-export declare type ServiceTier = (typeof SERVICE_TIERS)[number];
-export function isServiceTier(val: unknown): val is ServiceTier {
-  return typeof val === 'string' && SERVICE_TIERS.includes(val as ServiceTier);
-}
+export declare type ServiceTier = 'flex' | 'standard' | 'priority' | (string & {});
 
 /**
  * Configuration for the agent.

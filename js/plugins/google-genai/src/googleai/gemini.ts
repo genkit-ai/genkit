@@ -1056,12 +1056,12 @@ export function defineModel(
 
         const req: CreateInteractionRequest = {
           system_instruction: interactionsSystemInstruction,
-          model: extractVersion(ref),
+          model: modelVersion,
           tools: interactionsTools.length ? interactionsTools : undefined,
           generation_config: interactionGenerationConfig,
           stream: streamingRequested,
           input: toInteractionSteps(newMessages),
-          service_tier: serviceTier as ServiceTier,
+          service_tier: serviceTier,
         };
 
         if (jsonMode) {
