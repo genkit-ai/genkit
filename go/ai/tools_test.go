@@ -411,6 +411,65 @@ func TestToolDefinition(t *testing.T) {
 	})
 }
 
+// TestToolDefinition_OutputSchema pins what a tool advertises as its output:
+// the schema of its output type, an explicit override when given, and nothing
+// at all when the output type carries no schema. The action's own output schema
+// is the multipart envelope every tool function is wrapped in, and that must
+// never reach a model.
+func TestToolDefinition_OutputSchema(t *testing.T) {
+	type weather struct {
+		Temp int    `json:"temp"`
+		Sky  string `json:"sky"`
+	}
+
+	t.Run("typed output advertises its schema", func(t *testing.T) {
+		tl := NewTool("typed", "d", func(ctx *ToolContext, _ struct{}) (weather, error) {
+			return weather{}, nil
+		})
+		props, _ := tl.Definition().OutputSchema["properties"].(map[string]any)
+		if _, ok := props["temp"]; !ok {
+			t.Errorf("output schema = %#v, want the weather fields", tl.Definition().OutputSchema)
+		}
+	})
+
+	t.Run("any output advertises no schema", func(t *testing.T) {
+		tl := NewTool("anyOut", "d", func(ctx *ToolContext, _ struct{}) (any, error) {
+			return "anything at all", nil
+		})
+		if got := tl.Definition().OutputSchema; got != nil {
+			t.Errorf("output schema = %#v, want none: an unconstrained output is described by no schema", got)
+		}
+	})
+
+	t.Run("multipart tool advertises no schema", func(t *testing.T) {
+		tl := NewMultipartTool("multi", "d", func(ctx *ToolContext, _ struct{}) (*MultipartToolResponse, error) {
+			return &MultipartToolResponse{Output: "ok"}, nil
+		})
+		got := tl.Definition().OutputSchema
+		if props, ok := got["properties"].(map[string]any); ok {
+			if _, leaked := props["content"]; leaked {
+				t.Errorf("output schema leaked the multipart envelope: %#v", got)
+			}
+		}
+		if got != nil {
+			t.Errorf("output schema = %#v, want none", got)
+		}
+	})
+
+	t.Run("explicit output schema wins", func(t *testing.T) {
+		custom := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"custom": map[string]any{"type": "string"}},
+		}
+		tl := NewTool("override", "d",
+			func(ctx *ToolContext, _ struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(custom))
+		if diff := cmp.Diff(custom, tl.Definition().OutputSchema); diff != "" {
+			t.Errorf("output schema mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
+
 func TestLookupTool(t *testing.T) {
 	t.Run("returns nil for empty name", func(t *testing.T) {
 		r := newTestRegistry(t)
