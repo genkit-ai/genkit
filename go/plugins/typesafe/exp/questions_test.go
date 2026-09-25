@@ -671,3 +671,29 @@ func TestRuntimeQuestionsRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestAnswerRoundTripKeepsZeros(t *testing.T) {
+	// A zero is a real reading: a noul of 0, a score clamped to 0, the
+	// confidence of a flat distribution. Re-encoding an answer, as a flow
+	// that returns one does, must keep it, and must not add another kind's
+	// fields.
+	var answers map[string]Answer
+	if err := json.Unmarshal([]byte(`{
+		"flat":  {"choice": "a", "probabilities": {"a": 0.5, "b": 0.5}, "confidence": 0},
+		"low":   {"score": 0, "probabilities": {"0": 1}, "confidence": 1, "legend": {"0": "None"}},
+		"never": {"noul": 0}
+	}`), &answers); err != nil {
+		t.Fatal(err)
+	}
+	for id, kind := range map[string]string{"flat": kindChoice, "low": kindScore, "never": kindNoul} {
+		if answers[id].Type != kind {
+			t.Errorf("%s type = %q, want %q read from its fields", id, answers[id].Type, kind)
+		}
+	}
+	want := `{"flat":{"choice":"a","confidence":0,"probabilities":{"a":0.5,"b":0.5},"type":"choice"},` +
+		`"low":{"confidence":1,"legend":{"0":"None"},"probabilities":{"0":1},"score":0,"type":"score"},` +
+		`"never":{"noul":0,"type":"noul"}}`
+	if got := base.JSONString(answers); got != want {
+		t.Errorf("re-encoded answers:\n got %s\nwant %s", got, want)
+	}
+}

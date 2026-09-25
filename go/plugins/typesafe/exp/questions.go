@@ -99,7 +99,7 @@ type Rubric interface {
 type Choice[T Option[T]] struct {
 	Choice        T             `json:"choice"`
 	Probabilities map[T]float64 `json:"probabilities,omitempty"`
-	Confidence    float64       `json:"confidence,omitzero"`
+	Confidence    float64       `json:"confidence"`
 }
 
 // JSONSchema encodes the question: the options and their criteria as a
@@ -263,7 +263,7 @@ func noulSchema(yes, no string, yesGuidance, noGuidance any) *jsonschema.Schema 
 type Score[L Rubric] struct {
 	Score         float64            `json:"score"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
-	Confidence    float64            `json:"confidence,omitzero"`
+	Confidence    float64            `json:"confidence"`
 	Legend        map[string]string  `json:"legend,omitempty"`
 }
 
@@ -434,17 +434,71 @@ func Schema(questions map[string]Question) map[string]any {
 }
 
 // Answer is the answer to a question of a [Schema], with the fields of its
-// kind set. A choice sets Choice, Probabilities over the options, and
-// Confidence; a score sets Score, Probabilities keyed by level number,
-// Confidence, and Legend; a noul sets Probability alone. They mean what
-// the same fields of [Choice], [Score], and [NoulOf] mean.
+// kind set. Type names the kind: "choice" sets Choice, Probabilities over
+// the options, and Confidence; "score" sets Score, Probabilities keyed by
+// level number, Confidence, and Legend; "noul" sets Probability alone.
+// They mean what the same fields of [Choice], [Score], and [NoulOf] mean.
+// Decoding an answer sets Type from the field that names the kind, so a
+// response's answers need no discriminator.
 type Answer struct {
+	Type          string             `json:"type,omitempty"`
 	Choice        string             `json:"choice,omitempty"`
 	Score         float64            `json:"score,omitzero"`
 	Probability   float64            `json:"noul,omitzero"`
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 	Confidence    float64            `json:"confidence,omitzero"`
 	Legend        map[string]string  `json:"legend,omitempty"`
+}
+
+// UnmarshalJSON implements [json.Unmarshaler]. A missing type is read
+// from the field every answer of a kind carries: choice, score, or noul.
+func (a *Answer) UnmarshalJSON(data []byte) error {
+	type plain Answer
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, (*plain)(a)); err != nil {
+		return err
+	}
+	if a.Type == "" {
+		for _, kind := range []string{kindChoice, kindScore, kindNoul} {
+			if _, ok := fields[kind]; ok {
+				a.Type = kind
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// MarshalJSON implements [json.Marshaler]. It writes the fields of the
+// answer's kind, zeros included, so a score of 0 or a flat distribution's
+// confidence of 0 survives a round trip, and none of another kind's. An
+// answer with no Type writes its non-zero fields.
+func (a Answer) MarshalJSON() ([]byte, error) {
+	type plain Answer
+	out := map[string]any{"type": a.Type}
+	switch a.Type {
+	case kindChoice:
+		out["choice"], out["confidence"] = a.Choice, a.Confidence
+		if a.Probabilities != nil {
+			out["probabilities"] = a.Probabilities
+		}
+	case kindScore:
+		out["score"], out["confidence"] = a.Score, a.Confidence
+		if a.Probabilities != nil {
+			out["probabilities"] = a.Probabilities
+		}
+		if a.Legend != nil {
+			out["legend"] = a.Legend
+		}
+	case kindNoul:
+		out["noul"] = a.Probability
+	default:
+		return json.Marshal(plain(a))
+	}
+	return json.Marshal(out)
 }
 
 func probabilitiesSchema() *jsonschema.Schema {
