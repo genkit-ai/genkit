@@ -28,7 +28,7 @@ import (
 
 // GetActiveTools retrieves all tools available from the MCP server
 func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
-	if !c.IsEnabled() || c.server == nil {
+	if !c.isConnected() {
 		return nil, nil
 	}
 
@@ -76,9 +76,13 @@ func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (map[string]any, erro
 
 // createTool converts a single MCP tool to a Genkit tool
 func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
-	// Use namespaced tool name
-	namespacedToolName := c.GetToolNameWithNamespace(mcpTool.Name)
+	return c.createToolNamed(mcpTool, c.GetToolNameWithNamespace(mcpTool.Name))
+}
 
+// createToolNamed builds the same detached tool under a caller-chosen name.
+// Dynamic plugin actions use provider/tool names so the registry can resolve
+// them; the existing detached API keeps its underscore-prefixed names.
+func (c *GenkitMCPClient) createToolNamed(mcpTool mcp.Tool, name string) (ai.Tool, error) {
 	toolFunc := c.createToolFunction(mcpTool)
 	inputSchema, err := c.getInputSchema(mcpTool)
 	if err != nil {
@@ -87,14 +91,14 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	var tool ai.Tool
 	if len(inputSchema) > 0 {
 		tool = ai.NewTool(
-			namespacedToolName,
+			name,
 			mcpTool.Description,
 			toolFunc,
 			ai.WithInputSchema(inputSchema),
 		)
 	} else {
 		tool = ai.NewTool(
-			namespacedToolName,
+			name,
 			mcpTool.Description,
 			toolFunc,
 		)
@@ -129,6 +133,11 @@ func (c *GenkitMCPClient) getTools(ctx context.Context) ([]mcp.Tool, error) {
 
 // fetchToolsPage retrieves a single page of tools from the MCP server
 func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Tool, mcp.Cursor, error) {
+	remoteClient := c.clientForRequest()
+	if remoteClient == nil {
+		return nil, "", fmt.Errorf("MCP client %q is disconnected", c.Name())
+	}
+
 	listReq := mcp.ListToolsRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
 			Params: mcp.PaginatedParams{
@@ -137,7 +146,7 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 		},
 	}
 
-	result, err := c.server.Client.ListTools(ctx, listReq)
+	result, err := remoteClient.ListTools(ctx, listReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to list tools: %w", err)
 	}
@@ -149,10 +158,13 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolContext, interface{}) (interface{}, error) {
 	// Capture mcpTool by value for the closure
 	currentMCPTool := mcpTool
-	client := c.server.Client
 
 	return func(toolCtx *ai.ToolContext, args interface{}) (interface{}, error) {
 		ctx := toolCtx.Context // Get context from tool context
+		remoteClient := c.clientForRequest()
+		if remoteClient == nil {
+			return nil, fmt.Errorf("MCP client %q is disconnected", c.Name())
+		}
 
 		// Convert the arguments to the format expected by MCP
 		callToolArgs, err := prepareToolArguments(currentMCPTool, args)
@@ -161,7 +173,7 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 		}
 
 		// Create and execute the MCP tool call request
-		mcpResult, err := executeToolCall(ctx, client, currentMCPTool.Name, callToolArgs)
+		mcpResult, err := executeToolCall(ctx, remoteClient, currentMCPTool.Name, callToolArgs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to call tool %s: %w", currentMCPTool.Name, err)
 		}
