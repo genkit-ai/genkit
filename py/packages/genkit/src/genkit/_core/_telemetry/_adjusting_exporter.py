@@ -62,22 +62,10 @@ class AdjustingTraceExporter(SpanExporter):
     def __init__(
         self,
         exporter: SpanExporter,
-        log_input_and_output: bool = False,
-        project_id: str | None = None,
         error_handler: Callable[[Exception], None] | None = None,
     ) -> None:
         self._exporter = exporter
-        self._log_input_and_output = log_input_and_output
-        self._project_id = project_id
         self._error_handler = error_handler
-
-    @property
-    def project_id(self) -> str | None:
-        return self._project_id
-
-    @property
-    def log_input_and_output(self) -> bool:
-        return self._log_input_and_output
 
     @override
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
@@ -110,8 +98,6 @@ class AdjustingTraceExporter(SpanExporter):
         return span
 
     def _redact_pii(self, span: ReadableSpan) -> ReadableSpan:
-        if self._log_input_and_output:
-            return span
         attrs = _copy_attrs(span)
         keys_to_redact = [k for k in (Attr.INPUT, Attr.OUTPUT) if k in attrs]
         if not keys_to_redact:

@@ -24,7 +24,6 @@ and Cloud Trace / Cloud Monitoring limits used by this package.
 MIN_METRIC_EXPORT_INTERVAL_MS = 5000
 DEFAULT_METRIC_EXPORT_INTERVAL_MS = 300000
 DEV_METRIC_EXPORT_INTERVAL_MS = 5000
-PROD_METRIC_EXPORT_INTERVAL_MS = 300000
 
 # Project ID environment variables (resolution order)
 # Project ID env fallbacks. FIREBASE_PROJECT_ID is still honored for existing deployments.

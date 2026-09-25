@@ -31,7 +31,6 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from genkit._core._telemetry._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 
-from .action import action_telemetry
 from .constants import (
     MIN_SPAN_DURATION_NS,
     TRACE_RETRY_DEADLINE,
@@ -39,10 +38,6 @@ from .constants import (
     TRACE_RETRY_MAXIMUM,
     TRACE_RETRY_MULTIPLIER,
 )
-from .engagement import engagement_telemetry
-from .feature import features_telemetry
-from .generate import generate_telemetry
-from .path import paths_telemetry
 
 logger = structlog.get_logger(__name__)
 
@@ -125,125 +120,24 @@ class TimeAdjustedSpan(RedactedSpan):
 
 
 class GcpAdjustingTraceExporter(AdjustingTraceExporter):
-    """GCP-specific span exporter that adds telemetry recording.
-
-    This extends the base AdjustingTraceExporter to add GCP-specific telemetry
-    recording (metrics and logs) for each span, matching the JavaScript
-    implementation in gcpOpenTelemetry.ts.
-
-    The telemetry handlers record:
-    - Feature metrics (requests, latency) for root spans
-    - Path metrics for failure tracking
-    - Generate metrics (tokens, latency) for model actions
-    - Action logs for tools and generate
-    - Engagement metrics for user feedback
-
-    Example:
-        ```python
-        # 1. Wrap GCP trace exporter with PII redaction and metrics processing
-        exporter = GcpAdjustingTraceExporter(
-            exporter=GenkitGCPExporter(),
-            log_input_and_output=False,
-            project_id='my-project',
-        )
-
-        # 2. Export spans processed through Genkit telemetry handlers
-        # => Automatically redacts inputs/outputs and records model metrics
-        ```
-    """
+    """Cloud Trace exporter with PII redaction and a non-zero duration."""
 
     def __init__(
         self,
         exporter: SpanExporter,
-        log_input_and_output: bool = False,
-        project_id: str | None = None,
         error_handler: Callable[[Exception], None] | None = None,
     ) -> None:
         """Initialize the GCP adjusting trace exporter.
 
         Args:
             exporter: The underlying SpanExporter to wrap.
-            log_input_and_output: If True, preserve input/output in spans and logs.
-                Defaults to False (redact for privacy).
-            project_id: Optional GCP project ID for log correlation.
             error_handler: Optional callback invoked when export errors occur.
         """
         super().__init__(
             exporter=exporter,
-            log_input_and_output=log_input_and_output,
-            project_id=project_id,
             error_handler=error_handler,
         )
 
     def _adjust(self, span: ReadableSpan) -> ReadableSpan:
-        """Apply all adjustments to a span including telemetry.
-
-        This overrides the base method to add telemetry recording before
-        the standard adjustments (redaction, marking, normalization).
-
-        Args:
-            span: The span to adjust.
-
-        Returns:
-            The adjusted span with telemetry recorded and time adjusted.
-        """
-        # Record telemetry before adjustments (uses original attributes)
-        span = self._tick_telemetry(span)
-
-        # Apply standard adjustments from base class
         span = super()._adjust(span)
-
-        # Fix start/end times for GCP (must be end > start)
         return TimeAdjustedSpan(span, dict(span.attributes) if span.attributes else {})
-
-    def _tick_telemetry(self, span: ReadableSpan) -> ReadableSpan:
-        """Record telemetry for a span and apply root state marking.
-
-        This matches the JavaScript tickTelemetry method in gcpOpenTelemetry.ts.
-        It calls the appropriate telemetry handlers based on span type.
-
-        Args:
-            span: The span to record telemetry for.
-
-        Returns:
-            The span, potentially with genkit:rootState added for root spans.
-        """
-        attrs = span.attributes or {}
-        if 'genkit:type' not in attrs:
-            return span
-
-        span_type = attrs.get('genkit:type', '')
-        subtype = attrs.get('genkit:metadata:subtype', '')
-        is_root = bool(attrs.get('genkit:isRoot'))
-
-        try:
-            # Always record path telemetry for error tracking
-            paths_telemetry.tick(span, self._log_input_and_output, self._project_id)
-
-            if is_root:
-                # Report top level feature request and latency only for root spans
-                features_telemetry.tick(span, self._log_input_and_output, self._project_id)
-
-                # Set root state explicitly
-                state = attrs.get('genkit:state')
-                if state:
-                    new_attrs = dict(attrs)
-                    new_attrs['genkit:rootState'] = state
-                    span = RedactedSpan(span, new_attrs)
-            else:
-                if span_type == 'action' and subtype == 'model':
-                    # Report generate metrics for all model actions
-                    generate_telemetry.tick(span, self._log_input_and_output, self._project_id)
-
-                if span_type in ('action', 'flow', 'flowStep', 'util'):
-                    # Report request and latency metrics for all actions
-                    action_telemetry.tick(span, self._log_input_and_output, self._project_id)
-
-            if span_type == 'userEngagement':
-                # Report user acceptance and feedback metrics
-                engagement_telemetry.tick(span, self._log_input_and_output, self._project_id)
-
-        except Exception as e:
-            logger.warning('Error recording telemetry', error=str(e))
-
-        return span

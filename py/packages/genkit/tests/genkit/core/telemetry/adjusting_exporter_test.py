@@ -80,10 +80,10 @@ def get_attrs(span: ReadableSpan) -> dict[str, Any]:
     return dict(cast(Mapping[str, Any], attrs))
 
 
-def test_redacts_input_and_output_by_default() -> None:
-    """Test that genkit:input and genkit:output are redacted by default."""
+def test_redacts_colon_input_and_output() -> None:
+    """genkit:input and genkit:output export as <redacted>."""
     exporter = MockSpanExporter()
-    adjusting = AdjustingTraceExporter(exporter, log_input_and_output=False)
+    adjusting = AdjustingTraceExporter(exporter)
 
     # Use colon format - will be normalized to slash
     span = create_mock_span(
@@ -103,30 +103,16 @@ def test_redacts_input_and_output_by_default() -> None:
     assert attrs['other'] == 'preserved'
 
 
-def test_preserves_input_and_output_when_logging_enabled() -> None:
-    """Test that input/output are preserved when log_input_and_output=True."""
-    exporter = MockSpanExporter()
-    adjusting = AdjustingTraceExporter(exporter, log_input_and_output=True)
-
-    span = create_mock_span(
-        attributes={
-            'genkit:input': 'sensitive input data',
-            'genkit:output': 'sensitive output data',
-        }
-    )
-
-    adjusting.export([span])
-
-    attrs = get_attrs(exporter.exported_spans[0])
-    # After normalization, colons become slashes
-    assert attrs['genkit/input'] == 'sensitive input data'
-    assert attrs['genkit/output'] == 'sensitive output data'
+def test_adjusting_exporter_rejects_log_input_and_output() -> None:
+    """log_input_and_output= is gone. Prompt I/O is capture_action_io."""
+    with pytest.raises(TypeError, match='log_input_and_output'):
+        AdjustingTraceExporter(MockSpanExporter(), log_input_and_output=True)  # ty: ignore[unknown-argument]
 
 
 def test_handles_missing_input_output() -> None:
     """Test that spans without input/output are not modified for redaction."""
     exporter = MockSpanExporter()
-    adjusting = AdjustingTraceExporter(exporter, log_input_and_output=False)
+    adjusting = AdjustingTraceExporter(exporter)
 
     span = create_mock_span(attributes={'other': 'value'})
 
@@ -309,7 +295,7 @@ def test_normalizes_labels_colon_to_slash() -> None:
 def test_applies_all_transformations_in_order() -> None:
     """Test that all transformations are applied correctly to a complex span."""
     exporter = MockSpanExporter()
-    adjusting = AdjustingTraceExporter(exporter, log_input_and_output=False)
+    adjusting = AdjustingTraceExporter(exporter)
 
     span = create_mock_span(
         attributes={
@@ -327,7 +313,7 @@ def test_applies_all_transformations_in_order() -> None:
 
     attrs = get_attrs(exporter.exported_spans[0])
 
-    # Check redaction (colons normalized to slashes first)
+    # Redact colon keys, then rewrite those keys with slashes.
     assert attrs['genkit/input'] == '<redacted>'
     assert attrs['genkit/output'] == '<redacted>'
 

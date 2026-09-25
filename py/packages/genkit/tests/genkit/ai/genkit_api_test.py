@@ -14,7 +14,13 @@ from genkit import Genkit
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._telemetry._instrumentation import (
+    SpanMetadata,
+    SpanNext,
+    reset_instrumentation,
+)
 from genkit._core._typing import Operation
+from genkit.telemetry import configure_instrumentation
 
 
 @pytest.mark.asyncio
@@ -38,6 +44,34 @@ async def test_genkit_run() -> None:
 
     with pytest.raises(TypeError, match='fn must be a coroutine function'):
         await ai.run(name='test3', fn=sync_fn)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_genkit_run_tags_flow_step_action_type() -> None:
+    """ai.run leftover: the step span is typed so a later provider can classify it."""
+
+    class Recording:
+        last: SpanMetadata | None = None
+
+        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[str]) -> str:
+            self.last = metadata
+            return await next()
+
+    recording = Recording()
+    reset_instrumentation()
+    configure_instrumentation(recording)
+    try:
+        ai = Genkit()
+
+        async def step() -> str:
+            return 'ok'
+
+        assert await ai.run(name='lookup_account', fn=step) == 'ok'
+        assert recording.last is not None
+        assert recording.last.name == 'lookup_account'
+        assert recording.last.action_type == 'flowStep'
+    finally:
+        reset_instrumentation()
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ dependencies = [
   "genkit-google-cloud",
   "genkit-google-genai",
   "genkit-middleware",
+  "genkit-otel",
   "genkit-a2ui",
   "genkit-ollama",
   "genkit-vertexai",
@@ -172,6 +173,7 @@ genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
 genkit-middleware   = { workspace = true }
+genkit-otel         = { workspace = true }
 genkit-a2ui         = { workspace = true }
 genkit-ollama       = { workspace = true }
 genkit-vertexai     = { workspace = true }
@@ -377,6 +379,7 @@ root = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
@@ -408,6 +411,7 @@ extraPaths = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
@@ -452,6 +456,7 @@ search-path = [
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",

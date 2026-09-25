@@ -51,8 +51,6 @@ class GenkitMetricExporter(MetricExporter):
 
     This wrapper adds a microsecond to start times to ensure discrete export
     timeframes and prevent data being overwritten.
-
-    This matches the JavaScript MetricExporterWrapper in gcpOpenTelemetry.ts.
     """
 
     def __init__(
@@ -69,7 +67,7 @@ class GenkitMetricExporter(MetricExporter):
         self._exporter = exporter
         self._error_handler = error_handler
 
-        # Force DELTA temporality for all instrument types to match JS implementation.
+        # Cloud Monitoring converts DELTA to CUMULATIVE; we send DELTA.
         delta = AggregationTemporality.DELTA
         self._preferred_temporality = {
             Counter: delta,
@@ -79,8 +77,6 @@ class GenkitMetricExporter(MetricExporter):
             ObservableUpDownCounter: delta,
             ObservableGauge: delta,
         }
-
-        self._preferred_aggregation = getattr(exporter, '_preferred_aggregation', None)
 
     def export(
         self,
