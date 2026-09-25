@@ -46,6 +46,7 @@ export {
   type AgentInterrupt,
   type AgentResponse,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
   type RemoteAgentOptions,
 } from './client/agent.js';
@@ -76,6 +77,7 @@ export {
   type GenkitBetaOptions,
   type JsonPatch,
   type JsonPatchOperation,
+  type LocalAgentOptions,
   type SessionSnapshot,
   type SessionSnapshotInput,
   type SessionState,

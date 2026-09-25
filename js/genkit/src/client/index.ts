@@ -49,6 +49,7 @@ export {
   type AgentInterrupt,
   type AgentResponse,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
   type JsonPatch,
   type RemoteAgentOptions,

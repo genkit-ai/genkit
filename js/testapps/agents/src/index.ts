@@ -40,6 +40,10 @@ import {
 } from './file-store-agent.js';
 
 import { Agent } from 'genkit/beta';
+import {
+  authContextAgent,
+  testAuthContextAgent,
+} from './auth-context-agent.js';
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { bankingAgent, testBankingAgent } from './banking-agent.js';
 import {
@@ -93,6 +97,8 @@ void [
   testCodingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
+  authContextAgent,
+  testAuthContextAgent,
 ];
 
 export * from './background-agent.js';

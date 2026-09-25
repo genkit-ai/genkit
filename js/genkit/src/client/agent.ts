@@ -40,6 +40,7 @@ export {
   type AgentInterrupt,
   type AgentResponse,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
 } from '@genkit-ai/ai/agent-core';
 
@@ -79,9 +80,13 @@ export interface RemoteAgentOptions {
  *   url: '/api/weatherAgent',
  * });
  * const chat = agent.chat();
- * const res = await chat.send('Weather in Tokyo?').response;
+ * const res = await chat.send('Weather in Tokyo?');
  * console.log(res.text);
  * ```
+ *
+ * Unlike in-process agents, the returned API takes no `context` option: over
+ * HTTP the action context is derived server-side from the request (ex. from
+ * the `headers` option).
  */
 export function remoteAgent<State = unknown>(
   options: RemoteAgentOptions
