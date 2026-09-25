@@ -36,7 +36,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
@@ -76,17 +76,23 @@ type Confirmation struct {
 // restart, which is fine for illustrating the interrupt flow.
 var accountBalance = 150.00
 
+// transferMoney is the tool handle, kept so handleTransferInterrupt can claim
+// the interrupted call through it: Interrupted verifies that the part belongs
+// to this tool and decodes its input, and Restart on the claimed call checks
+// the resume payload against the tool's own resume type at compile time.
+var transferMoney *ai.ResumableToolAction[TransferInput, *TransferOutput, Confirmation]
+
 // defineBankerAgent registers the transferMoney tool and a prompt-backed
 // agent that uses it, then returns the agent. Wire it into the CLI with
 // handleTransferInterrupt as its interrupt handler (see main).
 func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "banker"
 
-	// transferMoney is an interruptible tool: rather than always returning a
+	// transferMoney is a resumable tool: rather than always returning a
 	// result, it can pause (tool.Interrupt) to get the user's approval. Its
 	// third parameter (*Confirmation) is the resume payload: nil on the first
 	// call, populated when the client resumes.
-	genkitx.DefineInterruptibleTool(g, "transferMoney",
+	transferMoney = genkit.DefineResumableTool(g, "transferMoney",
 		"Transfers money to another account. Use when the user wants to send money.",
 		func(ctx context.Context, input TransferInput, confirm *Confirmation) (*TransferOutput, error) {
 			if input.Amount <= 0 {
@@ -113,7 +119,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 					return &TransferOutput{Status: "rejected", Message: "Account balance is 0. Please add funds.", NewBalance: accountBalance}, nil
 				}
 				// Not enough money: pause and ask whether to send what's left.
-				return nil, tool.Interrupt(TransferInterrupt{
+				return nil, tool.Interrupt(ctx, TransferInterrupt{
 					Reason: "insufficient_balance", ToAccount: input.ToAccount,
 					Amount: input.Amount, Balance: accountBalance,
 				})
@@ -121,7 +127,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 			if confirm == nil && input.Amount > 100 {
 				// Large transfer on the first pass: ask for explicit confirmation.
-				return nil, tool.Interrupt(TransferInterrupt{
+				return nil, tool.Interrupt(ctx, TransferInterrupt{
 					Reason: "confirm_large", ToAccount: input.ToAccount,
 					Amount: input.Amount, Balance: accountBalance,
 				})
@@ -137,18 +143,25 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 	return genkitx.DefinePromptAgent(g, name,
 		aix.WithSessionStore(mustStore[any](name)),
-		aix.WithDescription[any]("Money transfer assistant (interruptible tool + human approval)"),
+		aix.WithDescription[any]("Money transfer assistant (resumable tool + human approval)"),
 	)
 }
 
 // handleTransferInterrupt is the banker's InterruptHandler. It reads the
 // typed interrupt payload, asks the user through the Prompter, and returns
-// a restart part (tool.Resume) carrying their decision. Returning a part rather
-// than touching the connection keeps the handler out of the streaming loop.
+// a restart part carrying their decision. Returning a part rather than
+// touching the connection keeps the handler out of the streaming loop.
 func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
-	meta, ok := tool.InterruptAs[TransferInterrupt](part)
+	call, ok := transferMoney.Interrupted(part)
 	if !ok {
-		// Not our interrupt type; let the CLI report it as unresolved.
+		// Not our tool's interrupt; let the CLI report it as unresolved.
+		return nil, nil
+	}
+	meta, ok := ai.InterruptAs[TransferInterrupt](part)
+	if !ok {
+		// The tool's interrupt, but not a payload this handler can ask
+		// about; let the CLI report it as unresolved rather than decline a
+		// transfer nobody was asked about.
 		return nil, nil
 	}
 
@@ -160,17 +173,17 @@ func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
 			fmt.Sprintf("Transfer $%.2f instead", meta.Balance),
 			"Cancel the transfer") {
 		case 0:
-			return tool.Resume(part, Confirmation{Approved: true, AdjustedAmount: &meta.Balance})
+			return call.Restart(Confirmation{Approved: true, AdjustedAmount: &meta.Balance}), nil
 		default:
-			return tool.Resume(part, Confirmation{Approved: false})
+			return call.Restart(Confirmation{Approved: false}), nil
 		}
 
 	case "confirm_large":
-		approved := p.Confirm(fmt.Sprintf("Confirm large transfer of $%.2f to %s?", meta.Amount, meta.ToAccount))
-		return tool.Resume(part, Confirmation{Approved: approved})
+		approved := p.Confirm(fmt.Sprintf("Confirm large transfer of $%.2f to %s?", call.Input.Amount, call.Input.ToAccount))
+		return call.Restart(Confirmation{Approved: approved}), nil
 
 	default:
 		p.Printf("Unrecognized approval request (%q); cancelling the transfer.\n", meta.Reason)
-		return tool.Resume(part, Confirmation{Approved: false})
+		return call.Restart(Confirmation{Approved: false}), nil
 	}
 }

@@ -35,15 +35,3 @@ func defineTestTool[In, Out any](r api.Registry, name, description string, fn ai
 	t.Register(r)
 	return t
 }
-
-func defineTestExpTool[In, Out any](r api.Registry, name, description string, fn ToolFunc[In, Out], opts ...ai.ToolOption) *Tool[In, Out] {
-	t := NewTool(name, description, fn, opts...)
-	t.Register(r)
-	return t
-}
-
-func defineTestInterruptibleTool[In, Out, Res any](r api.Registry, name, description string, fn InterruptibleToolFunc[In, Out, Res], opts ...ai.ToolOption) *InterruptibleTool[In, Out, Res] {
-	t := NewInterruptibleTool(name, description, fn, opts...)
-	t.Register(r)
-	return t
-}

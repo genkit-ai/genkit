@@ -34,6 +34,15 @@ import (
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
+// plainTool builds a tool whose function takes a plain [context.Context]. The
+// middleware's tool bodies never need [ai.ToolContext] (which embeds the
+// context), so an adapter keeps them readable.
+func plainTool[In, Out any](name, description string, fn func(context.Context, In) (Out, error)) ai.Tool {
+	return ai.NewTool(name, description, func(tc *ai.ToolContext, in In) (Out, error) {
+		return fn(tc, in)
+	})
+}
+
 // agentsMarker tags the system prompt part injected by this middleware. The
 // listing is constant for a given configuration, so it is injected once and
 // matched (no-op) on later tool-loop iterations.
@@ -291,9 +300,9 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		// The async variant carries the extra "background" input flag, so the
 		// two modes need distinct input schemas (tool schemas are static).
 		if a.Async {
-			tools = append(tools, aix.NewTool(name, desc, a.delegateAsync(ref, st)))
+			tools = append(tools, plainTool(name, desc, a.delegateAsync(ref, st)))
 		} else {
-			tools = append(tools, aix.NewTool(name, desc, a.delegate(ref, st)))
+			tools = append(tools, plainTool(name, desc, a.delegate(ref, st)))
 		}
 	}
 	if a.Async {
@@ -322,9 +331,9 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 			return nil, err
 		}
 		if a.Async {
-			tools = append(tools, aix.NewTool(continueName, continueToolDescription, a.continueTaskAsync(st)))
+			tools = append(tools, plainTool(continueName, continueToolDescription, a.continueTaskAsync(st)))
 		} else {
-			tools = append(tools, aix.NewTool(continueName, continueToolDescription, a.continueTask(st)))
+			tools = append(tools, plainTool(continueName, continueToolDescription, a.continueTask(st)))
 		}
 	}
 
@@ -395,7 +404,7 @@ type delegatedArtifact struct {
 }
 
 // delegate builds the delegation tool function for one sub-agent. The function
-// uses the experimental [aix.NewTool] signature: a plain [context.Context]
+// takes a plain [context.Context] (see [plainTool])
 // rather than an [ai.ToolContext], since delegation needs only the context for
 // agent resolution, sub-agent execution, and artifact merging.
 func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {

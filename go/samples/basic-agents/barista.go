@@ -66,16 +66,16 @@ func defineBaristaAgent(g *genkit.Genkit) *aix.Agent[BaristaOrder] {
 	// The write side, defined with the experimental tool API: the function
 	// takes a plain context.Context, so the session lookup reads the same way
 	// it does anywhere else. Use tool.AttachParts if a tool needs to return
-	// content alongside its output. The banker's interruptible tool is the
+	// content alongside its output. The banker's resumable tool is the
 	// other half of this API.
 	//
 	// A tool reaches the live session through its context and mutates the
 	// custom state; what it writes is visible to the next turn's prompt
 	// render. UpdateCustom takes and returns the state as its own type, so
 	// appending a drink is one line and a typo is a compile error.
-	addToOrder := genkitx.DefineTool(g, "addToOrder",
+	addToOrder := genkit.DefineTool(g, "addToOrder",
 		"Records one drink the customer ordered. Call it every time they ask for a drink.",
-		func(ctx context.Context, in struct {
+		func(ctx *ai.ToolContext, in struct {
 			Drink string `json:"drink" jsonschema_description:"The drink to add e.g. flat white"`
 		}) (string, error) {
 			sess := aix.SessionFromContext[BaristaOrder](ctx)

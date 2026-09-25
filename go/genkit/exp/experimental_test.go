@@ -30,12 +30,10 @@ import (
 // experimental guard runs before anything else, so the nil prompt/func is never
 // dereferenced.
 var constructors = map[string]func(g *genkit.Genkit){
-	"DefineAgent":             func(g *genkit.Genkit) { DefineAgent[any](g, "a", nil) },
-	"DefinePromptAgent":       func(g *genkit.Genkit) { DefinePromptAgent[any](g, "a") },
-	"DefineCustomAgent":       func(g *genkit.Genkit) { DefineCustomAgent[any](g, "a", nil) },
-	"DefineTool":              func(g *genkit.Genkit) { DefineTool[any, any](g, "t", "desc", nil) },
-	"DefineInterruptibleTool": func(g *genkit.Genkit) { DefineInterruptibleTool[any, any, any](g, "t", "desc", nil) },
-	"DefineStreamingFlow":     func(g *genkit.Genkit) { DefineStreamingFlow[any, any, any](g, "f", nil) },
+	"DefineAgent":         func(g *genkit.Genkit) { DefineAgent[any](g, "a", nil) },
+	"DefinePromptAgent":   func(g *genkit.Genkit) { DefinePromptAgent[any](g, "a") },
+	"DefineCustomAgent":   func(g *genkit.Genkit) { DefineCustomAgent[any](g, "a", nil) },
+	"DefineStreamingFlow": func(g *genkit.Genkit) { DefineStreamingFlow[any, any, any](g, "f", nil) },
 }
 
 // TestExperimentalGate pins the contract that the experimental surface is

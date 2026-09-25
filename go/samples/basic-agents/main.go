@@ -20,7 +20,7 @@
 //     registered under the agent's name, ./prompts/chef.prompt.
 //   - coder (coder.go): DefineCustomAgent, with the per-turn loop wired by
 //     hand.
-//   - banker (banker.go): a prompt agent with an interruptible tool, so a turn
+//   - banker (banker.go): a prompt agent with a resumable tool, so a turn
 //     pauses for approval before moving money and resumes with the answer.
 //   - barista (barista.go): an Agent[BaristaOrder] whose system instruction is
 //     a function. A tool writes the order into session state and the prompt
@@ -102,7 +102,7 @@ func main() {
 	// concrete store type, so swapping in a different SessionStore would
 	// not touch a line of it.
 	//
-	// The banker is the only agent with an interruptible tool, so it is the
+	// The banker is the only agent with a resumable tool, so it is the
 	// only one that supplies an onInterrupt handler; the others leave it
 	// nil and the CLI streams them exactly as before.
 	agents := []agentEntry{
