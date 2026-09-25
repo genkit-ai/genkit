@@ -47,6 +47,26 @@ func requireEnv(key string) (string, bool) {
 	return value, true
 }
 
+// skipIfRetired turns a provider "model is retired" response into a skip.
+//
+// Google removes model IDs on its own schedule, so a pinned ID stops
+// answering long before anyone touches this repo. That failure says nothing
+// about the code under test, and leaving it red trains people to ignore the
+// live suite. The fix is to repin the ID; until then the test skips with the
+// provider's own message, which names the replacement model.
+func skipIfRetired(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil {
+		return
+	}
+	// Both spellings seen in the wild: "is no longer available" and
+	// "is no longer available to new users".
+	if strings.Contains(err.Error(), "no longer available") {
+		t.Skipf("model retired by the provider, repin the model ID: %v", err)
+	}
+}
+
 // We can't test the DefineAll functions along with the other tests because
 // we get duplicate definitions of models.
 var testAll = flag.Bool("all", false, "test DefineAllXXX functions")
@@ -66,7 +86,7 @@ func TestGoogleAILive(t *testing.T) {
 	ctx := context.Background()
 
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-3.6-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
 	)
 
@@ -89,6 +109,7 @@ func TestGoogleAILive(t *testing.T) {
 	t.Run("embedder", func(t *testing.T) {
 		res, err := genkit.Embed(ctx, g, ai.WithEmbedderName("googleai/gemini-embedding-001"), ai.WithTextDocs("yellow banana"))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		out := res.Embeddings[0].Embedding
@@ -111,6 +132,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("Which country was Napoleon the emperor of? Name the country, nothing else"),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -138,6 +160,7 @@ func TestGoogleAILive(t *testing.T) {
 				return nil
 			}))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		out2 := ""
@@ -165,6 +188,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -186,6 +210,7 @@ func TestGoogleAILive(t *testing.T) {
 				return nil
 			}))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		out2 := ""
@@ -203,7 +228,7 @@ func TestGoogleAILive(t *testing.T) {
 	})
 
 	t.Run("tool with thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -214,6 +239,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("what is a gablorken of value 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -224,7 +250,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("api side tools", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		_, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
@@ -235,6 +261,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithModel(m),
 			ai.WithPrompt("When is the next lunar eclipse in US?"))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 	})
@@ -243,7 +270,7 @@ func TestGoogleAILive(t *testing.T) {
 		// This test verifies that tools are properly merged (not silently dropped),
 		// even though the API will reject this specific combination.
 		// See: https://github.com/google/adk-python/issues/53
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		_, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
@@ -257,6 +284,9 @@ func TestGoogleAILive(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error combining GoogleSearch with function calling, but got none")
 		}
+		// A retired model answers 404 before the tool combination is ever
+		// evaluated, so the assertion below would be judging the wrong error.
+		skipIfRetired(t, err)
 		if !strings.Contains(err.Error(), "Tool use with function calling is unsupported") &&
 			!strings.Contains(err.Error(), "INVALID_ARGUMENT") {
 			t.Fatalf("unexpected error: %v", err)
@@ -285,6 +315,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithOutputType(weather{}),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		var w weather
@@ -302,6 +333,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithToolChoice(ai.ToolChoiceNone),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -318,6 +350,7 @@ func TestGoogleAILive(t *testing.T) {
 
 		textContent, err := os.ReadFile(*cache)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -327,6 +360,7 @@ func TestGoogleAILive(t *testing.T) {
 			),
 			ai.WithPrompt("write a summary of the content"))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -351,6 +385,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("rewrite the previous summary but now talking like a pirate, say Ahoy a lot of times"),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if resp.Usage.CachedContentTokens == 0 {
@@ -380,6 +415,7 @@ func TestGoogleAILive(t *testing.T) {
 	t.Run("media content (inline data)", func(t *testing.T) {
 		i, err := fetchImgAsBase64()
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		resp, err := genkit.Generate(ctx, g,
@@ -392,6 +428,7 @@ func TestGoogleAILive(t *testing.T) {
 			),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
@@ -408,6 +445,7 @@ func TestGoogleAILive(t *testing.T) {
 			),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if !strings.Contains(resp.Text(), "Mario Kart") {
@@ -417,6 +455,7 @@ func TestGoogleAILive(t *testing.T) {
 	t.Run("data content (inline data)", func(t *testing.T) {
 		i, err := fetchImgAsBase64()
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		resp, err := genkit.Generate(ctx, g,
@@ -429,6 +468,7 @@ func TestGoogleAILive(t *testing.T) {
 			),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
@@ -447,6 +487,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithModel(m),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if len(resp.Message.Content) == 0 {
@@ -478,12 +519,14 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithOutputType(outFormat{}),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
 		var ans outFormat
 		err = resp.Output(&ans)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		const want = "France"
@@ -498,25 +541,28 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
 				ThinkingConfig: &genai.ThinkingConfig{
 					IncludeThoughts: true,
-					ThinkingBudget:  genai.Ptr[int32](1024),
+					ThinkingLevel:   genai.ThinkingLevelHigh,
 				},
 			}),
 			ai.WithModel(m),
 			ai.WithPrompt("Analogize photosynthesis and growing up."))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if resp == nil {
 			t.Fatal("nil response obtanied")
 		}
-		if resp.Usage.ThoughtsTokens == 0 || resp.Usage.ThoughtsTokens > 1024 {
-			t.Fatalf("thoughts tokens should not be zero or greater than 100, got: %d", resp.Usage.ThoughtsTokens)
+		// Gemini 3 models pick their own thinking length, so there is no
+		// budget to hold them to; that the model thought at all is the claim.
+		if resp.Usage.ThoughtsTokens == 0 {
+			t.Fatal("thoughts tokens should not be zero")
 		}
 	})
 	t.Run("thinking stream with structured output", func(t *testing.T) {
@@ -524,7 +570,7 @@ func TestGoogleAILive(t *testing.T) {
 			Text string `json:"text"`
 		}
 
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
@@ -541,6 +587,7 @@ func TestGoogleAILive(t *testing.T) {
 			}),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if resp == nil {
@@ -558,32 +605,36 @@ func TestGoogleAILive(t *testing.T) {
 			t.Fatalf("no reasoning found")
 		}
 	})
-	t.Run("thinking disabled", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+	// Gemini 3 models have no off switch for thinking - a zero budget is
+	// rejected outright - so MINIMAL is as far down as this goes.
+	t.Run("thinking minimal", func(t *testing.T) {
+		m := googlegenai.GoogleAIModel(g, "gemini-3.6-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
 				ThinkingConfig: &genai.ThinkingConfig{
 					IncludeThoughts: false,
-					ThinkingBudget:  genai.Ptr[int32](0),
+					ThinkingLevel:   genai.ThinkingLevelMinimal,
 				},
 			}),
 			ai.WithModel(m),
 			ai.WithPrompt("Analogize photosynthesis and growing up."))
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 		if resp == nil {
 			t.Fatal("nil response obtanied")
 		}
 		if resp.Usage.ThoughtsTokens > 0 {
-			t.Fatal("thoughts tokens should be zero")
+			t.Fatalf("minimal thinking should not spend thought tokens, got: %d", resp.Usage.ThoughtsTokens)
 		}
 	})
 	t.Run("multipart tool", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-3-pro-preview")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.1-pro-preview")
 		img64, err := fetchImgAsBase64()
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
@@ -604,6 +655,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("get an image and tell me what is in it"),
 		)
 		if err != nil {
+			skipIfRetired(t, err)
 			t.Fatal(err)
 		}
 
