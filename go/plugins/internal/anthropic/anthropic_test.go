@@ -987,3 +987,36 @@ func checkError(t *testing.T, err error, expectedErr string) bool {
 	}
 	return false
 }
+
+// TestToGenkitUsage pins how Anthropic's usage maps onto the
+// [ai.GenerationUsage] convention. Anthropic's input_tokens leaves out cache
+// reads and writes, which made InputTokens fall short of the prompt on every
+// cache hit and dropped cache writes altogether.
+func TestToGenkitUsage(t *testing.T) {
+	var u anthropic.Usage
+	if err := json.Unmarshal([]byte(`{
+		"input_tokens": 50,
+		"cache_read_input_tokens": 1000,
+		"cache_creation_input_tokens": 200,
+		"cache_creation": {"ephemeral_5m_input_tokens": 150, "ephemeral_1h_input_tokens": 50},
+		"output_tokens": 300,
+		"server_tool_use": {"web_search_requests": 2, "web_fetch_requests": 0}
+	}`), &u); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	want := &ai.GenerationUsage{
+		InputTokens:         1250,
+		CachedContentTokens: 1000,
+		CacheWriteTokens:    200,
+		OutputTokens:        300,
+		TotalTokens:         1550,
+		Custom: map[string]float64{
+			"cacheWrite5mTokens": 150,
+			"cacheWrite1hTokens": 50,
+			"webSearchRequests":  2,
+		},
+	}
+	if diff := cmp.Diff(want, toGenkitUsage(u)); diff != "" {
+		t.Errorf("toGenkitUsage() mismatch (-want +got):\n%s", diff)
+	}
+}

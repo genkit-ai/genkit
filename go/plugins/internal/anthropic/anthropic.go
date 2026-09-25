@@ -649,10 +649,37 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
-	r.Usage = &ai.GenerationUsage{
-		InputTokens:         int(m.Usage.InputTokens),
-		OutputTokens:        int(m.Usage.OutputTokens),
-		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
-	}
+	r.Usage = toGenkitUsage(m.Usage)
 	return &r, nil
+}
+
+// toGenkitUsage maps a message's usage onto [ai.GenerationUsage]'s convention.
+// Anthropic's input_tokens leaves out the tokens read from and written to the
+// cache, so they are added back to make InputTokens the whole prompt. Thinking
+// is inside output_tokens with no separate count, so ThoughtsTokens stays zero.
+func toGenkitUsage(u anthropic.Usage) *ai.GenerationUsage {
+	usage := &ai.GenerationUsage{
+		InputTokens:         int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens),
+		OutputTokens:        int(u.OutputTokens),
+		CachedContentTokens: int(u.CacheReadInputTokens),
+		CacheWriteTokens:    int(u.CacheCreationInputTokens),
+	}
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	// Cache writes are billed by how long the entry lives, and server tools
+	// by the request, neither of which has a field of its own.
+	for name, count := range map[string]int64{
+		"cacheWrite5mTokens": u.CacheCreation.Ephemeral5mInputTokens,
+		"cacheWrite1hTokens": u.CacheCreation.Ephemeral1hInputTokens,
+		"webSearchRequests":  u.ServerToolUse.WebSearchRequests,
+		"webFetchRequests":   u.ServerToolUse.WebFetchRequests,
+	} {
+		if count <= 0 {
+			continue
+		}
+		if usage.Custom == nil {
+			usage.Custom = make(map[string]float64)
+		}
+		usage.Custom[name] = float64(count)
+	}
+	return usage
 }
