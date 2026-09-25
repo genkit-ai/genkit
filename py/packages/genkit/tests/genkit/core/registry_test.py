@@ -14,12 +14,13 @@ import asyncio
 import pytest
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Plugin
+from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
 from genkit._core._dap import DapValue
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry, define_dynamic_action_provider
 from genkit._core._typing import ActionMetadata, Operation
+from genkit.plugin_api import Plugin
 
 
 async def _identity(x: object) -> object:

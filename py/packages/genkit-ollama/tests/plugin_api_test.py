@@ -30,16 +30,10 @@ from genkit_ollama.embedders import EmbeddingDefinition
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from pydantic import BaseModel
 
-from genkit import (
-    ActionKind,
-    Document,
-    EmbedRequest,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-)
-from genkit.plugin_api import to_json_schema
+from genkit import Document, Message, Part, Role
+from genkit.embedder import EmbedRequest
+from genkit.model import ModelRequest
+from genkit.plugin_api import ActionKind, to_json_schema
 
 
 class TestOllamaInit(unittest.TestCase):

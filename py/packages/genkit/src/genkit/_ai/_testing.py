@@ -24,13 +24,14 @@ from typing import Any, TypedDict, cast
 
 from pydantic import BaseModel, Field
 
+from genkit import Message, ModelResponse, ModelResponseChunk, Part
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit._core._typing import (
     ModelInfo,
     Role,
 )
-from genkit.model import Message, ModelRequest, ModelResponse, ModelResponseChunk, Part
+from genkit.model import ModelRequest
 
 from ._aio import Genkit
 

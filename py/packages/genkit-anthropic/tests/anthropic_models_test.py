@@ -27,21 +27,9 @@ from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thi
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
-from genkit import (
-    Constrained,
-    FinishReason,
-    Message,
-    Metadata,
-    ModelInfo,
-    ModelRequest,
-    ModelResponseChunk,
-    Part,
-    Role,
-    Supports,
-    ToolDefinition,
-)
+from genkit import FinishReason, Message, ModelResponseChunk, Part, Role
 from genkit._core._model import OutputConfig
-from genkit.plugin_api import ModelConfig
+from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, Supports, ToolDefinition
 
 
 def _create_sample_request() -> ModelRequest:
@@ -478,7 +466,7 @@ def test_cache_control_on_text_block() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part.from_text('Cached context', metadata=Metadata({'cache_control': {'type': 'ephemeral'}})),
+                Part.from_text('Cached context', metadata={'cache_control': {'type': 'ephemeral'}}),
                 Part.from_text('Question about the context'),
             ],
         ),
@@ -656,7 +644,7 @@ def test_pdf_with_cache_control() -> None:
                 Part.from_media(
                     pdf_data,
                     content_type='application/pdf',
-                    metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
+                    metadata={'cache_control': {'type': 'ephemeral'}},
                 ),
             ],
         ),

@@ -27,7 +27,7 @@ release.
 
 from typing import Literal, NamedTuple
 
-from genkit import Constrained, ModelInfo, Stage, Supports
+from genkit.model import Constrained, ModelInfo, Stage, Supports
 
 INFERENCE_PROFILE_PREFIXES = (
     'global.',

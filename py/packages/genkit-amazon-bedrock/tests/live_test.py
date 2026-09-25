@@ -41,18 +41,9 @@ from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
 from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit import (
-    Document,
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    ToolDefinition,
-)
+from genkit import ActionRunContext, Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit.model import ModelRequest, ToolDefinition
 
 pytestmark = [
     pytest.mark.asyncio,

@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit
 from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
@@ -34,6 +34,7 @@ from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit._core._telemetry.http import (
     GenkitBuiltinInstrumentation,
 )
+from genkit.plugin_api import ActionKind
 from genkit.telemetry import configure_instrumentation
 
 

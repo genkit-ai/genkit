@@ -21,8 +21,7 @@ from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, ModelResponse
-from genkit.plugin_api import RequestData
+from genkit import ActionRunContext, Genkit, ModelResponse, RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],

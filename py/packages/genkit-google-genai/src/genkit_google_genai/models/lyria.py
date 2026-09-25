@@ -32,7 +32,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import ModelInfo, Supports
+from genkit.model import ModelInfo, Supports
 
 
 class LyriaVersion(StrEnum):

@@ -28,17 +28,8 @@ from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
 from pydantic import ValidationError
 
-from genkit import (
-    ActionRunContext,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    Role,
-)
-from genkit.plugin_api import ModelConfig
+from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ModelUsage
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -110,7 +101,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, -1)
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(
             input_tokens=10,
             output_tokens=20,
@@ -174,7 +165,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 10)
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(
             input_tokens=10,
             output_tokens=20,
@@ -229,7 +220,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 14)
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -278,7 +269,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -324,7 +315,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -348,7 +339,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -370,7 +361,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -389,7 +380,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(Message, response.message).content, [])
 
     @patch(
-        'genkit.model.get_basic_usage_stats',
+        'genkit.plugin_api.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:

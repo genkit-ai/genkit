@@ -25,15 +25,8 @@ from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenModel, I
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit import (
-    ActionRunContext,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-)
+from genkit import ActionRunContext, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelRequest
 
 
 @pytest.mark.asyncio

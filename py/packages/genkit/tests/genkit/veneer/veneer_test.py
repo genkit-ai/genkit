@@ -17,7 +17,6 @@ from genkit import (
     Genkit,
     Interrupt,
     Message,
-    MiddlewareRef,
     ModelResponse,
     ModelResponseChunk,
     Part,
@@ -52,7 +51,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1838,7 +1837,7 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
 
 def test_background_model_factory_stashes_class_without_registering(setup_test: SetupFixture) -> None:
     """background_model() keeps the config class on the start action."""
-    from genkit import background_model
+    from genkit.model import background_model
 
     ai, _, _, *_ = setup_test
 

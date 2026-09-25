@@ -13,7 +13,7 @@ from collections.abc import Generator, Sequence
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError
@@ -25,6 +25,7 @@ from genkit._core._telemetry._instrumentation import (
     start_attributes,
 )
 from genkit._core._telemetry.http import ActiveSpan
+from genkit.plugin_api import ActionKind
 
 
 @pytest.fixture(autouse=True)

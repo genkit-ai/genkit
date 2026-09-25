@@ -27,18 +27,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelUsage,
-    Part,
-    Role,
-    ToolDefinition,
-    ToolRequest,
-)
-from genkit.plugin_api import GenkitError
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock.config import BedrockConfig
 
 # Metadata keys used to round-trip Bedrock reasoning ("thinking") content back

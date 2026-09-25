@@ -26,7 +26,8 @@ import pytest
 from genkit_google_genai.models.utils import PartConverter
 from google import genai
 
-from genkit import Part, ToolRequest, ToolResponse
+from genkit import Part
+from genkit.model import ToolRequest, ToolResponse
 
 
 class TestIsGeminiNativeUrl:

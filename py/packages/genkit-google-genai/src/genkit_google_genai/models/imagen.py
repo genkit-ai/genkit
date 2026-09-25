@@ -33,17 +33,16 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import (
+    ActionRunContext,
     GenkitError,
     Message,
-    ModelInfo,
-    ModelRequest,
     ModelResponse,
     Part,
     Role,
-    Supports,
 )
 from genkit._core._telemetry._instrumentation import run_in_new_span
-from genkit.plugin_api import ActionRunContext, wrap_http_error
+from genkit.model import ModelInfo, ModelRequest, Supports
+from genkit.plugin_api import wrap_http_error
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,

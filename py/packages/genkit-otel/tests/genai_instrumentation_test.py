@@ -27,12 +27,12 @@ from genkit_otel._gen_ai_attributes import (
 )
 from opentelemetry.trace import StatusCode
 
-from genkit import FinishReason, Part
+from genkit import FinishReason, Message, Part, Role
 from genkit._core._error import GenkitInterrupt
 from genkit._core._model import OutputConfig
 from genkit._core._telemetry._instrumentation import SpanNext
-from genkit._core._typing import GenerationUsage, Role
-from genkit.model import Candidate, Message, ModelRequest, ModelResponse
+from genkit._core._typing import GenerationUsage
+from genkit.model import Candidate, ModelRequest, ModelResponse
 from genkit.telemetry import SpanMetadata
 
 
