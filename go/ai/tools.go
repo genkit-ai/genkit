@@ -30,11 +30,6 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-var (
-	resumedCtxKey   = base.NewContextKey[map[string]any]()
-	origInputCtxKey = base.NewContextKey[any]()
-)
-
 // ToolFunc is the function type for tool implementations.
 type ToolFunc[In, Out any] = func(ctx *ToolContext, input In) (Out, error)
 
@@ -108,35 +103,20 @@ type Tool interface {
 	Register(r api.Registry)
 }
 
-// toolInterruptError represents an intentional interruption of tool execution.
-type toolInterruptError struct {
-	Metadata map[string]any
-}
-
-func (e *toolInterruptError) Error() string {
-	if e.Metadata != nil {
-		data, err := json.MarshalIndent(e.Metadata, "", "  ")
-		if err == nil {
-			return fmt.Sprintf("tool execution interrupted: \n\n%s", string(data))
-		}
-	}
-	return "tool execution interrupted"
-}
-
-// IsToolInterruptError determines whether the error is an interrupt error returned by the tool.
+// IsToolInterruptError reports whether err is an interrupt raised by a tool
+// call (see [github.com/firebase/genkit/go/ai/tool.Interrupt]) and returns the
+// interrupt data as a map, nil for a bare interrupt. It is for code that runs a
+// tool outside of [Generate], such as middleware; inside the loop, interrupts
+// surface through [ModelResponse.Interrupts].
 func IsToolInterruptError(err error) (bool, map[string]any) {
-	var tie *toolInterruptError
-	if errors.As(err, &tie) {
-		return true, tie.Metadata
+	var ie *base.ToolInterruptError
+	if !errors.As(err, &ie) {
+		return false, nil
 	}
-	return false, nil
-}
-
-// NewToolInterruptError creates a tool interrupt error with the given metadata.
-// This is intended for use in middleware that needs to interrupt tool execution
-// without calling the tool itself.
-func NewToolInterruptError(metadata map[string]any) error {
-	return &toolInterruptError{Metadata: metadata}
+	// tool.Interrupt normalized the payload when it raised the interrupt;
+	// the conversion here covers an error built with a struct directly.
+	m, _ := base.ObjectPayload(ie.Data, "interrupt data")
+	return true, m
 }
 
 // InterruptOptions provides configuration for tool interruption.
@@ -227,9 +207,7 @@ func (tc *ToolContext) Interrupt(opts *InterruptOptions) error {
 	if opts == nil {
 		opts = &InterruptOptions{}
 	}
-	return &toolInterruptError{
-		Metadata: opts.Metadata,
-	}
+	return &base.ToolInterruptError{Data: opts.Metadata}
 }
 
 // InterruptWith is a convenience function to interrupt a tool with a strongly-typed metadata value.
@@ -239,12 +217,13 @@ func InterruptWith[T any](tc *ToolContext, meta T) error {
 	if err != nil {
 		return fmt.Errorf("InterruptWith: failed to convert metadata: %w", err)
 	}
-	return tc.Interrupt(&InterruptOptions{Metadata: m})
+	return &base.ToolInterruptError{Data: m}
 }
 
 // InterruptAs returns the data an interrupted tool request carries, decoded
-// into T: what the tool chose to say about the pause, e.g. why it needs
-// approval. Returns the zero value and false if the part is not an interrupt,
+// into T. A tool sends that data with
+// [github.com/firebase/genkit/go/ai/tool.Interrupt]; it is what the tool chose
+// to say about the pause, e.g. why it needs approval. Returns the zero value and false if the part is not an interrupt,
 // the interrupt carries no data, or the data does not decode into T.
 func InterruptAs[T any](p *Part) (T, bool) {
 	var zero T
@@ -263,18 +242,25 @@ func (tc *ToolContext) IsResumed() bool {
 // IsToolResumed reports whether the current context is a resumed tool execution.
 // This is intended for use in middleware that needs to distinguish between
 // first-time and restarted tool calls.
+//
+// Deprecated: Use [github.com/firebase/genkit/go/ai/tool.ResumeData], whose
+// second result reports the same from any context.
 func IsToolResumed(ctx context.Context) bool {
-	return resumedCtxKey.FromContext(ctx) != nil
+	return base.ToolResumeKey.FromContext(ctx) != nil
 }
 
 // ResumedValue retrieves a typed value from the resumed metadata on ctx.
 // Returns the zero value and false if the key doesn't exist or the type doesn't match.
 // Accepts either a plain [context.Context] (useful in middleware) or a [*ToolContext],
 // which embeds [context.Context].
+//
+// Deprecated: Use [github.com/firebase/genkit/go/ai/tool.ResumeData] with a
+// struct that names the fields you read, which decodes the whole payload at
+// once from any context.
 func ResumedValue[T any](ctx context.Context, key string) (T, bool) {
 	var zero T
-	m := resumedCtxKey.FromContext(ctx)
-	if m == nil {
+	m, ok := resumedMap(ctx)
+	if !ok {
 		return zero, false
 	}
 	v, ok := m[key]
@@ -284,8 +270,28 @@ func ResumedValue[T any](ctx context.Context, key string) (T, bool) {
 	return base.ConvertTo[T](v)
 }
 
+// resumedMap returns the resume payload of a restarted call as a map, and
+// false when the call is not a resumption. The payload rides the context as
+// the caller gave it, so a struct from a struct restart is converted here and
+// a map is handed over untouched.
+func resumedMap(ctx context.Context) (map[string]any, bool) {
+	v := base.ToolResumeKey.FromContext(ctx)
+	if v == nil {
+		return nil, false
+	}
+	m, ok := base.ConvertTo[map[string]any](v)
+	if !ok || m == nil {
+		// Still a resumption: an empty payload keeps IsResumed true.
+		return map[string]any{}, true
+	}
+	return m, true
+}
+
 // OriginalInputAs returns the original input typed appropriately.
 // Returns the zero value and false if not resumed or type doesn't match.
+//
+// Deprecated: Use [github.com/firebase/genkit/go/ai/tool.OriginalInput], which
+// reads the same value from any context, a [ToolContext] included.
 func OriginalInputAs[T any](tc *ToolContext) (T, bool) {
 	var zero T
 	if tc.OriginalInput == nil {
@@ -337,7 +343,11 @@ func requireAnyTypeParam[T any](ctor, name, requirement string) {
 
 // NewTool creates a new [ToolAction]. It can be passed directly to [Generate].
 // Use [WithInputSchema] or [WithOutputSchema] to provide custom JSON schemas
-// instead of inferring them from the type parameters.
+// instead of inferring them from the type parameters. Inside the function,
+// [github.com/firebase/genkit/go/ai/tool.AttachParts] adds content parts (e.g.
+// media) to the response and
+// [github.com/firebase/genkit/go/ai/tool.SendPartial] streams progress, neither
+// of which changes the signature.
 func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolAction[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
@@ -372,6 +382,10 @@ func NewToolWithInputSchema[Out any](name, description string, inputSchema map[s
 // Use [WithOutputSchema] or [WithOutputSchemaName] to advertise the logical
 // output the tool produces (the envelope's output field); the wire format
 // stays the multipart response envelope.
+//
+// Deprecated: Use [NewTool] and attach content parts with
+// [github.com/firebase/genkit/go/ai/tool.AttachParts], which keeps the output
+// type (and therefore the advertised output schema).
 func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolAction[In, *MultipartToolResponse] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
@@ -412,16 +426,13 @@ func wrapToolFunc[In, Out any](name, description string, fn ToolFunc[In, Out]) (
 	}
 
 	wrappedFn := func(ctx context.Context, input In) (*MultipartToolResponse, error) {
-		toolCtx := &ToolContext{
-			Context:       ctx,
-			Resumed:       resumedCtxKey.FromContext(ctx),
-			OriginalInput: origInputCtxKey.FromContext(ctx),
-		}
-		output, err := fn(toolCtx, input)
-		if err != nil {
-			return nil, err
-		}
-		return &MultipartToolResponse{Output: output}, nil
+		return runToolFunc(ctx, name, func(ctx context.Context) (*MultipartToolResponse, error) {
+			output, err := fn(newToolContext(ctx), input)
+			if err != nil {
+				return nil, err
+			}
+			return &MultipartToolResponse{Output: output}, nil
+		})
 	}
 	return metadata, wrappedFn
 }
@@ -435,14 +446,73 @@ func wrapMultipartToolFunc[In any](name, description string, fn MultipartToolFun
 		"tool":        map[string]any{"multipart": true},
 	}
 	wrappedFn := func(ctx context.Context, input In) (*MultipartToolResponse, error) {
-		toolCtx := &ToolContext{
-			Context:       ctx,
-			Resumed:       resumedCtxKey.FromContext(ctx),
-			OriginalInput: origInputCtxKey.FromContext(ctx),
-		}
-		return fn(toolCtx, input)
+		return runToolFunc(ctx, name, func(ctx context.Context) (*MultipartToolResponse, error) {
+			return fn(newToolContext(ctx), input)
+		})
 	}
 	return metadata, wrappedFn
+}
+
+// newToolContext builds the [ToolContext] a tool function written against it
+// receives, lifting the restart state off the context.
+func newToolContext(ctx context.Context) *ToolContext {
+	tc := &ToolContext{
+		Context:       ctx,
+		OriginalInput: base.ToolOriginalInputKey.FromContext(ctx),
+	}
+	if m, ok := resumedMap(ctx); ok {
+		tc.Resumed = m
+	}
+	return tc
+}
+
+// runToolFunc runs one invocation of the tool named name. The generate loop
+// installs the part sink [github.com/firebase/genkit/go/ai/tool.AttachParts]
+// writes to around the whole tool call, WrapTool hooks included, folds it
+// when the call returns, and marks the tool function's context for the tool
+// to claim (see [base.ToolCall]). Any other run is a call of its own: a
+// direct run (RunRaw, the Dev UI), or a tool run under another call's
+// context, such as a tool that calls another tool directly. It gets its own
+// sink, folded here, and none of the enclosing call's restart state, so the
+// enclosing call's attachments and resume stay with that call.
+func runToolFunc(ctx context.Context, name string, run func(ctx context.Context) (*MultipartToolResponse, error)) (*MultipartToolResponse, error) {
+	if base.ToolPartSinkKey.FromContext(ctx) != nil && base.ToolCallKey.FromContext(ctx).Claim(name) {
+		resp, err := run(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			resp = &MultipartToolResponse{}
+		}
+		return resp, nil
+	}
+	sink := &base.PartSink{}
+	defer sink.Close() // On an error, too.
+	ctx = base.ToolPartSinkKey.NewContext(ctx, sink)
+	ctx = base.ToolCallKey.NewContext(ctx, nil)
+	ctx = base.ToolResumeKey.NewContext(ctx, nil)
+	ctx = base.ToolOriginalInputKey.NewContext(ctx, nil)
+	resp, err := run(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return foldAttachedParts(resp, sink), nil
+}
+
+// foldAttachedParts appends the parts attached to sink during a tool call to
+// resp and returns it. A multipart function may return a nil response with no
+// error, which the envelope treats as an empty one, so the parts still have a
+// response to land on.
+func foldAttachedParts(resp *MultipartToolResponse, sink *base.PartSink) *MultipartToolResponse {
+	if resp == nil {
+		resp = &MultipartToolResponse{}
+	}
+	for _, p := range sink.Close() {
+		if part, ok := p.(*Part); ok {
+			resp.Content = append(resp.Content, part)
+		}
+	}
+	return resp
 }
 
 // Name returns the name of the tool.

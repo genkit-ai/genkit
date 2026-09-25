@@ -907,6 +907,10 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	}
 //
 //	fmt.Println(resp.Text())
+//
+// Deprecated: Use [DefineTool] and attach content parts with
+// [github.com/firebase/genkit/go/ai/tool.AttachParts], which keeps the output
+// type (and therefore the advertised output schema).
 func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolAction[In, *ai.MultipartToolResponse] {
 	t := ai.NewMultipartTool(name, description, fn, opts...)
 	t.Register(g.reg)
