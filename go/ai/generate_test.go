@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -434,7 +435,8 @@ func TestGenerate(t *testing.T) {
 					Name:         "gablorken",
 					OutputSchema: map[string]any{"type": string("number")},
 					Metadata: map[string]any{
-						"multipart": false,
+						"multipart":    false,
+						"resumeSchema": map[string]any{"type": string("object")},
 					},
 				},
 			},
@@ -4695,18 +4697,25 @@ func TestResumedToolMessageOrder(t *testing.T) {
 
 // TestResumeRejectedBeforeAnyToolRuns pins that a resume is checked as a
 // whole before any tool runs: when one pending request has no resolution, or
-// a response that does not match the tool's output schema, the resume fails
-// and a sibling with a valid restart has not run.
+// a restart payload or response that does not match the tool's schema, the
+// resume fails and a sibling with a valid restart has not run.
 func TestResumeRejectedBeforeAnyToolRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		want error
 		// resolve returns the directives for the second request, "confirm".
-		resolve func(confirm *ToolAction[map[string]any, string], part *Part) []GenerateOption
+		resolve func(t *testing.T, part *Part) []*Part
 	}{
-		{"no resolution", ErrUnresolvedToolRequest, func(*ToolAction[map[string]any, string], *Part) []GenerateOption { return nil }},
-		{"mistyped response", status.ErrInvalidArgument, func(confirm *ToolAction[map[string]any, string], part *Part) []GenerateOption {
-			return []GenerateOption{WithToolResponses(confirm.Respond(part, map[string]any{"not": "a string"}, nil))}
+		{"no resolution", ErrUnresolvedToolRequest, func(*testing.T, *Part) []*Part { return nil }},
+		{"mistyped restart payload", status.ErrInvalidArgument, func(t *testing.T, part *Part) []*Part {
+			restart, err := part.ToToolRestart(map[string]any{"approved": "yes"})
+			assertNoError(t, err)
+			return []*Part{restart}
+		}},
+		{"mistyped response", status.ErrInvalidArgument, func(t *testing.T, part *Part) []*Part {
+			respond, err := part.ToToolResponse(map[string]any{"not": "a string"})
+			assertNoError(t, err)
+			return []*Part{respond}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4723,36 +4732,37 @@ func TestResumeRejectedBeforeAnyToolRuns(t *testing.T) {
 					}}, nil
 				},
 			})
-			charges := 0
-			interruptOnce := func(ctx *ToolContext, _ map[string]any) (string, error) {
-				if !ctx.IsResumed() {
-					return "", ctx.Interrupt(nil)
-				}
-				charges++
-				return "charged", nil
+			type confirmation struct {
+				Approved bool `json:"approved"`
 			}
-			charge := defineTool(r, "charge", "charges a card", interruptOnce)
-			confirm := defineTool(r, "confirm", "asks to confirm",
+			charges := 0
+			charge := defineTool(r, "charge", "charges a card",
 				func(ctx *ToolContext, _ map[string]any) (string, error) {
-					return "", ctx.Interrupt(nil)
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					charges++
+					return "charged", nil
 				})
+			confirm := NewResumableTool("confirm", "asks to confirm",
+				func(ctx context.Context, _ map[string]any, res *confirmation) (string, error) {
+					return "", &base.ToolInterruptError{}
+				})
+			confirm.Register(r)
 
 			res, err := Generate(testCtx, r,
 				WithModelName("test/twoInterrupts"), WithPrompt("go"), WithTools(charge, confirm))
 			assertNoError(t, err)
-			opts := []GenerateOption{
-				WithModelName("test/twoInterrupts"),
-				WithMessages(res.History()...),
-				WithTools(charge, confirm),
-			}
+			var parts []*Part
 			for _, part := range res.Interrupts() {
-				if part.ToolRequest.Name == "charge" {
-					opts = append(opts, WithToolRestarts(charge.Restart(part, nil)))
+				if call, ok := charge.Interrupted(part); ok {
+					parts = append(parts, call.Restart(nil))
 				} else {
-					opts = append(opts, tc.resolve(confirm, part)...)
+					parts = append(parts, tc.resolve(t, part)...)
 				}
 			}
-			_, err = Generate(testCtx, r, opts...)
+			_, err = Generate(testCtx, r, WithModelName("test/twoInterrupts"),
+				WithMessages(res.History()...), WithTools(charge, confirm), WithResume(parts...))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("resume error = %v, want %v", err, tc.want)
 			}

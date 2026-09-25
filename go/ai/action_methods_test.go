@@ -183,6 +183,16 @@ func TestForwardersRejectNilReceivers(t *testing.T) {
 			_, err := tl.RunJSONWithTelemetry(ctx, in, nil)
 			return err
 		}},
+		{"tool RunRawMultipart", func() error {
+			var tl *ToolAction[any, any]
+			_, err := tl.RunRawMultipart(ctx, nil)
+			return err
+		}},
+		{"resumable tool RunRaw", func() error {
+			var tl *ResumableToolAction[any, any, struct{}]
+			_, err := tl.RunRaw(ctx, nil)
+			return err
+		}},
 		{"background RunJSON", func() error {
 			var b *BackgroundModelAction
 			_, err := b.RunJSON(ctx, in, nil)
