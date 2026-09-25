@@ -17,9 +17,11 @@
 import {
   ANALYTICS_OPT_OUT_CONFIG_TAG,
   ConfigEvent,
+  getProjectSettings,
   getUserSettings,
   logger,
   record,
+  setProjectSettings,
   setUserSettings,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
@@ -27,6 +29,7 @@ import { Command } from 'commander';
 
 export const UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG =
   'updateNotificationsOptOut';
+export const RUNTIME_COMMAND_CONFIG_TAG = 'runtimeCommand';
 
 const CONFIG_TAGS: Record<
   string,
@@ -50,6 +53,7 @@ const CONFIG_TAGS: Record<
       return o;
     }
   },
+  [RUNTIME_COMMAND_CONFIG_TAG]: (value) => value,
 };
 
 export const config = new Command('config');
@@ -58,7 +62,7 @@ config
   .description('set development environment configuration')
   .command('get')
   .argument('<tag>', `The config tag to get. One of [${readableTagsHint()}]`)
-  .action((tag) => {
+  .action(async (tag) => {
     if (!CONFIG_TAGS[tag]) {
       logger.error(
         `Unknown config tag "${clc.bold(tag)}.\nValid options: ${readableTagsHint()}`
@@ -66,9 +70,12 @@ config
       return;
     }
 
-    const userSettings = getUserSettings();
-    if (userSettings[tag] !== undefined) {
-      logger.info(userSettings[tag]);
+    const settings =
+      tag === RUNTIME_COMMAND_CONFIG_TAG
+        ? await getProjectSettings()
+        : getUserSettings();
+    if (settings[tag] !== undefined) {
+      logger.info(settings[tag]);
     } else {
       logger.info(clc.italic('(unset)'));
     }
@@ -96,13 +103,24 @@ config
 
     await record(new ConfigEvent(tag));
 
-    const userSettings = getUserSettings();
-    setUserSettings({
-      ...userSettings,
-      [tag]: parsedValue,
-    });
-
-    logger.info(`Set "${clc.bold(tag)}" to "${clc.bold(value)}".`);
+    if (tag === RUNTIME_COMMAND_CONFIG_TAG) {
+      const settings = await getProjectSettings();
+      if (value === '') {
+        delete settings[tag];
+        logger.info(`Unset "${clc.bold(tag)}".`);
+      } else {
+        settings[tag] = parsedValue;
+        logger.info(`Set "${clc.bold(tag)}" to "${clc.bold(value)}".`);
+      }
+      await setProjectSettings(settings);
+    } else {
+      const userSettings = getUserSettings();
+      setUserSettings({
+        ...userSettings,
+        [tag]: parsedValue,
+      });
+      logger.info(`Set "${clc.bold(tag)}" to "${clc.bold(value)}".`);
+    }
   });
 
 function readableTagsHint() {
