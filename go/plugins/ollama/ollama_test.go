@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -1121,5 +1122,52 @@ func TestDefineModelReusesDiscoveredCapabilities(t *testing.T) {
 	}
 	if got := showCalls.Load(); got != 1 {
 		t.Errorf("/api/show calls = %d, want 1; DefineModel must not perform I/O", got)
+	}
+}
+
+// TestGenerateReportsUsage pins that a response reports the token counts
+// Ollama sends on its last message, which a stream carries on its final
+// chunk. The plugin used to report an empty usage on every path.
+func TestGenerateReportsUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		body   string
+	}{
+		{
+			name: "complete",
+			body: `{"model":"llama3","message":{"role":"assistant","content":"Hi"},"done":true,"prompt_eval_count":26,"eval_count":9}`,
+		},
+		{
+			name:   "stream",
+			stream: true,
+			body: `{"model":"llama3","message":{"role":"assistant","content":"H"},"done":false}
+{"model":"llama3","message":{"role":"assistant","content":"i"},"done":false}
+{"model":"llama3","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":26,"eval_count":9}
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			g := &generator{model: ModelDefinition{Name: "llama3", Type: "chat"}, serverAddress: server.URL, timeout: 30}
+			var cb func(context.Context, *ai.ModelResponseChunk) error
+			if tc.stream {
+				cb = func(context.Context, *ai.ModelResponseChunk) error { return nil }
+			}
+			resp, err := g.generate(t.Context(), &ai.ModelRequest{
+				Messages: []*ai.Message{ai.NewUserTextMessage("hello")},
+			}, cb)
+			if err != nil {
+				t.Fatalf("generate() error = %v", err)
+			}
+			want := ai.GenerationUsage{InputTokens: 26, OutputTokens: 9, TotalTokens: 35}
+			if resp.Usage == nil || !reflect.DeepEqual(*resp.Usage, want) {
+				t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
+			}
+		})
 	}
 }

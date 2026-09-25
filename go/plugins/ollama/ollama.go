@@ -391,12 +391,32 @@ type ollamaChatResponse struct {
 		Thinking  string           `json:"thinking"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
+	ollamaUsage
 }
 
 type ollamaModelResponse struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	Response  string `json:"response"`
+	ollamaUsage
+}
+
+// ollamaUsage holds the token counts Ollama reports on a finished response,
+// which a stream carries on its last chunk.
+type ollamaUsage struct {
+	PromptEvalCount int `json:"prompt_eval_count"`
+	EvalCount       int `json:"eval_count"`
+}
+
+// toGenkit maps Ollama's counts onto [ai.GenerationUsage]'s convention.
+// Thinking is inside eval_count with no separate count, so ThoughtsTokens
+// stays zero.
+func (u ollamaUsage) toGenkit() *ai.GenerationUsage {
+	return &ai.GenerationUsage{
+		InputTokens:  u.PromptEvalCount,
+		OutputTokens: u.EvalCount,
+		TotalTokens:  u.PromptEvalCount + u.EvalCount,
+	}
 }
 
 // Ollama provides configuration options for the Init function.
@@ -709,6 +729,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return response, nil
 	} else {
 		var chunks []*ai.ModelResponseChunk
+		var usage ollamaUsage
 		decoder := json.NewDecoder(resp.Body)
 		chunkCount := 0
 
@@ -720,6 +741,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				return nil, fmt.Errorf("reading response stream: %v", err)
 			}
 			chunkCount++
+			var u ollamaUsage
+			if err := json.Unmarshal(raw, &u); err == nil && (u.PromptEvalCount > 0 || u.EvalCount > 0) {
+				usage = u
+			}
 
 			var chunk *ai.ModelResponseChunk
 			if isChatModel {
@@ -741,6 +766,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Message: &ai.Message{
 				Role: ai.RoleModel,
 			},
+			Usage: usage.toGenkit(),
 		}
 		// Add all the merged content to the final response's candidate
 		for _, chunk := range chunks {
@@ -832,6 +858,7 @@ func translateChatResponse(responseData []byte, thinkingEnabled bool) (*ai.Model
 		Message: &ai.Message{
 			Role: ai.RoleModel,
 		},
+		Usage: response.toGenkit(),
 	}
 
 	// Check for thinking/reasoning in the dedicated JSON field first.
@@ -888,7 +915,7 @@ func translateModelResponse(responseData []byte) (*ai.ModelResponse, error) {
 
 	aiPart := ai.NewTextPart(response.Response)
 	modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
-	modelResponse.Usage = &ai.GenerationUsage{} // TODO: can we get any of this info?
+	modelResponse.Usage = response.toGenkit()
 	return modelResponse, nil
 }
 
