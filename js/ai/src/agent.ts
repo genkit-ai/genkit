@@ -63,6 +63,12 @@ import {
   GenerationResponseError,
   generateStream,
 } from './generate.js';
+import {
+  abortReason,
+  callerStopped as loopCallerStopped,
+  statusOf,
+} from './generate/action.js';
+import { withoutPayloads } from './generate/resolve-tool-requests.js';
 import { diff, type JsonPatch } from './json-patch.js';
 import { MessageData } from './model-types.js';
 import { type ToolRequestPart, type ToolResponsePart } from './parts.js';
@@ -116,24 +122,35 @@ export {
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /**
- * Default staleness threshold (ms) after which a `pending` snapshot whose
- * heartbeat has not advanced is reported as `expired` on read. Should be
- * comfortably larger than {@link DEFAULT_HEARTBEAT_INTERVAL_MS} so a single
- * missed beat does not trip expiry.
+ * Default staleness threshold (ms) after which a `pending` or `aborting`
+ * snapshot whose heartbeat has not advanced is reported as `expired` on read.
+ * Should be comfortably larger than {@link DEFAULT_HEARTBEAT_INTERVAL_MS} so a
+ * single missed beat does not trip expiry.
  */
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000;
 
 /**
- * Returns `true` when a snapshot is a `pending` (detached, in-flight) snapshot
- * whose heartbeat is older than `timeoutMs` - i.e. its background worker is
- * presumed dead. A pending snapshot that has not yet written a first heartbeat
- * is not considered expired (the beat may simply not have fired yet).
+ * How long a worker keeps heartbeating an `aborting` row while its stopped
+ * turn drains toward the finalize write. The flip stops the work, not the
+ * worker, and a drain through a slow tool or model call can outlast
+ * {@link DEFAULT_HEARTBEAT_TIMEOUT_MS}; the beats keep the row reading as live
+ * meanwhile. The budget bounds them so a worker that never unwinds still goes
+ * stale, and the row becomes recoverable.
+ */
+const WIND_DOWN_HEARTBEAT_BUDGET_MS = 5 * 60_000;
+
+/**
+ * Returns `true` when a snapshot is a detached row still owed a write (see
+ * {@link owedHeartbeat}) whose heartbeat is older than `timeoutMs` - i.e. its
+ * background worker is presumed dead. A row that has not yet written a first
+ * heartbeat is not considered expired (the beat may simply not have fired
+ * yet).
  */
 function isHeartbeatExpired(
   snapshot: SessionSnapshot,
   timeoutMs: number = DEFAULT_HEARTBEAT_TIMEOUT_MS
 ): boolean {
-  if (snapshot.status !== 'pending' || !snapshot.heartbeatAt) {
+  if (!owedHeartbeat(snapshot) || !snapshot.heartbeatAt) {
     return false;
   }
   const last = Date.parse(snapshot.heartbeatAt);
@@ -141,6 +158,17 @@ function isHeartbeatExpired(
     return false;
   }
   return Date.now() - last > timeoutMs;
+}
+
+/**
+ * Whether a detached row is still owed a heartbeat: a `pending` one while the
+ * turn runs, and an `aborting` one while the stopped turn drains toward the
+ * finalize, which settles it as `aborted`.
+ */
+function owedHeartbeat(
+  snapshot: SessionSnapshot<unknown> | undefined
+): boolean {
+  return snapshot?.status === 'pending' || snapshot?.status === 'aborting';
 }
 
 /**
@@ -185,6 +213,14 @@ export class CommittedTurnError extends Error {
     this.result = result;
     // Restore prototype chain for `instanceof` across transpilation targets.
     Object.setPrototypeOf(this, CommittedTurnError.prototype);
+    // Keep the span markers tracing stamped on the cause, as GenkitError
+    // does, so the span that first failed stays the failure source and the
+    // turn span this error passes through does not claim it again.
+    if (typeof cause === 'object' && cause !== null) {
+      const marked = cause as { ignoreFailedSpan?: boolean; traceId?: string };
+      if (marked.ignoreFailedSpan) (this as any).ignoreFailedSpan = true;
+      if (marked.traceId) (this as any).traceId = marked.traceId;
+    }
   }
 }
 
@@ -259,16 +295,100 @@ function generationError(res: GenerateResponse): GenerationResponseError {
   // The loop's statuses are canonical; a status a model wrote itself may not
   // be, and an error is still owed for it.
   const known = StatusNameSchema.safeParse(status);
-  return new Ctor(res, message, known.success ? known.data : 'INTERNAL');
+  const error = new Ctor(res, message, known.success ? known.data : 'INTERNAL');
+  // The loop's spans already recorded where this failure came from; the turn
+  // span this error passes through must not claim it as its own.
+  (error as any).ignoreFailedSpan = true;
+  return error;
+}
+
+/**
+ * Reports whether a run ended because the caller stopped it rather than
+ * because something inside it broke. Two roads reach the same place:
+ *
+ * The caller's abort signal fired. An attached caller aborts the signal it
+ * passed to the action, or the transport under it closes; a detached caller
+ * calls the `abort` companion action, which aborts the signal on the status
+ * flip.
+ *
+ * Or the run reached a limit the caller set. The generate loop throws a
+ * {@link GenerationAbortedError} at `maxTurns`, and reports every stop it
+ * classified on a response it returned as one; a cancellation or timeout it
+ * observed reaches a turn that let the loop throw as the `AbortError` or
+ * `TimeoutError` itself. A turn that lets any of these through, whatever
+ * raised it, is stopped, not broken, and reports so without having to say it
+ * in a {@link TurnResult}, as a Go turn propagating a context error does.
+ *
+ * Both roads are read from the signal and the error's identity, never from a
+ * classified status, which is a wider set than the caller's own doing: a
+ * provider answering with ABORTED or DEADLINE_EXCEEDED did not stop the run on
+ * the caller's request, and persisting that as an aborted row would tell a
+ * retry client the one thing that is not true of it. The rule is
+ * `generate`'s own, widened by the limit it throws for, so the snapshot
+ * status and a partial's finish reason agree on who ended the run.
+ */
+function callerStopped(
+  abortSignal: AbortSignal | undefined,
+  cause: unknown
+): boolean {
+  return (
+    cause instanceof GenerationAbortedError ||
+    loopCallerStopped(abortSignal, cause)
+  );
+}
+
+/**
+ * The snapshot status that goes with the reason a turn or run ended on, for
+ * the rows that ended with an error. Deriving it keeps the two from
+ * disagreeing: a row is aborted exactly when it says the caller stopped the
+ * run.
+ */
+function terminalStatus(
+  reason: AgentFinishReason | undefined
+): 'aborted' | 'failed' {
+  return reason === 'aborted' ? 'aborted' : 'failed';
+}
+
+/**
+ * The error a stop observed at the signal reports: the signal's reason when
+ * it is one, else a CANCELLED error carrying it.
+ */
+function stopCause(abortSignal: AbortSignal): unknown {
+  return abortReason(abortSignal, 'The agent run was aborted.');
+}
+
+/**
+ * Resolves with the channel's `next` result, or as a finished iteration once
+ * `signal` fires. The abort listener lives only as long as this one wait, so
+ * a run with many turns does not pile reactions onto a promise that never
+ * settles.
+ */
+function nextOrStopped<T>(
+  next: Promise<IteratorResult<T>>,
+  signal: AbortSignal | undefined
+): Promise<IteratorResult<T>> {
+  const stopped: IteratorResult<T> = { done: true, value: undefined };
+  if (!signal) return next;
+  if (signal.aborted) return Promise.resolve(stopped);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(stopped);
+    signal.addEventListener('abort', onAbort, { once: true });
+    next
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /**
  * Normalizes a thrown value into the structured error shape used across the
- * agent (in `AgentOutput.error` and `SessionRunner.lastTurnError`).
+ * agent (in `AgentOutput.error` and `SessionRunner.lastTurnError`). The
+ * status is classified the way `generate` classifies it (see `statusOf`): a
+ * canonical status of the error's own, else a timeout or cancellation by the
+ * error's name or by `abortSignal` having fired, else INTERNAL.
  */
-function toErrorDetails(e: any): AgentErrorDetails {
+function toErrorDetails(e: any, abortSignal?: AbortSignal): AgentErrorDetails {
   return {
-    status: e?.status || 'INTERNAL',
+    status: statusOf(e, abortSignal),
     // A GenkitError's own text: the status it prefixes its message with
     // travels on `status`, and a client matching the recorded message across
     // runtimes reads the same words a Go or Python agent records.
@@ -289,28 +409,23 @@ function toErrorDetails(e: any): AgentErrorDetails {
  * response reports stands in for it.
  */
 function toErrorDetailsPayload(detail: unknown): unknown {
-  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
-    return detail;
-  }
-  const {
-    response,
-    request: _request,
-    ...rest
-  } = detail as Record<string, any>;
-  const inner = response?.error?.details;
+  const inner = (detail as { response?: { error?: { details?: unknown } } })
+    ?.response?.error?.details;
   if (inner !== undefined) return inner;
-  return Object.keys(rest).length > 0 ? rest : undefined;
+  return withoutPayloads(detail);
 }
 
 /**
  * Builds an abort-aware `saveSnapshot` mutator: it skips the write (returns
  * `null`) when the current snapshot was concurrently aborted, otherwise writes
- * `input`. This prevents a "done"/"failed" write from clobbering an "aborted"
- * status set by a concurrent abort.
+ * `input`. This prevents a "done"/"failed" write from clobbering an
+ * "aborting" or "aborted" status set by a concurrent abort.
  */
 function abortAwareMutator<S>(input: SessionSnapshotInput<S>) {
   return (current: SessionSnapshot<S> | undefined) =>
-    current?.status === 'aborted' ? null : input;
+    current?.status === 'aborting' || current?.status === 'aborted'
+      ? null
+      : input;
 }
 
 /**
@@ -331,9 +446,11 @@ function requireStore<S>(
 }
 
 /**
- * Sets a snapshot's status to `aborted` (unless it already reached a terminal
- * state) and returns its previous status, or `undefined` when the snapshot
- * does not exist.
+ * Flips a pending snapshot to `aborting` and returns its previous status, or
+ * `undefined` when the snapshot does not exist. The runtime observes the
+ * flip, stops the work, and its finalize settles the row as `aborted` with
+ * the state the run committed. A row already aborting, or settled, is left
+ * as it is.
  */
 async function abortSnapshotInStore<S>(
   store: SessionStore<S>,
@@ -346,14 +463,10 @@ async function abortSnapshotInStore<S>(
     (current) => {
       if (!current) return null;
       previousStatus = current.status;
-      if (
-        current.status === 'completed' ||
-        current.status === 'failed' ||
-        current.status === 'aborted'
-      ) {
-        return null; // Already terminal - don't override.
+      if (current.status !== 'pending') {
+        return null; // Already aborting or terminal - don't override.
       }
-      return { ...current, status: 'aborted' };
+      return { ...current, status: 'aborting' };
     },
     options
   );
@@ -374,11 +487,15 @@ export class SessionRunner<State = unknown> {
   ) => void;
   public onDetach?: (snapshotId: string) => void;
   public newSnapshotId?: string;
-  /** The finish reason of the most recently completed turn. */
+  /**
+   * How the most recent turn ended, or `aborted` when the caller stopped the
+   * run before the next turn started.
+   */
   public lastTurnFinishReason?: AgentFinishReason;
   /**
-   * Error details of the most recent failed turn. Set when a turn throws and
-   * the runner resolves gracefully instead of propagating the exception.
+   * Error details of the most recent turn that failed or was stopped. Set
+   * when a turn throws, or the caller stops the run, and the runner resolves
+   * gracefully instead of propagating the exception.
    */
   public lastTurnError?: AgentErrorDetails;
   /**
@@ -388,7 +505,7 @@ export class SessionRunner<State = unknown> {
    * the live state is the resume point. True until a turn fails without
    * committing.
    */
-  public lastTurnCommitted: boolean = true;
+  private lastTurnCommitted: boolean = true;
   /**
    * A deep copy of the session state as of the most recent *committed* turn
    * (or the initial state when no turn has committed yet). On a turn that
@@ -422,6 +539,23 @@ export class SessionRunner<State = unknown> {
    * when the store no longer returns it. Undefined until the client detaches.
    */
   private pendingRow?: SessionSnapshotInput<State> & { snapshotId: string };
+  /** The requested detach's pending-row write; see {@link detach}. */
+  private detachInFlight?: Promise<string>;
+  /**
+   * True as soon as a detach is requested, before its pending-row write
+   * lands. From then on the caller's signal no longer stops the run (see the
+   * agent action's abort wiring): the client that detached may close its
+   * transport while the row is still being written.
+   */
+  get detachRequested(): boolean {
+    return this.detachInFlight !== undefined;
+  }
+  /**
+   * Set once the run has settled and its output is decided. A detach that
+   * arrives after that has no run to move to the background: {@link detach}
+   * refuses it rather than write a pending row nothing would finalize.
+   */
+  public runEnded: boolean = false;
   /**
    * Serializes snapshot writes. The detach write and an in-flight turn-end
    * write run on different tasks; under the lock the detach either waits for
@@ -430,9 +564,11 @@ export class SessionRunner<State = unknown> {
    */
   private snapLock: Promise<unknown> = Promise.resolve();
   /**
-   * Aborts in-flight turns. When set and aborted, a turn that rejects out of
-   * `generate` is reported as `aborted` (not `failed`) and its failed snapshot
-   * write is skipped (the abort path already persisted the `aborted` status).
+   * Fires when the caller stops the run: an attached caller aborting the
+   * signal it passed to the action, or the `abort` companion action flipping
+   * a detached run's row. A turn in flight observes it through the signal the
+   * agent function receives; the runner reads it to report that turn, or an
+   * input still queued, as `aborted` rather than `failed` (see `run`).
    */
   private abortSignal?: AbortSignal;
 
@@ -545,8 +681,11 @@ export class SessionRunner<State = unknown> {
    * reason is reported.
    *
    * When the handler throws, the runner records the failure, stops looping,
-   * and lets the invocation resolve with `finishReason: 'failed'`. What it
-   * does with the turn's state depends on what was thrown: a
+   * and lets the invocation resolve with `finishReason: 'failed'`, or
+   * `'aborted'` when the caller stopped the run: its abort signal fired, or
+   * the error is a cancellation, a timeout, or a caller-set limit such as
+   * `maxTurns` (see `callerStopped`). What it does with the turn's state
+   * depends on what was thrown: a
    * {@link CommittedTurnError} commits the turn, which snapshots the session
    * as `failed` with the error on the row and makes it the resume point, and
    * any other error rolls the turn back, leaving the previous snapshot as the
@@ -554,11 +693,28 @@ export class SessionRunner<State = unknown> {
    * produced a partial response, because that partial ends at a turn seam and
    * is a conversation the caller can continue from; a custom agent commits
    * when it knows the same of its own state.
+   *
+   * A stop that lands between turns drops the inputs still queued and reports
+   * `aborted` with the last committed turn as the resume point.
    */
   async run(
     fn: (input: AgentInput, ctx: TurnContext) => Promise<TurnResult | void>
   ): Promise<void> {
-    for await (const input of this.inputCh) {
+    const inputs = this.inputCh[Symbol.asyncIterator]();
+    while (true) {
+      const nextInput = inputs.next();
+      const next = await nextOrStopped(nextInput, this.abortSignal);
+      // The caller stopping the run wins over an input still queued for it
+      // and over a run that would otherwise end on its own terms: the
+      // invocation reports the stop and the resume point the last committed
+      // turn left. An input the wait left unread is dropped.
+      if (this.abortSignal?.aborted) {
+        nextInput.catch(() => {});
+        this.recordStop();
+        break;
+      }
+      if (next.done) break;
+      const input = next.value;
       if (input.message) {
         this.session.addMessages([input.message]);
       }
@@ -656,43 +812,49 @@ export class SessionRunner<State = unknown> {
    * Records a turn whose handler threw `e`, writing the turn's snapshot when
    * it committed, and returns that snapshot's id.
    *
-   * An aborted turn rejects out of `generate` and lands here too. It is
-   * `aborted` rather than `failed`: the abort path already persisted the
-   * `aborted` status (the abort-aware mutator would skip a `failed` write
-   * anyway), so only the finish reason is recorded and no snapshot is written.
+   * What the turn threw decides what happens to its state: a
+   * CommittedTurnError commits the turn as a resume point, anything else
+   * rolls it back (see `run`). The error the output and the snapshot report
+   * is the underlying cause either way. Who ended the turn decides how it
+   * reports itself: the caller stopping the run wins over whatever the turn
+   * reported, so a stop that lands while a turn is settling keeps the
+   * aborted terminal, attached or detached. Otherwise the turn's own finish
+   * reason, when the result names one, goes on the turn-end chunk and the
+   * row; the invocation reports how it ended.
    */
   private async endFailedTurn(
     e: unknown,
     turnSnapshotId: string | undefined
   ): Promise<string | undefined> {
-    if (this.abortSignal?.aborted) {
-      this.lastTurnFinishReason = 'aborted';
-      this.lastTurnError = undefined;
-      this.lastTurnCommitted = false;
-      this.notifyEndTurn(this.lastSnapshot?.snapshotId, 'aborted');
-      return undefined;
-    }
-
-    // What the turn threw decides what happens to its state: a
-    // CommittedTurnError commits the turn as a resume point, anything else
-    // rolls it back (see `run`). The error the output and the snapshot
-    // report is the underlying cause either way. The turn's own finish
-    // reason, when the result names one, goes on the turn-end chunk and the
-    // row; the invocation reports how it ended.
     const committed = isCommittedTurnError(e);
     const cause = committed ? e.cause : e;
-    const finishReason: AgentFinishReason =
-      (committed && e.result?.finishReason) || 'failed';
+    const finishReason: AgentFinishReason = callerStopped(
+      this.abortSignal,
+      cause
+    )
+      ? 'aborted'
+      : (committed && e.result?.finishReason) || 'failed';
     this.lastTurnFinishReason = finishReason;
-    this.lastTurnError = toErrorDetails(cause);
+    // A turn that rethrew a signal's reason that is not an error (a string,
+    // nothing at all) is recorded through the signal, as a stop between
+    // turns is.
+    const stopped = finishReason === 'aborted';
+    const reported =
+      stopped &&
+      (cause === null || typeof cause !== 'object') &&
+      this.abortSignal
+        ? stopCause(this.abortSignal)
+        : cause;
+    this.lastTurnError = toErrorDetails(reported, this.abortSignal);
     this.lastTurnCommitted = committed;
 
     let snapshotId: string | undefined;
     if (committed) {
-      // The failed turn's own snapshot, with the error on the row, is the
-      // newest snapshot and so the resume point the failed output reports.
+      // The turn's own snapshot, with the error on the row and the status
+      // its reason says, is the newest snapshot and so the resume point
+      // the output reports.
       snapshotId = await this.maybeSnapshot(
-        'failed',
+        terminalStatus(finishReason),
         this.lastTurnError,
         turnSnapshotId,
         finishReason
@@ -704,9 +866,36 @@ export class SessionRunner<State = unknown> {
     return snapshotId;
   }
 
+  /**
+   * Records that the caller stopped the run between turns, before an input
+   * still queued was started. No turn ran, so the last committed turn keeps
+   * its place as the resume point; the invocation reports `aborted` with the
+   * signal's reason as the error.
+   */
+  private recordStop(): void {
+    this.lastTurnFinishReason = 'aborted';
+    this.lastTurnError = toErrorDetails(
+      stopCause(this.abortSignal!),
+      this.abortSignal
+    );
+  }
+
+  /**
+   * The session state as of the last turn that committed: the live state when
+   * that is the last turn, else the copy taken at the last committed turn,
+   * which is the state the invocation began with until a turn commits. It is
+   * what a run stopping mid-turn hands back or lands on its row, since the
+   * live state holds the unfinished turn's mutations.
+   */
+  committedState(): SessionState<State> {
+    return this.lastTurnCommitted
+      ? this.session.getState()
+      : (this.lastGoodState ?? this.session.getState());
+  }
+
   /** Runs `fn` under the snapshot lock; see {@link snapLock}. */
   private withSnapLock<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.snapLock.then(fn, fn);
+    const run = this.snapLock.then(fn);
     this.snapLock = run.catch(() => {});
     return run;
   }
@@ -726,7 +915,7 @@ export class SessionRunner<State = unknown> {
    * Pending rows themselves are written by {@link detach}, not here.
    */
   async maybeSnapshot(
-    status?: 'pending' | 'completed' | 'failed',
+    status?: 'pending' | 'completed' | 'failed' | 'aborted',
     error?: { status?: string; message: string; details?: any },
     snapshotId?: string,
     finishReason?: AgentFinishReason
@@ -809,8 +998,14 @@ export class SessionRunner<State = unknown> {
         message: 'Detach is only supported when a session store is provided.',
       });
     }
-    return this.withSnapLock(async () => {
-      if (this.pendingRow) return this.pendingRow.snapshotId;
+    if (this.detachInFlight) return this.detachInFlight;
+    if (this.runEnded) {
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: 'The run has ended; there is nothing left to detach.',
+      });
+    }
+    this.detachInFlight = this.withSnapLock(async () => {
       const snapshotId = this.newSnapshotId || reserveSnapshotId();
       const now = new Date().toISOString();
       const row: SessionSnapshotInput<State> & { snapshotId: string } = {
@@ -833,6 +1028,7 @@ export class SessionRunner<State = unknown> {
       this.onDetach?.(snapshotId);
       return snapshotId;
     });
+    return this.detachInFlight;
   }
 
   /**
@@ -841,13 +1037,16 @@ export class SessionRunner<State = unknown> {
    * reason, and the error when it failed. The row keeps its lineage and
    * creation time; its heartbeat is cleared, since the row is settled.
    *
-   * A late abort wins over the terminal the run was about to land: the row
-   * keeps `aborted` and only the finish reason is stamped, so the row is
-   * self-describing (the abort write flips the status; the runtime owns the
-   * reason). Nothing is written once that stamp is on.
+   * A late abort wins over the terminal the run was about to land: a row the
+   * abort flipped to `aborting` settles as `aborted`, with the finish reason,
+   * the error the stop recorded, and the committed state, so the row is
+   * self-describing and resumable (the abort write only flips the status;
+   * the runtime owns the reason, the error, and the state). Nothing is
+   * written once the row is `aborted`.
    *
-   * `cause` is an error the agent function itself threw, which fails the run
-   * whatever its turns did. A run that never detached has nothing to
+   * `cause` is an error the agent function itself threw, which ends the run
+   * whatever its turns did: `failed`, or `aborted` when the caller stopped it
+   * (see `callerStopped`). A run that never detached has nothing to
    * finalize. The pending row is read under the snapshot lock, where a
    * detach requested before the run settled has already queued its write.
    * Persistence is best-effort: a store failure is logged and does not
@@ -863,29 +1062,43 @@ export class SessionRunner<State = unknown> {
         if (!row) return;
         snapshotId = row.snapshotId;
 
-        // An error the agent function threw ends the run as failed whatever
-        // its turns did; otherwise the last turn's own error and finish
-        // reason stand.
-        const error =
-          cause !== undefined ? toErrorDetails(cause) : this.lastTurnError;
-        const status = error ? 'failed' : 'completed';
+        // How the run ended. An error the agent function threw is read the
+        // way the runner reads a turn's: a background run that reached a
+        // caller-set limit was stopped, not broken. Otherwise the last turn's
+        // own error and finish reason stand.
+        const stopped =
+          cause !== undefined && callerStopped(this.abortSignal, cause);
         const finishReason =
-          cause !== undefined ? 'failed' : this.lastTurnFinishReason;
-        // The state the row lands with: everything through the last turn that
-        // committed, so a rolled-back turn's mutations do not ride onto a row
-        // that is a resume point.
-        const state = this.lastTurnCommitted
-          ? this.session.getState()
-          : (this.lastGoodState ?? this.session.getState());
+          cause === undefined
+            ? this.lastTurnFinishReason
+            : stopped
+              ? 'aborted'
+              : 'failed';
+        const error =
+          cause === undefined
+            ? this.lastTurnError
+            : toErrorDetails(cause, this.abortSignal);
+        const status = error ? terminalStatus(finishReason) : 'completed';
+        // The state the row lands with: everything through the last turn
+        // that committed, so an unfinished turn's mutations do not ride onto
+        // a row that is a resume point.
+        const state = this.committedState();
         const now = new Date().toISOString();
 
         await store.saveSnapshot(
           snapshotId,
           (existing) => {
             const { heartbeatAt: _, ...base } = existing ?? row;
-            if (base.status === 'aborted') {
-              if (base.finishReason === 'aborted') return null;
-              return { ...base, finishReason: 'aborted', updatedAt: now };
+            if (base.status === 'aborted') return null;
+            if (base.status === 'aborting') {
+              return {
+                ...base,
+                status: 'aborted',
+                finishReason: 'aborted',
+                error,
+                state,
+                updatedAt: now,
+              };
             }
             return {
               ...base,
@@ -1159,15 +1372,30 @@ async function resolveSession<State>(
 }
 
 /**
- * Rejects a snapshot that cannot be continued from. A `pending` row is still
- * being written by its detached invocation. A `failed` row can be continued
- * from: the turn that wrote it committed a conversation ending at a turn seam,
- * and whether the recorded error is worth another attempt is the caller's
- * judgement, not the framework's.
+ * Rejects a snapshot that cannot be continued from. A `pending` or `aborting`
+ * row is still being written by its detached invocation. A `failed` or
+ * `aborted` row can be continued from: the turn that wrote it committed a
+ * conversation ending at a turn seam, and whether to continue from a run
+ * that broke or one that was stopped is the caller's judgement, not the
+ * framework's.
  */
 function assertResumable(snapshot: SessionSnapshot<unknown>): void {
+  // A dead worker leaves a row nothing will finalize; the caller's way out
+  // is the row's parent, so the rejection names it.
+  const parent = snapshot.parentId
+    ? `resume from its parent snapshot ${snapshot.parentId}.`
+    : `it recorded no progress, so there is nothing to resume.`;
   switch (snapshot.status) {
     case 'pending':
+      if (isHeartbeatExpired(snapshot)) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message:
+            `Snapshot ${snapshot.snapshotId} is still pending but its worker ` +
+            `stopped heartbeating and is presumed dead; ` +
+            (snapshot.parentId ? `abort it, then ${parent}` : parent),
+        });
+      }
       throw new GenkitError({
         status: 'FAILED_PRECONDITION',
         message:
@@ -1175,10 +1403,25 @@ function assertResumable(snapshot: SessionSnapshot<unknown>): void {
           `invocation is still running; wait for it to finalize or abort it ` +
           `before resuming.`,
       });
-    case 'aborted':
+    case 'aborting':
+      // The abort stopped the work and the worker is draining toward the
+      // finalize that settles the row as `aborted` with its state. While it
+      // beats, this same id is the thing to wait on: an earlier snapshot
+      // would fork the run away from the work the finalize is about to
+      // commit. Only a quiet beat says the write is never coming.
+      if (isHeartbeatExpired(snapshot)) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message:
+            `Snapshot ${snapshot.snapshotId} was being aborted but its worker ` +
+            `stopped heartbeating and is presumed dead; ${parent}`,
+        });
+      }
       throw new GenkitError({
         status: 'FAILED_PRECONDITION',
-        message: `Snapshot ${snapshot.snapshotId} was aborted.`,
+        message:
+          `Snapshot ${snapshot.snapshotId} is being aborted: its invocation ` +
+          `has not recorded the state yet; retry this same snapshot ID.`,
       });
   }
 }
@@ -1202,6 +1445,10 @@ function pipeInputWithDetach<State>(
   (async () => {
     try {
       for await (const input of inputStream) {
+        // Once the run has settled nothing reads the queue any more, and a
+        // detach has no run to move to the background: later inputs are
+        // dropped rather than queued or written up as pending.
+        if (getRunner()?.runEnded) continue;
         if (input.detach) {
           if (!storeEnabled) {
             rejectDetach(
@@ -1362,14 +1609,40 @@ export function defineCustomAgent<State = unknown>(
       // Background heartbeat timer for the detached snapshot. Started in
       // `onDetach`, cleared when the flow settles (or on abort).
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      let windDownBudget: ReturnType<typeof setTimeout> | undefined;
       const stopHeartbeat = () => {
         if (heartbeatTimer) {
           clearInterval(heartbeatTimer);
           heartbeatTimer = undefined;
         }
+        if (windDownBudget) {
+          clearTimeout(windDownBudget);
+          windDownBudget = undefined;
+        }
       };
 
       let runner!: SessionRunner<State>;
+
+      // The caller's signal is the attached lever: aborting it stops the run
+      // the way the abort companion action stops a detached one. An in-flight
+      // turn observes the stop through the signal the agent function gets,
+      // inputs still queued are dropped, and the invocation resolves with
+      // `aborted` naming the resume point (see SessionRunner.run). A run that
+      // is detaching or detached has no caller left to stop it, so the signal
+      // is ignored from the detach request on: the transport closing behind
+      // a detach is not an abort, even while the pending row is still being
+      // written.
+      const onCallerAbort = () => {
+        if (runner?.detachRequested) return;
+        abortController.abort(arg.abortSignal.reason);
+      };
+      if (arg.abortSignal.aborted) {
+        onCallerAbort();
+      } else {
+        arg.abortSignal.addEventListener('abort', onCallerAbort, {
+          once: true,
+        });
+      }
 
       // Centralized chunk emitter: every stream chunk passes through here so
       // the optional `clientTransform.chunk` can reshape/redact it (or drop it
@@ -1419,19 +1692,20 @@ export function defineCustomAgent<State = unknown>(
           }
 
           // Refresh the detached snapshot's heartbeat periodically. The mutator
-          // only touches a still-`pending` snapshot (returns null otherwise) so
-          // it never resurrects a terminal snapshot or clobbers a concurrent
-          // abort. If a read sees this heartbeat go stale, the snapshot is
-          // reported as `expired` (the worker is presumed dead). `unref` so the
-          // timer never keeps the process alive on its own.
+          // only touches a row still owed a write (returns null otherwise): a
+          // pending one, or an aborting one whose finalize has not landed. So
+          // it never resurrects a settled snapshot, and a concurrent abort
+          // keeps its status. If a read sees this heartbeat go stale, the snapshot
+          // is reported as `expired` (the worker is presumed dead). `unref` so
+          // the timer never keeps the process alive on its own.
           const ctx = getContext();
           heartbeatTimer = setInterval(() => {
             void store
               .saveSnapshot(
                 snapshotId,
                 (current) =>
-                  current?.status === 'pending'
-                    ? { ...current, heartbeatAt: new Date().toISOString() }
+                  owedHeartbeat(current)
+                    ? { ...current!, heartbeatAt: new Date().toISOString() }
                     : null,
                 { context: ctx }
               )
@@ -1445,8 +1719,15 @@ export function defineCustomAgent<State = unknown>(
             unsubscribe = store.onSnapshotStateChange(
               snapshotId,
               (snap) => {
-                if (snap.status === 'aborted') {
-                  stopHeartbeat();
+                if (snap.status === 'aborting') {
+                  // The flip stops the work, not the worker: the run winds
+                  // down toward its finalize, and the beats keep the row
+                  // reading as live meanwhile, within the budget.
+                  windDownBudget = setTimeout(
+                    stopHeartbeat,
+                    WIND_DOWN_HEARTBEAT_BUDGET_MS
+                  );
+                  windDownBudget.unref?.();
                   abortController.abort();
                   if (unsubscribe) unsubscribe();
                 }
@@ -1529,21 +1810,22 @@ export function defineCustomAgent<State = unknown>(
           // last turn. Omitting a status defaults to a resumable `completed`
           // write, which the version guard skips when nothing changed. A
           // detached run has nothing to write here: its finalize records the
-          // cumulative state. Nor does a run that failed: the resume point is
-          // the last committed snapshot, whether that is the failed turn's own
-          // row or its predecessor's, and a completed row on top of it would
-          // displace it as the session's latest.
-          finalSnapshotId =
-            runner.lastTurnCommitted && !runner.lastTurnError
-              ? await runner.maybeSnapshot()
-              : runner.lastGoodSnapshotId;
+          // cumulative state. Nor does a run that failed or was stopped: the
+          // resume point is the last committed snapshot, whether that is the
+          // turn's own row or its predecessor's, and a completed row on top
+          // of it would displace it as the session's latest.
+          if (!runner.lastTurnError) {
+            finalSnapshotId = await runner.maybeSnapshot();
+          }
         } catch (e) {
           fnError = e;
           fnThrew = true;
         } finally {
-          // The run has settled, so stop refreshing the pending row's
-          // heartbeat before the finalize clears it.
+          // The run has settled: a detach from here on is refused, and the
+          // pending row's heartbeat stops before the finalize clears it.
+          runner.runEnded = true;
           stopHeartbeat();
+          arg.abortSignal.removeEventListener('abort', onCallerAbort);
           if (unsubscribe) unsubscribe();
           session.off('artifactAdded', sendArtifactChunk);
           session.off('artifactUpdated', sendArtifactChunk);
@@ -1573,28 +1855,29 @@ export function defineCustomAgent<State = unknown>(
 
       const { result, finalSnapshotId } = outcome;
 
-      // A turn failed: resolve gracefully with `finishReason: 'failed'` and
-      // the resume point. That is the state through the last committed turn,
-      // which is the failed turn itself when it committed and its predecessor
-      // when it did not, since only a committed turn snapshots and advances
-      // the last-good state. No message and no artifacts: they describe the
-      // result of a completed run, and the live artifacts would carry a
-      // rolled-back turn's. The turn's own finish reason, when its result
-      // named one, is on the turn-end chunk and the row; the invocation
-      // reports how it ended.
+      // A turn failed, or the caller stopped the run: resolve gracefully with
+      // `finishReason: 'failed'` or `'aborted'`, the error, and the resume
+      // point. That is the state through the last committed turn, which is
+      // the turn itself when it committed and its predecessor when it did
+      // not, since only a committed turn snapshots and advances the last-good
+      // state. No message and no artifacts: they describe the result of a
+      // run that finished, and the live artifacts would carry a rolled-back
+      // turn's. The turn's own finish reason, when its result named one, is
+      // on the turn-end chunk and the row; the invocation reports how it
+      // ended.
       if (runner.lastTurnError) {
-        const lastGood = (runner.lastGoodState ??
-          session.getState()) as SessionState<State>;
         return {
           sessionId: session.sessionId,
-          finishReason: 'failed' as AgentFinishReason,
+          finishReason: terminalStatus(runner.lastTurnFinishReason),
           error: runner.lastTurnError,
           // Server-managed: the newest snapshot is the resume point. Undefined
           // when nothing has been committed yet (a first-turn failure that
           // rolled back on a fresh session).
           ...(config.store && { snapshotId: runner.lastGoodSnapshotId }),
           // Client-managed: return the resume point's state directly.
-          ...(!config.store && { state: toClientState(lastGood) }),
+          ...(!config.store && {
+            state: toClientState(runner.committedState()),
+          }),
         };
       }
 
@@ -1847,7 +2130,7 @@ export function definePromptAgent<
         // Safety: validate that every restart/respond entry references
         // a tool request that actually exists in the session history.
         // For restarts, also verify that the input has not been tampered with.
-        validateResumeAgainstHistory(input.resume, sess.getMessages());
+        validateResumeAgainstHistory(input.resume, sessionMessages);
 
         genOpts.resume = {
           ...(input.resume.restart?.length && {

@@ -321,20 +321,19 @@ describe('GenerateResponse partials', () => {
     );
   });
 
-  it('stamps the error on the response assertValid rejects', () => {
+  it('leaves the response unchanged after assertValid rejects it', () => {
+    // The loop stamps `error` on a response it rejects; the validator itself
+    // only reports, so a caller asking about a response does not change it.
     const blocked = new GenerateResponse({
       finishReason: 'blocked',
       finishMessage: 'unsafe',
     });
     assert.throws(() => blocked.assertValid(), GenerationBlockedError);
-    assert.deepStrictEqual(blocked.error, {
-      status: 'FAILED_PRECONDITION',
-      message: 'Generation blocked: unsafe',
-    });
+    assert.strictEqual(blocked.error, undefined);
 
     const empty = new GenerateResponse({ finishReason: 'length' });
     assert.throws(() => empty.assertValid(), GenerationResponseError);
-    assert.strictEqual(empty.error?.status, 'FAILED_PRECONDITION');
+    assert.strictEqual(empty.error, undefined);
   });
 
   it('leaves the response unchanged after isValid', () => {

@@ -711,9 +711,9 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
    * parsed snapshot whenever it changes.
    *
    * Unlike {@link InMemorySessionStore}, file-backed snapshots are frequently
-   * mutated by a *different* process (e.g. the request handler that received an
-   * abort writes `status: 'aborted'`, while a detached background worker is the
-   * one watching). Detecting that requires observing the filesystem rather than
+   * mutated by a *different* process (e.g. the request handler that received
+   * an abort writes `status: 'aborting'`, while a detached background worker
+   * is the one watching). Detecting that requires observing the filesystem rather than
    * in-process `saveSnapshot` calls.
    *
    * Reliability comes from two layers:

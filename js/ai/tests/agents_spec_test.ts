@@ -444,6 +444,41 @@ function setupHarness(
     }
   );
 
+  // customAgentAbortable: server-managed, records the turn and blocks until
+  // the run is stopped on the turn whose message is "block". Used for the
+  // resumable-abort cases, where the abort has to land with a committed turn
+  // behind it and an unfinished one in front of it.
+  const customAgentAbortable = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentAbortable',
+      store: new InMemorySessionStore(),
+    },
+    async (sess, { abortSignal }) => {
+      await sess.run(async (input) => {
+        if (input.message?.content[0]?.text === 'block') {
+          await new Promise<never>((_, reject) => {
+            const stop = () =>
+              reject(
+                new GenkitError({ status: 'CANCELLED', message: 'stopped' })
+              );
+            if (abortSignal?.aborted) {
+              stop();
+              return;
+            }
+            abortSignal?.addEventListener('abort', stop, { once: true });
+          });
+          // Not reached: the turn commits nothing, so the message the runner
+          // added for it rolls back with it.
+        }
+        sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
   // customAgentFailing: server-managed, throws during processing.
   // Used for detach + background failure tests.
   const customAgentFailing = defineCustomAgent(
@@ -581,6 +616,7 @@ function setupHarness(
     promptAgentWithRestartTool,
     promptAgentWithToolsAndStore,
     customAgentBlocking,
+    customAgentAbortable,
     customAgentFailing,
     customAgentWithArtifacts,
     customAgentWithCustomState,
@@ -975,7 +1011,15 @@ async function executeWaitUntilCompletedInvocation(
   let snapshot: any;
   while (Date.now() - startTime < timeoutMs) {
     snapshot = await agent.getSnapshotData({ snapshotId: snapshotId });
-    if (snapshot && terminalStatuses.has(snapshot.status)) {
+    // An aborted row reaches its status in two writes: the abort flips it,
+    // and the finalize that follows stamps the reason and the state. The
+    // reason is the marker that the second write landed, so a wait that
+    // stopped at the status alone would read a row still being written.
+    if (
+      snapshot &&
+      terminalStatuses.has(snapshot.status) &&
+      (snapshot.status !== 'aborted' || snapshot.finishReason)
+    ) {
       break;
     }
     await new Promise((r) => setTimeout(r, 100));
@@ -1035,7 +1079,10 @@ describe('Agent conformance spec', () => {
   // Gated spec capabilities this runtime implements; a test whose `requires`
   // names anything absent here is skipped, so the shared spec can carry
   // cases for features this SDK has not adopted yet.
-  const SUPPORTED_REQUIRES = new Set<string>(['resumable-failures']);
+  const SUPPORTED_REQUIRES = new Set<string>([
+    'resumable-failures',
+    'resumable-aborts',
+  ]);
   const KNOWN_REQUIRES = new Set(spec.capabilities);
 
   for (const test of spec.tests) {

@@ -114,21 +114,21 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
   }
 
   /**
-   * Throws an error if the response does not contain valid output. The
-   * thrown error carries this response, which then also reports the failure
-   * on {@link error}.
+   * Throws an error if the response does not contain valid output.
    */
   assertValid(): void {
     if (this.finishReason === 'blocked') {
-      const message = `Generation blocked${this.finishMessage ? `: ${this.finishMessage}` : '.'}`;
-      this.error = { status: 'FAILED_PRECONDITION', message };
-      throw new GenerationBlockedError(this, message);
+      throw new GenerationBlockedError(
+        this,
+        `Generation blocked${this.finishMessage ? `: ${this.finishMessage}` : '.'}`
+      );
     }
 
     if (!this.message && !this.operation) {
-      const message = `Model did not generate a message. Finish reason: '${this.finishReason}': ${this.finishMessage}`;
-      this.error = { status: 'FAILED_PRECONDITION', message };
-      throw new GenerationResponseError(this, message);
+      throw new GenerationResponseError(
+        this,
+        `Model did not generate a message. Finish reason: '${this.finishReason}': ${this.finishMessage}`
+      );
     }
   }
 
@@ -145,17 +145,12 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
   }
 
   isValid(request?: GenerateRequest): boolean {
-    // A read-only check: the error assertValid stamps on a rejected response
-    // is restored afterwards.
-    const error = this.error;
     try {
       this.assertValid();
       this.assertValidSchema(request);
       return true;
     } catch (e) {
       return false;
-    } finally {
-      this.error = error;
     }
   }
 

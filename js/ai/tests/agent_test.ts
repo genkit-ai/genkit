@@ -19,7 +19,7 @@ import { Registry } from '@genkit-ai/core/registry';
 import { enableTelemetry } from '@genkit-ai/core/tracing';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 
 import { GenkitError, z } from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
@@ -1319,8 +1319,10 @@ describe('Agent', () => {
       const previousStatus = await flow.abort(snapshotId!);
 
       assert.strictEqual(previousStatus, 'pending');
+      // The abort flips the row to `aborting`; the finalize settles it as
+      // `aborted` once the stopped turn winds down.
       const snapAborted = await store.getSnapshot({ snapshotId: snapshotId! });
-      assert.strictEqual(snapAborted?.status, 'aborted');
+      assert.strictEqual(snapAborted?.status, 'aborting');
       // AbortController.abort() fires onabort synchronously, so no delay needed.
       assert.strictEqual(aborted, true);
     });
@@ -1405,6 +1407,15 @@ describe('Agent', () => {
 
       const viaData = await flow.getSnapshotData({ snapshotId: snapshotId! });
       assert.strictEqual(viaData?.status, 'expired');
+
+      // An aborting row whose worker stopped beating before its finalize is
+      // one nothing will settle, and reads as expired too.
+      await store.saveSnapshot(snapshotId!, (row) => ({
+        ...row!,
+        status: 'aborting',
+      }));
+      const aborting = await flow.getSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(aborting?.status, 'expired');
     });
 
     it('keeps a pending snapshot with a fresh heartbeat as pending', async () => {
@@ -1657,11 +1668,19 @@ describe('Agent', () => {
       await flow.abort(snapshotId!);
 
       const snapshot = await store.getSnapshot({ snapshotId: snapshotId! });
-      assert.strictEqual(snapshot?.status, 'aborted');
+      assert.strictEqual(snapshot?.status, 'aborting');
 
-      // Release the flow so it doesn't hang
+      // Release the flow: its finalize settles the row the abort flipped.
       resolveBlock();
       session.close();
+      const start = Date.now();
+      let settled = snapshot;
+      while (settled?.status === 'aborting' && Date.now() - start < 5000) {
+        await new Promise((r) => setTimeout(r, 20));
+        settled = await store.getSnapshot({ snapshotId: snapshotId! });
+      }
+      assert.strictEqual(settled?.status, 'aborted');
+      assert.strictEqual(settled?.finishReason, 'aborted');
     });
 
     it('should fetch snapshot data via companion action', async () => {
@@ -4233,14 +4252,16 @@ Now respond to the latest message.`,
       assert.strictEqual(bySnapshot.parentId, failedSnapshotId);
     });
 
-    it('server-managed: resuming a pending or aborted snapshot is rejected', async () => {
-      const store = new InMemorySessionStore<{}>();
+    it('server-managed: resuming a pending or aborting snapshot is rejected', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
 
-      const flow = defineCustomAgent<{}>(
+      const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'frResumeDeadEnd', store },
         async (sess) => {
-          await sess.run(async () => {});
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+          });
           return { message: { role: 'model', content: [{ text: 'done' }] } };
         }
       );
@@ -4270,31 +4291,103 @@ Now respond to the latest message.`,
         }
         return session2.output;
       };
+      const setRow = (mutate: (row: SessionSnapshot<any>) => unknown) =>
+        store.saveSnapshot(snapshotId, (current) => mutate(current!) as any);
 
-      // A pending row is still being written by its detached invocation and
-      // an aborted row is a dead end; a failed row (see above) is neither.
-      for (const [status, wording] of [
-        ['pending', 'still pending'],
-        ['aborted', 'was aborted'],
-      ] as const) {
-        await store.saveSnapshot(snapshotId, (current) => ({
-          ...current!,
-          status,
-        }));
-        for (const init of [{ snapshotId }, { sessionId }]) {
-          const output = await resumeWith(init);
-          assert.strictEqual(
-            output.finishReason,
-            'failed',
-            `${status} via ${JSON.stringify(init)}`
-          );
-          assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
-          assert.ok(
-            output.error!.message.includes(wording),
-            `Expected "${wording}", got: ${output.error!.message}`
-          );
-        }
+      // A pending row is still being written by its detached invocation.
+      await setRow((row) => ({ ...row, status: 'pending' }));
+      for (const init of [{ snapshotId }, { sessionId }]) {
+        const output = await resumeWith(init);
+        assert.strictEqual(output.finishReason, 'failed', JSON.stringify(init));
+        assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+        assert.ok(
+          output.error!.message.includes('still pending'),
+          output.error!.message
+        );
       }
+
+      // A pending row whose worker stopped heartbeating is one nothing will
+      // finalize: the rejection names the parent to resume from.
+      await setRow((row) => ({
+        ...row,
+        status: 'pending',
+        parentId: 'parent-1',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      for (const init of [{ snapshotId }, { sessionId }]) {
+        const output = await resumeWith(init);
+        assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+        assert.ok(
+          output.error!.message.includes('presumed dead'),
+          output.error!.message
+        );
+        assert.ok(
+          output.error!.message.includes(
+            'abort it, then resume from its parent snapshot parent-1'
+          ),
+          output.error!.message
+        );
+      }
+
+      // An aborted row carrying state is a resume point, as a failed one is.
+      await setRow((row) => ({
+        ...row,
+        status: 'aborted',
+        finishReason: 'aborted',
+      }));
+      const resumed = await resumeWith({ sessionId });
+      assert.strictEqual(
+        resumed.error,
+        undefined,
+        JSON.stringify(resumed.error)
+      );
+      const resumedRow = await store.getSnapshot({
+        snapshotId: resumed.snapshotId!,
+      });
+      assert.strictEqual((resumedRow!.state.custom as any).count, 2);
+      assert.strictEqual(resumedRow?.parentId, snapshotId);
+
+      // An aborting row is one whose worker is winding down toward the
+      // finalize that settles it. The heartbeat says whether that write is
+      // still coming (retry this id) or never will be (name an earlier one).
+      await setRow((row) => ({
+        ...row,
+        status: 'aborting',
+        heartbeatAt: new Date().toISOString(),
+      }));
+      let output = await resumeWith({ snapshotId });
+      assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+      assert.ok(
+        output.error!.message.includes('retry this same snapshot ID'),
+        output.error!.message
+      );
+
+      await setRow((row) => ({
+        ...row,
+        status: 'aborting',
+        parentId: 'parent-1',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      output = await resumeWith({ snapshotId });
+      assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+      assert.ok(
+        output.error!.message.includes(
+          'resume from its parent snapshot parent-1'
+        ),
+        output.error!.message
+      );
+
+      // A first-turn row has no parent, so there is nothing to go back to.
+      await setRow(({ parentId: _parentId, ...row }) => ({
+        ...row,
+        status: 'aborting',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      output = await resumeWith({ snapshotId });
+      assert.ok(
+        output.error!.message.includes('nothing to resume'),
+        output.error!.message
+      );
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {
@@ -4590,6 +4683,375 @@ Now respond to the latest message.`,
       assert.strictEqual(output.message?.content[0].text, 'ok');
       const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
       assert.strictEqual(row?.status, 'completed');
+    });
+  });
+
+  describe('aborted runs', () => {
+    /** A custom agent whose turn on the message "block" waits for the stop. */
+    function blockingAgent(store: InMemorySessionStore<{ count: number }>) {
+      let enterBlock: () => void = () => {};
+      const blocking = new Promise<void>((resolve) => {
+        enterBlock = resolve;
+      });
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'stopMidTurn', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async (input) => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            if (input.message?.content[0]?.text === 'block') {
+              enterBlock();
+              // A plain error: the stop, not the error's own status, says
+              // CANCELLED.
+              await new Promise<never>((_, reject) => {
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('stopped')),
+                  { once: true }
+                );
+              });
+            }
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+      return { flow, blocking };
+    }
+
+    it('reports a turn the caller stopped as aborted and keeps the last committed turn as the resume point', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow, blocking } = blockingAgent(store);
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'block' }] },
+      });
+      session.close();
+      void blocking.then(() => ac.abort());
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'stopped');
+      assert.strictEqual(output.message, undefined);
+
+      // Turn 1 committed; the stopped turn rolled back and reports no row.
+      const turnEnds = chunks.filter((c) => c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 2);
+      assert.ok(turnEnds[0].snapshotId, 'turn 1 reports its snapshotId');
+      assert.strictEqual(turnEnds[1].finishReason, 'aborted');
+      assert.strictEqual(turnEnds[1].snapshotId, undefined);
+      assert.strictEqual(output.snapshotId, turnEnds[0].snapshotId);
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+      assert.strictEqual((row!.state.custom as any).count, 1);
+      const latest = await store.getSnapshot({ sessionId: output.sessionId! });
+      assert.strictEqual(latest?.snapshotId, output.snapshotId);
+    });
+
+    it('reports a stop between turns as aborted and drops the inputs still queued', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow } = blockingAgent(store);
+
+      // Stopped while idle: the first turn ended and the input side is open.
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+        if (chunk.turnEnd) ac.abort(new Error('user closed the tab'));
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'user closed the tab');
+      const turnEnds = chunks.filter((c) => c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 1);
+      assert.ok(
+        turnEnds[0].snapshotId,
+        'the committed turn is the resume point'
+      );
+      assert.strictEqual(output.snapshotId, turnEnds[0].snapshotId);
+
+      // Stopped before it started: the queued input never runs a turn.
+      const pre = new AbortController();
+      pre.abort();
+      const never = flow.streamBidi({}, { abortSignal: pre.signal });
+      never.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      never.close();
+      const neverChunks: AgentStreamChunk[] = [];
+      for await (const chunk of never.stream) {
+        neverChunks.push(chunk);
+      }
+      const neverOutput = await never.output;
+      assert.strictEqual(neverOutput.finishReason, 'aborted');
+      assert.strictEqual(neverOutput.error?.status, 'CANCELLED');
+      assert.strictEqual(neverOutput.snapshotId, undefined);
+      assert.strictEqual(neverChunks.filter((c) => c.turnEnd).length, 0);
+      assert.strictEqual(
+        await store.getSnapshot({ sessionId: neverOutput.sessionId! }),
+        undefined
+      );
+    });
+
+    it('refuses a detach that arrives after the run ended', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow, blocking } = blockingAgent(store);
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'block' }] },
+      });
+      void blocking.then(() => ac.abort());
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'aborted');
+
+      // The client detaches after the fact. There is no run to move to the
+      // background, so no pending row is written: the session's latest row
+      // stays the committed turn.
+      session.send({ detach: true });
+      session.close();
+      await new Promise((r) => setTimeout(r, 20));
+      const latest = await store.getSnapshot({ sessionId: output.sessionId! });
+      assert.strictEqual(latest?.snapshotId, output.snapshotId);
+      assert.strictEqual(latest?.status, 'completed');
+    });
+
+    it('records a stop reason a turn rethrew as is', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let enterBlock: () => void = () => {};
+      const blocking = new Promise<void>((resolve) => {
+        enterBlock = resolve;
+      });
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'rethrowReason', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            enterBlock();
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(abortSignal.reason),
+                { once: true }
+              );
+            });
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'go' }] },
+      });
+      session.close();
+      void blocking.then(() => ac.abort('closed by user'));
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'closed by user');
+    });
+
+    /**
+     * A prompt agent over a model that calls `slow`, a tool whose first call
+     * waits to be released and then fails; the model answers "done" once the
+     * tool has responded.
+     */
+    function slowToolAgent(store: InMemorySessionStore<unknown>) {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let enterTool: () => void = () => {};
+      const inTool = new Promise<void>((resolve) => {
+        enterTool = resolve;
+      });
+      let toolCalls = 0;
+      defineTool(
+        registry,
+        { name: 'slow', description: 'blocks once' },
+        async () => {
+          toolCalls++;
+          if (toolCalls === 1) {
+            enterTool();
+            await released;
+            throw new Error('released after the stop');
+          }
+          return 'fast now';
+        }
+      );
+      pm.handleResponse = async (req: any) => {
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === 'tool') {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'slow', input: {}, ref: 'r1' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const flow = defineAgent(registry, {
+        name: 'stopAgent',
+        model: 'programmableModel',
+        tools: ['slow'],
+        store,
+      });
+      return { flow, inTool, release, toolCalls: () => toolCalls };
+    }
+
+    it('commits a prompt agent turn stopped mid-generation as an aborted row and resumes it', async () => {
+      const store = new InMemorySessionStore();
+      const { flow, inTool, release } = slowToolAgent(store);
+
+      const ac = new AbortController();
+      const first = flow.streamBidi({}, { abortSignal: ac.signal });
+      first.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      first.close();
+      void inTool.then(() => {
+        ac.abort();
+        release();
+      });
+      for await (const _ of first.stream) {
+      }
+      const stopped = await first.output;
+
+      assert.strictEqual(stopped.finishReason, 'aborted');
+      assert.strictEqual(stopped.error?.status, 'CANCELLED');
+      assert.ok(stopped.snapshotId, 'the stopped turn commits its seam');
+      const row = await store.getSnapshot({ snapshotId: stopped.snapshotId! });
+      assert.strictEqual(row?.status, 'aborted');
+      assert.strictEqual(row?.finishReason, 'aborted');
+      assert.strictEqual(row?.error?.status, 'CANCELLED');
+      // The unfinished round went whole: the conversation ends at the seam.
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.role),
+        ['user']
+      );
+
+      // The row resumes; an empty input runs the turn again from the seam.
+      const again = flow.streamBidi({ snapshotId: stopped.snapshotId });
+      again.send({});
+      again.close();
+      for await (const _ of again.stream) {
+      }
+      const output = await again.output;
+      assert.strictEqual(output.error, undefined, JSON.stringify(output.error));
+      assert.strictEqual(output.message?.content[0].text, 'done');
+      const finalRow = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(finalRow?.status, 'completed');
+      assert.strictEqual(finalRow?.parentId, stopped.snapshotId);
+      assert.deepStrictEqual(
+        finalRow?.state?.messages.map((m) => m.role),
+        ['user', 'model', 'tool', 'model']
+      );
+    });
+
+    it('reports a run that reached its turn limit as aborted', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      defineTool(
+        registry,
+        { name: 'again', description: 'always more' },
+        async () => 'more'
+      );
+      pm.handleResponse = async () => ({
+        message: {
+          role: 'model',
+          content: [{ toolRequest: { name: 'again', input: {}, ref: 'r1' } }],
+        },
+        finishReason: 'stop',
+      });
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'limitedAgent',
+        model: 'programmableModel',
+        tools: ['again'],
+        maxTurns: 2,
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // A limit the caller set stops the run; it does not break it.
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'ABORTED');
+      assert.ok(output.snapshotId, 'the stopped turn commits its rounds');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'aborted');
+      assert.strictEqual(row?.finishReason, 'aborted');
+      const roles = row!.state!.messages.map((m) => m.role);
+      assert.strictEqual(roles[0], 'user');
+      assert.strictEqual(roles[roles.length - 1], 'tool');
+    });
+
+    it('reports a provider abort as failed: only the caller stops a run', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      pm.handleResponse = async () => {
+        throw new GenkitError({
+          status: 'ABORTED',
+          message: 'provider gave up',
+        });
+      };
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'providerAbortAgent',
+        model: 'programmableModel',
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'ABORTED');
+      assert.strictEqual(output.error?.message, 'provider gave up');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'failed');
+      assert.strictEqual(row?.finishReason, 'failed');
     });
   });
 
@@ -4956,6 +5418,164 @@ Now respond to the latest message.`,
       assert.strictEqual(attempts, 2);
     });
 
+    it('rolls back the message of a turn the caller stopped before it committed', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let enterTurn: () => void = () => {};
+      const inTurn = new Promise<void>((resolve) => {
+        enterTurn = resolve;
+      });
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiStopRollback', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            enterTurn();
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(new Error('stopped')),
+                { once: true }
+              );
+            });
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      const ac = new AbortController();
+      void inTurn.then(() => ac.abort());
+      const res = await chat.send('hi', { abortSignal: ac.signal });
+      assert.strictEqual(res.finishReason, 'aborted');
+      assert.strictEqual(chat.messages.length, 0);
+      assert.strictEqual(chat.snapshotId, undefined);
+    });
+
+    it('keeps the message of a stopped turn that committed and continues from it', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let enterTool: () => void = () => {};
+      const inTool = new Promise<void>((resolve) => {
+        enterTool = resolve;
+      });
+      let toolCalls = 0;
+      defineTool(
+        registry,
+        { name: 'slow', description: 'blocks once' },
+        async () => {
+          toolCalls++;
+          if (toolCalls === 1) {
+            enterTool();
+            await released;
+            throw new Error('released after the stop');
+          }
+          return 'fast now';
+        }
+      );
+      pm.handleResponse = async (req: any) => {
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === 'tool') {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'slow', input: {}, ref: 'r1' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const store = new InMemorySessionStore();
+      const agent = defineAgent(registry, {
+        name: 'apiStopCommitted',
+        model: 'programmableModel',
+        tools: ['slow'],
+        store,
+      });
+
+      const chat = agent.chat();
+      const ac = new AbortController();
+      void inTool.then(() => {
+        ac.abort();
+        release();
+      });
+      const stopped = await chat.send('hi', { abortSignal: ac.signal });
+      assert.strictEqual(stopped.finishReason, 'aborted');
+      const abortedId = chat.snapshotId;
+      assert.ok(abortedId, 'the chat adopts the aborted snapshot');
+      assert.strictEqual(chat.messages.length, 1);
+
+      // An empty input runs the turn again from the seam the stop left.
+      const res = await chat.send({});
+      assert.strictEqual(res.finishReason, 'stop');
+      assert.strictEqual(chat.messages[0].content[0].text, 'hi');
+      assert.strictEqual(
+        chat.messages[chat.messages.length - 1].content[0].text,
+        'done'
+      );
+      const row = await store.getSnapshot({ snapshotId: chat.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+      assert.strictEqual(row?.parentId, abortedId);
+    });
+
+    it('wait() settles an aborted task only once its finalize has landed', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiAbortWait', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async (input) => {
+            if (input.message?.content[0]?.text === 'block') {
+              await new Promise<never>((_, reject) => {
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('stopped')),
+                  { once: true }
+                );
+              });
+            }
+            sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('first');
+      const task = await chat.detach('block');
+      assert.strictEqual(await task.abort(), 'pending');
+      // The abort flips the row; the finalize that follows stamps the reason
+      // and the state. `wait()` resolves with the second write, not the first.
+      const snapshot = await task.wait({ intervalMs: 5 });
+      assert.strictEqual(snapshot.status, 'aborted');
+      assert.strictEqual(snapshot.finishReason, 'aborted');
+      assert.strictEqual(snapshot.error?.status, 'CANCELLED');
+      assert.strictEqual(snapshot.error?.message, 'stopped');
+      assert.deepStrictEqual(
+        snapshot.state?.messages.map((m) => m.content[0].text),
+        ['first', 'ack']
+      );
+
+      // And that row is the resume point it says it is.
+      const resumed = agent.chat({ snapshotId: task.snapshotId });
+      const res = await resumed.send('carry on');
+      assert.strictEqual(res.text, 'done');
+      const row = await store.getSnapshot({ snapshotId: resumed.snapshotId! });
+      assert.strictEqual(row?.parentId, task.snapshotId);
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.content[0].text),
+        ['first', 'ack', 'carry on', 'ack']
+      );
+    });
+
     it('loadChat() restores history from a snapshot (server-managed)', async () => {
       const store = new InMemorySessionStore<{}>();
       const agent = defineCustomAgent<{}>(
@@ -5220,26 +5840,32 @@ describe('detach finalize', () => {
     assert.strictEqual(rowCount(store), 1);
   });
 
-  it('stamps the abort reason on a row the abort flipped', async () => {
+  it('stamps the abort reason and the committed state on a row the abort flipped', async () => {
     const store = new InMemorySessionStore<{}>();
     const flow = defineCustomAgent<{}>(
       new Registry(),
       { name: 'finalizeAborted', store },
       async (sess, { abortSignal }) => {
-        await sess.run(async () => {
-          await new Promise<void>((resolve) => {
-            abortSignal?.addEventListener('abort', () => resolve(), {
-              once: true,
+        await sess.run(async (input) => {
+          if (input.message?.content[0]?.text === 'block') {
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(new Error('stopped')),
+                { once: true }
+              );
             });
-          });
+          }
+          sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
         });
         return { message: { role: 'model', content: [{ text: 'done' }] } };
       }
     );
 
     const session = flow.streamBidi({});
+    session.send({ message: { role: 'user', content: [{ text: 'first' }] } });
     session.send({
-      message: { role: 'user', content: [{ text: 'go' }] },
+      message: { role: 'user', content: [{ text: 'block' }] },
       detach: true,
     });
     const output = await session.output;
@@ -5256,5 +5882,177 @@ describe('detach finalize', () => {
     assert.strictEqual(snap?.status, 'aborted');
     assert.strictEqual(snap?.finishReason, 'aborted');
     assert.strictEqual(snap?.heartbeatAt, undefined);
+    // The row says what stopped it, as an attached abort's row does.
+    assert.strictEqual(snap?.error?.status, 'CANCELLED');
+    assert.strictEqual(snap?.error?.message, 'stopped');
+    // The state through the committed turn: the blocked turn's message rolled
+    // back with the turn, which committed nothing.
+    assert.deepStrictEqual(
+      snap?.state?.messages.map((m) => m.content[0].text),
+      ['first', 'ack']
+    );
+
+    // The row resumes, and the continued turn runs on that conversation.
+    const resumed = flow.streamBidi({ snapshotId: output.snapshotId });
+    resumed.send({
+      message: { role: 'user', content: [{ text: 'carry on' }] },
+    });
+    resumed.close();
+    for await (const _ of resumed.stream) {
+    }
+    const resumedOutput = await resumed.output;
+    assert.strictEqual(resumedOutput.error, undefined);
+    const row = await store.getSnapshot({
+      snapshotId: resumedOutput.snapshotId!,
+    });
+    assert.strictEqual(row?.parentId, output.snapshotId);
+    assert.deepStrictEqual(
+      row?.state?.messages.map((m) => m.content[0].text),
+      ['first', 'ack', 'carry on', 'ack']
+    );
+  });
+
+  it('keeps heartbeating an aborting row until its finalize lands', async () => {
+    // The abort flips the row to aborting and stops the work, not the
+    // worker: the beats go on while the stopped turn drains, so a reader sees
+    // a live row whose finalize is still coming rather than one whose worker
+    // died.
+    mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      const store = new InMemorySessionStore<{}>();
+      let release: () => void = () => {};
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'finalizeWindDown', store },
+        async (sess) => {
+          await sess.run(async () => {
+            // Ignores the signal: the turn drains on its own time.
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            throw new Error('drained');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user', content: [{ text: 'block' }] },
+        detach: true,
+      });
+      const output = await session.output;
+      session.close();
+      const snapshotId = output.snapshotId!;
+      const firstBeat = (await store.getSnapshot({ snapshotId }))!.heartbeatAt;
+      assert.ok(firstBeat, 'the pending row carries a heartbeat');
+
+      const until = async (
+        ready: (snap: SessionSnapshot | undefined) => boolean
+      ) => {
+        const start = Date.now();
+        let snap: SessionSnapshot | undefined;
+        while (Date.now() - start < 5000) {
+          snap = await store.getSnapshot({ snapshotId });
+          if (ready(snap)) return snap;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        return snap;
+      };
+
+      assert.strictEqual(await flow.abort(snapshotId), 'pending');
+      const flipped = await until((s) => s?.status === 'aborting');
+      assert.strictEqual(flipped?.status, 'aborting');
+      assert.strictEqual(flipped?.heartbeatAt, firstBeat);
+
+      // The next beat lands on the aborting row.
+      mock.timers.tick(30_000);
+      const beating = await until((s) => s?.heartbeatAt !== firstBeat);
+      assert.strictEqual(beating?.status, 'aborting');
+      assert.ok(beating?.heartbeatAt, 'the aborting row keeps its heartbeat');
+
+      // The finalize clears it, settles the row, and stamps how the run
+      // ended.
+      release();
+      const settled = await until((s) => s?.status === 'aborted');
+      assert.strictEqual(settled?.status, 'aborted');
+      assert.strictEqual(settled?.heartbeatAt, undefined);
+      assert.strictEqual(settled?.error?.status, 'CANCELLED');
+      assert.strictEqual(settled?.error?.message, 'drained');
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("ignores the caller's signal from the detach request on, even while the pending row is being written", async () => {
+    const base = new InMemorySessionStore<{}>();
+    let gateNext = false;
+    let writing: () => void = () => {};
+    const writeStarted = new Promise<void>((resolve) => {
+      writing = resolve;
+    });
+    let releaseWrite: () => void = () => {};
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    // The first write after the gate is armed is the detach's pending row;
+    // it is held until the test releases it.
+    const store = Object.assign(Object.create(base), {
+      getSnapshot: base.getSnapshot.bind(base),
+      onSnapshotStateChange: base.onSnapshotStateChange.bind(base),
+      saveSnapshot: async (id: any, mutator: any, opts: any) => {
+        if (gateNext) {
+          gateNext = false;
+          writing();
+          await writeGate;
+        }
+        return base.saveSnapshot(id, mutator, opts);
+      },
+    }) as InMemorySessionStore<{}>;
+
+    let releaseTurn: () => void = () => {};
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'detachRace', store },
+      async (sess) => {
+        await sess.run(async () => {
+          await turnGate;
+          sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const ac = new AbortController();
+    const session = flow.streamBidi({}, { abortSignal: ac.signal });
+    gateNext = true;
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    await writeStarted;
+    // The transport closes behind the detach while its row is in flight.
+    ac.abort();
+    releaseWrite();
+    const output = await session.output;
+    session.close();
+
+    assert.strictEqual(output.finishReason, 'detached');
+    assert.ok(output.snapshotId, 'the detach reports its pending row');
+
+    // The background run was not stopped: it finishes and finalizes the row.
+    releaseTurn();
+    const snap = await waitForSnapshotStatus(
+      store,
+      output.snapshotId!,
+      'completed'
+    );
+    assert.deepStrictEqual(
+      snap.state?.messages.map((m) => m.content[0].text),
+      ['go', 'ack']
+    );
   });
 });

@@ -391,10 +391,18 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                 };
               }
 
-              // ── Failure: surface the error to the orchestrator ────
-              if (agentOutput.finishReason === 'failed') {
+              // ── Failure or stop: surface the error to the orchestrator ──
+              // An aborted run (a cancelled signal, a timeout, a turn limit)
+              // carries no message either, only the error that stopped it.
+              if (
+                agentOutput.finishReason === 'failed' ||
+                agentOutput.finishReason === 'aborted'
+              ) {
                 const message =
-                  agentOutput.error?.message ?? 'Unknown sub-agent failure.';
+                  agentOutput.error?.message ??
+                  (agentOutput.finishReason === 'aborted'
+                    ? 'The sub-agent run was aborted.'
+                    : 'Unknown sub-agent failure.');
                 return {
                   response: `Error calling agent '${ref.name}': ${message}`,
                 };
