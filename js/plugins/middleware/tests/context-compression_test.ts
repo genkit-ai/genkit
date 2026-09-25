@@ -1893,4 +1893,155 @@ describe('contextCompression middleware', () => {
     // Truncation should have clamped to 4 messages rather than 6 due to severe overshoot
     assert.strictEqual(capturedRequest?.messages.length, 4);
   });
+
+  it('preserves the latest [model, tool] turn when maxMessages is 3 (keepCount: 2) in a tool loop', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel(
+      { name: 'smallKeepCountLoopModel' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'system', content: [{ text: 'Sys' }] },
+        { role: 'user', content: [{ text: 'Original task' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 't', input: { step: 1 } } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 't', output: 'r1' } }],
+        },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 't', input: { step: 2 } } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 't', output: 'r2' } }],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxMessages: 3,
+          insertTruncationNotice: true,
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    assert.strictEqual(msgs.length, 4);
+    assert.strictEqual(msgs[0].role, 'system');
+    assert.strictEqual(msgs[1].role, 'user');
+    assert.strictEqual(msgs[1].content[0].text, 'Original task');
+    assert.strictEqual(msgs[2].role, 'model');
+    assert.deepStrictEqual((msgs[2].content[0].toolRequest as any)?.input, {
+      step: 2,
+    });
+    assert.strictEqual(msgs[3].role, 'tool');
+    assert.strictEqual(msgs[3].content[0].toolResponse?.output, 'r2');
+  });
+
+  it('reconciles a saved standalone notice into a newly prepended system message without producing two system messages', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'reconcileNoticeModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        usage: { inputTokens: 20 },
+      };
+    });
+
+    const mw = contextCompression({
+      maxMessages: 4,
+      insertTruncationNotice: true,
+    });
+
+    // Turn 1: no system message -> standalone system notice is inserted at index 0
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1' }] },
+        { role: 'model', content: [{ text: 'm1' }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+        { role: 'model', content: [{ text: 'm2' }] },
+        { role: 'user', content: [{ text: 'u3' }] },
+      ],
+      use: [mw],
+    });
+
+    const turn1Messages = capturedRequest!.messages;
+    assert.strictEqual(
+      turn1Messages.filter((m) => m.role === 'system').length,
+      1
+    );
+
+    // Turn 2: caller saves turn1Messages (including the standalone notice) and
+    // prepends a real system prompt on a non-compressing turn (<= maxMessages: 4)
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'system', content: [{ text: 'You are an assistant.' }] },
+        ...turn1Messages,
+      ],
+      use: [mw],
+    });
+
+    const turn2SystemMsgs = capturedRequest!.messages.filter(
+      (m) => m.role === 'system'
+    );
+    assert.strictEqual(turn2SystemMsgs.length, 1);
+    const sysText = turn2SystemMsgs[0].content.map((p) => p.text).join('');
+    assert.match(sysText, /You are an assistant\./);
+    assert.match(
+      sysText,
+      /Some earlier messages in this conversation have been removed/
+    );
+  });
+
+  it('reports non-zero inputTokensBefore when safety cap fires with maxInputTokens unset', async () => {
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'safetyCapTokensModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+      usage: { inputTokens: 300 },
+    }));
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch' }] },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'dump',
+                output: 'A'.repeat(1000),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxToolResponseChars: 200,
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.custom?.contextCompression?.triggered, true);
+    assert.ok(response.custom?.contextCompression?.inputTokensBefore > 0);
+  });
 });
