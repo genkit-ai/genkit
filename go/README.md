@@ -85,11 +85,9 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic‑prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files, shared partials and helpers, and prompts embedded in the binary |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content computed from your data, with media and retrieved docs |
 | [basic‑tools](samples/basic-tools/main.go) | A slow tool that streams progress and attaches a chart to its answer |
-| [basic‑tools‑exp](samples/basic-tools-exp/main.go) | The same program on the in-preview tools API, so the diff between the two is the API |
 | [basic‑agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Serving store-backed and stateless agents over HTTP |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop (HITL): a tool that pauses for approval and resumes with the answer |
-| [basic‑tool‑interrupts‑exp](samples/basic-tool-interrupts-exp/main.go) | The same HITL program on the in-preview tools API, so the diff between the two is the API |
 | [basic‑middleware](samples/basic-middleware) | Model middleware, one program each: [retry-fallback](samples/basic-middleware/retry-fallback/main.go) composes `Retry` and `Fallback` into a cascade that survives a dead model, [filesystem](samples/basic-middleware/filesystem) gives the model file access scoped to a single directory, and [skills](samples/basic-middleware/skills) loads `SKILL.md` personas on demand |
 | [basic‑errors](samples/basic-errors/main.go) | Classifying failures with sentinels and recovering with `errors.Is` |
 | [basic‑durable‑streaming‑exp](samples/basic-durable-streaming-exp/main.go) | Reconnectable streams with replay, on the in-preview `core/x/streaming` API |
