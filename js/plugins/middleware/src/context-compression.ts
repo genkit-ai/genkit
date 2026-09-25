@@ -16,11 +16,13 @@
 
 import {
   generateMiddleware,
+  ModelReferenceSchema,
   z,
   type GenerateMiddleware,
   type MessageData,
   type Part,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -83,6 +85,33 @@ export const DeduplicateToolResponsesOptionsSchema = z.object({
     .describe('Replacement text for deduplicated tool responses.'),
 });
 
+export const SummarizeOptionsSchema = z.object({
+  /**
+   * Model to use for summarization. A model reference, model name string,
+   * or ModelAction, e.g. `{ name: 'googleai/gemini-flash-lite-latest' }`.
+   */
+  model: ModelReferenceSchema.describe('Model to use for summarization.'),
+
+  /**
+   * Number of most recent messages to keep un-summarized.
+   * Everything before this window is replaced with a summary.
+   * @default 6
+   */
+  preserveRecent: z
+    .number()
+    .optional()
+    .describe('Keep last N messages un-summarized. Default: 6.'),
+
+  /**
+   * Custom summarization prompt. The string `{conversation}` will be
+   * replaced with a text rendering of the messages to summarize.
+   */
+  prompt: z
+    .string()
+    .optional()
+    .describe('Custom summarization prompt. Use {conversation} placeholder.'),
+});
+
 export const ContextCompressionOptionsSchema = z.object({
   /**
    * Compression triggers when the previous turn's `inputTokens` exceeds
@@ -94,6 +123,16 @@ export const ContextCompressionOptionsSchema = z.object({
     .positive()
     .optional()
     .describe('Compress when token count exceeds this threshold.'),
+
+  /**
+   * Number of most recent non-system messages to preserve untouched during
+   * dynamic overshoot adjustment.
+   * @default 4
+   */
+  preserveRecent: z
+    .number()
+    .optional()
+    .describe('Number of recent messages to preserve. Default: 4.'),
 
   /**
    * Always keep system/instructions messages.
@@ -151,6 +190,27 @@ export const ContextCompressionOptionsSchema = z.object({
     ),
 
   /**
+   * Use an LLM to summarize older messages into a condensed form.
+   * The summary replaces the original messages, preserving recent context.
+   */
+  summarize: SummarizeOptionsSchema.optional().describe(
+    'Summarize older messages using an LLM.'
+  ),
+
+  /**
+   * If cheap strategies (deduplication + tool truncation) reduce estimated
+   * context by at least this fraction, skip the LLM summarization step.
+   * Set to `0` to always summarize when configured.
+   * @default undefined (always summarize when configured)
+   */
+  skipSummarizationThreshold: z
+    .number()
+    .optional()
+    .describe(
+      'Skip summarization if cheap strategies save at least this fraction of context. E.g. 0.3 = 30%.'
+    ),
+
+  /**
    * Insert a notice message when messages are dropped during message
    * truncation, so the model knows context was removed.
    * @default true
@@ -183,6 +243,15 @@ const DEFAULT_DEDUP_KEEP_RECENT = 1;
 const DEFAULT_DEDUP_NOTICE =
   '[Deduplicated: This tool response has been removed to save context. ' +
   'See the most recent call of this tool for current output.]';
+const DEFAULT_PRESERVE_RECENT = 4;
+const DEFAULT_SUMMARIZE_PRESERVE_RECENT = 6;
+const SUMMARY_PREFIX = '[Conversation Summary]';
+const DEFAULT_SUMMARIZE_PROMPT = `Summarize the following conversation concisely. Capture key facts, decisions made, tool calls and their results, and the current state of the conversation so that the assistant can continue helping the user effectively.
+
+Conversation:
+{conversation}
+
+Summary:`;
 const DEFAULT_TRUNCATION_NOTICE =
   '[NOTE] Some earlier messages in this conversation have been removed to stay within ' +
   'context limits. The most recent messages are preserved. Pay close attention to the ' +
@@ -253,6 +322,27 @@ function withCompressionMetadata(
       ...fields,
     },
   };
+}
+
+/**
+ * Render messages as text for summarization.
+ */
+function renderMessages(messages: MessageData[]): string {
+  return messages
+    .map((m) => {
+      const parts = m.content
+        .map((p) => {
+          if (p.text) return p.text;
+          if (p.toolRequest)
+            return `[Tool call: ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})]`;
+          if (p.toolResponse)
+            return `[Tool response: ${p.toolResponse.name} → ${stringifyOutput(p.toolResponse.output)}]`;
+          return '[other content]';
+        })
+        .join(' ');
+      return `${m.role}: ${parts}`;
+    })
+    .join('\n');
 }
 
 /**
@@ -379,6 +469,57 @@ function lastReportedInputTokens(messages: MessageData[]): number | undefined {
 }
 
 /**
+ * Inject conversation summary as a dedicated user message preceding preserved messages.
+ */
+function buildSummarizedMessages(
+  systemMessages: MessageData[],
+  summaryText: string,
+  toKeep: MessageData[]
+): MessageData[] {
+  const summaryPrefix = `${SUMMARY_PREFIX}\n${summaryText}`;
+  const summaryMessage: MessageData = {
+    role: 'user',
+    content: [{ text: summaryPrefix }],
+  };
+  return [...systemMessages, summaryMessage, ...toKeep];
+}
+
+/**
+ * Adjust preserve windows based on how far over budget we are.
+ */
+function adjustForOvershoot(
+  overshootRatio: number,
+  preserveRecent: number,
+  summaryPreserveRecent: number
+): {
+  adjustedPreserveRecent: number;
+  adjustedSummaryPreserveRecent: number;
+} {
+  if (overshootRatio >= 2.0) {
+    return {
+      adjustedPreserveRecent: Math.min(preserveRecent, 2),
+      adjustedSummaryPreserveRecent: Math.min(summaryPreserveRecent, 2),
+    };
+  }
+  if (overshootRatio >= 1.5) {
+    return {
+      adjustedPreserveRecent: Math.min(
+        preserveRecent,
+        Math.max(1, Math.floor(preserveRecent / 2))
+      ),
+      adjustedSummaryPreserveRecent: Math.min(
+        summaryPreserveRecent,
+        Math.max(1, Math.floor(summaryPreserveRecent / 2))
+      ),
+    };
+  }
+  return {
+    adjustedPreserveRecent: preserveRecent,
+    adjustedSummaryPreserveRecent: summaryPreserveRecent,
+  };
+}
+
+/**
  * Estimate the total character count across all message content.
  */
 function estimateMessageChars(messages: MessageData[]): number {
@@ -427,6 +568,8 @@ export const contextCompression: GenerateMiddleware<
   },
   ({ config, ai }) => {
     const maxInputTokens = config?.maxInputTokens ?? Infinity;
+    const basePreserveRecent =
+      config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT;
     const preserveSystem = config?.preserveSystem !== false;
     const rawMaxToolResponseChars =
       config?.maxToolResponseChars ?? DEFAULT_MAX_TOOL_RESPONSE_CHARS;
@@ -455,6 +598,14 @@ export const contextCompression: GenerateMiddleware<
     const insertTruncationNotice = config?.insertTruncationNotice !== false;
     const truncationNoticeText =
       config?.truncationNotice ?? DEFAULT_TRUNCATION_NOTICE;
+
+    const summarizeConfig = config?.summarize;
+    const skipSummarizationThreshold = config?.skipSummarizationThreshold;
+    const baseSummaryPreserveRecent =
+      summarizeConfig?.preserveRecent ?? DEFAULT_SUMMARIZE_PRESERVE_RECENT;
+    const summaryPromptTemplate =
+      summarizeConfig?.prompt ?? DEFAULT_SUMMARIZE_PROMPT;
+    const summaryModelRef = summarizeConfig?.model;
 
     function applyToolResponseDeduplication(messages: MessageData[]): {
       messages: MessageData[];
@@ -671,13 +822,17 @@ export const contextCompression: GenerateMiddleware<
       return { messages: result, capped, truncated };
     }
 
-    function applyMessageTruncation(messages: MessageData[]): {
+    function applyMessageTruncation(
+      messages: MessageData[],
+      effectiveMaxMessages?: number
+    ): {
       messages: MessageData[];
       dropped: number;
       noticeInserted: boolean;
       tailCount: number;
     } {
-      if (!maxMessages || maxMessages <= 0 || messages.length <= maxMessages) {
+      const cap = effectiveMaxMessages ?? maxMessages;
+      if (!cap || cap <= 0 || messages.length <= cap) {
         return { messages, dropped: 0, noticeInserted: false, tailCount: 0 };
       }
 
@@ -690,7 +845,7 @@ export const contextCompression: GenerateMiddleware<
         insertTruncationNotice && systemMessages.length === 0;
       const keepCount = Math.max(
         0,
-        maxMessages - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
+        cap - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
       );
       let kept = keepCount === 0 ? [] : nonSystemMessages.slice(-keepCount);
 
@@ -811,6 +966,69 @@ export const contextCompression: GenerateMiddleware<
       };
     }
 
+    async function applySummarization(
+      messages: MessageData[],
+      effectiveSummaryPreserveRecent?: number
+    ): Promise<{
+      messages: MessageData[];
+      summarized: boolean;
+      tailCount: number;
+    }> {
+      if (!summaryModelRef)
+        return { messages, summarized: false, tailCount: 0 };
+
+      const summaryPreserveRecent =
+        effectiveSummaryPreserveRecent ?? baseSummaryPreserveRecent;
+
+      const { systemMessages, nonSystemMessages } = partitionMessages(
+        messages,
+        preserveSystem
+      );
+
+      if (nonSystemMessages.length <= summaryPreserveRecent) {
+        return { messages, summarized: false, tailCount: 0 };
+      }
+
+      const toSummarize = nonSystemMessages.slice(
+        0,
+        nonSystemMessages.length - summaryPreserveRecent
+      );
+      const toKeep = nonSystemMessages.slice(-summaryPreserveRecent);
+
+      try {
+        const conversationText = renderMessages(toSummarize);
+        const prompt = summaryPromptTemplate.replaceAll(
+          '{conversation}',
+          () => conversationText
+        );
+
+        const response = await ai.generate({
+          model: summaryModelRef as any,
+          config: summaryModelRef?.config,
+          prompt,
+        });
+
+        return {
+          messages: buildSummarizedMessages(
+            systemMessages,
+            response.text,
+            toKeep
+          ),
+          summarized: true,
+          tailCount: toKeep.length,
+        };
+      } catch (e: any) {
+        logger.warn(
+          `Summarization failed, proceeding without compression: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          { 'genkit.middleware.name': 'contextCompression' },
+          e
+        );
+        return { messages, summarized: false, tailCount: 0 };
+      }
+    }
+
     return {
       model: async (req, ctx, next) => {
         const result = await next(req, ctx);
@@ -902,21 +1120,34 @@ export const contextCompression: GenerateMiddleware<
           return response;
         }
 
+        const charsBefore = estimateMessageChars(rawMessages);
         const originalCount = rawMessages.length;
         const inputTokensBefore =
           effectiveTokens > 0
             ? effectiveTokens
-            : Math.ceil(
-                estimateMessageChars(rawMessages) / CHARS_PER_TOKEN_ESTIMATE
-              );
+            : Math.ceil(charsBefore / CHARS_PER_TOKEN_ESTIMATE);
 
         let compressedMessages: MessageData[] = rawMessages;
+
+        const overshootRatio =
+          maxInputTokens !== Infinity && maxInputTokens > 0
+            ? effectiveTokens / maxInputTokens
+            : 1;
+
+        const { adjustedPreserveRecent, adjustedSummaryPreserveRecent } =
+          adjustForOvershoot(
+            overshootRatio,
+            basePreserveRecent,
+            baseSummaryPreserveRecent
+          );
 
         const {
           toolResponsesSafetyCapped,
           toolResponsesDeduplicated,
           toolResponsesTruncated,
           truncationNoticeInserted,
+          summarized,
+          summarizationSkipped,
         } = await ai.run(
           'contextCompression',
           { messageCount: originalCount, effectiveTokens: inputTokensBefore },
@@ -926,6 +1157,8 @@ export const contextCompression: GenerateMiddleware<
             let deduplicated = 0;
             let truncated = 0;
             let noticeInserted = false;
+            let isSummarized = false;
+            let skippedSummary = false;
 
             // 1. Tool response deduplication (when shouldCompress is true)
             if (shouldCompress && dedupConfig) {
@@ -940,15 +1173,54 @@ export const contextCompression: GenerateMiddleware<
             capped = toolResult.capped;
             truncated = toolResult.truncated;
 
-            // 3. Message truncation
-            if (
-              shouldCompress &&
-              maxMessages &&
-              messages.length > maxMessages
-            ) {
-              const msgResult = applyMessageTruncation(messages);
-              messages = msgResult.messages;
-              noticeInserted = msgResult.noticeInserted;
+            if (shouldCompress) {
+              // 3. Check if cheap strategies saved enough to skip summarization
+              const charsAfterCheap = estimateMessageChars(messages);
+              const charsSaved = charsBefore - charsAfterCheap;
+              const savingsRatio =
+                charsBefore > 0 ? charsSaved / charsBefore : 0;
+
+              const shouldSkipSummarization =
+                skipSummarizationThreshold !== undefined &&
+                savingsRatio >= skipSummarizationThreshold;
+
+              // 4. Summarization
+              if (summaryModelRef) {
+                if (shouldSkipSummarization) {
+                  skippedSummary = true;
+                } else {
+                  const sumResult = await applySummarization(
+                    messages,
+                    adjustedSummaryPreserveRecent
+                  );
+                  messages = sumResult.messages;
+                  isSummarized = sumResult.summarized;
+                }
+              }
+
+              // 5. Message truncation (as fallback or hard cap)
+              const effectiveMaxMessages = maxMessages
+                ? Math.min(
+                    maxMessages,
+                    Math.max(
+                      adjustedPreserveRecent + (insertTruncationNotice ? 1 : 0),
+                      maxMessages -
+                        (basePreserveRecent - adjustedPreserveRecent)
+                    )
+                  )
+                : undefined;
+
+              if (
+                effectiveMaxMessages &&
+                messages.length > effectiveMaxMessages
+              ) {
+                const msgResult = applyMessageTruncation(
+                  messages,
+                  effectiveMaxMessages
+                );
+                messages = msgResult.messages;
+                noticeInserted = msgResult.noticeInserted;
+              }
             }
 
             compressedMessages = messages;
@@ -959,6 +1231,8 @@ export const contextCompression: GenerateMiddleware<
               toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
               truncationNoticeInserted: noticeInserted,
+              summarized: isSummarized,
+              summarizationSkipped: skippedSummary,
             };
           }
         );
@@ -968,6 +1242,7 @@ export const contextCompression: GenerateMiddleware<
           toolResponsesSafetyCapped > 0 ||
           toolResponsesDeduplicated > 0 ||
           toolResponsesTruncated > 0 ||
+          summarized ||
           compressedCount < originalCount ||
           truncationNoticeInserted;
 
@@ -987,6 +1262,9 @@ export const contextCompression: GenerateMiddleware<
             truncationNoticeInserted:
               truncationNoticeInserted ||
               Boolean(latestCompressionMeta?.truncationNoticeInserted),
+            summarized:
+              summarized || Boolean(latestCompressionMeta?.summarized),
+            summarizationSkipped,
           };
           latestCompressionMeta = turnCompressionMeta;
         }
