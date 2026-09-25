@@ -338,11 +338,18 @@ export class GenkitMcpServer {
    * StdioServerTransport will be created and used.
    */
   async start(transport?: Transport) {
+    const { StdioServerTransport } = await import(
+      '@modelcontextprotocol/sdk/server/stdio.js'
+    );
     if (!transport) {
-      const { StdioServerTransport } = await import(
-        '@modelcontextprotocol/sdk/server/stdio.js'
-      );
       transport = new StdioServerTransport();
+    }
+    if (
+      transport instanceof StdioServerTransport ||
+      transport.constructor?.name === 'StdioServerTransport'
+    ) {
+      // Stdout carries MCP messages, including during setup and shutdown.
+      logger.setDefaultLogOutput('stderr');
     }
     await this.setup();
     await this.server!.connect(transport);

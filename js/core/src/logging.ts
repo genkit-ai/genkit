@@ -22,14 +22,17 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 const loggerKey = '__genkit_logger';
 
 const _defaultLogger = {
+  output: 'stdout' as 'stdout' | 'stderr',
   shouldLog(targetLevel: string) {
     return LOG_LEVELS.indexOf(this.level) <= LOG_LEVELS.indexOf(targetLevel);
   },
   debug(...args: any) {
-    this.shouldLog('debug') && console.debug(...args);
+    this.shouldLog('debug') &&
+      (this.output === 'stderr' ? console.error : console.debug)(...args);
   },
   info(...args: any) {
-    this.shouldLog('info') && console.info(...args);
+    this.shouldLog('info') &&
+      (this.output === 'stderr' ? console.error : console.info)(...args);
   },
   warn(...args: any) {
     this.shouldLog('warn') && console.warn(...args);
@@ -223,6 +226,11 @@ class Logger {
 
   setLogLevel(level: 'error' | 'warn' | 'info' | 'debug') {
     getLogger().level = level;
+  }
+
+  /** Select the output stream for the default logger's debug and info messages. */
+  setDefaultLogOutput(output: 'stdout' | 'stderr') {
+    _defaultLogger.output = output;
   }
 
   private _mergeErrorMetadata(metadata: any, err?: any): any {
