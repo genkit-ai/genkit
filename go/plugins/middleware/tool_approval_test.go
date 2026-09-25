@@ -18,11 +18,15 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -387,5 +391,172 @@ func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error from re-interrupted restart, got nil")
+	}
+}
+
+// TestToolApprovalReleasesTheToolsOwnInterrupt pins the two-step flow with a
+// tool that asks its own question: the hold is the middleware's interrupt;
+// the approval answers it, after which the tool runs afresh, asks its own
+// question with no resume data, and the answer to that question passes the
+// gate, since the call was approved.
+func TestToolApprovalReleasesTheToolsOwnInterrupt(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineToolModel(t, r, "test/transfer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		for _, msg := range req.Messages {
+			if msg.Role == ai.RoleTool {
+				return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("done")}, nil
+			}
+		}
+		return &ai.ModelResponse{
+			Request: req,
+			Message: &ai.Message{
+				Role: ai.RoleModel,
+				Content: []*ai.Part{
+					ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Input: map[string]any{"amount": 200}}),
+				},
+			},
+		}, nil
+	})
+	type transferInput struct {
+		Amount float64 `json:"amount"`
+	}
+	var resumes []map[string]any
+	transfer := ai.NewTool("transfer", "moves money",
+		func(tc *ai.ToolContext, _ transferInput) (string, error) {
+			resumes = append(resumes, tc.Resumed)
+			if !tc.IsResumed() {
+				return "", tool.Interrupt(tc, nil)
+			}
+			if tc.Resumed["approved"] != true {
+				return "cancelled", nil
+			}
+			return "completed", nil
+		})
+	transfer.Register(r)
+	ta := &ToolApproval{} // deny all
+	registerTestMiddleware(r, "toolApproval", ta)
+	generate := func(opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+		return ai.Generate(ctx, r, append([]ai.GenerateOption{ai.WithModel(m), ai.WithTools(transfer), ai.WithUse(ta)}, opts...)...)
+	}
+	restart := func(p *ai.Part, resume map[string]any) ai.GenerateOption {
+		part, err := transfer.RestartWith(p, ai.WithResumedMetadata[transferInput](resume))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ai.WithToolRestarts(part)
+	}
+
+	resp, err := generate(ai.WithPrompt("go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := resp.Interrupts()
+	if len(held) != 1 || held[0].Interrupt == nil || held[0].Interrupt.RaisedBy != ta.Name() {
+		t.Fatalf("interrupts = %+v, want one hold raised by %s", held, ta.Name())
+	}
+
+	resp2, err := generate(ai.WithMessages(resp.History()...), restart(held[0], map[string]any{"toolApproved": true}))
+	if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
+		t.Fatalf("approval = (%v, %v), want the tool's own interrupt under FAILED_PRECONDITION", resp2, err)
+	}
+	if len(resumes) != 1 || resumes[0] != nil {
+		t.Fatalf("tool saw resumes %v, want one fresh call: the approval must not reach it", resumes)
+	}
+	asked := resp2.Interrupts()
+	if len(asked) != 1 || asked[0].Interrupt == nil || asked[0].Interrupt.RaisedBy != "" {
+		t.Fatalf("interrupts = %+v, want the tool's own question", asked)
+	}
+
+	resp3, err := generate(ai.WithMessages(resp2.History()...), restart(asked[0], map[string]any{"approved": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp3.Text() != "done" {
+		t.Errorf("got %q, want %q", resp3.Text(), "done")
+	}
+	if len(resumes) != 2 || resumes[1]["approved"] != true {
+		t.Errorf("tool saw resumes %v, want the approval on its second call", resumes)
+	}
+}
+
+// TestToolApprovalHoldWithoutRecordedStageNeedsApproval pins that a hold
+// which does not record the stage that raised it, as one stored before
+// stages were recorded, still needs an explicit approval: the restart's
+// answer reaches the gate, a denial holds the call again, and only
+// "toolApproved": true runs the tool.
+func TestToolApprovalHoldWithoutRecordedStageNeedsApproval(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		for _, msg := range req.Messages {
+			for _, part := range msg.Content {
+				if part.IsToolResponse() {
+					return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("done")}, nil
+				}
+			}
+		}
+		return &ai.ModelResponse{Request: req, Message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "needsApproval", Input: map[string]any{"v": "1"}}),
+		}}}, nil
+	})
+	needsApproval := defineTool(t, r, "needsApproval")
+	ta := &ToolApproval{}
+	registerTestMiddleware(r, "toolApproval", ta)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithTools(needsApproval), ai.WithUse(ta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop the recorded stage, as a hold stored before it was recorded lacks it.
+	raw, err := json.Marshal(resp.History())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range wire {
+		for _, c := range msg["content"].([]any) {
+			if md, ok := c.(map[string]any)["metadata"].(map[string]any); ok {
+				delete(md, "interruptedBy")
+			}
+		}
+	}
+	if raw, err = json.Marshal(wire); err != nil {
+		t.Fatal(err)
+	}
+	var history []*ai.Message
+	if err := json.Unmarshal(raw, &history); err != nil {
+		t.Fatal(err)
+	}
+	var held *ai.Part
+	for _, msg := range history {
+		for _, p := range msg.Content {
+			if p.IsInterrupt() {
+				held = p
+			}
+		}
+	}
+	if held == nil || held.Interrupt.RaisedBy != "" {
+		t.Fatalf("held part = %+v, want an interrupt with no recorded stage", held)
+	}
+
+	resume := func(answer map[string]any) (*ai.ModelResponse, error) {
+		restart := needsApproval.Restart(held, &ai.RestartOptions{ResumedMetadata: answer})
+		return ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(history...),
+			ai.WithTools(needsApproval), ai.WithToolRestarts(restart), ai.WithUse(ta))
+	}
+	if _, err := resume(map[string]any{"toolApproved": false}); !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Fatalf("denied restart = %v, want the call held again", err)
+	}
+	if _, err := resume(nil); !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Fatalf("bare restart = %v, want the call held again", err)
+	}
+	resp, err = resume(map[string]any{"toolApproved": true})
+	if err != nil {
+		t.Fatalf("approved restart: %v", err)
+	}
+	if resp.Text() != "done" {
+		t.Errorf("Text() = %q, want done", resp.Text())
 	}
 }
