@@ -61,7 +61,7 @@
 // never state: it is instructions, put in front of every question, and for
 // the enum format it is the question. Answers come back as one JSON text
 // part shaped like the output type, with the response's resolved model
-// version and raw answers on [ai.ModelResponse.Custom].
+// version and raw answers read with [ResponseInfo].
 //
 // The same questions reach jev through TypeSafe's own API or through a
 // gateway; see [Endpoint].
@@ -298,33 +298,56 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 		part = ai.NewTextPart(text)
 	}
 
-	custom := map[string]any{"model": resp.Model, "answers": resp.Answers}
-	if resp.Provider != "" {
-		custom["provider"] = resp.Provider
-	}
-	if resp.ID != "" {
-		custom["id"] = resp.ID
+	usage := &ai.GenerationUsage{
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+		TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
 	}
 	if resp.Usage.Cost != nil {
-		custom["cost"] = *resp.Usage.Cost
+		usage.Custom = map[string]float64{"cost": *resp.Usage.Cost}
 	}
 	return &ai.ModelResponse{
 		Message:      ai.NewModelMessage(part),
 		FinishReason: ai.FinishReasonStop,
-		Usage: &ai.GenerationUsage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		},
-		Custom: custom,
+		Usage:        usage,
+		Raw:          &Info{Model: resp.Model, Provider: resp.Provider, ID: resp.ID, Answers: resp.Answers},
 	}, nil
+}
+
+// Info is what a jev response carries beside the answers in the message:
+// the model version that answered, which is what confidence thresholds are
+// tuned against, a gateway's provider and generation ID, and the answers
+// as the API sent them, guidance echoes and fields the answer types do not
+// declare included. [ResponseInfo] reads it.
+type Info struct {
+	Model    string                    `json:"model"`
+	Provider string                    `json:"provider,omitempty"`
+	ID       string                    `json:"id,omitempty"`
+	Answers  map[string]map[string]any `json:"answers,omitempty"`
+}
+
+// ResponseInfo reads the [Info] of a jev response, from the model or from
+// JSON that carried one, such as a flow's output or a stored trace. It is
+// the zero Info for a response from any other model.
+func ResponseInfo(resp *ai.ModelResponse) Info {
+	var info Info
+	if resp == nil || resp.Raw == nil {
+		return info
+	}
+	if raw, ok := resp.Raw.(*Info); ok {
+		return *raw
+	}
+	if data, err := json.Marshal(resp.Raw); err == nil {
+		_ = json.Unmarshal(data, &info)
+	}
+	return info
 }
 
 // answerFields lists the fields of a wire answer per question type, which
 // are the fields the answer types declare. The answer schemas are closed,
 // so a field the API or a gateway adds later is dropped here rather than
 // failing every call at validation; the untouched answer is still on
-// [ai.ModelResponse.Custom].
+// [Info.Answers].
 var answerFields = map[string][]string{
 	kindChoice: {"choice", "probabilities", "confidence"},
 	kindScore:  {"score", "probabilities", "confidence", "legend"},

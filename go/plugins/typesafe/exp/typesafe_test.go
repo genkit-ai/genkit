@@ -154,12 +154,24 @@ func TestGenerateData(t *testing.T) {
 	if resp.Usage == nil || resp.Usage.InputTokens != 312 || resp.Usage.OutputTokens != 48 || resp.Usage.TotalTokens != 360 {
 		t.Errorf("usage = %+v", resp.Usage)
 	}
-	custom, _ := resp.Custom.(map[string]any)
-	if custom["model"] != "jev-1.13.0" || custom["answers"] == nil {
-		t.Errorf("custom = %v", resp.Custom)
+	if info := ResponseInfo(resp); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+		t.Errorf("info = %+v", info)
 	}
 	if resp.FinishReason != ai.FinishReasonStop {
 		t.Errorf("finish reason = %v", resp.FinishReason)
+	}
+
+	// A response that travelled as JSON, as a flow's output or a trace
+	// does, keeps the same info.
+	var decoded ai.ModelResponse
+	if err := json.Unmarshal([]byte(base.JSONString(resp)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if info := ResponseInfo(&decoded); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+		t.Errorf("info after a JSON round trip = %+v", info)
+	}
+	if info := ResponseInfo(&ai.ModelResponse{Raw: "another model's"}); info.Model != "" {
+		t.Errorf("info of another model's response = %+v, want zero", info)
 	}
 }
 
@@ -545,7 +557,7 @@ func TestInitRequiresACloudflareAccount(t *testing.T) {
 func TestAnswersProjectedOntoDeclaredFields(t *testing.T) {
 	// A field the API or a gateway adds to an answer must not reach the
 	// message: the answer schemas are closed, so it would fail validation on
-	// every call. The untouched answers stay on Custom.
+	// every call. The untouched answers stay on the response's Info.
 	resp := &response{Answers: map[string]map[string]any{
 		"department":  {"type": kindChoice, "choice": "billing", "probabilities": map[string]any{"billing": 1.0}, "confidence": 1.0, "explanation": "new"},
 		"is_urgent":   {"type": kindNoul, "noul": 0.9, "reasoning": "new"},

@@ -118,7 +118,7 @@ func (Dept) Guidance() map[Dept]any {
 An object with no `what` gets the string as its `what`, so guidance adds to
 the description. Any other value goes out as it is. A score's legend keeps
 the rubric's strings, and the guidance the API echoes back is on
-`resp.Custom["answers"]`.
+`typesafex.ResponseInfo(resp).Answers`.
 
 The built-in `enum` output format also works, with no decision type: the enum
 values are the options of one choice question, the system message is the
@@ -250,10 +250,10 @@ Requests that fail to connect, time out, are rate limited, or hit a server
 error are retried twice, with `Retry-After` honored.
 
 Pin a version in production. Confidence thresholds tuned against one release do
-not carry over to the next, and the resolved version is on
-`resp.Custom["model"]` for every call. Where a reference with a config is
-needed, such as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)`
-builds one.
+not carry over to the next, and `typesafex.ResponseInfo(resp).Model` is the
+version that answered, on every call. A gateway's cost is
+`resp.Usage.Custom["cost"]`. Where a reference with a config is needed, such
+as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)` builds one.
 
 ## Limits
 

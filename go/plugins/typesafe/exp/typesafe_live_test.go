@@ -50,7 +50,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("answers: %s", base.JSONString(out))
-		t.Logf("custom: %s", base.JSONString(resp.Custom))
+		t.Logf("info: %s, usage: %s", base.JSONString(ResponseInfo(resp)), base.JSONString(resp.Usage))
 
 		if _, ok := out.Department.Choice.Criteria()[out.Department.Choice]; !ok {
 			t.Errorf("choice %q is outside the criteria", out.Department.Choice)
@@ -77,9 +77,11 @@ func TestOpenRouterLive(t *testing.T) {
 		if resp.Usage == nil || resp.Usage.InputTokens == 0 {
 			t.Errorf("usage = %+v", resp.Usage)
 		}
-		custom, _ := resp.Custom.(map[string]any)
-		if model, _ := custom["model"].(string); model == "" {
-			t.Errorf("no resolved model version on the response: %v", resp.Custom)
+		if ResponseInfo(resp).Model == "" {
+			t.Errorf("no resolved model version on the response: %v", resp.Raw)
+		}
+		if resp.Usage.Custom["cost"] <= 0 {
+			t.Errorf("usage custom = %v, want the gateway's cost", resp.Usage.Custom)
 		}
 	})
 
@@ -111,7 +113,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("answers: %s", base.JSONString(out))
-		t.Logf("custom: %s", base.JSONString(resp.Custom))
+		t.Logf("info: %s, usage: %s", base.JSONString(ResponseInfo(resp)), base.JSONString(resp.Usage))
 		if out.Department.Choice != "billing" {
 			t.Errorf("department = %q, want billing", out.Department.Choice)
 		}
@@ -129,7 +131,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("enum: %q custom: %s", resp.Text(), base.JSONString(resp.Custom))
+		t.Logf("enum: %q info: %s", resp.Text(), base.JSONString(ResponseInfo(resp)))
 		if resp.Text() != "technical" {
 			t.Errorf("text = %q, want technical", resp.Text())
 		}
@@ -162,8 +164,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		custom, _ := resp.Custom.(map[string]any)
-		t.Logf("jev-1.13 resolved to %v", custom["model"])
+		t.Logf("jev-1.13 resolved to %v", ResponseInfo(resp).Model)
 	})
 
 	t.Run("patch version refused", func(t *testing.T) {
@@ -188,8 +189,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Logf("no preview channel: %v", err)
 			return
 		}
-		custom, _ := resp.Custom.(map[string]any)
-		t.Logf("jev-preview resolved to %v", custom["model"])
+		t.Logf("jev-preview resolved to %v", ResponseInfo(resp).Model)
 	})
 
 	t.Run("runtime questions", func(t *testing.T) {

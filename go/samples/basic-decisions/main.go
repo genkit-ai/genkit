@@ -334,7 +334,7 @@ func triageResult(decision *Triage, resp *ai.ModelResponse) TriageResult {
 	return TriageResult{
 		Decision: *decision,
 		Route:    route(decision),
-		Model:    resolvedModel(resp),
+		Model:    typesafex.ResponseInfo(resp).Model,
 	}
 }
 
@@ -509,12 +509,4 @@ func DefineTeam(g *genkit.Genkit) {
 		}
 		return Dept(resp.Text()), nil
 	})
-}
-
-// resolvedModel reads the version that actually answered off the response.
-// The plugin puts it there because an alias like jev-latest moves.
-func resolvedModel(resp *ai.ModelResponse) string {
-	custom, _ := resp.Custom.(map[string]any)
-	version, _ := custom["model"].(string)
-	return version
 }
