@@ -36,16 +36,18 @@ of the SDK's request options).
 
 ## Models
 
-The plugin registers a curated catalog spanning the GPT-5 line (`gpt-5.6-sol`,
-`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and earlier), the GPT-4
-line, and the o-series reasoning models. The catalog is not a ceiling: any
+The plugin registers a curated catalog spanning `gpt-6-astra`, the GPT-5 line
+(`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
+earlier), the GPT-4 line, and the o-series reasoning models. `gpt-6-astra` is
+registered without tool support: the Chat Completions API rejects function
+tools for it at every `reasoning_effort`. The catalog is not a ceiling: any
 model ID the API serves resolves on demand, and the models the endpoint
 reports are listed dynamically. Use the `Models` field to describe or correct
 any model, most often one released after this plugin:
 
 ```go
 plugin := &oai.OpenAI{Models: map[string]ai.ModelOptions{
-    "gpt-6": {Label: "GPT-6", Supports: &compat_oai.Multimodal},
+    "gpt-7": {Label: "GPT-7", Supports: &compat_oai.Multimodal},
 }}
 ```
 
