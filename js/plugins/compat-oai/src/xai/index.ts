@@ -41,6 +41,8 @@ import {
 
 export type XAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
+export const XAI_BASE_URL = 'https://api.x.ai/v1';
+
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
     if (actionType === 'model') {
@@ -96,12 +98,14 @@ export function xAIPlugin(options?: XAIPluginOptions): GenkitPluginV2 {
         'Please pass in the API key or set the XAI_API_KEY environment variable.',
     });
   }
-  const pluginOptions = { name: 'xai', ...options };
-  return openAICompatible({
-    name: 'xai',
-    baseURL: 'https://api.x.ai/v1',
-    apiKey,
+  const pluginOptions: PluginOptions = {
     ...options,
+    name: 'xai',
+    baseURL: XAI_BASE_URL,
+    apiKey,
+  };
+  return openAICompatible({
+    ...pluginOptions,
     initializer: async (client) => {
       const models = [] as ResolvableAction[];
       models.push(
