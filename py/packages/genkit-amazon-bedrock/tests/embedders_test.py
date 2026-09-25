@@ -603,6 +603,42 @@ async def test_a_failing_batch_cancels_the_calls_that_have_not_started() -> None
     assert len(transport.calls) < len(documents)
 
 
+@pytest.mark.asyncio
+async def test_cancelling_the_caller_stops_the_rest_of_the_batch() -> None:
+    documents = [text_doc(f'doc {i}') for i in range(50)]
+
+    class SlowTransport:
+        """Completes in a moment, so lanes free and the queued calls would start."""
+
+        def __init__(self) -> None:
+            self.started = 0
+            self.saturated = asyncio.Event()
+
+        async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:
+            self.started += 1
+            if self.started >= EMBED_CONCURRENCY_LIMIT:
+                # Every lane is busy now, so the rest of the batch is queued.
+                self.saturated.set()
+            await asyncio.sleep(0.05)
+            return titan_response([1.0])
+
+    transport = SlowTransport()
+    embedder = BedrockEmbedder(model_id=TITAN_TEXT, transport=transport)
+    task = asyncio.create_task(embedder.embed(EmbedRequest(input=documents)))
+    await asyncio.wait_for(transport.saturated.wait(), timeout=5)
+
+    started_before_cancel = transport.started
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Long enough for the calls that were left alone to free their lanes and
+    # pull the rest of the batch through; without the cancel reaching them, all
+    # 50 documents end up on the wire.
+    await asyncio.sleep(0.3)
+
+    assert transport.started == started_before_cancel
+
+
 def test_the_semaphore_is_built_per_call_not_per_module() -> None:
     # A module-level semaphore binds to the first loop that has to wait on it,
     # and the Dev UI reflection server runs a second one. This needs more
