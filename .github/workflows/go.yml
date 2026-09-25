@@ -21,6 +21,7 @@ on:
     paths:
       - "go/**"
       - "genkit-tools/**"
+      - "tests/specs/**"
       - ".github/workflows/go.yml"
 
 
