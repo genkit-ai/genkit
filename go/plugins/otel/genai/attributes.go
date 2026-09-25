@@ -14,53 +14,62 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package genai holds pure helpers for mapping Genkit data to OpenTelemetry
-// GenAI semantic conventions. It deliberately avoids any OpenTelemetry imports
-// so the mapping logic can be unit tested in isolation.
+// Package genai holds the mapping from Genkit data to OpenTelemetry GenAI
+// semantic conventions: attribute names, value vocabularies, message shapes,
+// and the spec's client metrics. Names and values come from the generated
+// semconv package wherever it has them, so a spec rename surfaces on upgrade.
 //
 // See the spec:
 // https://github.com/open-telemetry/semantic-conventions-genai
 package genai
 
-import "strings"
+import (
+	"strings"
+
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
+)
+
+// SchemaURL is the semantic-conventions schema the emitted telemetry follows.
+const SchemaURL = semconv.SchemaURL
 
 // Canonical gen_ai.* attribute names used by this instrumentation.
 const (
-	AttrOperationName = "gen_ai.operation.name"
-	AttrProviderName  = "gen_ai.provider.name"
+	AttrOperationName = string(semconv.GenAIOperationNameKey)
+	AttrProviderName  = string(semconv.GenAIProviderNameKey)
 
-	AttrRequestModel            = "gen_ai.request.model"
-	AttrRequestTemperature      = "gen_ai.request.temperature"
-	AttrRequestTopP             = "gen_ai.request.top_p"
-	AttrRequestTopK             = "gen_ai.request.top_k"
-	AttrRequestMaxTokens        = "gen_ai.request.max_tokens"
-	AttrRequestStopSequences    = "gen_ai.request.stop_sequences"
-	AttrRequestFrequencyPenalty = "gen_ai.request.frequency_penalty"
-	AttrRequestPresencePenalty  = "gen_ai.request.presence_penalty"
-	AttrRequestSeed             = "gen_ai.request.seed"
-	AttrRequestChoiceCount      = "gen_ai.request.choice.count"
+	AttrRequestModel            = string(semconv.GenAIRequestModelKey)
+	AttrRequestTemperature      = string(semconv.GenAIRequestTemperatureKey)
+	AttrRequestTopP             = string(semconv.GenAIRequestTopPKey)
+	AttrRequestTopK             = string(semconv.GenAIRequestTopKKey)
+	AttrRequestMaxTokens        = string(semconv.GenAIRequestMaxTokensKey)
+	AttrRequestStopSequences    = string(semconv.GenAIRequestStopSequencesKey)
+	AttrRequestFrequencyPenalty = string(semconv.GenAIRequestFrequencyPenaltyKey)
+	AttrRequestPresencePenalty  = string(semconv.GenAIRequestPresencePenaltyKey)
+	AttrRequestSeed             = string(semconv.GenAIRequestSeedKey)
+	AttrRequestChoiceCount      = string(semconv.GenAIRequestChoiceCountKey)
 
-	AttrOutputType = "gen_ai.output.type"
+	AttrOutputType = string(semconv.GenAIOutputTypeKey)
 
-	AttrResponseFinishReasons = "gen_ai.response.finish_reasons"
+	AttrResponseFinishReasons = string(semconv.GenAIResponseFinishReasonsKey)
 
 	// AttrTokenType distinguishes token-usage measurements: input vs output.
-	AttrTokenType = "gen_ai.token.type"
+	AttrTokenType = string(semconv.GenAITokenTypeKey)
 
-	AttrUsageInputTokens           = "gen_ai.usage.input_tokens"
-	AttrUsageOutputTokens          = "gen_ai.usage.output_tokens"
+	AttrUsageInputTokens  = string(semconv.GenAIUsageInputTokensKey)
+	AttrUsageOutputTokens = string(semconv.GenAIUsageOutputTokensKey)
+	// Not in semconv v1.39.0 yet.
 	AttrUsageReasoningOutputTokens = "gen_ai.usage.reasoning.output_tokens"
 	AttrUsageCacheReadInputTokens  = "gen_ai.usage.cache_read.input_tokens"
 
-	AttrToolName = "gen_ai.tool.name"
-	AttrToolType = "gen_ai.tool.type"
+	AttrToolName = string(semconv.GenAIToolNameKey)
+	AttrToolType = string(semconv.GenAIToolTypeKey)
 
 	// Content attributes (opt-in; may contain PII).
-	AttrInputMessages      = "gen_ai.input.messages"
-	AttrOutputMessages     = "gen_ai.output.messages"
-	AttrSystemInstructions = "gen_ai.system_instructions"
+	AttrInputMessages      = string(semconv.GenAIInputMessagesKey)
+	AttrOutputMessages     = string(semconv.GenAIOutputMessagesKey)
+	AttrSystemInstructions = string(semconv.GenAISystemInstructionsKey)
 
-	AttrErrorType = "error.type"
+	AttrErrorType = string(semconv.ErrorTypeKey)
 )
 
 // Non-reserved genkit.* attributes. Kept out of the gen_ai.* namespace so
@@ -76,10 +85,28 @@ const (
 	AttrGenkitOutput = "genkit.output"
 )
 
+// The values below are literals because genaiconv exposes them as vars and
+// method results, not constants. TestSemconvValues pins them to genaiconv, so
+// a spec rename still fails loudly on upgrade.
+
 // Well-known values for gen_ai.operation.name.
 const (
 	OperationChat        = "chat"
 	OperationExecuteTool = "execute_tool"
+)
+
+// Well-known values for gen_ai.token.type.
+const (
+	TokenTypeInput  = "input"
+	TokenTypeOutput = "output"
+)
+
+// Well-known values for gen_ai.provider.name that Genkit plugins map to.
+const (
+	ProviderGCPGemini   = "gcp.gemini"
+	ProviderGCPVertexAI = "gcp.vertex_ai"
+	ProviderOpenAI      = "openai"
+	ProviderAnthropic   = "anthropic"
 )
 
 // Canonical gen_ai.* metric instrument names.
@@ -87,11 +114,6 @@ const (
 	MetricTokenUsage        = "gen_ai.client.token.usage"
 	MetricOperationDuration = "gen_ai.client.operation.duration"
 )
-
-// SemConvVersion is the OTel GenAI semantic-conventions version this
-// instrumentation targets. Recorded so future readers know which shape the
-// mapping was written against.
-const SemConvVersion = "1.38.0"
 
 // OperationDetailsEvent is the dedicated event that carries prompt/response
 // content independently of the span, per the spec.
@@ -161,13 +183,13 @@ func DeriveProviderName(prefix string) string {
 		return ""
 	case "googleai", "google-genai", "google_genai":
 		// Gemini API (AI Studio), distinct from Vertex AI.
-		return "gcp.gemini"
+		return ProviderGCPGemini
 	case "vertexai", "vertex-ai", "vertex_ai":
-		return "gcp.vertex_ai"
+		return ProviderGCPVertexAI
 	case "openai":
-		return "openai"
+		return ProviderOpenAI
 	case "anthropic":
-		return "anthropic"
+		return ProviderAnthropic
 	default:
 		return strings.ToLower(prefix)
 	}

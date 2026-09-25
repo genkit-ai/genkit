@@ -19,6 +19,8 @@ package genai
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/firebase/genkit/go/ai"
 )
 
@@ -47,9 +49,51 @@ func TestMapPart(t *testing.T) {
 		t.Errorf("tool response part = %+v", resp)
 	}
 
-	media := MapPart(ai.NewMediaPart("image/png", "data:image/png;base64,AAAA"))
-	if media["type"] != "media" || media["content_type"] != "image/png" {
-		t.Errorf("media part = %+v", media)
+}
+
+func TestMapMediaPart(t *testing.T) {
+	tests := []struct {
+		name string
+		part *ai.Part
+		want map[string]any
+	}{
+		{
+			name: "inline data uri becomes blob without payload",
+			part: ai.NewMediaPart("image/png", "data:image/png;base64,AAAAAAAA"),
+			want: map[string]any{"type": "blob", "modality": "image", "mime_type": "image/png", "size_bytes": 6},
+		},
+		{
+			name: "base64 padding is excluded from size",
+			part: ai.NewMediaPart("audio/wav", "data:audio/wav;base64,AAAAAA=="),
+			want: map[string]any{"type": "blob", "modality": "audio", "mime_type": "audio/wav", "size_bytes": 4},
+		},
+		{
+			name: "mime type falls back to the data uri header",
+			part: ai.NewMediaPart("", "data:video/mp4;base64,AAAA"),
+			want: map[string]any{"type": "blob", "modality": "video", "mime_type": "video/mp4", "size_bytes": 3},
+		},
+		{
+			name: "non-base64 data uri reports raw length",
+			part: ai.NewMediaPart("", "data:text/plain,hello"),
+			want: map[string]any{"type": "blob", "modality": "document", "mime_type": "text/plain", "size_bytes": 5},
+		},
+		{
+			name: "remote url becomes uri",
+			part: ai.NewMediaPart("application/pdf", "gs://bucket/doc.pdf"),
+			want: map[string]any{"type": "uri", "modality": "document", "mime_type": "application/pdf", "uri": "gs://bucket/doc.pdf"},
+		},
+		{
+			name: "unknown mime type omits mime_type",
+			part: ai.NewMediaPart("", "https://example.com/x"),
+			want: map[string]any{"type": "uri", "modality": "document", "uri": "https://example.com/x"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if diff := cmp.Diff(tt.want, MapPart(tt.part)); diff != "" {
+				t.Errorf("MapPart() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
