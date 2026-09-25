@@ -233,7 +233,7 @@ function sliceCodePointSafe(str: string, limit: number): string {
 
 function hasCompressionFlag(
   target: { metadata?: Record<string, unknown> },
-  flag: 'truncated' | 'capped' | 'deduplicated' | 'notice'
+  flag: 'truncated' | 'capped' | 'deduplicated' | 'notice' | 'standaloneNotice'
 ): boolean {
   const ccMeta = target.metadata?.contextCompression as
     | Record<string, unknown>
@@ -252,6 +252,80 @@ function withCompressionMetadata(
         {}),
       ...fields,
     },
+  };
+}
+
+/**
+ * Reconciles any synthetic standalone truncation notice (`role: 'system'`) saved
+ * in history from an earlier turn when a real `system` message is also present,
+ * ensuring the request never contains multiple `system` messages.
+ */
+function reconcileStandaloneNotices(
+  messages: MessageData[],
+  preserveSystem: boolean,
+  truncationNoticeText: string
+): { messages: MessageData[]; reconciled: boolean } {
+  const hasStandalone = messages.some((m) =>
+    hasCompressionFlag(m, 'standaloneNotice')
+  );
+  if (!hasStandalone) {
+    return { messages, reconciled: false };
+  }
+
+  if (!preserveSystem) {
+    return {
+      messages: messages.filter(
+        (m) => !hasCompressionFlag(m, 'standaloneNotice')
+      ),
+      reconciled: true,
+    };
+  }
+
+  const hasRealSystem = messages.some(
+    (m) => m.role === 'system' && !hasCompressionFlag(m, 'standaloneNotice')
+  );
+  const standaloneCount = messages.filter((m) =>
+    hasCompressionFlag(m, 'standaloneNotice')
+  ).length;
+
+  if (
+    !hasRealSystem &&
+    standaloneCount === 1 &&
+    messages[0]?.role === 'system'
+  ) {
+    return { messages, reconciled: false };
+  }
+
+  const withoutStandalone = messages.filter(
+    (m) => !hasCompressionFlag(m, 'standaloneNotice')
+  );
+
+  if (hasRealSystem) {
+    let mergedIntoFirstSystem = false;
+    const merged = withoutStandalone.map((msg) => {
+      if (!mergedIntoFirstSystem && msg.role === 'system') {
+        mergedIntoFirstSystem = true;
+        if (hasCompressionFlag(msg, 'notice')) {
+          return msg;
+        }
+        return {
+          ...msg,
+          metadata: withCompressionMetadata(msg, { notice: true }),
+          content: [...msg.content, { text: `\n\n${truncationNoticeText}` }],
+        };
+      }
+      return msg;
+    });
+    return { messages: merged, reconciled: true };
+  }
+
+  // Only standalone notices existed (either >1 or displaced from index 0)
+  const firstStandalone = messages.find((m) =>
+    hasCompressionFlag(m, 'standaloneNotice')
+  )!;
+  return {
+    messages: [firstStandalone, ...withoutStandalone],
+    reconciled: true,
   };
 }
 
@@ -626,6 +700,23 @@ export const contextCompression: GenerateMiddleware<
         kept.shift();
       }
 
+      // If keepCount was too small to capture the preceding model message for a
+      // trailing tool turn (e.g. keepCount === 1), rescue the final [model, ...tool] group.
+      if (
+        kept.length === 0 &&
+        keepCount > 0 &&
+        nonSystemMessages.length > 0 &&
+        nonSystemMessages[nonSystemMessages.length - 1].role === 'tool'
+      ) {
+        let idx = nonSystemMessages.length - 1;
+        while (idx >= 0 && nonSystemMessages[idx].role === 'tool') {
+          idx--;
+        }
+        if (idx >= 0 && nonSystemMessages[idx].role === 'model') {
+          kept = nonSystemMessages.slice(idx);
+        }
+      }
+
       // Ensure kept conversation starts with a user message:
       // - If kept contains a later user message, shift leading model/tool messages up to it.
       // - If kept has no user message (e.g. a single-user-prompt multi-turn tool loop),
@@ -647,10 +738,16 @@ export const contextCompression: GenerateMiddleware<
             }
           }
           if (anchorUser) {
-            const tail =
+            let tail =
               keepCount > 1 ? nonSystemMessages.slice(-(keepCount - 1)) : [];
             while (tail.length > 0 && tail[0].role === 'tool') {
               tail.shift();
+            }
+            // When keepCount - 1 is too small to hold even a single [model, tool]
+            // pair, preserve the latest [model, tool] group (`kept`) so the active
+            // tool loop never loses its most recent tool result.
+            if (tail.length === 0) {
+              tail = kept;
             }
             kept = [anchorUser, ...tail];
           } else {
@@ -691,10 +788,10 @@ export const contextCompression: GenerateMiddleware<
         } else {
           const notice: MessageData = {
             role: 'system',
-            metadata: {
-              ...withCompressionMetadata({}, { notice: true }),
-              agentPreamble: true,
-            },
+            metadata: withCompressionMetadata(
+              {},
+              { notice: true, standaloneNotice: true }
+            ),
             content: [{ text: truncationNoticeText }],
           };
           return {
@@ -743,7 +840,14 @@ export const contextCompression: GenerateMiddleware<
           cumulativeTruncated = 0;
         }
 
-        const rawMessages = envelope.request.messages || [];
+        const {
+          messages: rawMessages,
+          reconciled: reconciledStandaloneNotices,
+        } = reconcileStandaloneNotices(
+          envelope.request.messages || [],
+          preserveSystem,
+          truncationNoticeText
+        );
         const stampedTokens =
           lastInputTokens ?? lastReportedInputTokens(rawMessages);
         const estimatedTokens =
@@ -776,7 +880,16 @@ export const contextCompression: GenerateMiddleware<
           );
 
         if (!shouldCompress && !hasOversizedToolResponse) {
-          const response = await next(envelope, ctx);
+          const passthroughEnvelope = reconciledStandaloneNotices
+            ? {
+                ...envelope,
+                request: {
+                  ...envelope.request,
+                  messages: rawMessages,
+                },
+              }
+            : envelope;
+          const response = await next(passthroughEnvelope, ctx);
           if (isTopLevel && latestCompressionMeta) {
             return {
               ...response,
@@ -790,16 +903,23 @@ export const contextCompression: GenerateMiddleware<
         }
 
         const originalCount = rawMessages.length;
+        const inputTokensBefore =
+          effectiveTokens > 0
+            ? effectiveTokens
+            : Math.ceil(
+                estimateMessageChars(rawMessages) / CHARS_PER_TOKEN_ESTIMATE
+              );
+
+        let compressedMessages: MessageData[] = rawMessages;
 
         const {
-          messages: compressedMessages,
           toolResponsesSafetyCapped,
           toolResponsesDeduplicated,
           toolResponsesTruncated,
           truncationNoticeInserted,
         } = await ai.run(
           'contextCompression',
-          { messageCount: originalCount, effectiveTokens },
+          { messageCount: originalCount, effectiveTokens: inputTokensBefore },
           async () => {
             let messages = [...rawMessages];
             let capped = 0;
@@ -831,8 +951,10 @@ export const contextCompression: GenerateMiddleware<
               noticeInserted = msgResult.noticeInserted;
             }
 
+            compressedMessages = messages;
+
             return {
-              messages,
+              messagesAfter: messages.length,
               toolResponsesSafetyCapped: capped,
               toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
@@ -856,7 +978,7 @@ export const contextCompression: GenerateMiddleware<
           cumulativeTruncated += toolResponsesTruncated;
           turnCompressionMeta = {
             triggered: true,
-            inputTokensBefore: effectiveTokens,
+            inputTokensBefore,
             messagesOriginal: originalCount,
             messagesAfter: compressedCount,
             toolResponsesSafetyCapped: cumulativeCapped,
@@ -873,7 +995,10 @@ export const contextCompression: GenerateMiddleware<
           ...envelope,
           request: {
             ...envelope.request,
-            messages: wasCompressed ? compressedMessages : rawMessages,
+            messages:
+              wasCompressed || reconciledStandaloneNotices
+                ? compressedMessages
+                : rawMessages,
           },
         };
 
