@@ -39,7 +39,7 @@ import (
 // context), so an adapter keeps them readable.
 func plainTool[In, Out any](name, description string, fn func(context.Context, In) (Out, error)) ai.Tool {
 	return ai.NewTool(name, description, func(tc *ai.ToolContext, in In) (Out, error) {
-		return fn(tc, in)
+		return fn(tc.Context, in)
 	})
 }
 
