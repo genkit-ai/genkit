@@ -44,7 +44,7 @@ type ollamaEmbedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest, staticHeaders map[string]string, headerFunc RequestHeaderFunc) (*ai.EmbedResponse, error) {
 	options, ok := req.Options.(*EmbedOptions)
 	if !ok && req.Options != nil {
 		return nil, fmt.Errorf("invalid options type: expected *EmbedOptions")
@@ -64,7 +64,16 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai
 		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
 	}
 
-	resp, err := sendEmbedRequest(ctx, serverAddress, jsonData)
+	headers, err := resolveHeaders(ctx, staticHeaders, headerFunc, HeaderParams{
+		ServerAddress: serverAddress,
+		Model:         &ModelDefinition{Name: options.Model},
+		EmbedRequest:  req,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve request headers: %w", err)
+	}
+
+	resp, err := sendEmbedRequest(ctx, serverAddress, jsonData, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -82,13 +91,14 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai
 	return newEmbedResponse(ollamaResp.Embeddings), nil
 }
 
-func sendEmbedRequest(ctx context.Context, serverAddress string, jsonData []byte) (*http.Response, error) {
+func sendEmbedRequest(ctx context.Context, serverAddress string, jsonData []byte, headers map[string]string) (*http.Response, error) {
 	client := &http.Client{}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", serverAddress+"/api/embed", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyHeaders(httpReq, headers)
 	return client.Do(httpReq)
 }
 
@@ -183,7 +193,7 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 			}
 		}
 
-		return embed(ctx, o.ServerAddress, &normalizedReq)
+		return embed(ctx, o.ServerAddress, &normalizedReq, o.RequestHeaders, o.RequestHeaderFunc)
 	})
 }
 
