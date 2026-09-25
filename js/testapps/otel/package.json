@@ -1,0 +1,25 @@
+{
+  "name": "otel-testapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Genkit + OpenTelemetry GenAI instrumentation sample.",
+  "main": "lib/index.js",
+  "scripts": {
+    "start": "node lib/index.js",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "dev": "npx tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/otel": "workspace:*",
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "genkit": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
