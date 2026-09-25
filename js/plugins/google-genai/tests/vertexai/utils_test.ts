@@ -71,6 +71,7 @@ describe('Vertex AI Utils', () => {
 
     delete process.env.GCLOUD_PROJECT;
     delete process.env.GCLOUD_LOCATION;
+    delete process.env.GOOGLE_CLOUD_LOCATION;
     delete process.env.FIREBASE_CONFIG;
     delete process.env.GCLOUD_SERVICE_ACCOUNT_CREDS;
     delete process.env.VERTEX_API_KEY;
@@ -123,6 +124,30 @@ describe('Vertex AI Utils', () => {
         assert.strictEqual(options.location, 'us');
       });
 
+      it('should use GOOGLE_CLOUD_LOCATION for multi-regional options', async () => {
+        process.env.GCLOUD_PROJECT = 'env-project';
+        process.env.GOOGLE_CLOUD_LOCATION = 'us';
+        const options = (await getDerivedOptions(
+          undefined,
+          mockAuthClass as any
+        )) as any;
+        assert.strictEqual(options.kind, 'multi-regional');
+        assert.strictEqual(options.projectId, 'env-project');
+        assert.strictEqual(options.location, 'us');
+      });
+
+      it('should prefer GOOGLE_CLOUD_LOCATION over GCLOUD_LOCATION', async () => {
+        process.env.GCLOUD_PROJECT = 'env-project';
+        process.env.GOOGLE_CLOUD_LOCATION = 'eu';
+        process.env.GCLOUD_LOCATION = 'us';
+        const options = (await getDerivedOptions(
+          undefined,
+          mockAuthClass as any
+        )) as any;
+        assert.strictEqual(options.kind, 'multi-regional');
+        assert.strictEqual(options.location, 'eu');
+      });
+
       it('should pass apiVersion from options', async () => {
         const pluginOptions: VertexPluginOptions = {
           projectId: 'options-project',
@@ -169,6 +194,18 @@ describe('Vertex AI Utils', () => {
         const authOptions = mockAuthClass.lastCall.args[0];
         assert.strictEqual(authOptions.projectId, 'env-project');
         sinon.assert.notCalled(authInstance.getProjectId);
+      });
+
+      it('should use GOOGLE_CLOUD_LOCATION for regional options', async () => {
+        process.env.GCLOUD_PROJECT = 'env-project';
+        process.env.GOOGLE_CLOUD_LOCATION = 'europe-west1';
+        const options = (await getDerivedOptions(
+          undefined,
+          mockAuthClass as any
+        )) as RegionalClientOptions;
+        assert.strictEqual(options.kind, 'regional');
+        assert.strictEqual(options.projectId, 'env-project');
+        assert.strictEqual(options.location, 'europe-west1');
       });
 
       it('should use default location when only projectId is available', async () => {
