@@ -37,7 +37,7 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 	return []*ai.MiddlewareDesc{
 		ai.NewMiddleware("Retry failed model calls with exponential backoff", Retry{}),
 		ai.NewMiddleware("Try alternative models when the primary model fails", Fallback{}),
-		ai.NewMiddleware("Require explicit approval before executing tools", ToolApproval{}),
+		ai.NewMiddleware("Require approval, from the caller or a judge model, before executing tools", ToolApproval{}),
 		ai.NewMiddleware("Return tool errors to the model instead of failing the generation", SoftToolErrors{}),
 		ai.NewMiddleware("Expose a local library of skills as loadable system instructions", Skills{}),
 		ai.NewMiddleware("Grant the model file access scoped to a directory", Filesystem{}),
