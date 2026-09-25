@@ -278,7 +278,7 @@ describe('Google AI Gemini', () => {
       });
 
       it('constructs tools array correctly', async () => {
-        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        const model = defineModel('gemini-3.5-flash', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
           ...minimalRequest,
@@ -299,6 +299,7 @@ describe('Google AI Gemini', () => {
             urlContext: {},
           },
         };
+
         await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
@@ -322,7 +323,7 @@ describe('Google AI Gemini', () => {
 
       it('constructs google_search tool for images with empty searchTypes', async () => {
         const model = defineModel(
-          'gemini-3.1-flash-image-preview',
+          'gemini-3.1-flash-image',
           defaultPluginOptions
         );
         mockFetchResponse(defaultApiResponse);
@@ -346,7 +347,7 @@ describe('Google AI Gemini', () => {
 
       it('constructs google_search tool for images with webSearch', async () => {
         const model = defineModel(
-          'gemini-3.1-flash-image-preview',
+          'gemini-3.1-flash-image',
           defaultPluginOptions
         );
         mockFetchResponse(defaultApiResponse);
@@ -372,7 +373,7 @@ describe('Google AI Gemini', () => {
 
       it('constructs google_search tool for images with imageSearch', async () => {
         const model = defineModel(
-          'gemini-3.1-flash-image-preview',
+          'gemini-3.1-flash-image',
           defaultPluginOptions
         );
         mockFetchResponse(defaultApiResponse);
@@ -398,7 +399,7 @@ describe('Google AI Gemini', () => {
 
       it('constructs google_search tool for images with both webSearch and imageSearch', async () => {
         const model = defineModel(
-          'gemini-3.1-flash-image-preview',
+          'gemini-3.1-flash-image',
           defaultPluginOptions
         );
         mockFetchResponse(defaultApiResponse);
@@ -420,6 +421,152 @@ describe('Google AI Gemini', () => {
         assert.deepStrictEqual(apiRequest.tools?.[0], {
           google_search: { searchTypes: { webSearch: {}, imageSearch: {} } },
         });
+      });
+
+      it('constructs google_search tool for images with empty searchTypes (Interactions API)', async () => {
+        const model = defineModel(
+          'gemini-flash-latest', // uses Interactions API
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {},
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          type: 'google_search',
+        });
+      });
+
+      it('constructs google_search tool for images with webSearch (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { webSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          type: 'google_search',
+          search_types: ['web_search'],
+        });
+      });
+
+      it('constructs google_search tool for images with imageSearch (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { imageSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          type: 'google_search',
+          search_types: ['image_search'],
+        });
+      });
+
+      it('constructs google_search tool for images with both webSearch and imageSearch (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { webSearch: {}, imageSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          type: 'google_search',
+          search_types: ['web_search', 'image_search'],
+        });
+      });
+
+      it('constructs generation_config.tool_choice for functionCallingConfig (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            functionCallingConfig: {
+              mode: 'ANY',
+              allowedFunctionNames: ['myFunc'],
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
+          allowed_tools: {
+            mode: 'any',
+            tools: ['myFunc'],
+          },
+        });
+      });
+
+      it('constructs generation_config.tool_choice for toolChoice (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          toolChoice: 'required',
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
+          allowed_tools: {
+            mode: 'any',
+          },
+        });
+      });
+
+      it('passes responseModalities to the API (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            responseModalities: ['TEXT', 'AUDIO'],
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.deepStrictEqual(apiRequest.response_modalities, [
+          'text',
+          'audio',
+        ]);
       });
 
       it('constructs toolConfig with retrievalConfig and googleMaps tool correctly', async () => {
@@ -512,7 +659,7 @@ describe('Google AI Gemini', () => {
       });
 
       it('passes serviceTier to the API', async () => {
-        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        const model = defineModel('gemini-3.5-flash', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
           ...minimalRequest,
@@ -526,6 +673,21 @@ describe('Google AI Gemini', () => {
           fetchStub.lastCall.args[1].body
         );
         assert.strictEqual(apiRequest.serviceTier, 'flex');
+      });
+
+      it('passes serviceTier to the API (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions); // Uses Interactions API
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            serviceTier: 'flex',
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.strictEqual(apiRequest.service_tier, 'flex');
       });
 
       it('passes imageConfig to the API', async () => {
