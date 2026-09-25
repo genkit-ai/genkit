@@ -19,8 +19,9 @@ package tracing
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"sync"
@@ -33,29 +34,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
-
-// markedError wraps an error to track if it's already been marked as a failure source
-type markedError struct {
-	error
-	marked bool
-}
-
-func (e *markedError) Error() string {
-	return e.error.Error()
-}
-
-func (e *markedError) Unwrap() error {
-	return e.error
-}
-
-// isErrorAlreadyMarked checks if an error has already been marked as a failure source
-func isErrorAlreadyMarked(err error) bool {
-	var me *markedError
-	if errors.As(err, &me) {
-		return me.marked
-	}
-	return false
-}
 
 var (
 	providerInitOnce sync.Once
@@ -75,10 +53,9 @@ func TracerProvider() *sdktrace.TracerProvider {
 		}
 	}
 
-	// Lazily create the SDK provider so OTel ids and any user-configured
-	// exporters keep working. It no longer auto-registers the telemetry-server
-	// processor: feeding the Dev UI is now the Direct instrumentation's job
-	// (axis 1), decoupled from tracer-provider bootstrap (axis 2).
+	// Lazily install a bare SDK provider for callers of this deprecated API
+	// that register span processors on it. It exports nothing by itself; the
+	// Dev UI is fed by the Direct instrumentation.
 	providerInitOnce.Do(func() {
 		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 	})
@@ -241,10 +218,16 @@ func RunInNewSpan[I, O any](
 	var output O
 	runBody := func(ctx context.Context, span Span) (any, error) {
 		sm.TraceInfo = span.TraceInfo()
+		if sm.TraceInfo.TraceID == "" {
+			// No provider tracks ids (e.g. only OTel over its no-op provider).
+			// Framework mechanics still key off them: the reflection server's
+			// cancel registry and trace headers, log correlation, and error
+			// details. So mint Genkit-local ids, continuing the parent's trace.
+			sm.TraceInfo = fallbackTraceInfo(parentSM)
+		}
 
-		// Fire the telemetry callback the moment ids are known. Omit blank ids
-		// so an uninstrumented run does not look like a broken exporter.
-		if cb := telemetryCallback(ctx); cb != nil && sm.TraceInfo.TraceID != "" {
+		// Fire the telemetry callback the moment ids are known.
+		if cb := telemetryCallback(ctx); cb != nil {
 			cb(sm.TraceInfo.TraceID, sm.TraceInfo.SpanID)
 		}
 
@@ -304,6 +287,20 @@ func RunInNewSpan[I, O any](
 
 	_, err := dispatch(ctx, activeInstrumentations(), info, runBody)
 	return output, err
+}
+
+// fallbackTraceInfo mints ids for a span no provider assigned ids to. It stays
+// in the parent's trace when the parent has one. The ids are never exported,
+// so math/rand is enough and keeps this cheap on the uninstrumented path.
+func fallbackTraceInfo(parent *spanMetadata) TraceInfo {
+	traceID := ""
+	if parent != nil {
+		traceID = parent.TraceInfo.TraceID
+	}
+	if traceID == "" {
+		traceID = fmt.Sprintf("%016x%016x", rand.Uint64(), rand.Uint64())
+	}
+	return TraceInfo{TraceID: traceID, SpanID: fmt.Sprintf("%016x", rand.Uint64())}
 }
 
 // buildAnnotatedPath creates a path with type annotations
@@ -375,6 +372,21 @@ type spanMetadata struct {
 	Type            string            // span type (action, flow, model, etc.)
 	Subtype         string            // span subtype (tool, model, flow, etc.)
 	Metadata        map[string]string // additional custom metadata
+
+	// Cached JSON encodings of Input, Init and Output, so the providers in a
+	// chain, and a span's start and end writes, marshal each payload once.
+	// Only touched on the span's own goroutine: providers encode before
+	// calling next and after it returns.
+	inputJSON, initJSON, outputJSON *string
+}
+
+// cachedJSON returns the JSON encoding of v, computing it into *cache once.
+func cachedJSON(cache **string, v any) string {
+	if *cache == nil {
+		s := base.JSONString(v)
+		*cache = &s
+	}
+	return **cache
 }
 
 // attributes returns some information about the spanMetadata
@@ -383,16 +395,16 @@ func (sm *spanMetadata) attributes() []attribute.KeyValue {
 	kvs := []attribute.KeyValue{
 		attribute.String("genkit:name", sm.Name),
 		attribute.String("genkit:state", string(sm.State)),
-		attribute.String("genkit:input", base.JSONString(sm.Input)),
+		attribute.String("genkit:input", cachedJSON(&sm.inputJSON, sm.Input)),
 		attribute.String("genkit:path", sm.Path),
 	}
 
 	if sm.Init != nil {
-		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
+		kvs = append(kvs, attribute.String("genkit:init", cachedJSON(&sm.initJSON, sm.Init)))
 	}
 
 	if sm.Output != nil {
-		kvs = append(kvs, attribute.String("genkit:output", base.JSONString(sm.Output)))
+		kvs = append(kvs, attribute.String("genkit:output", cachedJSON(&sm.outputJSON, sm.Output)))
 	}
 
 	if sm.Type != "" {
@@ -460,10 +472,10 @@ func (sm *spanMetadata) startAttributes() []attribute.KeyValue {
 // match attributes() so the end write reasserts them.
 func (sm *spanMetadata) inputAttributes() []attribute.KeyValue {
 	kvs := []attribute.KeyValue{
-		attribute.String("genkit:input", base.JSONString(sm.Input)),
+		attribute.String("genkit:input", cachedJSON(&sm.inputJSON, sm.Input)),
 	}
 	if sm.Init != nil {
-		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
+		kvs = append(kvs, attribute.String("genkit:init", cachedJSON(&sm.initJSON, sm.Init)))
 	}
 	return kvs
 }

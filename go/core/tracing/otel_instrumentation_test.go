@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,10 +25,10 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// TestOTelInstrumentation_EmptyIDsWhenUnconfigured verifies the redesign's core
-// property: OTelInstrumentation has no opinion about the provider and installs
-// none. With OTel's no-op provider (nothing configured) its span ids are
-// invalid, so TraceInfo reports empty rather than an all-zero span.
+// TestOTelInstrumentation_EmptyIDsWhenUnconfigured verifies that
+// OTelInstrumentation installs no provider of its own. With OTel's no-op
+// provider (nothing configured) its span ids are invalid, so TraceInfo reports
+// empty rather than an all-zero span.
 func TestOTelInstrumentation_EmptyIDsWhenUnconfigured(t *testing.T) {
 	prev := otel.GetTracerProvider()
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
@@ -46,6 +46,34 @@ func TestOTelInstrumentation_EmptyIDsWhenUnconfigured(t *testing.T) {
 	}
 	if got.TraceID != "" || got.SpanID != "" {
 		t.Errorf("TraceInfo = %+v, want empty (no provider configured)", got)
+	}
+}
+
+// TestOTelInstrumentation_SkipsEncodingWhenNotRecording checks that a span the
+// no-op provider discards is not paid for: the end write, which JSON-encodes
+// input and output, is skipped. Realtime is pinned off: with it on, input is
+// seeded as a start option, before recording is known (and is then reused by
+// the other providers through the cache).
+func TestOTelInstrumentation_SkipsEncodingWhenNotRecording(t *testing.T) {
+	prevRealtime := realtimeTelemetryActive
+	realtimeTelemetryActive = false
+	t.Cleanup(func() { realtimeTelemetryActive = prevRealtime })
+
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	otel.SetTracerProvider(noop.NewTracerProvider())
+
+	sm := &spanMetadata{Name: "n", Input: "in"}
+	o := &OTelInstrumentation{}
+	_, err := o.RunInNewSpan(context.Background(), &SpanInfo{metadata: sm}, func(context.Context, Span) (any, error) {
+		sm.Output = "out"
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm.inputJSON != nil || sm.outputJSON != nil {
+		t.Error("input/output were JSON-encoded for a non-recording span")
 	}
 }
 

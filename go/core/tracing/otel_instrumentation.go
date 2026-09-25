@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,15 +25,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// OTelInstrumentation is the default, back-compatible instrumentation: exactly
-// what RunInNewSpan did historically via the OpenTelemetry SDK. Pure span
-// creation. It reads whatever provider the caller registered via
-// otel.SetTracerProvider (a user's OTel setup, or the GCP / Firebase plugins)
-// and has no opinion about where that provider comes from; Genkit no longer
-// installs one. When nothing is configured, OTel's no-op provider yields
-// all-zero, invalid ids, which TraceInfo reports as empty. It also puts an OTel
-// span in the context, so direct trace.SpanFromContext writes (e.g. in
-// ai/exp/agent.go) keep working while OTel is in the chain.
+// OTelInstrumentation is the default instrumentation: it encodes each Genkit
+// span as an OpenTelemetry span. It reads whatever provider the caller
+// registered via otel.SetTracerProvider (a user's OTel setup, or the GCP /
+// Firebase plugins) and installs none itself. When nothing is configured,
+// OTel's no-op provider yields all-zero, invalid ids, which TraceInfo reports
+// as empty. It also puts the OTel span in the context, so direct
+// trace.SpanFromContext writes (e.g. in ai/exp/agent.go) land on it.
 //
 // Back-compat default; removed in the next major to reach the shared "not
 // instrumented by default" goal.
@@ -93,10 +91,16 @@ func (o *OTelInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, 
 	defer span.End()
 	// The deferred end write reasserts the full attribute set (including the
 	// run-determined output/state). Registered after span.End so it runs first.
-	defer func() { span.SetAttributes(sm.attributes()...) }()
+	// Skipped for a non-recording span (the no-op provider, or unsampled),
+	// which would discard the attributes after paying to JSON-encode them.
+	defer func() {
+		if span.IsRecording() {
+			span.SetAttributes(sm.attributes()...)
+		}
+	}()
 
 	out, err := next(ctx, &otelSpan{span: span})
-	if err != nil && !isErrorAlreadyMarked(err) {
+	if err != nil && span.IsRecording() {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}

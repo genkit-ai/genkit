@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,26 +18,25 @@ package tracing
 
 import (
 	"context"
-	"os"
+	"maps"
 	"sync"
+	"sync/atomic"
 )
 
 // This file holds the pluggable instrumentation abstraction: span creation is
-// decoupled from collection/export. [RunInNewSpan] stays the entry point and
-// owns Genkit semantics (path, isRoot, state/output, debug logging); it
-// dispatches to a chain of Instrumentation providers that each only encode the
-// span into their backend. Collection stays with the explicit WriteTelemetry*
-// helpers and the GCP / Firebase plugins.
+// decoupled from collection/export. [RunInNewSpan] is the entry point and owns
+// Genkit semantics (path, isRoot, state/output, debug logging); it dispatches
+// to a chain of Instrumentation providers that each only encode the span into
+// their backend.
 
 // SpanInfo is the backend-independent view of a span the dispatcher hands to
 // each [Instrumentation] provider. The dispatcher owns Genkit semantics; a
-// provider only encodes this into its backend.
+// provider only encodes this into its backend, reading it through Labels and
+// the accessor methods.
 //
-// The running metadata (name, path, type, input/output/state, ...) is kept in
-// the unexported spanMetadata for now, so the only field an out-of-package
-// provider can read today is Labels. Built-in providers reach the metadata
-// directly. A future change promotes an exported, read-only view once the shape
-// settles.
+// Everything the accessors return is known when the span starts. The run's
+// result is not on SpanInfo: a provider reads the output and error from what
+// next returns, the only point they are known.
 type SpanInfo struct {
 	// Labels are the raw TelemetryLabels set directly as span attributes.
 	Labels map[string]string
@@ -46,6 +45,69 @@ type SpanInfo struct {
 	// (OTel, Direct) encode it via its attributes()/startAttributes() methods.
 	// It is fully populated (state, output, error) only after next returns.
 	metadata *spanMetadata
+}
+
+// The accessors tolerate a nil receiver and nil metadata, so a provider (or a
+// test) holding a zero-value *SpanInfo does not panic.
+
+// Name is the span name. For a model span it is the fully qualified model name
+// (e.g. "googleai/gemini-flash-latest").
+func (i *SpanInfo) Name() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Name
+}
+
+// Type is the Genkit span type ("action", "flowStep", "util", ...).
+func (i *SpanInfo) Type() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Type
+}
+
+// Subtype is the finer categorization ("model", "tool", "flow", ...), or "".
+func (i *SpanInfo) Subtype() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Subtype
+}
+
+// Path is the type-annotated span path, e.g.
+// "/{chatFlow,t:flow}/{googleai/gemini-flash-latest,t:action,s:model}".
+func (i *SpanInfo) Path() string {
+	if i == nil || i.metadata == nil {
+		return ""
+	}
+	return i.metadata.Path
+}
+
+// IsRoot reports whether this span is the root of a Genkit trace.
+func (i *SpanInfo) IsRoot() bool {
+	if i == nil || i.metadata == nil {
+		return false
+	}
+	return i.metadata.IsRoot
+}
+
+// Input is the raw input the action was invoked with.
+func (i *SpanInfo) Input() any {
+	if i == nil || i.metadata == nil {
+		return nil
+	}
+	return i.metadata.Input
+}
+
+// Metadata returns a copy of the span's custom metadata (recorded as
+// genkit:metadata:<key> attributes), or nil if there is none. Metadata added
+// mid-run arrives through [Span.SetMetadata] instead.
+func (i *SpanInfo) Metadata() map[string]string {
+	if i == nil || i.metadata == nil {
+		return nil
+	}
+	return maps.Clone(i.metadata.Metadata)
 }
 
 // Span is the backend-independent handle a provider exposes for the span it
@@ -75,6 +137,8 @@ type Instrumentation interface {
 // ---------------------------------------------------------------------------
 
 var (
+	// instrumentationMu serializes writers of the registry; readers on the
+	// span hot path only load activeChain.
 	instrumentationMu sync.Mutex
 	// configured replaces the implicit OTel default when set via
 	// ConfigureInstrumentation.
@@ -82,12 +146,16 @@ var (
 	// defaultOTel is the implicit, back-compat default. Removed in the next
 	// major to reach the shared "not instrumented by default" goal.
 	defaultOTel Instrumentation = &OTelInstrumentation{}
-	// direct feeds the Dev UI without OTel; prepended when a dev telemetry
-	// server is configured (env var or the reflection handshake).
+	// direct feeds the Dev UI without OTel; set by EnableDevInstrumentation.
 	direct Instrumentation
-	// devServerURL is the dev telemetry server the Direct provider talks to.
-	devServerURL string
+	// activeChain is the resolved chain every span dispatches through,
+	// rebuilt by each registry write.
+	activeChain atomic.Pointer[[]Instrumentation]
 )
+
+func init() {
+	rebuildChainLocked()
+}
 
 // ConfigureInstrumentation replaces the implicit default
 // ([OTelInstrumentation]) with i. DirectTelemetryInstrumentation is still
@@ -97,68 +165,55 @@ func ConfigureInstrumentation(i Instrumentation) {
 	instrumentationMu.Lock()
 	defer instrumentationMu.Unlock()
 	configured = i
+	rebuildChainLocked()
 }
 
-// EnableDevInstrumentation installs the Direct provider (feeding the Dev UI at
-// url) as the primary dev instrumentation. It replaces the old telemetry-server
-// span-processor auto-registration. An empty url is ignored; a later call
-// updates the destination. Called during dev-mode init with GENKIT_TELEMETRY_SERVER
-// or the URL the Genkit CLI supplies over the reflection API.
+// EnableDevInstrumentation installs the Direct provider, feeding the Dev UI's
+// telemetry server at url, at the front of the chain. An empty url is ignored;
+// a later call updates the destination. In the dev environment genkit.Init
+// calls it with GENKIT_TELEMETRY_SERVER, and the reflection server calls it
+// with the URL the Genkit CLI supplies.
 func EnableDevInstrumentation(url string) {
 	if url == "" {
 		return
 	}
 	instrumentationMu.Lock()
 	defer instrumentationMu.Unlock()
-	devServerURL = url
 	direct = newDirectTelemetryInstrumentation(url)
+	rebuildChainLocked()
 }
 
-// ResetInstrumentation clears configured and auto-injected instrumentation,
-// restoring the implicit OTel default. Intended for tests that call
+// ResetInstrumentation clears configured and dev instrumentation, restoring
+// the implicit OTel default. Intended for tests that call
 // [ConfigureInstrumentation] and want to undo it (typically via t.Cleanup).
 func ResetInstrumentation() {
 	instrumentationMu.Lock()
 	defer instrumentationMu.Unlock()
 	configured = nil
 	direct = nil
-	devServerURL = ""
+	rebuildChainLocked()
 }
 
-// activeInstrumentations resolves the chain for this call: base is the
-// configured provider or the implicit OTel default; the Direct provider is
-// prepended when a dev telemetry server is configured, so its ids win and the
-// Dev UI is fed without OTel.
+// activeInstrumentations returns the chain for a new span: the Direct provider
+// first when a dev telemetry server is configured (so its ids win), then the
+// configured provider or the implicit OTel default. Lock-free: this runs for
+// every span.
 func activeInstrumentations() []Instrumentation {
-	instrumentationMu.Lock()
-	defer instrumentationMu.Unlock()
+	return *activeChain.Load()
+}
+
+// rebuildChainLocked publishes the chain for the current registry state.
+// Caller holds instrumentationMu (or is init).
+func rebuildChainLocked() {
 	base := configured
 	if base == nil {
 		base = defaultOTel
 	}
-	if d := resolveDirectLocked(); d != nil {
-		return []Instrumentation{d, base}
-	}
-	return []Instrumentation{base}
-}
-
-// resolveDirectLocked lazily builds the Direct provider from the dev server URL
-// (explicitly set, or read once from GENKIT_TELEMETRY_SERVER). The env fallback
-// mirrors the pre-refactor TracerProvider bootstrap. Caller holds
-// instrumentationMu.
-func resolveDirectLocked() Instrumentation {
+	chain := []Instrumentation{base}
 	if direct != nil {
-		return direct
+		chain = []Instrumentation{direct, base}
 	}
-	url := devServerURL
-	if url == "" {
-		url = os.Getenv("GENKIT_TELEMETRY_SERVER")
-	}
-	if url == "" {
-		return nil
-	}
-	direct = newDirectTelemetryInstrumentation(url)
-	return direct
+	activeChain.Store(&chain)
 }
 
 // ---------------------------------------------------------------------------

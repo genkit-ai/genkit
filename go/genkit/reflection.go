@@ -648,11 +648,8 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 // Shared between V1 and V2 reflection servers.
 func configureTelemetry(url string) {
 	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
-		// Feed the Dev UI through the Direct instrumentation (axis 1) rather
-		// than registering an OTel span processor. Direct reuses realtime
-		// (start + end) export, so traces stream in as spans start, not just
-		// when they end (which, for a long-lived agent connection, is only
-		// when it closes).
+		// Traces reach the Dev UI through the Direct instrumentation, which
+		// needs no OpenTelemetry SDK.
 		tracing.EnableDevInstrumentation(url)
 		tracing.EnableLogExport(url)
 		slog.Debug("connected to telemetry server", "url", url)
