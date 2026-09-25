@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-// A model-free telemetry testapp: a Go port of js/testapps/flow-sample1. It
-// exercises the tracing paths (nested steps, streaming, errors, caught errors)
-// without any model calls, so the traces it writes to .genkit/traces are a
-// stable fixture for verifying the instrumentation refactor did not change the
-// exported trace shape.
 //
-// Run it under the Dev UI and call the flows from the browser at
-// http://localhost:4000, then inspect .genkit/traces:
+// SPDX-License-Identifier: Apache-2.0
+
+// This sample shows how flows and their steps (genkit.Run) appear as traces:
+// sequential and nested steps, streaming, a failing step, a failing flow, and
+// a step error the flow recovers from. It makes no model calls, so it runs
+// without API keys and its traces are deterministic (a Go port of
+// js/testapps/flow-sample1).
+//
+// Run it under the Dev UI, call the flows from http://localhost:4000, and
+// open each run's trace:
 //
 //	genkit start -- go run .
 package main

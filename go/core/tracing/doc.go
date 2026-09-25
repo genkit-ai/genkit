@@ -69,7 +69,8 @@ that path. The Dev UI provides:
   - Error highlighting and stack traces
   - Performance analysis across flow executions
 
-Set GENKIT_TELEMETRY_SERVER to configure a custom telemetry endpoint.
+Set GENKIT_TELEMETRY_SERVER to configure a custom telemetry endpoint; genkit.Init
+reads it once at startup in the dev environment.
 
 # Span Metadata
 

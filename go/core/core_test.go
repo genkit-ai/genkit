@@ -31,12 +31,25 @@ import (
 var testTelemetryClient = tracing.NewTestOnlyTelemetryClient()
 
 // TestMain routes the package's spans through a Direct instrumentation over
-// testTelemetryClient. Tests that need an isolated capture (collectStepSpans)
-// configure their own client and restore this default on cleanup.
+// testTelemetryClient. Tests that inspect traces use captureTraces instead.
 func TestMain(m *testing.M) {
 	tracing.ConfigureInstrumentation(
 		tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
 	os.Exit(m.Run())
+}
+
+// captureTraces routes spans to a fresh client for the rest of the test, then
+// restores the package-wide default (see TestMain) rather than clearing it, so
+// later tests still carry trace ids.
+func captureTraces(t *testing.T) *tracing.TestOnlyTelemetryClient {
+	t.Helper()
+	client := tracing.NewTestOnlyTelemetryClient()
+	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	t.Cleanup(func() {
+		tracing.ConfigureInstrumentation(
+			tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
+	})
+	return client
 }
 
 func TestRegisterSchema(t *testing.T) {
