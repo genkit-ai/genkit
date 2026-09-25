@@ -123,8 +123,12 @@ response = await ai.generate(
         Message(
             role=Role.USER,
             content=[
-                Part.from_media('gs://my-bucket/person.png', metadata={'type': 'personImage'}),
-                Part.from_media('gs://my-bucket/shirt.png', metadata={'type': 'productImage'}),
+                Part.from_media(
+                    'gs://my-bucket/person.png', content_type='image/png', metadata={'type': 'personImage'}
+                ),
+                Part.from_media(
+                    'gs://my-bucket/shirt.png', content_type='image/png', metadata={'type': 'productImage'}
+                ),
             ],
         )
     ],
