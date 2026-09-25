@@ -34,6 +34,9 @@
 //   - teamFlow is the built-in enum format on the same model: the system
 //     message is the question, the enum values are the options, and there
 //     is no decision type.
+//   - toolFlow picks the tool an agent should call from a list built in
+//     code, the way the tools on hand are known only at run time, and asks
+//     the user instead when the pick is not clear.
 //
 // Thresholds live in code next to the questions. The model returns
 // probabilities; what to do at 0.6 is the application's decision, and it
@@ -75,6 +78,10 @@
 //	curl -X POST http://localhost:8080/askFlow \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"query": "What is the capital of Australia?"}}'
+//
+//	curl -X POST http://localhost:8080/toolFlow \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"request": "Move my 3pm meeting with Dana to Thursday."}}'
 package main
 
 import (
@@ -258,6 +265,33 @@ type AskResult struct {
 	Answer  string  `json:"answer"`
 }
 
+// agentTool is a tool an agent can call. In an application the list is
+// whatever is registered at run time, so no Go type can list the options:
+// toolFlow builds its choice from these values.
+type agentTool struct {
+	name, description string
+}
+
+var agentTools = []agentTool{
+	{"web_search", "Look up facts, news, or prices on the web"},
+	{"calendar", "Read or change the user's own calendar"},
+	{"email", "Read, draft, or send the user's email"},
+	{"calculator", "Do arithmetic or convert units"},
+}
+
+// ToolRequest is what toolFlow routes.
+type ToolRequest struct {
+	Request string `json:"request" jsonschema:"default=Move my 3pm meeting with Dana to Thursday." jsonschema_description:"What the user asked the assistant"`
+}
+
+// ToolPick is toolFlow's answer and what the policy made of it.
+type ToolPick struct {
+	Tool          string             `json:"tool" jsonschema_description:"The tool to call, or none"`
+	Confidence    float64            `json:"confidence"`
+	Probabilities map[string]float64 `json:"probabilities"`
+	Route         string             `json:"route" jsonschema:"enum=call,enum=ask,enum=answer" jsonschema_description:"Call the tool, ask the user which one they meant, or answer without a tool"`
+}
+
 // The prompt files are compiled into the binary, so the sample runs from
 // any directory.
 //
@@ -301,6 +335,7 @@ func main() {
 	DefineRank(g)
 	DefineAsk(g)
 	DefineTeam(g)
+	DefineToolPick(g)
 
 	// Serve every flow over HTTP.
 	mux := http.NewServeMux()
@@ -504,5 +539,49 @@ func DefineTeam(g *genkit.Genkit) {
 			return "", fmt.Errorf("could not pick a team: %w", err)
 		}
 		return Dept(resp.Text()), nil
+	})
+}
+
+// toolFloor is the confidence below which toolFlow asks rather than calls.
+// A tool call acts on the user's data, so the bar is higher than triage's.
+const toolFloor = 0.7
+
+// DefineToolPick asks a choice whose options are only known at run time:
+// the tools on hand. typesafex.Schema builds the question from values
+// rather than from a type, and the answer comes back as a typesafex.Answer.
+// A "none" option lets the model say no tool fits.
+func DefineToolPick(g *genkit.Genkit) {
+	genkit.DefineFlow(g, "toolFlow", func(ctx context.Context, input ToolRequest) (ToolPick, error) {
+		options := make([]typesafex.ChoiceOption, 0, len(agentTools)+1)
+		for _, t := range agentTools {
+			options = append(options, typesafex.ChoiceOption{Name: t.name, Criteria: t.description})
+		}
+		options = append(options, typesafex.ChoiceOption{Name: "none", Criteria: "No tool fits; the assistant answers from what it knows"})
+
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName(model),
+			ai.WithSystem("The state is a request a user made to an assistant."),
+			ai.WithOutputSchema(typesafex.Schema(map[string]typesafex.Question{
+				"tool": typesafex.ChoiceQuestion{Instructions: "Which tool does the assistant need to fulfil the request?", Options: options},
+			})),
+			ai.WithPrompt(input.Request),
+		)
+		if err != nil {
+			return ToolPick{}, fmt.Errorf("could not pick a tool: %w", err)
+		}
+		var answers map[string]typesafex.Answer
+		if err := resp.Output(&answers); err != nil {
+			return ToolPick{}, fmt.Errorf("could not read the pick: %w", err)
+		}
+
+		pick := answers["tool"]
+		route := "call"
+		switch {
+		case pick.Choice == "none":
+			route = "answer"
+		case pick.Confidence < toolFloor:
+			route = "ask"
+		}
+		return ToolPick{Tool: pick.Choice, Confidence: pick.Confidence, Probabilities: pick.Probabilities, Route: route}, nil
 	})
 }
