@@ -1589,7 +1589,7 @@ func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool)
 	logger.Debug(ctx, "tool failed, returning the error to the model", "tool", name, "error", err)
 	return &MultipartToolResponse{
 		Output:   map[string]any{"error": msg},
-		Metadata: map[string]any{"error": true},
+		Metadata: map[string]any{"isError": true},
 	}
 }
 

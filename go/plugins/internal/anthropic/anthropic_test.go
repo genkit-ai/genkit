@@ -469,7 +469,7 @@ func TestToAnthropicParts(t *testing.T) {
 						Ref:    "ref1",
 						Output: map[string]any{"error": "no such city"},
 					},
-					Metadata: map[string]any{"error": true},
+					Metadata: map[string]any{"isError": true},
 				},
 			},
 			expected: []anthropic.ContentBlockParamUnion{
