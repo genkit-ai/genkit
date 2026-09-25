@@ -483,10 +483,21 @@ class SpeechConfigSchema(BaseModel):
     response_json_schema: Any | None = Field(None, exclude=True)
 
 
+DEFAULT_TTS_VOICE_NAME = 'Kore'
+"""Prebuilt voice sent with a TTS request whose config names no voice."""
+
+
 class GeminiTtsConfigSchema(GeminiConfigSchema):
     """Gemini TTS Config Schema."""
 
-    speech_config: SpeechConfigSchema | None = Field(None, alias='speechConfig')
+    speech_config: SpeechConfigSchema | None = Field(
+        None,
+        alias='speechConfig',
+        description=(
+            'Speech synthesis settings. Without a voice config or a multi-speaker voice config, '
+            f'the {DEFAULT_TTS_VOICE_NAME} prebuilt voice is used.'
+        ),
+    )
 
 
 class GeminiImageConfigSchema(GeminiConfigSchema):
@@ -1430,12 +1441,24 @@ class GeminiModel:
         # prompts into configuration object
         request_cfg = await self._genkit_to_googleai_cfg(request=request)
 
-        # TTS models require response_modalities: ["AUDIO"]
+        # TTS models require response_modalities: ["AUDIO"]; some reject a request that names no voice
         if is_tts_model(model_name):
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
             if not request_cfg.response_modalities:
                 request_cfg.response_modalities = ['AUDIO']
+            speech = request_cfg.speech_config
+            if speech is None:
+                speech = genai_types.SpeechConfig()
+                request_cfg.speech_config = speech
+            if (
+                not isinstance(speech, str)
+                and speech.voice_config is None
+                and speech.multi_speaker_voice_config is None
+            ):
+                speech.voice_config = genai_types.VoiceConfig(
+                    prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name=DEFAULT_TTS_VOICE_NAME)
+                )
 
         # Image models require response_modalities: ["TEXT", "IMAGE"]
         if is_image_model(model_name):

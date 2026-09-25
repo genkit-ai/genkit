@@ -101,7 +101,14 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
 
     # Determine expected config based on model type
     if is_tts_model(version):
-        expected_config = genai.types.GenerateContentConfig(response_modalities=['AUDIO'])
+        expected_config = genai.types.GenerateContentConfig(
+            response_modalities=['AUDIO'],
+            speech_config=genai.types.SpeechConfig(
+                voice_config=genai.types.VoiceConfig(
+                    prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(voice_name='Kore')
+                )
+            ),
+        )
     elif is_image_model(version):
         expected_config = genai.types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
     else:
@@ -150,7 +157,14 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
 
     # Determine expected config based on model type
     if is_tts_model(version):
-        expected_config = genai.types.GenerateContentConfig(response_modalities=['AUDIO'])
+        expected_config = genai.types.GenerateContentConfig(
+            response_modalities=['AUDIO'],
+            speech_config=genai.types.SpeechConfig(
+                voice_config=genai.types.VoiceConfig(
+                    prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(voice_name='Kore')
+                )
+            ),
+        )
     elif is_image_model(version):
         expected_config = genai.types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
     else:
@@ -1528,3 +1542,89 @@ async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: 
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['IMAGE']
+
+
+def _tts_client_mock(mocker: MockerFixture) -> AsyncMock:
+    candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
+    return client_mock
+
+
+@pytest.mark.asyncio
+async def test_generate_defaults_the_tts_voice_when_config_names_none(mocker: MockerFixture) -> None:
+    """A TTS request without a speech config is sent with the default prebuilt voice."""
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
+    client_mock = _tts_client_mock(mocker)
+
+    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
+    assert sent_config.speech_config.voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config.voice_name == 'Kore'
+
+
+@pytest.mark.asyncio
+async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: MockerFixture) -> None:
+    """A speech config that sets only a language code still gets the default voice."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'languageCode': 'en-US'}}),
+    )
+    client_mock = _tts_client_mock(mocker)
+
+    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
+    assert sent_config.speech_config.language_code == 'en-US'
+    assert sent_config.speech_config.voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config.voice_name == 'Kore'
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_the_caller_tts_voice(mocker: MockerFixture) -> None:
+    """A voice named by the caller is sent unchanged."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Puck'}}}
+        }),
+    )
+    client_mock = _tts_client_mock(mocker)
+
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
+    assert sent_config.speech_config.voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config is not None
+    assert sent_config.speech_config.voice_config.prebuilt_voice_config.voice_name == 'Puck'
+
+
+@pytest.mark.asyncio
+async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFixture) -> None:
+    """A multi-speaker voice config is sent without a single-voice config beside it."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {
+                'multiSpeakerVoiceConfig': {
+                    'speakerVoiceConfigs': [
+                        {'speaker': 'Alice', 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+                    ]
+                }
+            }
+        }),
+    )
+    client_mock = _tts_client_mock(mocker)
+
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
+    assert sent_config.speech_config.voice_config is None
+    assert sent_config.speech_config.multi_speaker_voice_config is not None
