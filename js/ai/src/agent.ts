@@ -38,6 +38,7 @@ import {
 
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import {
+  recordSpanException,
   setCustomMetadataAttribute,
   setCustomMetadataAttributes,
 } from '@genkit-ai/core/tracing';
@@ -505,6 +506,12 @@ export class SessionRunner<State = unknown> {
           this.notifyEndTurn(this.lastSnapshot?.snapshotId, 'aborted');
           break;
         }
+
+        // Record on the active (typically action) span without failing it.
+        // The turn span already records via runInNewSpan's rethrow path; this
+        // keeps the exception visible on the parent even when we absorb the
+        // error into a graceful `finishReason: 'failed'` result below.
+        recordSpanException(e);
 
         this.lastTurnFinishReason = 'failed';
         this.lastTurnError = toErrorDetails(e);
@@ -1038,7 +1045,8 @@ export function defineCustomAgent<State = unknown>(
       } catch (e: any) {
         // An AgentInitError signals API misuse (e.g. the snapshot/session
         // ownership guard) that must surface as a thrown error; re-throw it so
-        // the server handler maps it to a proper HTTP status.
+        // the server handler maps it to a proper HTTP status. Uncaught path:
+        // runInNewSpan records the exception timeEvent on rethrow.
         if (e instanceof AgentInitError) {
           throw e;
         }
@@ -1046,8 +1054,11 @@ export function defineCustomAgent<State = unknown>(
         // snapshot, invalid client state). Resolve gracefully with
         // `finishReason: 'failed'` - preserving the original `error.status` -
         // rather than throwing, so the caller gets a structured, inspectable
-        // result. There is no last-good turn yet; echo back the
-        // client-supplied state when present.
+        // result. Record a timeEvent so the error remains observable on the
+        // span even when output attributes are filtered.
+        recordSpanException(e);
+        // There is no last-good turn yet; echo back the client-supplied state
+        // when present.
         return {
           finishReason: 'failed' as AgentFinishReason,
           error: toErrorDetails(e),

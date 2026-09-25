@@ -215,6 +215,11 @@ function getErrorMessage(e: any): string {
   if (e instanceof Error) {
     return e.message;
   }
+  // Plain objects with a string `message` (serialized / custom errors) would
+  // otherwise stringify as "[object Object]".
+  if (e && typeof e === 'object' && typeof e.message === 'string') {
+    return e.message;
+  }
   return `${e}`;
 }
 
@@ -240,6 +245,28 @@ function metadataToAttributes(metadata: SpanMetadata): Record<string, string> {
     }
   });
   return out;
+}
+
+/**
+ * Records an exception on the currently active span without failing the span.
+ *
+ * Use when an error is handled gracefully (e.g. returned as structured
+ * `finishReason: 'failed'` output) but should still appear in trace
+ * `timeEvents` so Dev UI / exporters can surface the message and stack
+ * without reading `genkit:output`.
+ *
+ * @hidden
+ */
+export function recordSpanException(e: unknown): void {
+  const span = trace.getActiveSpan();
+  if (!span) {
+    return;
+  }
+  if (e instanceof Error) {
+    span.recordException(e);
+  } else {
+    span.recordException(new Error(getErrorMessage(e)));
+  }
 }
 
 /**

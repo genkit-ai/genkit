@@ -686,6 +686,263 @@ describe('Agent', () => {
       const out = JSON.parse(turnSpan.attributes['genkit:output']);
       assert.deepStrictEqual(out.state.custom, { count: 1 });
     });
+
+    it('records exception timeEvents on graceful turn failure without failing the action span', async () => {
+      // Regression for #5709: caught turn errors resolve as finishReason
+      // 'failed' (span stays success) but must still expose exception
+      // timeEvents so Dev UI can show the message without reading output.
+      spanExporter.exportedSpans = [];
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        new Registry(),
+        { name: 'traceCaughtFailure', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new Error('caught turn boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.error?.message.includes('caught turn boom'));
+
+      const actionSpan = spanExporter.exportedSpans.find(
+        (s) =>
+          s.displayName === 'traceCaughtFailure' &&
+          s.attributes['genkit:metadata:subtype'] === 'agent'
+      );
+      assert.ok(actionSpan, 'expected the agent action span');
+      // Span success/failure semantics are unchanged for this PR.
+      assert.strictEqual(actionSpan.attributes['genkit:state'], 'success');
+
+      const exceptionEvent = actionSpan.timeEvents.timeEvent.find(
+        (e: any) => e.annotation?.description === 'exception'
+      );
+      assert.ok(
+        exceptionEvent,
+        'expected an exception timeEvent on the action span'
+      );
+      assert.ok(
+        String(
+          exceptionEvent.annotation.attributes['exception.message']
+        ).includes('caught turn boom')
+      );
+      assert.ok(
+        exceptionEvent.annotation.attributes['exception.stacktrace'],
+        'expected exception.stacktrace on the timeEvent'
+      );
+
+      // Error remains observable even if output attributes are unavailable.
+      const outputStr = actionSpan.attributes['genkit:output'] as string;
+      assert.ok(outputStr.includes('failed'));
+      delete actionSpan.attributes['genkit:output'];
+      const exceptionWithoutOutput = actionSpan.timeEvents.timeEvent.find(
+        (e: any) => e.annotation?.description === 'exception'
+      );
+      assert.ok(
+        exceptionWithoutOutput,
+        'exception timeEvent must remain after stripping genkit:output'
+      );
+      assert.ok(
+        String(
+          exceptionWithoutOutput.annotation.attributes['exception.message']
+        ).includes('caught turn boom')
+      );
+    });
+
+    it('records exception timeEvents when a detached background turn fails', async () => {
+      spanExporter.exportedSpans = [];
+      const store = new InMemorySessionStore();
+      let resolvePromise: () => void = () => {};
+      const releasePromise = new Promise<void>((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      const flow = defineCustomAgent(
+        new Registry(),
+        { name: 'traceDetachFailure', store },
+        async (sess) => {
+          await sess.run(async () => {
+            await releasePromise;
+            throw new Error('detached turn boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'hi' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+        detach: true,
+      });
+
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'detached');
+      assert.ok(output.snapshotId);
+
+      resolvePromise();
+      session.close();
+
+      await waitForSnapshotStatus(store, output.snapshotId!, 'failed');
+
+      // After detach the action span has already ended; the turn span is where
+      // the exception is recorded (uncaught inside run(), plus parent record
+      // when an active span remains).
+      const turnSpan = spanExporter.exportedSpans.find(
+        (s) => s.displayName === 'runTurn-1'
+      );
+      assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
+      const exceptionEvent = turnSpan.timeEvents.timeEvent.find(
+        (e: any) => e.annotation?.description === 'exception'
+      );
+      assert.ok(
+        exceptionEvent,
+        'expected an exception timeEvent on the turn span'
+      );
+      assert.ok(
+        String(
+          exceptionEvent.annotation.attributes['exception.message']
+        ).includes('detached turn boom')
+      );
+
+      // Still observable without relying on genkit:output.
+      delete turnSpan.attributes['genkit:output'];
+      assert.ok(
+        turnSpan.timeEvents.timeEvent.find(
+          (e: any) => e.annotation?.description === 'exception'
+        )
+      );
+    });
+
+    it('records exception timeEvents on uncaught agent init errors', async () => {
+      // Uncaught path: AgentInitError is rethrown and recorded by runInNewSpan.
+      spanExporter.exportedSpans = [];
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        new Registry(),
+        { name: 'traceUncaughtInit', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Client-managed init (state) against a server-managed agent is API misuse
+      // and throws AgentInitError out of the action.
+      const session = flow.streamBidi({
+        state: {
+          custom: { foo: 'should-be-rejected' },
+          messages: [],
+          artifacts: [],
+        },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      let thrown: any;
+      try {
+        for await (const _ of session.stream) {
+        }
+        await session.output;
+      } catch (e: any) {
+        thrown = e;
+      }
+      assert.ok(thrown, 'Expected the turn to throw an error');
+      assert.strictEqual(thrown.status, 'FAILED_PRECONDITION');
+
+      const actionSpan = spanExporter.exportedSpans.find(
+        (s) =>
+          s.displayName === 'traceUncaughtInit' &&
+          s.attributes['genkit:metadata:subtype'] === 'agent'
+      );
+      assert.ok(actionSpan, 'expected the agent action span');
+      assert.strictEqual(actionSpan.attributes['genkit:state'], 'error');
+
+      const exceptionEvent = actionSpan.timeEvents.timeEvent.find(
+        (e: any) => e.annotation?.description === 'exception'
+      );
+      assert.ok(
+        exceptionEvent,
+        'expected an exception timeEvent on the uncaught path'
+      );
+      assert.ok(
+        String(
+          exceptionEvent.annotation.attributes['exception.message']
+        ).includes("Cannot send 'state' to agent")
+      );
+    });
+
+    it('records exception timeEvents on graceful setup failures', async () => {
+      // Caught path outside SessionRunner: missing snapshot resolves as
+      // finishReason 'failed' and must still record a timeEvent.
+      spanExporter.exportedSpans = [];
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        new Registry(),
+        { name: 'traceSetupFailure', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({
+        snapshotId: 'does-not-exist',
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.error);
+
+      const actionSpan = spanExporter.exportedSpans.find(
+        (s) =>
+          s.displayName === 'traceSetupFailure' &&
+          s.attributes['genkit:metadata:subtype'] === 'agent'
+      );
+      assert.ok(actionSpan, 'expected the agent action span');
+      assert.strictEqual(actionSpan.attributes['genkit:state'], 'success');
+
+      const exceptionEvent = actionSpan.timeEvents.timeEvent.find(
+        (e: any) => e.annotation?.description === 'exception'
+      );
+      assert.ok(
+        exceptionEvent,
+        'expected an exception timeEvent on graceful setup failure'
+      );
+      assert.ok(
+        exceptionEvent.annotation.attributes['exception.message'],
+        'expected exception.message on the timeEvent'
+      );
+
+      delete actionSpan.attributes['genkit:output'];
+      assert.ok(
+        actionSpan.timeEvents.timeEvent.find(
+          (e: any) => e.annotation?.description === 'exception'
+        ),
+        'exception timeEvent must remain after stripping genkit:output'
+      );
+    });
   });
 
   describe('sessionId', () => {
