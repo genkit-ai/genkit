@@ -2161,6 +2161,11 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 	if p == nil || !p.IsToolRequest() {
 		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
 	}
+	// The kind check alone lets through a tool request part with no request,
+	// which history assembled by hand can carry; every step below reads it.
+	if p.ToolRequest == nil {
+		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: tool request part has no request")
+	}
 	if _, ok := p.Metadata["pendingOutput"]; ok {
 		return &resumeStep{request: p}, nil
 	}

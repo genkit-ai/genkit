@@ -4757,3 +4757,20 @@ func TestResumeRejectedBeforeAnyToolRuns(t *testing.T) {
 		})
 	}
 }
+
+// TestResumeRejectsToolRequestPartWithoutRequest pins that a tool request
+// part with no request in the last model message, which the kind check alone
+// lets through, fails the resume with ErrInvalidPart rather than panicking
+// when the resume is planned.
+func TestResumeRejectsToolRequestPartWithoutRequest(t *testing.T) {
+	r, tool, res := interruptedForResume(t)
+	history := res.History()
+	last := history[len(history)-1]
+	last.Content = append(last.Content, NewToolRequestPart(nil))
+	_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithMessages(history...), WithTools(tool),
+		WithToolResponses(tool.Respond(res.Message.Content[0], "answer", nil)))
+	if !errors.Is(err, ErrInvalidPart) {
+		t.Errorf("resume error = %v, want ErrInvalidPart", err)
+	}
+}
