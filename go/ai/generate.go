@@ -645,7 +645,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// execution is both wrapped by WrapGenerate and recorded under this
 		// turn's span (generate > tool > generate > model > tool).
 		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
-			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
+			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool, wrappedCb)
 			if err != nil {
 				return nil, err
 			}
@@ -976,10 +976,19 @@ func buildModelChain(mws []namedHooks, fn ModelFunc) ModelFunc {
 // its context from the one it was handed keeps the flag.
 var toolRanKey = base.NewContextKey[*bool]()
 
+// toolCallContext marks ctx, the context the tool function of one call to the
+// tool named toolName runs with, with a fresh [base.ToolCall] for the tool
+// function to claim. A WrapTool hook that runs the tool twice gets a fresh
+// mark each time.
+func toolCallContext(ctx context.Context, toolName string) context.Context {
+	return base.ToolCallKey.NewContext(ctx, &base.ToolCall{Name: toolName})
+}
+
 // buildToolRunner composes the WrapTool hooks from mws (outer-to-inner) into
 // a single function that executes a tool. The returned function is safe to
 // invoke from concurrent goroutines; each invocation threads its own params
-// through the shared hook chain. When no WrapTool hooks are configured, the
+// through the shared hook chain. The tool itself runs with the context
+// toolCallContext marks. When no WrapTool hooks are configured, the
 // tool is invoked directly without allocating a ToolParams wrapper.
 func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
 	hasHook := false
@@ -991,14 +1000,14 @@ func buildToolRunner(mws []namedHooks) func(ctx context.Context, tool Tool, req 
 	}
 	if !hasHook {
 		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-			return tool.RunRawMultipart(ctx, req.Input)
+			return tool.RunRawMultipart(toolCallContext(ctx, tool.Name()), req.Input)
 		}
 	}
 	chain := func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
 		if ran := toolRanKey.FromContext(ctx); ran != nil {
 			*ran = true
 		}
-		return params.Tool.RunRawMultipart(ctx, params.Request.Input)
+		return params.Tool.RunRawMultipart(toolCallContext(ctx, params.Tool.Name()), params.Request.Input)
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
@@ -1524,6 +1533,52 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 	return status.Errorf(ErrToolFailed, "tool %q failed: %w", name, cause)
 }
 
+// toolStreamer lets the tools of one round, which run concurrently, stream
+// through cb with [github.com/firebase/genkit/go/ai/tool.SendPartial] (wrapped
+// partial responses) and [github.com/firebase/genkit/go/ai/tool.SendChunk]
+// (raw model response chunks). cb, the wrapped stream callback, mutates
+// shared role and index state and writes the single stream sink, neither of
+// which is safe for concurrent use, so every tool-originated send is
+// serialized under one mutex. Streaming is best effort, so a sink error is
+// logged and dropped rather than failing the tool's authoritative return
+// value. The zero value with a nil cb installs no senders.
+type toolStreamer struct {
+	cb ModelStreamCallback
+	mu sync.Mutex
+}
+
+// send streams chunk through cb.
+func (s *toolStreamer) send(ctx context.Context, chunk *ModelResponseChunk) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cb(ctx, chunk); err != nil {
+		logger.Debug(ctx, "tool stream callback failed, dropping chunk", "error", err)
+	}
+}
+
+// context returns ctx with the senders for the call to req installed, or ctx
+// itself when there is no stream to send to.
+func (s *toolStreamer) context(ctx context.Context, req *ToolRequest) context.Context {
+	if s == nil || s.cb == nil {
+		return ctx
+	}
+	ctx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
+		s.send(sendCtx, &ModelResponseChunk{
+			Role: RoleTool,
+			Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
+				Name:   req.Name,
+				Ref:    req.Ref,
+				Output: output,
+			})},
+		})
+	})
+	return base.ToolChunkSenderKey.NewContext(ctx, func(sendCtx context.Context, chunk any) {
+		if c, ok := chunk.(*ModelResponseChunk); ok {
+			s.send(sendCtx, c)
+		}
+	})
+}
+
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
 type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
@@ -1531,11 +1586,18 @@ type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*M
 // interruptedPart returns the copy of tool request p that records the
 // interrupt raised for it, carrying the interrupt's data (nil for a bare
 // interrupt) as typed state; the wire marker is written when the part is
-// marshaled.
-func interruptedPart(p *Part, tie *toolInterruptError) *Part {
+// marshaled. The data is stored as the JSON object it serializes to, the
+// shape it has after a wire hop, so a reader such as [InterruptAs] sees one
+// shape wherever the part came from. tool.Interrupt already normalized it;
+// the conversion here covers an error built with a struct directly.
+func interruptedPart(p *Part, tie *base.ToolInterruptError) (*Part, error) {
+	data, err := base.ObjectPayload(tie.Data, "interrupt data")
+	if err != nil {
+		return nil, err
+	}
 	newPart := p.typedClone()
-	newPart.Interrupt = &ToolInterrupt{Data: bareIfNil(tie.Metadata)}
-	return newPart
+	newPart.Interrupt = &ToolInterrupt{Data: bareIfNil(data)}
+	return newPart, nil
 }
 
 // resolvedPart returns the copy of tool request p that records its interrupt,
@@ -1602,24 +1664,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
 
-	// Tools run concurrently (one goroutine each, below), and tool.SendPartial /
-	// tool.SendChunk let a tool stream through cb from inside its goroutine. cb
-	// (the wrapped stream callback) mutates shared role/index state and writes
-	// the single stream sink, neither of which is safe for concurrent use, so
-	// serialize every tool-originated send under one mutex. Streaming is
-	// best-effort, so a sink error is logged and dropped rather than failing the
-	// tool's authoritative return value.
-	var streamMu sync.Mutex
-	streamChunk := func(sendCtx context.Context, chunk *ModelResponseChunk) {
-		if cb == nil {
-			return
-		}
-		streamMu.Lock()
-		defer streamMu.Unlock()
-		if err := cb(sendCtx, chunk); err != nil {
-			logger.Debug(sendCtx, "tool stream callback failed, dropping chunk", "error", err)
-		}
-	}
+	stream := &toolStreamer{cb: cb}
 
 	for i, part := range revisedMsg.Content {
 		if !part.IsToolRequest() {
@@ -1634,35 +1679,29 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				return
 			}
 
-			// Inject per-tool streaming senders so tools can stream via
-			// tool.SendPartial (wrapped partial responses) and
-			// tool.SendChunk (raw model response chunks). Both route through
-			// streamChunk, which serializes sends across the concurrent tools.
-			toolCtx := ctx
-			if cb != nil {
-				toolCtx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
-					streamChunk(sendCtx, &ModelResponseChunk{
-						Role: RoleTool,
-						Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
-							Name:   toolReq.Name,
-							Ref:    toolReq.Ref,
-							Output: output,
-						})},
-					})
-				})
-				toolCtx = base.ToolChunkSenderKey.NewContext(toolCtx, func(sendCtx context.Context, chunk any) {
-					if c, ok := chunk.(*ModelResponseChunk); ok {
-						streamChunk(sendCtx, c)
-					}
-				})
-			}
+			toolCtx := stream.context(ctx, toolReq)
+
+			// The part sink spans the whole call, WrapTool hooks included,
+			// so a hook can attach parts before or after running the tool.
+			// A fresh call answers no restart, including one an enclosing
+			// tool call was answering when it called Generate.
+			sink := &base.PartSink{}
+			defer sink.Close() // On an error or interrupt, too.
+			toolCtx = base.ToolPartSinkKey.NewContext(toolCtx, sink)
+			toolCtx = base.ToolResumeKey.NewContext(toolCtx, nil)
+			toolCtx = base.ToolOriginalInputKey.NewContext(toolCtx, nil)
 
 			multipartResp, err := runTool(toolCtx, tool, toolReq)
 			if err != nil {
-				var tie *toolInterruptError
+				var tie *base.ToolInterruptError
 				if errors.As(err, &tie) {
 					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
-					revisedMsg.Content[idx] = interruptedPart(p, tie)
+					interrupt, ierr := interruptedPart(p, tie)
+					if ierr != nil {
+						resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, ierr)}
+						return
+					}
+					revisedMsg.Content[idx] = interrupt
 					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
 					return
 				}
@@ -1670,6 +1709,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
 				return
 			}
+			multipartResp = foldAttachedParts(multipartResp, sink)
 
 			// p is already private to this call (revisedMsg is a deep clone of
 			// the model message), and the stamp writes only its metadata, so a
@@ -1693,7 +1733,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		res := <-resultChan
 		receivedIndexes = append(receivedIndexes, res.index)
 		if res.err != nil {
-			var tie *toolInterruptError
+			var tie *base.ToolInterruptError
 			if errors.As(res.err, &tie) {
 				hasInterrupts = true
 				continue
@@ -2220,7 +2260,7 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 // handleResumedToolRequest carries out step: it replays the pending output,
 // builds the response a Respond directive supplies, or re-executes the tool
 // for a Restart directive.
-func handleResumedToolRequest(ctx context.Context, step *resumeStep, runTool toolRunnerFunc) (*resumedToolRequestOutput, error) {
+func handleResumedToolRequest(ctx context.Context, step *resumeStep, runTool toolRunnerFunc, stream *toolStreamer) (*resumedToolRequestOutput, error) {
 	p := step.request
 	switch {
 	case step.tool == nil:
@@ -2259,7 +2299,7 @@ func handleResumedToolRequest(ctx context.Context, step *resumeStep, runTool too
 		}, nil
 	}
 
-	newToolResp, interrupt, err := restartedToolResponse(ctx, step.tool, p, step.restart, runTool)
+	newToolResp, interrupt, err := restartedToolResponse(ctx, step.tool, p, step.restart, runTool, stream)
 	if interrupt != nil {
 		return &resumedToolRequestOutput{interrupt: interrupt}, nil
 	}
@@ -2291,19 +2331,18 @@ func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
 	return nil
 }
 
-// resumePayload returns the payload restart rs delivers, as the map the
-// tool reads from [ToolContext.Resumed]: its resume data when that is a JSON
-// object, and an empty map for a bare restart, so the call still reads as a
-// resumption. ok is false when rs carries a marker that is not an object: a
-// peer runtime may mark a restart with any truthy JSON value (the JS
-// restartTool passes its resumedMetadata through as given), and Go delivers
-// only an object, so such a marker reads as a bare restart.
-func resumePayload(rs *ToolRestart) (payload map[string]any, ok bool) {
-	if base.IsNil(rs.Resume) {
+// resumePayload returns the payload restart rs delivers: its resume data when
+// that is a JSON object, and an empty map for a bare restart, so the call
+// still reads as a resumption. ok is false when rs carries a marker that is
+// not an object: a peer runtime may mark a restart with any truthy JSON value
+// (the JS restartTool passes its resumedMetadata through as given), and Go
+// delivers only an object, so such a marker reads as a bare restart.
+func resumePayload(rs *ToolRestart) (payload any, ok bool) {
+	switch {
+	case base.IsNil(rs.Resume):
 		return map[string]any{}, true
-	}
-	if m, err := base.ObjectPayload(rs.Resume, "resume data"); err == nil {
-		return m, true
+	case base.IsJSONObject(rs.Resume):
+		return rs.Resume, true
 	}
 	return map[string]any{}, false
 }
@@ -2311,35 +2350,46 @@ func resumePayload(rs *ToolRestart) (payload map[string]any, ok bool) {
 // restartedToolResponse re-executes tool for a Restart directive and builds
 // its tool response. The tool sees the resume payload the restart carries (an
 // empty map for a bare restart, so the call still reads as a resumption)
-// and, when the caller replaced the input, the original one. A tool that
-// interrupts again returns the interrupted copy of p instead of a response.
-func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc) (resp, interrupt *Part, err error) {
+// and, when the caller replaced the input, the original one. The payload
+// rides as given, a map or the caller's struct, and each reader converts it
+// to what it returns. A restarted tool streams and attaches parts as the
+// tools of a model turn do. A tool that interrupts again returns the
+// interrupted copy of p instead of a response.
+func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc, stream *toolStreamer) (resp, interrupt *Part, err error) {
 	name := restartPart.ToolRequest.Name
-	resumedCtx := ctx
+	resumedCtx := stream.context(ctx, restartPart.ToolRequest)
+	var resume, original any
 	if rs := restartPart.restartState(); rs != nil {
-		resume, ok := resumePayload(rs)
-		if !ok {
+		var ok bool
+		if resume, ok = resumePayload(rs); !ok {
 			logger.Debug(ctx, "resume payload is not a JSON object; restarting with an empty payload", "tool", name, "type", fmt.Sprintf("%T", rs.Resume))
 		}
-		resumedCtx = resumedCtxKey.NewContext(resumedCtx, resume)
-		if rs.OriginalInput != nil {
-			resumedCtx = origInputCtxKey.NewContext(resumedCtx, rs.OriginalInput)
-		}
+		original = rs.OriginalInput
 	}
+	resumedCtx = base.ToolResumeKey.NewContext(resumedCtx, resume)
+	resumedCtx = base.ToolOriginalInputKey.NewContext(resumedCtx, original)
 
+	sink := &base.PartSink{}
+	defer sink.Close() // On an error or interrupt, too.
+	resumedCtx = base.ToolPartSinkKey.NewContext(resumedCtx, sink)
 	multipartResp, err := runTool(resumedCtx, tool, &ToolRequest{
 		Name:  name,
 		Ref:   restartPart.ToolRequest.Ref,
 		Input: restartPart.ToolRequest.Input,
 	})
 	if err != nil {
-		var tie *toolInterruptError
+		var tie *base.ToolInterruptError
 		if errors.As(err, &tie) {
 			logger.Debug(ctx, "restarted tool triggered an interrupt", "tool", name)
-			return nil, interruptedPart(p, tie), nil
+			interrupt, ierr := interruptedPart(p, tie)
+			if ierr != nil {
+				return nil, nil, toolFailureError(ctx, name, ierr)
+			}
+			return nil, interrupt, nil
 		}
 		return nil, nil, toolFailureError(ctx, name, err)
 	}
+	multipartResp = foldAttachedParts(multipartResp, sink)
 
 	newToolResp := NewToolResponsePart(&ToolResponse{
 		Name:    name,
@@ -2353,7 +2403,7 @@ func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part,
 
 // handleResumeOption amends message history to handle `resume` arguments.
 // It returns the amended history.
-func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc) (*resumeOptionOutput, error) {
+func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc, cb ModelStreamCallback) (*resumeOptionOutput, error) {
 	if genOpts.Resume == nil || (len(genOpts.Resume.Respond) == 0 && len(genOpts.Resume.Restart) == 0) {
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
 	}
@@ -2403,6 +2453,8 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	resultChan := make(chan result[*resumedToolRequestOutput], toolReqCount)
 	newContent := make([]*Part, len(lastMessage.Content))
+	// Restarted tools stream as the tools of a model turn do.
+	stream := &toolStreamer{cb: cb}
 
 	// Every request is planned before any tool runs, so a resume that
 	// cannot go through fails without having run part of it.
@@ -2421,7 +2473,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	for i, step := range steps {
 		go func(idx int, step *resumeStep) {
-			output, err := handleResumedToolRequest(ctx, step, runTool)
+			output, err := handleResumedToolRequest(ctx, step, runTool, stream)
 			resultChan <- result[*resumedToolRequestOutput]{
 				index: idx,
 				value: output,

@@ -17,9 +17,36 @@
 package base
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 )
+
+// ToolInterruptError is the error a tool call returns to pause generation and
+// hand control back to the caller. ai/tool.Interrupt is the public way to
+// raise it; ai recognizes it with errors.As when the tool returns, records Data
+// on the interrupted tool request part, and reports it through
+// ai.IsToolInterruptError. The type is internal so that raising an interrupt
+// has a single entry point and the in-process representation can change with
+// the wire contract.
+//
+// Data is the interrupt payload: nil for a bare interrupt, otherwise the JSON
+// object it serializes to, as a map[string]any. ai/tool.Interrupt normalizes
+// it with [ObjectPayload] when the interrupt is raised, so a payload has one
+// shape in process and after a wire hop; ai normalizes again when the tool
+// returns, for an error built with a struct directly.
+type ToolInterruptError struct {
+	Data any
+}
+
+func (e *ToolInterruptError) Error() string {
+	if e.Data != nil {
+		if data, err := json.MarshalIndent(e.Data, "", "  "); err == nil {
+			return fmt.Sprintf("tool execution interrupted: \n\n%s", string(data))
+		}
+	}
+	return "tool execution interrupted"
+}
 
 // ObjectPayload converts an interrupt or resume payload to the JSON object the
 // wire contract requires: nil, a nil map and a nil pointer stay nil (a bare

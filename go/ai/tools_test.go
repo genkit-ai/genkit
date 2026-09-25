@@ -22,6 +22,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -44,30 +45,10 @@ func TestToolName(t *testing.T) {
 	})
 }
 
-func TestToolInterruptError(t *testing.T) {
-	t.Run("Error includes metadata when present", func(t *testing.T) {
-		err := &toolInterruptError{Metadata: map[string]any{"key": "value"}}
-		got := err.Error()
-		want := "tool execution interrupted: \n\n{\n  \"key\": \"value\"\n}"
-		if got != want {
-			t.Errorf("Error() = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Error returns simple message when no metadata", func(t *testing.T) {
-		err := &toolInterruptError{}
-		got := err.Error()
-		want := "tool execution interrupted"
-		if got != want {
-			t.Errorf("Error() = %q, want %q", got, want)
-		}
-	})
-}
-
 func TestIsToolInterruptError(t *testing.T) {
-	t.Run("returns true for toolInterruptError", func(t *testing.T) {
+	t.Run("returns true for an interrupt error", func(t *testing.T) {
 		meta := map[string]any{"reason": "user cancelled"}
-		err := &toolInterruptError{Metadata: meta}
+		err := &base.ToolInterruptError{Data: meta}
 
 		isInterrupt, gotMeta := IsToolInterruptError(err)
 
@@ -79,9 +60,9 @@ func TestIsToolInterruptError(t *testing.T) {
 		}
 	})
 
-	t.Run("returns true for wrapped toolInterruptError", func(t *testing.T) {
+	t.Run("returns true for a wrapped interrupt error", func(t *testing.T) {
 		meta := map[string]any{"step": 3}
-		innerErr := &toolInterruptError{Metadata: meta}
+		innerErr := &base.ToolInterruptError{Data: meta}
 		wrappedErr := errors.New("context: " + innerErr.Error())
 		// Use proper wrapping
 		wrappedErr = &wrappedInterruptError{cause: innerErr}
@@ -1231,7 +1212,7 @@ func TestResumedValue(t *testing.T) {
 	ctxWithResumed := func(m map[string]any) *ToolContext {
 		ctx := context.Background()
 		if m != nil {
-			ctx = resumedCtxKey.NewContext(ctx, m)
+			ctx = base.ToolResumeKey.NewContext(ctx, m)
 		}
 		return &ToolContext{Context: ctx, Resumed: m}
 	}
@@ -1319,7 +1300,7 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("works with a plain context.Context (middleware use)", func(t *testing.T) {
-		ctx := resumedCtxKey.NewContext(context.Background(), map[string]any{
+		ctx := base.ToolResumeKey.NewContext(context.Background(), map[string]any{
 			"toolApproved": true,
 		})
 
