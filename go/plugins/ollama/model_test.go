@@ -21,8 +21,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/firebase/genkit/go/ai"
 )
 
 func TestOllamaChatRequest_MarshalJSON(t *testing.T) {
@@ -48,22 +46,74 @@ func TestOllamaChatRequest_MarshalJSON(t *testing.T) {
 	}
 }
 
+func TestOllamaChatRequest_FormatField(t *testing.T) {
+	t.Run("string json mode", func(t *testing.T) {
+		req := &ollamaChatRequest{Model: "llama3", Format: "json"}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		got := string(data)
+		if !strings.Contains(got, `"format":"json"`) {
+			t.Errorf("expected \"format\":\"json\", got: %s", got)
+		}
+	})
+
+	t.Run("schema object mode", func(t *testing.T) {
+		schema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"answer": map[string]any{"type": "string"},
+			},
+		}
+		req := &ollamaChatRequest{Model: "llama3", Format: schema}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		got := string(data)
+		// format must be a JSON object, not the string "json"
+		if strings.Contains(got, `"format":"json"`) {
+			t.Errorf("format should be a JSON object, not the string \"json\": %s", got)
+		}
+		if !strings.Contains(got, `"format":{"`) {
+			t.Errorf("expected format to be a JSON object, got: %s", got)
+		}
+		if !strings.Contains(got, `"type":"object"`) {
+			t.Errorf("expected schema type in format, got: %s", got)
+		}
+	})
+
+	t.Run("nil omits field", func(t *testing.T) {
+		req := &ollamaChatRequest{Model: "llama3"}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		got := string(data)
+		if strings.Contains(got, `"format"`) {
+			t.Errorf("expected \"format\" key to be absent, got: %s", got)
+		}
+	})
+}
+
 func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 	tests := []struct {
-		name    string
-		cfg     any
-		want    *ollamaChatRequest
-		wantErr bool
+		name string
+		cfg  GenerateContentConfig
+		want *ollamaChatRequest
 	}{
 		{
-			name: "GenerateContentConfig pointer",
-			cfg: &GenerateContentConfig{
+			name: "configured values",
+			cfg: GenerateContentConfig{
 				Seed:        Ptr(42),
 				Temperature: Ptr(0.7),
 				Think:       ThinkEnabled(true),
+				KeepAlive:   "10m",
 			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
+				Think:     ThinkEnabled(true),
+				KeepAlive: "10m",
 				Options: map[string]any{
 					"seed":        42,
 					"temperature": 0.7,
@@ -71,14 +121,12 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig with zero values",
-			cfg: &GenerateContentConfig{
+			name: "explicit zero values",
+			cfg: GenerateContentConfig{
 				Seed:        Ptr(0),
 				Temperature: Ptr(0.0),
-				Think:       ThinkEnabled(true),
 			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
 				Options: map[string]any{
 					"seed":        0,
 					"temperature": 0.0,
@@ -86,21 +134,8 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig value",
+			name: "thinking effort",
 			cfg: GenerateContentConfig{
-				Seed:  Ptr(42),
-				Think: ThinkEnabled(true),
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
-				Options: map[string]any{
-					"seed": 42,
-				},
-			},
-		},
-		{
-			name: "GenerateContentConfig with ThinkEffort",
-			cfg: &GenerateContentConfig{
 				Think: ThinkEffort("high"),
 			},
 			want: &ollamaChatRequest{
@@ -108,69 +143,8 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "map[string]any with opts only",
-			cfg: map[string]any{
-				"temperature": 0.5,
-				"top_k":       40,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.5,
-					"top_k":       40,
-				},
-			},
-		},
-		{
-			name: "map[string]any with top level fields",
-			cfg: map[string]any{
-				"think":      true,
-				"keep_alive": "10m",
-			},
-			want: &ollamaChatRequest{
-				Think:     ThinkEnabled(true),
-				KeepAlive: "10m",
-			},
-		},
-		{
-			name: "map[string]any mixed main and opts",
-			cfg: map[string]any{
-				"temperature": 0.9,
-				"think":       true,
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
-				Options: map[string]any{
-					"temperature": 0.9,
-				},
-			},
-		},
-		{
-			name: "map[string]any with string think (GPT-OSS)",
-			cfg: map[string]any{
-				"think": "medium",
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEffort("medium"),
-			},
-		},
-		{
-			name: "GenerationCommonConfig pointer",
-			cfg: &ai.GenerationCommonConfig{
-				Temperature: 0.7,
-				TopK:        1,
-				TopP:        2.0,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.7,
-					"top_k":       1,
-					"top_p":       2.0,
-				},
-			},
-		},
-		{
-			name: "nil config",
-			cfg:  nil,
+			name: "zero config",
+			cfg:  GenerateContentConfig{},
 			want: &ollamaChatRequest{},
 		},
 	}
@@ -178,19 +152,7 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &ollamaChatRequest{}
-
-			err := req.ApplyOptions(tt.cfg)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			req.ApplyOptions(tt.cfg)
 
 			if !reflect.DeepEqual(req, tt.want) {
 				t.Errorf(

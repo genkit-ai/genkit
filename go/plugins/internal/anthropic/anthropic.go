@@ -31,7 +31,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal"
-	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 
@@ -403,7 +403,7 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 		// Native structured output via OutputConfig. Set only the format so a
 		// config-provided OutputConfig.Effort survives.
 		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
-			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
+			Schema: schemautil.EnforceStrict(i.Output.Schema),
 			// Type is elided, defaults to "json_schema"
 		}
 	}
@@ -458,7 +458,7 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 		strict := strictSupported && strictRequested
 
 		if strict {
-			inputSchema = pluginjsonschema.EnforceStrict(inputSchema)
+			inputSchema = schemautil.EnforceStrict(inputSchema)
 		}
 
 		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)

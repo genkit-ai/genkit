@@ -32,11 +32,11 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -68,10 +68,11 @@ var (
 	// defaultOllamaSupports preserves the historical fallback for dynamically
 	// discovered Ollama models when capability detection is unavailable.
 	defaultOllamaSupports = ai.ModelSupports{
-		Multiturn:  true,
-		Media:      true,
-		Tools:      true,
-		SystemRole: true,
+		Multiturn:   true,
+		Media:       true,
+		Tools:       true,
+		SystemRole:  true,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 
 	// thinkingRegex matches <think> or <thinking> tags case-insensitively across multiple lines.
@@ -148,9 +149,10 @@ func (o *Ollama) modelCapabilitiesContext(parent context.Context) (context.Conte
 // by the Ollama /api/show endpoint.
 func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 	return &ai.ModelSupports{
-		Multiturn:  true,
-		SystemRole: true,
-		Tools:      slices.Contains(caps, "tools"),
+		Multiturn:   true,
+		SystemRole:  true,
+		Tools:       slices.Contains(caps, "tools"),
+		Constrained: ai.ConstrainedSupportNoTools,
 		// concatImages only forwards image parts; audio input is not supported.
 		Media: slices.Contains(caps, "vision"),
 	}
@@ -160,10 +162,11 @@ func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 // defined models when the server does not report capabilities.
 func modelSupportsFromStaticLists(modelName string) *ai.ModelSupports {
 	return &ai.ModelSupports{
-		Multiturn:  true,
-		SystemRole: true,
-		Tools:      slices.Contains(toolSupportedModels, modelName),
-		Media:      slices.Contains(mediaSupportedModels, modelName),
+		Multiturn:   true,
+		SystemRole:  true,
+		Tools:       slices.Contains(toolSupportedModels, modelName),
+		Media:       slices.Contains(mediaSupportedModels, modelName),
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 }
 
@@ -221,13 +224,12 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 	}
 
 	meta := &ai.ModelOptions{
-		Label:        internal.ProviderLabel("Ollama", model.Name),
-		Supports:     modelOpts.Supports,
-		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		Label:    internal.ProviderLabel("Ollama", model.Name),
+		Supports: modelOpts.Supports,
+		Versions: []string{},
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
-	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+	return genkit.DefineModelAction(g, api.NewName(provider, model.Name), meta, gen.generate)
 }
 
 // IsDefinedModel reports whether a model is defined.
@@ -354,7 +356,7 @@ type ollamaModelRequest struct {
 	Model  string   `json:"model"`
 	Prompt string   `json:"prompt"`
 	Stream bool     `json:"stream"`
-	Format string   `json:"format,omitempty"`
+	Format any      `json:"format,omitempty"`
 }
 
 // Tool definition from Ollama API
@@ -503,17 +505,16 @@ func normalizeModelName(name string) string {
 // It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
 func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
 	meta := &ai.ModelOptions{
-		Label:        internal.ProviderLabel("Ollama", name),
-		Supports:     opts.Supports,
-		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		Label:    internal.ProviderLabel("Ollama", name),
+		Supports: opts.Supports,
+		Versions: []string{},
 	}
 	gen := &generator{
 		model:         ModelDefinition{Name: name, Type: "chat"},
 		serverAddress: o.ServerAddress,
 		timeout:       o.Timeout,
 	}
-	return ai.NewModel(api.NewName(provider, name), meta, gen.generate)
+	return ai.NewModelAction(api.NewName(provider, name), meta, gen.generate)
 }
 
 // ListActions calls /api/tags to discover locally installed Ollama models.
@@ -607,7 +608,7 @@ func Ptr[T any](v T) *T {
 }
 
 // Generate makes a request to the Ollama API and processes the response.
-func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config GenerateContentConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	stream := cb != nil
 	var payload any
 	var thinkingEnabled bool
@@ -621,12 +622,19 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	}
 
 	if !isChatModel {
+		// TODO: config is not applied here. ollamaModelRequest has no options,
+		// think, or keep_alive fields, so a caller's GenerateContentConfig is
+		// silently dropped for a non-chat (/api/generate) model. Pre-existing
+		// gap, tracked for a follow-up: /api/generate accepts the same
+		// "options" object /api/chat does, so this needs the same treatment
+		// ollamaChatRequest.ApplyOptions gives the chat request.
 		payload = ollamaModelRequest{
 			Model:  g.model.Name,
 			Prompt: concatMessages(input, []ai.Role{ai.RoleUser, ai.RoleModel, ai.RoleTool}),
 			System: concatMessages(input, []ai.Role{ai.RoleSystem}),
 			Images: images,
 			Stream: stream,
+			Format: ollamaFormatValue(input.Output),
 		}
 	} else {
 		var messages []*ollamaMessage
@@ -644,10 +652,9 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Model:    g.model.Name,
 			Stream:   stream,
 			Images:   images,
+			Format:   ollamaFormatValue(input.Output),
 		}
-		if err := chatReq.ApplyOptions(input.Config); err != nil {
-			return nil, fmt.Errorf("failed to apply options: %v", err)
-		}
+		chatReq.ApplyOptions(config)
 		thinkingEnabled = chatReq.Think.IsEnabled()
 
 		if len(input.Tools) > 0 {
@@ -702,10 +709,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		} else {
 			response, err = translateModelResponse(body)
 		}
-		response.Request = input
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse response: %v", err)
 		}
+		response.Request = input
 		return response, nil
 	} else {
 		var chunks []*ai.ModelResponseChunk
@@ -748,6 +755,73 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		}
 		return finalResponse, nil // Return the final merged response
 
+	}
+}
+
+// ollamaFormatValue returns the value for the Ollama API's format field when
+// native constrained output is active. JSON and array formats use their schema
+// directly. Enum schemas are normalized to a top-level string enum because the
+// enum response parser expects a bare value rather than an object wrapper.
+func ollamaFormatValue(output *ai.ModelOutputConfig) any {
+	if output == nil || !output.Constrained {
+		return nil
+	}
+	switch output.Format {
+	case ai.OutputFormatJSON, ai.OutputFormatArray:
+		if len(output.Schema) == 0 {
+			// The framework only enables native constraints when a schema is
+			// present. Keep "json" as a defense-in-depth fallback for a
+			// caller-built JSON ModelOutputConfig.
+			if output.Format == ai.OutputFormatJSON {
+				return ai.OutputFormatJSON
+			}
+			return nil
+		}
+		// Ollama's constrained-output engine does not resolve JSON Schema
+		// references, so flatten schemas supplied explicitly by callers.
+		return schemautil.ResolveRefs(output.Schema)
+	case ai.OutputFormatEnum:
+		return ollamaEnumFormat(output.Schema)
+	default:
+		return nil
+	}
+}
+
+// ollamaEnumFormat converts either supported enum schema shape into the
+// top-level string enum Ollama needs to generate the value expected by Genkit's
+// enum response parser.
+func ollamaEnumFormat(schema map[string]any) map[string]any {
+	if enums := enumStrings(schema["enum"]); len(enums) > 0 {
+		return map[string]any{"type": "string", "enum": enums}
+	}
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for _, value := range properties {
+			property, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if enums := enumStrings(property["enum"]); len(enums) > 0 {
+				return map[string]any{"type": "string", "enum": enums}
+			}
+		}
+	}
+	return nil
+}
+
+func enumStrings(value any) []string {
+	switch enums := value.(type) {
+	case []string:
+		return enums
+	case []any:
+		result := make([]string, 0, len(enums))
+		for _, value := range enums {
+			if enum, ok := value.(string); ok {
+				result = append(result, enum)
+			}
+		}
+		return result
+	default:
+		return nil
 	}
 }
 
