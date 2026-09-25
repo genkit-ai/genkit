@@ -25,6 +25,8 @@ env:
 jobs:
   changes:
     uses: ./.github/workflows/changes.yml
+    permissions:
+      pull-requests: read
 
   build:
     name: Run Tests (just DevUI tests for now)

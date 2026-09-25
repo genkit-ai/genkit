@@ -28,12 +28,17 @@
 #   jobs:
 #     changes:
 #       uses: ./.github/workflows/changes.yml
+#       permissions:
+#         pull-requests: read
 #     build:
 #       needs: changes
 #       if: >-
 #         ${{ !cancelled() && (needs.changes.result != 'success' ||
 #         needs.changes.outputs.js == 'true' ||
 #         needs.changes.outputs.other == 'true') }}
+#
+# The caller grants `pull-requests: read` because the repo's default token has
+# none, and a called workflow cannot raise its own permissions.
 #
 # Checking `needs.changes.result` makes a detection failure run the job
 # instead of skipping it, which would otherwise pass the required check.
