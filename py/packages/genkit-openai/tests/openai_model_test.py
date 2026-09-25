@@ -975,6 +975,10 @@ async def test_generate_no_choices_reaches_the_caller(sample_request: ModelReque
         ),
         (
             None,
+            OpenAIConfig(),
+        ),
+        (
+            42,
             Exception(),
         ),
     ],
