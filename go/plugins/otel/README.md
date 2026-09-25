@@ -45,7 +45,33 @@ tracing.ConfigureInstrumentation(genaiotel.NewGenAiInstrumentation(genaiotel.Gen
 g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 ```
 
-See `go/samples/otel-genai` for a runnable example using stdout exporters.
+The configuration is process-wide on purpose: Genkit actions can run without
+a Genkit instance (for example a model obtained directly from a plugin), and
+those calls are instrumented too.
+
+See `go/samples/otel-genai` for a runnable example that exports over OTLP.
+
+## Google Cloud / Firebase telemetry
+
+Do not combine this provider with the `googlecloud` or `firebase` telemetry
+plugins. Configuring it replaces Genkit's default OpenTelemetry encoding (the
+`genkit:*` span attributes) that those plugins read, so their Genkit metrics
+stop, and their input/output redaction does not cover `gen_ai.*` content
+attributes.
+
+## What gets recorded
+
+- `gen_ai.request.*` params are read from the request config, whether it is
+  Genkit's `GenerationCommonConfig` or a provider SDK's native type (camelCase
+  and snake_case names are both recognized). A param set to `0` is recorded.
+- A call that fails after the model responded (for example, output schema
+  validation) still records the response: token usage, content, and a
+  `gen_ai.response.finish_reasons` of `error`.
+- `error.type` is the Genkit status name, such as `INVALID_ARGUMENT` or
+  `RESOURCE_EXHAUSTED` (`INTERNAL` when unclassified).
+- Inline media (`data:` URIs) is captured as a `blob` part with its decoded
+  size in `size_bytes`, never the payload. Remote media becomes a `uri` part.
+- Telemetry labels (`tracing.WithTelemetryLabels`) are set as span attributes.
 
 ## Options
 

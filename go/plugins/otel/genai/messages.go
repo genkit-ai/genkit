@@ -18,6 +18,7 @@ package genai
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 )
@@ -73,11 +74,7 @@ func MapPart(part *ai.Part) map[string]any {
 		}
 		return m
 	case part.IsMedia():
-		m := map[string]any{"type": "media", "content": part.Text}
-		if part.ContentType != "" {
-			m["content_type"] = part.ContentType
-		}
-		return m
+		return mapMediaPart(part)
 	default:
 		// Unknown/opaque part: represent it structurally without losing the
 		// fact that it existed.
@@ -87,6 +84,64 @@ func MapPart(part *ai.Part) map[string]any {
 		}
 		return map[string]any{"type": "text", "content": string(b)}
 	}
+}
+
+// mapMediaPart maps a media part (whose Text holds the URL) to a spec "uri"
+// part, or to a "blob" part for an inline data: URI.
+//
+// Blob payloads are deliberately not captured: a base64 image can be
+// megabytes, which gets truncated mid-JSON by attribute length limits and can
+// push an OTLP export past the receiver's message size cap, failing the whole
+// batch. The blob part carries the decoded size instead of "content", which
+// keeps it a valid spec GenericPart.
+func mapMediaPart(part *ai.Part) map[string]any {
+	url := part.Text
+	mimeType := part.ContentType
+	if rest, ok := strings.CutPrefix(url, "data:"); ok {
+		header, payload, _ := strings.Cut(rest, ",")
+		if mimeType == "" {
+			mimeType, _, _ = strings.Cut(header, ";")
+		}
+		m := map[string]any{
+			"type":       "blob",
+			"modality":   mediaModality(mimeType),
+			"size_bytes": dataURIPayloadSize(header, payload),
+		}
+		if mimeType != "" {
+			m["mime_type"] = mimeType
+		}
+		return m
+	}
+	m := map[string]any{"type": "uri", "modality": mediaModality(mimeType), "uri": url}
+	if mimeType != "" {
+		m["mime_type"] = mimeType
+	}
+	return m
+}
+
+// mediaModality maps a MIME type to the spec's modality vocabulary. The spec
+// requires a modality, so anything that is not image/video/audio (including
+// an unknown type) is reported as a document.
+func mediaModality(mimeType string) string {
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return "image"
+	case strings.HasPrefix(mimeType, "video/"):
+		return "video"
+	case strings.HasPrefix(mimeType, "audio/"):
+		return "audio"
+	default:
+		return "document"
+	}
+}
+
+// dataURIPayloadSize estimates the decoded size of a data: URI payload without
+// decoding it. Non-base64 payloads are reported by their raw length.
+func dataURIPayloadSize(header, payload string) int {
+	if !strings.HasSuffix(header, ";base64") {
+		return len(payload)
+	}
+	return len(payload)*3/4 - strings.Count(payload[max(0, len(payload)-2):], "=")
 }
 
 // mapParts maps a slice of Genkit parts to GenAI content parts.

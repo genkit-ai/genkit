@@ -21,6 +21,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/semconv/v1.39.0/genaiconv"
 )
 
 // tokenBuckets are the explicit token-count buckets recommended by the spec for
@@ -45,20 +46,27 @@ type Metrics struct {
 }
 
 // NewMetrics builds the GenAI client metric instruments from meter.
+//
+// The instruments are created directly rather than via genaiconv.New*: those
+// replace all of their defaults (unit, description, buckets) as soon as any
+// option is passed, and we need the spec's token buckets. Name, unit, and
+// description still come from genaiconv so they track the spec.
 func NewMetrics(meter metric.Meter) (*Metrics, error) {
+	tu := genaiconv.ClientTokenUsage{}
 	tokenUsage, err := meter.Int64Histogram(
-		MetricTokenUsage,
-		metric.WithUnit("{token}"),
-		metric.WithDescription("Number of input and output tokens used by the model."),
+		tu.Name(),
+		metric.WithUnit(tu.Unit()),
+		metric.WithDescription(tu.Description()),
 		metric.WithExplicitBucketBoundaries(tokenBuckets...),
 	)
 	if err != nil {
 		return nil, err
 	}
+	od := genaiconv.ClientOperationDuration{}
 	operationDuration, err := meter.Float64Histogram(
-		MetricOperationDuration,
-		metric.WithUnit("s"),
-		metric.WithDescription("Duration of a GenAI model operation."),
+		od.Name(),
+		metric.WithUnit(od.Unit()),
+		metric.WithDescription(od.Description()),
 	)
 	if err != nil {
 		return nil, err
@@ -66,17 +74,16 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 	return &Metrics{tokenUsage: tokenUsage, operationDuration: operationDuration}, nil
 }
 
-// RecordTokenUsage records input/output token counts, one point per provided
-// count, tagged with gen_ai.token.type.
-func (m *Metrics) RecordTokenUsage(ctx context.Context, base []attribute.KeyValue, inputTokens, outputTokens *int) {
-	if inputTokens != nil {
-		attrs := append(append([]attribute.KeyValue{}, base...), attribute.String(AttrTokenType, "input"))
-		m.tokenUsage.Record(ctx, int64(*inputTokens), metric.WithAttributes(attrs...))
-	}
-	if outputTokens != nil {
-		attrs := append(append([]attribute.KeyValue{}, base...), attribute.String(AttrTokenType, "output"))
-		m.tokenUsage.Record(ctx, int64(*outputTokens), metric.WithAttributes(attrs...))
-	}
+// RecordTokenUsage records input and output token counts, one point each,
+// tagged with gen_ai.token.type.
+func (m *Metrics) RecordTokenUsage(ctx context.Context, base []attribute.KeyValue, inputTokens, outputTokens int) {
+	m.recordTokens(ctx, base, TokenTypeInput, inputTokens)
+	m.recordTokens(ctx, base, TokenTypeOutput, outputTokens)
+}
+
+func (m *Metrics) recordTokens(ctx context.Context, base []attribute.KeyValue, tokenType string, n int) {
+	attrs := append(append([]attribute.KeyValue{}, base...), attribute.String(AttrTokenType, tokenType))
+	m.tokenUsage.Record(ctx, int64(n), metric.WithAttributes(attrs...))
 }
 
 // RecordDuration records the operation duration in seconds. Recorded for both

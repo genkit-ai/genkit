@@ -17,18 +17,20 @@
 package otel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
-	"reflect"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/otel/genai"
 )
 
@@ -54,29 +56,61 @@ func asModelResponse(output any) *ai.ModelResponse {
 	return nil
 }
 
-// asCommonConfig extracts GenerationCommonConfig from a request config that is
-// either the common config itself or a provider config that embeds/JSON-matches
-// it. It round-trips through JSON so provider-specific configs (which share the
-// common field names/tags) map without a hard dependency on their types.
-func asCommonConfig(config any) *ai.GenerationCommonConfig {
+// configMap returns a request config as its JSON object form, or nil.
+//
+// Configs are Genkit's GenerationCommonConfig or a provider SDK's native type
+// (googlegenai GenerateContentConfig, anthropic MessageNewParams, ...), which
+// this package cannot depend on. The JSON form is the one shape they all
+// share, and decoding into a map (rather than a typed struct) keeps key
+// presence, so an explicit 0 is distinguishable from unset, and one field of
+// an unexpected type cannot fail the whole decode. It runs once per model
+// call, next to a network round trip, so the marshal cost is negligible.
+func configMap(config any) map[string]any {
 	if config == nil {
 		return nil
 	}
-	if c, ok := config.(*ai.GenerationCommonConfig); ok {
-		return c
-	}
-	if c, ok := config.(ai.GenerationCommonConfig); ok {
-		return &c
+	if m, ok := config.(map[string]any); ok {
+		return m
 	}
 	b, err := json.Marshal(config)
 	if err != nil {
 		return nil
 	}
-	var c ai.GenerationCommonConfig
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil // Not a JSON object.
 	}
-	return &c
+	return m
+}
+
+// lookupNumber returns the first numeric value present under keys.
+func lookupNumber(m map[string]any, keys []string) (float64, bool) {
+	for _, k := range keys {
+		if v, ok := m[k].(float64); ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+// lookupStrings returns the first string list (or single string, as OpenAI's
+// "stop" allows) present under keys.
+func lookupStrings(m map[string]any, keys []string) []string {
+	for _, k := range keys {
+		switch v := m[k].(type) {
+		case string:
+			return []string{v}
+		case []any:
+			out := make([]string, 0, len(v))
+			for _, s := range v {
+				if s, ok := s.(string); ok {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 // resolveMessage resolves the response message. Modern plugins set Message
@@ -120,37 +154,35 @@ func (g *GenAiInstrumentation) recordError(span oteltrace.Span, err error) {
 	span.RecordError(err)
 }
 
-// errorTypeOf reports the error type for the error.type attribute: the concrete
-// Go type name (e.g. "*errors.errorString"), mirroring JS using the error name.
+// errorTypeOf reports the error.type value: the Genkit status name (e.g.
+// "INVALID_ARGUMENT", "RESOURCE_EXHAUSTED"; "INTERNAL" when unclassified).
+// It is low cardinality and independent of how the error was wrapped, which a
+// Go type name is not (fmt.Errorf alone turns any error into *fmt.wrapError).
 func errorTypeOf(err error) string {
 	if err == nil {
 		return ""
 	}
-	t := reflect.TypeOf(err)
-	if t == nil {
-		return "error"
-	}
-	return t.String()
+	return string(status.Of(err))
 }
 
-// maybeWarnNotRecording warns once if the SDK is not collecting: when no
-// TracerProvider is registered, OTel returns a non-recording span, so telemetry
-// is silently dropped. Surface that instead of failing quietly.
-func (g *GenAiInstrumentation) maybeWarnNotRecording(span oteltrace.Span) {
-	if span.IsRecording() {
+// maybeWarnNotRecording warns once when no OpenTelemetry SDK is installed, so
+// GenAI telemetry is silently dropped. Without an SDK, a span has an invalid
+// span context. A span the SDK sampled out is also non-recording but keeps a
+// valid context, so this does not fire for a working, sampled setup.
+func (g *GenAiInstrumentation) maybeWarnNotRecording(ctx context.Context, span oteltrace.Span) {
+	if span.SpanContext().IsValid() {
 		return
 	}
 	g.warnOnce.Do(func() {
-		slog.Warn("GenAiInstrumentation is configured but no OpenTelemetry SDK is " +
-			"recording, so GenAI telemetry will not be exported. Initialize the " +
-			"OTel SDK before constructing Genkit.")
+		logger.Warn(ctx, "genai instrumentation is configured but no opentelemetry sdk is installed, telemetry is not exported")
 	})
 }
 
 // setJSONAttribute records value on span as a JSON string under key, skipping
-// nil values.
+// nil values, including typed nils (a failed action's zero output), which
+// would otherwise encode as "null".
 func setJSONAttribute(span oteltrace.Span, key string, value any) {
-	if value == nil {
+	if base.IsNil(value) {
 		return
 	}
 	span.SetAttributes(attribute.String(key, jsonString(value)))

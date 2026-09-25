@@ -9,6 +9,11 @@ OTLP `http/protobuf` at `localhost:4318` for traces, metrics, and logs, and env
 vars override that. Point it at a collector (below) or use `--use-otel`; an
 unconfigured run will log OTLP connection errors, same as JS `NodeSDK()`.
 
+The sample is its own Go module (with a `replace` pointing at the local Genkit
+checkout) so the OTLP exporter dependencies it pulls in via
+`go.opentelemetry.io/contrib/exporters/autoexport` stay out of the Genkit
+library module.
+
 ## Run against a local collector + Jaeger
 
 The repo ships a Docker-free helper that downloads Jaeger v2 and an

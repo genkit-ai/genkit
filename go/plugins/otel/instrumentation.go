@@ -25,13 +25,20 @@
 // Wire it up with [tracing.ConfigureInstrumentation]:
 //
 //	tracing.ConfigureInstrumentation(otel.NewGenAiInstrumentation(otel.GenAiInstrumentationOptions{
-//		ContentCapturingMode: otel.SpanOnly,
+//		ContentCapturingMode: genai.SpanOnly,
 //		EmitToolSpans:        true,
 //	}))
 //	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 //
-// It composes with the built-in dev instrumentation, which feeds the Developer
-// UI on a separate pipeline.
+// Configuration is process-wide on purpose: Genkit actions (e.g. a model
+// obtained straight from a plugin) can run without a Genkit instance, and they
+// must be instrumented too.
+//
+// The provider replaces Genkit's default OpenTelemetry encoding (the genkit:*
+// span attributes) and composes with the built-in dev instrumentation, which
+// feeds the Developer UI on a separate pipeline. Do not combine it with the
+// googlecloud or firebase telemetry plugins: those read the genkit:* attributes
+// (their metrics stop) and their redaction does not cover gen_ai.* content.
 //
 // See the spec:
 // https://github.com/open-telemetry/semantic-conventions-genai
@@ -43,10 +50,14 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel"
+	otellog "go.opentelemetry.io/otel/log"
+	otellogglobal "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/metric"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/plugins/otel/genai"
 )
 
@@ -93,19 +104,21 @@ type GenAiInstrumentation struct {
 	captureOnEvent  bool
 	captureActionIO bool
 	emitToolSpans   bool
-	emitMetrics     bool
-	scopeName       string
 
-	injectedTracer oteltrace.Tracer
-	injectedMeter  metric.Meter
-
-	metricsOnce sync.Once
-	metrics     *genai.Metrics
+	tracer oteltrace.Tracer
+	logger otellog.Logger
+	// metrics is nil when disabled or when instrument creation failed.
+	metrics *genai.Metrics
 
 	warnOnce sync.Once
 }
 
 // NewGenAiInstrumentation builds a GenAiInstrumentation from options.
+//
+// The tracer, meter, and logger are resolved here, once. That still picks up
+// an SDK installed later: the OTel globals hand out delegating instruments
+// that switch to the real provider when it is set. Resolving per span instead
+// would take the SDK provider's lock on every span start.
 func NewGenAiInstrumentation(opts GenAiInstrumentationOptions) *GenAiInstrumentation {
 	mode := opts.ContentCapturingMode
 	if mode == "" {
@@ -115,51 +128,48 @@ func NewGenAiInstrumentation(opts GenAiInstrumentationOptions) *GenAiInstrumenta
 	if scope == "" {
 		scope = "genkit-genai"
 	}
-	return &GenAiInstrumentation{
+	g := &GenAiInstrumentation{
 		contentMode:     mode,
 		captureOnSpan:   mode == genai.SpanOnly || mode == genai.SpanAndEvent,
 		captureOnEvent:  mode == genai.EventOnly || mode == genai.SpanAndEvent,
 		captureActionIO: opts.CaptureActionIO,
 		emitToolSpans:   opts.EmitToolSpans,
-		emitMetrics:     !opts.DisableMetrics,
-		scopeName:       scope,
-		injectedTracer:  opts.Tracer,
-		injectedMeter:   opts.Meter,
+		tracer:          opts.Tracer,
+		logger: otellogglobal.Logger(scope,
+			otellog.WithInstrumentationVersion(internal.Version),
+			otellog.WithSchemaURL(genai.SchemaURL)),
 	}
-}
-
-func contentCapturingModeFromEnv() genai.ContentCapturingMode {
-	mode, ok := genai.ParseContentCapturingMode(getenv(genai.CaptureContentEnvVar))
-	if !ok {
-		slog.Warn("invalid content capturing mode env var; defaulting to NO_CONTENT",
-			"env", genai.CaptureContentEnvVar)
+	if g.tracer == nil {
+		g.tracer = otel.Tracer(scope,
+			oteltrace.WithInstrumentationVersion(internal.Version),
+			oteltrace.WithSchemaURL(genai.SchemaURL))
 	}
-	return mode
-}
-
-func (g *GenAiInstrumentation) tracer() oteltrace.Tracer {
-	if g.injectedTracer != nil {
-		return g.injectedTracer
-	}
-	// Resolve lazily so the app's SDK setup, which may run after construction,
-	// is picked up. otel.Tracer reads the global provider on each call.
-	return otel.Tracer(g.scopeName, oteltrace.WithInstrumentationVersion(genai.SemConvVersion))
-}
-
-func (g *GenAiInstrumentation) genAiMetrics() *genai.Metrics {
-	g.metricsOnce.Do(func() {
-		meter := g.injectedMeter
+	if !opts.DisableMetrics {
+		meter := opts.Meter
 		if meter == nil {
-			meter = otel.Meter(g.scopeName, metric.WithInstrumentationVersion(genai.SemConvVersion))
+			meter = otel.Meter(scope,
+				metric.WithInstrumentationVersion(internal.Version),
+				metric.WithSchemaURL(genai.SchemaURL))
 		}
 		m, err := genai.NewMetrics(meter)
 		if err != nil {
-			slog.Warn("failed to create GenAI metrics; metrics disabled", "error", err)
-			return
+			slog.Warn("failed to create genai metrics, metrics disabled", "error", err)
+		} else {
+			g.metrics = m
 		}
-		g.metrics = m
-	})
-	return g.metrics
+	}
+	return g
+}
+
+// contentCapturingModeFromEnv reads the spec env var. It runs at construction
+// with no context, hence slog rather than core/logger.
+func contentCapturingModeFromEnv() genai.ContentCapturingMode {
+	mode, ok := genai.ParseContentCapturingMode(getenv(genai.CaptureContentEnvVar))
+	if !ok {
+		slog.Warn("invalid content capturing mode, defaulting to NO_CONTENT",
+			"env", genai.CaptureContentEnvVar)
+	}
+	return mode
 }
 
 // RunInNewSpan dispatches on the Genkit action type and encodes the span using
@@ -174,16 +184,15 @@ func (g *GenAiInstrumentation) RunInNewSpan(ctx context.Context, info *tracing.S
 		actionType = info.Type()
 	}
 	switch actionType {
-	case "model":
+	case string(api.ActionTypeModel):
 		return g.runModelSpan(ctx, info, next)
-	case "tool":
+	case string(api.ActionTypeTool), string(api.ActionTypeToolV2):
+		// DefineTool registers tool.v2; plain "tool" is the legacy spelling.
 		if g.emitToolSpans {
 			return g.runToolSpan(ctx, info, next)
 		}
-		return g.runGenericSpan(ctx, info, next, actionType)
-	default:
-		return g.runGenericSpan(ctx, info, next, actionType)
 	}
+	return g.runGenericSpan(ctx, info, next, actionType)
 }
 
 var _ tracing.Instrumentation = (*GenAiInstrumentation)(nil)

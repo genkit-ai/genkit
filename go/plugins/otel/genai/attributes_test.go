@@ -16,7 +16,33 @@
 
 package genai
 
-import "testing"
+import (
+	"testing"
+
+	"go.opentelemetry.io/otel/semconv/v1.39.0/genaiconv"
+)
+
+// TestSemconvValues pins the literal constants to the generated semconv
+// values, so a spec rename fails here on upgrade.
+func TestSemconvValues(t *testing.T) {
+	tests := []struct{ got, want string }{
+		{OperationChat, string(genaiconv.OperationNameChat)},
+		{OperationExecuteTool, string(genaiconv.OperationNameExecuteTool)},
+		{TokenTypeInput, string(genaiconv.TokenTypeInput)},
+		{TokenTypeOutput, string(genaiconv.TokenTypeOutput)},
+		{ProviderGCPGemini, string(genaiconv.ProviderNameGCPGemini)},
+		{ProviderGCPVertexAI, string(genaiconv.ProviderNameGCPVertexAI)},
+		{ProviderOpenAI, string(genaiconv.ProviderNameOpenAI)},
+		{ProviderAnthropic, string(genaiconv.ProviderNameAnthropic)},
+		{MetricTokenUsage, genaiconv.ClientTokenUsage{}.Name()},
+		{MetricOperationDuration, genaiconv.ClientOperationDuration{}.Name()},
+	}
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("got %q, want %q", tt.got, tt.want)
+		}
+	}
+}
 
 func TestSplitModelName(t *testing.T) {
 	tests := []struct {
