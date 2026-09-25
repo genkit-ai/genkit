@@ -27,7 +27,7 @@ interface FormatType {
 const FILE_OPTS: { encoding: 'utf-8' } = { encoding: 'utf-8' };
 const FORMAT_TYPES: FormatType[] = [
   {
-    regex: /\.((tsx?)|(s?css)|(jsx?))$/,
+    regex: /\.(tsx?|s?css|[cm]?js|jsx)$/,
     header: '/**',
     body: ' *',
     footer: ' */',
@@ -95,7 +95,12 @@ function updateContent(content: string, format: FormatType): string {
     .join('\n');
   const footer = format.footer ? `\n${format.footer}` : '';
 
-  return `${header}${body}${footer}\n\n${content}`;
+  // A hashbang must remain first; terminate it before inserting the comment.
+  const hashbang = content.match(/^(#!.*)(\r\n|[\r\n\u2028\u2029]|$)/);
+  const prefix = hashbang ? `${hashbang[1]}${hashbang[2] || '\n'}` : '';
+  const source = hashbang ? content.slice(hashbang[0].length) : content;
+
+  return `${prefix}${header}${body}${footer}\n\n${source}`;
 }
 
 console.log('Checking copyright in sources...');
