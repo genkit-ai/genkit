@@ -37,8 +37,8 @@
 //	}
 //
 //	type Triage struct {
-//		Department typesafe.Choice[Dept] `json:"department" jsonschema_description:"Which team should handle this?"`
-//		IsUrgent   typesafe.Noul         `json:"is_urgent"  jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+//		Department typesafex.Choice[Dept] `json:"department" jsonschema_description:"Which team should handle this?"`
+//		IsUrgent   typesafex.Noul         `json:"is_urgent"  jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 //	}
 //
 //	out, resp, err := genkit.GenerateData[Triage](ctx, g,
