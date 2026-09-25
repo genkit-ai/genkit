@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,90 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestNewGenkitMCPClientReturnsInitializationError(t *testing.T) {
+	const failure = "test MCP handshake failure"
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL: "http://example.com/mcp",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New(failure)
+			})},
+		},
+	})
+	if client != nil {
+		t.Cleanup(func() { client.Disconnect() })
+		t.Errorf("NewGenkitMCPClient() client = %v, want nil", client)
+	}
+	if err == nil || !strings.Contains(err.Error(), failure) {
+		t.Errorf("NewGenkitMCPClient() error = %v, want initialization failure", err)
+	}
+}
+
+func TestReenableLeavesClientDisabledAfterInitializationError(t *testing.T) {
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		Disabled: true,
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL: "http://example.com/mcp",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("test MCP handshake failure")
+			})},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Disconnect() })
+
+	client.Reenable()
+	if client.IsEnabled() {
+		t.Error("Reenable() left a failed client enabled")
+	}
+	if client.server != nil {
+		t.Error("Reenable() retained a failed connection")
+	}
+}
+
+func TestMCPHostReconnectAfterFailedStartup(t *testing.T) {
+	var available atomic.Bool
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !available.Load() {
+			return nil, errors.New("server unavailable")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1.0.0"}}}`,
+			)),
+			Request: req,
+		}, nil
+	})}
+
+	host, err := NewMCPHost(nil, MCPHostOptions{
+		MCPServers: []MCPServerConfig{{
+			Name: "recovering-server",
+			Config: MCPClientOptions{StreamableHTTP: &StreamableHTTPConfig{
+				BaseURL: "http://example.com/mcp", HTTPClient: httpClient,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Disconnect(context.Background(), "recovering-server") })
+	if host.clients["recovering-server"].server != nil {
+		t.Fatal("failed startup retained a live server connection")
+	}
+
+	available.Store(true)
+	if err := host.Reconnect(context.Background(), "recovering-server"); err != nil {
+		t.Fatalf("Reconnect() after server recovery: %v", err)
+	}
+	if host.clients["recovering-server"].server == nil {
+		t.Error("Reconnect() did not establish a server connection")
+	}
 }
 
 // TestCreateTransportHonorsStreamableHTTPClient verifies that a custom
