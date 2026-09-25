@@ -35,8 +35,20 @@ import (
 // it with [ObjectPayload] when the interrupt is raised, so a payload has one
 // shape in process and after a wire hop; ai normalizes again when the tool
 // returns, for an error built with a struct directly.
+//
+// RaisedBy names the stage that raised the interrupt: the id of a WrapTool
+// hook, read from the context under [ToolHookKey] by ai/tool.Interrupt, or
+// empty for the tool function itself. ai records it on the interrupted part,
+// and on restart delivers the answer to that stage alone.
+//
+// Released lists, in chain order, the ids of the WrapTool hooks that let the
+// call through before it interrupted. The hook chain in ai/generate.go
+// records each as the interrupt passes back out through it; nil when no hook
+// let the call through.
 type ToolInterruptError struct {
-	Data any
+	Data     any
+	RaisedBy string
+	Released []string
 }
 
 func (e *ToolInterruptError) Error() string {

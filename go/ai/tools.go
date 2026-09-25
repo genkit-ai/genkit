@@ -469,8 +469,8 @@ func newToolContext(ctx context.Context) *ToolContext {
 // runToolFunc runs one invocation of the tool named name. The generate loop
 // installs the part sink [github.com/firebase/genkit/go/ai/tool.AttachParts]
 // writes to around the whole tool call, WrapTool hooks included, folds it
-// when the call returns, and marks the tool function's context for the tool
-// to claim (see [base.ToolCall]). Any other run is a call of its own: a
+// when the call returns, and marks the tool stage for the tool to claim (see
+// [base.ToolCall]). Any other run is a call of its own: a
 // direct run (RunRaw, the Dev UI), or a tool run under another call's
 // context, such as a tool that calls another tool directly. It gets its own
 // sink, folded here, and none of the enclosing call's restart state, so the
@@ -490,8 +490,11 @@ func runToolFunc(ctx context.Context, name string, run func(ctx context.Context)
 	defer sink.Close() // On an error, too.
 	ctx = base.ToolPartSinkKey.NewContext(ctx, sink)
 	ctx = base.ToolCallKey.NewContext(ctx, nil)
+	ctx = base.ToolRestartKey.NewContext(ctx, nil)
+	ctx = base.ToolHookKey.NewContext(ctx, "")
 	ctx = base.ToolResumeKey.NewContext(ctx, nil)
 	ctx = base.ToolOriginalInputKey.NewContext(ctx, nil)
+	ctx = base.ToolReleasedKey.NewContext(ctx, false)
 	resp, err := run(ctx)
 	if err != nil {
 		return nil, err

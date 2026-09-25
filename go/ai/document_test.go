@@ -716,6 +716,23 @@ func TestPartInterruptWireRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			name: "interrupt a hook raised",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer", Ref: "r1"})
+				p.Interrupt = &ToolInterrupt{RaisedBy: "genkit-middleware/toolApproval"}
+				return p
+			},
+			wantWire: map[string]any{
+				"interrupt":     true,
+				"interruptedBy": "genkit-middleware/toolApproval",
+			},
+			wantLifts: func(t *testing.T, p *Part) {
+				if !p.IsInterrupt() || p.Interrupt.RaisedBy != "genkit-middleware/toolApproval" {
+					t.Errorf("lifted interrupt = %+v, want a bare one raised by the middleware", p.Interrupt)
+				}
+			},
+		},
+		{
 			name: "resolved interrupt",
 			part: func() *Part {
 				p := NewToolRequestPart(&ToolRequest{Name: "transfer"})

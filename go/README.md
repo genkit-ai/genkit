@@ -909,7 +909,7 @@ response, _ := genkit.Generate(ctx, g,
 
 The `middleware` plugin also ships with:
 
-- [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
+- [`ToolApproval`](plugins/middleware/tool_approval.go) — holds any tool call not on an allow list until a restart approves it; the tool then runs afresh, and a restart answering the tool's own interrupt passes.
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
 

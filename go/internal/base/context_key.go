@@ -56,24 +56,58 @@ var ToolChunkSenderKey = NewContextKey[func(context.Context, any)]()
 
 // ToolResumeKey is the context key holding the data a caller sent when
 // restarting an interrupted tool call, as the caller gave it: a map[string]any
-// after a wire hop or from a map restart, the caller's struct from a struct
-// restart in process. Set by ai/generate.go (restartedToolResponse) for the
-// restarted call, and cleared for every fresh one; each reader converts it to
+// after a wire hop or from a map restart, the caller's struct from a typed
+// restart in process. Set by the hook chain in ai/generate.go on the one
+// stage the restart answers (see [ToolRestart]); each reader converts it to
 // what it returns with [ConvertTo], so a value that is already the wanted
-// type is handed over untouched, with its Go types intact: ai
-// (ToolContext.Resumed, IsToolResumed, ResumedValue) and ai/tool
-// (ResumeData). A bare restart stores an empty map, so presence of the key,
-// not its contents, marks a call as resumed.
+// type is handed over untouched, with its Go types intact: ai (ToolContext.Resumed,
+// IsToolResumed, ResumedValue) and ai/tool (ResumeData). A bare restart
+// stores an empty map, so presence of the key, not its contents, marks a
+// call as resumed.
 var ToolResumeKey = NewContextKey[any]()
 
 // ToolOriginalInputKey is the context key holding a tool call's pre-replacement
-// input, set when the caller restarted the call with a new input. Set by
-// ai/generate.go (restartedToolResponse), read by ai (ToolContext.OriginalInput)
-// and by ai/tool (OriginalInput).
+// input, set when the caller restarted the call with a new input. Set by the
+// hook chain in ai/generate.go on the stage the restart answers (see
+// [ToolRestart]), read by ai (ToolContext.OriginalInput) and by ai/tool
+// (OriginalInput).
 var ToolOriginalInputKey = NewContextKey[any]()
 
-// ToolCall marks the context the tool runner in ai/generate.go hands the tool
-// function of one tool call, inside any WrapTool hooks. The tool function that claims it owns the call's
+// ToolHookKey is the context key naming the stage a tool call is running in:
+// the id of the WrapTool hook whose turn it is, empty inside the tool itself.
+// Set per stage by the hook chain in ai/generate.go, read by ai/tool
+// (Interrupt) to attribute an interrupt to the stage that raised it.
+var ToolHookKey = NewContextKey[string]()
+
+// ToolRestart is the restart a resumed tool call answers. ai/generate.go
+// (restartedToolResponse) sets it on the call's context under
+// [ToolRestartKey], and the hook chain delivers it stage by stage: the stage
+// that raised the interrupt (RaisedBy, empty for the tool itself) receives
+// Resume and OriginalInput under [ToolResumeKey] and [ToolOriginalInputKey],
+// a hook the interrupted call records in Released, which let the call through
+// before, is marked under [ToolReleasedKey] unless the restart replaced the
+// input, and any other stage sees a fresh call. An interrupt that records
+// neither RaisedBy nor Released, as one stored before they were recorded,
+// does not say which stage it came from, so every stage receives Resume and
+// OriginalInput and none is released.
+type ToolRestart struct {
+	Resume        any
+	OriginalInput any
+	RaisedBy      string
+	Released      []string
+}
+
+// ToolRestartKey is the context key holding the [ToolRestart] a resumed tool
+// call answers, for the hook chain to deliver.
+var ToolRestartKey = NewContextKey[*ToolRestart]()
+
+// ToolReleasedKey is the context key marking a stage that let the call
+// through before: the restart answers a later stage. Set per stage by the
+// hook chain in ai/generate.go, read by ai/tool (Released).
+var ToolReleasedKey = NewContextKey[bool]()
+
+// ToolCall marks the context the hook chain in ai/generate.go hands the tool
+// stage of one tool call. The tool function that claims it owns the call's
 // restart state and part sink; any other tool run under that context, such as
 // a tool calling another tool directly, finds it claimed or naming another
 // tool and runs as a call of its own. A retry that runs the tool stage again
@@ -90,7 +124,7 @@ func (c *ToolCall) Claim(name string) bool {
 }
 
 // ToolCallKey is the context key holding the [ToolCall] of the tool stage.
-// Set by the tool runner in ai/generate.go, read by the tool constructors in ai.
+// Set by the hook chain in ai/generate.go, read by the tool constructors in ai.
 var ToolCallKey = NewContextKey[*ToolCall]()
 
 // ToolPartSinkKey is the context key for the [PartSink] that collects content
