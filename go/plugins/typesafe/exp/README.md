@@ -234,7 +234,7 @@ Pick the endpoint on the plugin; the model names stay `typesafe/<id>`.
 | --------------------------------- | ----------------------- | --------------------------------------------------------- |
 | `Direct()` (default)              | `TYPESAFE_API_KEY`      | `TYPESAFE_BASE_URL` is read too; lists models              |
 | `OpenRouter()`                    | `OPENROUTER_API_KEY`    | alpha Decisions API; releases by minor version, `jev-1.13`; a patch version is refused |
-| `Cloudflare(accountID)`           | `CLOUDFLARE_API_TOKEN`  | alias `typesafe/jev` only; a pinned version is refused     |
+| `Cloudflare(accountID)`           | `CLOUDFLARE_API_TOKEN`  | alias `typesafe/jev` only; a pinned version is refused; `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty |
 
 ```go
 genkit.WithPlugins(&typesafex.TypeSafe{Endpoint: typesafex.OpenRouter()})

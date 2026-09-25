@@ -203,6 +203,22 @@ func TestCloudflareEndpoint(t *testing.T) {
 	if rec.calls() != calls {
 		t.Error("a pinned version was sent to Cloudflare instead of being refused")
 	}
+
+	// The account ID comes from the environment when none is given, and is
+	// escaped into the path.
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct/2")
+	ep, err := Cloudflare("").withAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = newClient(t, rec, ep)
+	rec.reply = cannedReply
+	if _, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions}); err != nil {
+		t.Fatal(err)
+	}
+	if req, _ := rec.last(t); req.URL.EscapedPath() != "/client/v4/accounts/acct%2F2/ai/run" {
+		t.Errorf("path = %s, want the account from the environment, escaped", req.URL.EscapedPath())
+	}
 }
 
 func TestExtraMergesTopLevelFields(t *testing.T) {

@@ -26,6 +26,8 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +51,10 @@ type Endpoint struct {
 	apiKeyEnv  string
 	modelsPath string
 	models     []string
+	// account fills the {account} segment of path, from accountEnv when
+	// it is empty; see [Endpoint.urlPath].
+	account    string
+	accountEnv string
 	// modelID maps a registered model ID to the one the endpoint serves.
 	modelID func(id string) (string, error)
 	// body wraps the native request in the endpoint's envelope.
@@ -90,15 +96,18 @@ func OpenRouter() *Endpoint {
 
 // Cloudflare serves jev on Workers AI under the alias typesafe/jev only, so
 // a versioned model ID is rejected rather than silently served by whatever
-// the alias points at. The API token comes from CLOUDFLARE_API_TOKEN.
+// the alias points at. The API token comes from CLOUDFLARE_API_TOKEN, and
+// the account ID from CLOUDFLARE_ACCOUNT_ID when accountID is empty.
 func Cloudflare(accountID string) *Endpoint {
 	return &Endpoint{
-		name:      "cloudflare",
-		baseURL:   "https://api.cloudflare.com",
-		path:      "/client/v4/accounts/" + accountID + "/ai/run",
-		apiKeyEnv: "CLOUDFLARE_API_TOKEN",
-		models:    []string{"jev-latest"},
-		modelID:   cloudflareModelID,
+		name:       "cloudflare",
+		baseURL:    "https://api.cloudflare.com",
+		path:       "/client/v4/accounts/{account}/ai/run",
+		account:    accountID,
+		accountEnv: "CLOUDFLARE_ACCOUNT_ID",
+		apiKeyEnv:  "CLOUDFLARE_API_TOKEN",
+		models:     []string{"jev-latest"},
+		modelID:    cloudflareModelID,
 		body: func(model string, req *request) any {
 			return map[string]any{"model": model, "input": req.body("")}
 		},
@@ -111,6 +120,26 @@ func Cloudflare(accountID string) *Endpoint {
 // names a release by its minor version and serves dated snapshots under
 // it, so a patch version cannot be pinned there and is refused rather than
 // widened to whatever the minor version serves.
+// withAccount returns the endpoint with its account ID resolved, from the
+// environment when none was given, or an error naming what to set. An
+// endpoint whose path has no account is returned as it is.
+func (ep *Endpoint) withAccount() (*Endpoint, error) {
+	if !strings.Contains(ep.path, "{account}") {
+		return ep, nil
+	}
+	resolved := *ep
+	resolved.account = cmp.Or(ep.account, os.Getenv(ep.accountEnv))
+	if resolved.account == "" {
+		return nil, fmt.Errorf("%s needs an account ID; pass one or set %s", ep.name, ep.accountEnv)
+	}
+	return &resolved, nil
+}
+
+// urlPath is the request path, with the account ID escaped into it.
+func (ep *Endpoint) urlPath() string {
+	return strings.ReplaceAll(ep.path, "{account}", url.PathEscape(ep.account))
+}
+
 func openRouterModelID(id string) (string, error) {
 	switch id {
 	case "jev", "jev-latest":
@@ -237,7 +266,7 @@ func (c *client) decide(ctx context.Context, model string, req *request) (*respo
 	if c.ep.body != nil {
 		body = c.ep.body(id, req)
 	}
-	raw, err := c.do(ctx, http.MethodPost, c.baseURL+c.ep.path, body)
+	raw, err := c.do(ctx, http.MethodPost, c.baseURL+c.ep.urlPath(), body)
 	if err != nil {
 		return nil, err
 	}

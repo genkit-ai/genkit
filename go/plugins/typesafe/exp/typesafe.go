@@ -141,8 +141,9 @@ type Config struct {
 func (t *TypeSafe) Name() string { return provider }
 
 // Init implements [api.Plugin]. It builds the client and panics without a
-// key, since every request would fail. No actions are registered up front:
-// models resolve by name.
+// key, or without an account ID on an endpoint that needs one, since every
+// request would fail. No actions are registered up front: models resolve
+// by name.
 func (t *TypeSafe) Init(ctx context.Context) []api.Action {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -150,7 +151,10 @@ func (t *TypeSafe) Init(ctx context.Context) []api.Action {
 		panic("typesafe: plugin already initialized")
 	}
 
-	ep := cmp.Or(t.Endpoint, Direct())
+	ep, err := cmp.Or(t.Endpoint, Direct()).withAccount()
+	if err != nil {
+		panic("typesafe: " + err.Error())
+	}
 	apiKey := cmp.Or(t.APIKey, os.Getenv(ep.apiKeyEnv))
 	if apiKey == "" {
 		panic("typesafe: set APIKey or the " + ep.apiKeyEnv + " environment variable")

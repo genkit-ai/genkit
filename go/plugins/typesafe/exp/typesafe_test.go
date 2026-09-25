@@ -532,6 +532,16 @@ func TestInitRequiresAKey(t *testing.T) {
 	(&TypeSafe{}).Init(t.Context())
 }
 
+func TestInitRequiresACloudflareAccount(t *testing.T) {
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "CLOUDFLARE_ACCOUNT_ID") {
+			t.Errorf("Init without an account ID: recovered %v, want a panic naming the variable", r)
+		}
+	}()
+	(&TypeSafe{APIKey: "k", Endpoint: Cloudflare("")}).Init(t.Context())
+}
+
 func TestAnswersProjectedOntoDeclaredFields(t *testing.T) {
 	// A field the API or a gateway adds to an answer must not reach the
 	// message: the answer schemas are closed, so it would fail validation on
