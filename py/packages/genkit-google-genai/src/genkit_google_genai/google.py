@@ -199,12 +199,12 @@ def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool)
         return
 
     # Vertex AI returns supported_actions=None for every publisher model, so
-    # categorize by name. Embedders are deliberately excluded: the catalog
-    # over-lists embedders that are not callable, so they are advertised from a curated list
-    # (VERTEX_KNOWN_EMBEDDERS) rather than discovered here.
+    # categorize by name. Embedders and Virtual Try-On are deliberately excluded:
+    # they are advertised from curated lists (VERTEX_KNOWN_EMBEDDERS,
+    # VERTEX_KNOWN_VIRTUAL_TRY_ON) rather than discovered here.
     if is_vertex:
         lower_name = name.lower()
-        if 'embedding' in lower_name:
+        if 'embedding' in lower_name or is_virtual_try_on_model(name):
             return
         elif is_unsupported_image_model_name(name):
             return
