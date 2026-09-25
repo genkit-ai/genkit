@@ -62,26 +62,53 @@ export class GenkitError extends Error {
   // and status, but that's redundant with JSON.
   originalMessage: string;
 
+  /**
+   * The message safe to send to a client when `originalMessage` is not.
+   * A `GenkitError` is treated as user-facing by the HTTP handlers (see
+   * {@link getCallableJSON}), so an error that wraps arbitrary text (a tool's
+   * own exception, a provider SDK error) sets this to keep that text
+   * in-process only. Unset means `originalMessage` is safe.
+   */
+  publicMessage?: string;
+
   constructor({
     status,
     message,
     detail,
     source,
     responseMetadata,
+    cause,
+    publicMessage,
   }: {
     status: StatusName;
     message: string;
     detail?: any;
     source?: string;
     responseMetadata?: ErrorResponseMetadata;
+    /** The underlying error, exposed as the standard `Error.cause`. */
+    cause?: unknown;
+    publicMessage?: string;
   }) {
-    super(`${source ? `${source}: ` : ''}${status}: ${message}`);
+    super(
+      `${source ? `${source}: ` : ''}${status}: ${message}`,
+      cause === undefined ? undefined : { cause }
+    );
     this.originalMessage = message;
+    this.source = source;
     this.code = httpStatusCode(status);
     this.status = status;
     this.detail = detail;
     this.responseMetadata = responseMetadata;
+    this.publicMessage = publicMessage;
     this.name = 'GenkitError';
+    // An error that wraps another keeps the span markers tracing stamped on
+    // the cause, so the span that first failed stays the failure source and
+    // the wrapper does not claim it again on the way up.
+    if (typeof cause === 'object' && cause !== null) {
+      const marked = cause as { ignoreFailedSpan?: boolean; traceId?: string };
+      if (marked.ignoreFailedSpan) (this as any).ignoreFailedSpan = true;
+      if (marked.traceId) (this as any).traceId = marked.traceId;
+    }
   }
 
   /**
@@ -93,7 +120,7 @@ export class GenkitError extends Error {
       // but the actual Callable protocol value is "details"
       ...(this.detail === undefined ? {} : { details: this.detail }),
       status: this.status,
-      message: this.originalMessage,
+      message: this.publicMessage ?? this.originalMessage,
     };
   }
 }
