@@ -173,4 +173,11 @@ describe('ReflectionServer API', () => {
       /NOT_FOUND: Snapshot not found for action test/
     );
   });
+
+  it('tolerates concurrent stop() calls', async () => {
+    // A quit request racing a signal handler must not close the server twice
+    // (the second close would reject with ERR_SERVER_NOT_RUNNING).
+    await Promise.all([server.stop(), server.stop()]);
+    await assert.rejects(() => fetchApi('/api/__health'));
+  });
 });
