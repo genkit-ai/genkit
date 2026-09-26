@@ -113,7 +113,7 @@ func TestResolveReflectionConfig(t *testing.T) {
 func TestResolveReflectionConfigInvalidPort(t *testing.T) {
 	// An invalid port must fail startup rather than quietly fall back to
 	// probing, which would hide a typo in a deployment config.
-	for _, port := range []string{"abc", "-1", "70000", "3100.5", " "} {
+	for _, port := range []string{"abc", "-1", "70000", "3100.5", " ", "+7", "0x10", "1e3", " 7", "1_000"} {
 		t.Run(port, func(t *testing.T) {
 			_, err := resolveReflectionConfig(
 				envFunc(map[string]string{"GENKIT_REFLECTION_PORT": port}), 0)
