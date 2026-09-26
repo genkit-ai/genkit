@@ -15,14 +15,15 @@
  */
 
 // Genkit in a Box: one entry file defines a `runShell` tool AND boxes it (self
-// mode). The tool body runs in a separate process; the agent and the model API
-// key stay in this one. Only `runShell` calls cross the boundary.
+// mode) inside a local OS sandbox. The tool body runs jailed; the agent and the
+// model API key stay in this (unsandboxed) process. Only `runShell` calls cross
+// the boundary.
 //
 // Run it:
 //   GEMINI_API_KEY=... pnpm genkit:dev
 // then call the `runInBox` flow or chat with `codingAgent` in the Dev UI.
 
-import { box, execRunner } from '@genkit-ai/box';
+import { box, execRunner, localSandbox } from '@genkit-ai/box';
 import { googleAI } from '@genkit-ai/google-genai';
 import { retry } from '@genkit-ai/middleware';
 import { z } from 'genkit';
@@ -34,10 +35,14 @@ const run = promisify(exec);
 
 const ai = genkit({ plugins: [googleAI(), retry.plugin()] });
 
-// Run the boxed side as *this same program*, in a child process.
-const myBox = box(ai, { runner: execRunner({ self: true }) });
+// Run the boxed side as *this same program*, isolated by the OS sandbox that
+// fits the current platform (seatbelt on macOS, bubblewrap on Linux).
+const myBox = box(ai, {
+  runner: execRunner({ self: true, isolate: localSandbox() }),
+});
 
-// The real tool implementation. This body executes inside the box.
+// The real tool implementation. This body executes inside the sandbox, so it
+// can only touch what the sandbox profile allows.
 const runShell = ai.defineTool(
   {
     name: 'runShell',
@@ -60,10 +65,10 @@ const runShell = ai.defineTool(
 
 // A boxed handle to that tool. Hand over the real action (no schema
 // restatement); types are inferred from `runShell`. Every call is routed into
-// the box.
+// the sandbox.
 const boxedRunShell = myBox.fromTool(runShell);
 
-// The agent (and the Gemini API key) live OUTSIDE the box. Only runShell
+// The agent (and the Gemini API key) live OUTSIDE the sandbox. Only runShell
 // crosses the boundary.
 export const codingAgent = ai.defineAgent({
   name: 'codingAgent',
