@@ -88,6 +88,12 @@ type jsonRPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
+// Error lets a jsonRPCError travel as an error while keeping Code
+// inspectable, which register needs to recognize an auth rejection.
+func (e *jsonRPCError) Error() string {
+	return fmt.Sprintf("jsonrpc error %d: %s", e.Code, e.Message)
+}
+
 // reflectionRegisterResponse is the result payload for a register request.
 // Not in the generated schema because its only field is optional and the
 // JS side reads it structurally.
@@ -131,12 +137,19 @@ type reflectionServerV2 struct {
 	// the action has finished initializing are buffered rather than dropped.
 	bidiMu       sync.Mutex
 	bidiSessions map[string]*bidiSession
+
+	// authRejected is set when the CLI refuses this runtime's secret, which
+	// stops the session loop from reconnecting into a refusal loop.
+	authRejected atomic.Bool
 }
 
 // reflectionServerV2Options configures the V2 reflection client.
 type reflectionServerV2Options struct {
 	Name string // App name (optional, defaults to the runtime ID).
 	URL  string // WebSocket URL of the CLI manager.
+	// Secret presented in register. The CLI rejects the connection when it
+	// requires a secret and this does not match.
+	Secret string
 }
 
 // startReflectionServerV2 connects to the CLI's WebSocket server and spawns
@@ -210,6 +223,11 @@ func (s *reflectionServerV2) session(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		// The CLI refused this runtime's secret. That will not change, so
+		// reconnecting would just loop against a server that keeps refusing.
+		if s.authRejected.Load() {
+			return
+		}
 
 		delay := reconnectBaseDelay << attempt
 		if delay > reconnectMaxDelay {
@@ -247,10 +265,21 @@ func (s *reflectionServerV2) register(ctx context.Context) {
 		GenkitVersion:            "go/" + internal.Version,
 		ReflectionApiSpecVersion: internal.GENKIT_REFLECTION_API_SPEC_VERSION,
 		Envs:                     []string{"dev"},
+		Secret:                   s.opts.Secret,
 	}
 
 	result, err := s.sendRequest(ctx, "register", params)
 	if err != nil {
+		// Auth failures are terminal: the secret will not change, so retrying
+		// just reconnects in a loop against a CLI that keeps refusing.
+		var rpcErr *jsonRPCError
+		if errors.As(err, &rpcErr) && rpcErr.Code == reflectionAuthErrorCode {
+			slog.Error("reflection API rejected this runtime; not reconnecting", "error", rpcErr.Message)
+			s.authRejected.Store(true)
+			// Drop the connection so the session loop wakes and sees the flag.
+			_ = s.conn.Close(websocket.StatusNormalClosure, "unauthorized")
+			return
+		}
 		slog.Error("reflection V2: register failed", "error", err)
 		return
 	}
@@ -921,7 +950,7 @@ func (s *reflectionServerV2) sendRequest(ctx context.Context, method string, par
 	select {
 	case resp := <-ch:
 		if resp.err != nil {
-			return nil, fmt.Errorf("jsonrpc error %d: %s", resp.err.Code, resp.err.Message)
+			return nil, resp.err
 		}
 		return resp.result, nil
 	case <-ctx.Done():

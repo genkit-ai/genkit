@@ -46,6 +46,8 @@ func dec(_ context.Context, x int) (int, error) {
 
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
+		// The runtime file is dev-only now, and this case asserts on it.
+		t.Setenv("GENKIT_ENV", "dev")
 		g := Init(context.Background())
 
 		tc := tracing.NewTestOnlyTelemetryClient()
@@ -57,7 +59,11 @@ func TestReflectionServer(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		srv := startReflectionServer(ctx, g, errCh, serverStartCh)
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode: reflectionV1,
+			host: defaultReflectionHost,
+			port: defaultReflectionPort,
+		}, errCh, serverStartCh)
 		if srv == nil {
 			t.Fatal("failed to start reflection server")
 		}
