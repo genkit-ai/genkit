@@ -181,6 +181,9 @@ restricts:
 - **The child still inherits your environment**, API keys included. Pass a
   separate `cmd` entry and keep secrets out of its env if that matters.
 
+For untrusted or hostile code, use `podmanRunner()` (below). The local
+sandboxes are not containment.
+
 Tightening the defaults:
 
 ```ts
@@ -194,6 +197,90 @@ sandboxExec({ profile: '(version 1)\n(deny default)\n(allow network* (local ip))
 `bubblewrap({ unshareNet: true })` isolates the network namespace, but that
 currently breaks the reflection dial-back (the host binds the host's loopback,
 not the namespace's), so it is not usable for local boxes yet.
+
+## Containers: `podmanRunner()`
+
+For untrusted code, run the box in a container. The container runner is a
+**runner**, not an `isolate:` provider, because it flips the reflection
+direction: the box serves the **v1** HTTP reflection API and the runner
+publishes that port to the host loopback (`-p`). Nothing dials out of the
+container.
+
+```ts
+import { box, podmanRunner } from '@genkit-ai/box';
+
+const myBox = box(ai, {
+  runner: podmanRunner({
+    image: 'node:22-slim',
+    cmd: 'node dist/boxed.js', // runs INSIDE the container
+    extraArgs: ['--memory=512m', '--pids-limit=256'],
+  }),
+});
+```
+
+This is the first option with real containment:
+
+- **Egress is blocked by default.** Boxes run on an auto-created `--internal`
+  podman network, so a boxed tool cannot reach the internet. Published ports
+  still work, so reflection is unaffected. Opt out with `network: 'bridge'`.
+- **Resource caps actually exist.** Pass `--memory`, `--cpus`, `--pids-limit`
+  via `extraArgs`; the local sandboxes cannot do this at all.
+- **Nothing is inherited.** A container gets no host env and no host
+  filesystem beyond the project mount. Your `GEMINI_API_KEY` does not leak into
+  the box unless you pass it explicitly via `env:`.
+- **`docker` works too**, via `engine: 'docker'`.
+
+### Why v1 here, and not v2
+
+Everywhere else box uses reflection v2, where the runtime dials *out* to a
+WebSocket server. v1 is deliberate here: **blocking egress and dialing back out
+are mutually exclusive**, because they are the same route. On an `--internal`
+network `host.containers.internal` still resolves but cannot be connected to,
+while published ports keep working (the engine injects them from the host
+side).
+
+| | v2 (dial out) | v1 + `-p` (dial in) |
+| --- | --- | --- |
+| normal bridge | works | works |
+| **egress blocked (`--internal`)** | **impossible** | **works** |
+
+### Self-entry mode
+
+`self: true` runs *this same program* in the container. The project is mounted
+at its **own absolute path**, so `process.argv` and loader flags carry over
+verbatim and relative symlinks still resolve.
+
+```ts
+podmanRunner({
+  image: 'node:22-slim',
+  self: true,
+  modulesVolume: 'genkit-box-modules',
+});
+```
+
+The catch is `node_modules`: host-installed deps are built for the host OS/arch
+and **cannot load in a Linux container** (esbuild and other native addons fail
+outright). `modulesVolume` shadows the mounted `node_modules` with a named
+volume holding Linux-built deps. Prime it once:
+
+```bash
+podman run --rm -v "$PWD:$PWD" -w "$PWD" \
+  -v genkit-box-modules:"$PWD/node_modules" node:22-slim npm ci
+```
+
+### Reflection contract
+
+The runner starts each container with:
+
+- `GENKIT_REFLECTION_PORT=3100`: bind exactly that port (it is what the runner
+  publishes).
+- `GENKIT_REFLECTION_HOST=0.0.0.0`: published ports arrive on the container's
+  eth0, so the default loopback bind would be unreachable.
+- `GENKIT_REFLECTION_SECRET_TOKEN`: a fresh random secret per container. The
+  runner sends it on every call, and the host side of the port is bound to
+  `127.0.0.1` as well.
+
+> Cross-language boxes need a runtime that honors these variables.
 
 ## Tracing
 
