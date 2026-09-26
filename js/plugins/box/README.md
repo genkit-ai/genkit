@@ -105,6 +105,21 @@ interface BoxRunner {
 }
 ```
 
+Runners don't speak reflection themselves; they hand the core a
+`BoxConnection` built from one of two shared clients:
+
+- `ReflectionHost`: the reflection **v2** manager. Runtimes dial in over
+  WebSocket (`GENKIT_REFLECTION_V2_SERVER`) and must present its per-host
+  `secret` (`GENKIT_REFLECTION_SECRET_TOKEN`) in `register`.
+- `ReflectionClientV1`: a client for the **v1** HTTP API, for runtimes that
+  serve reflection themselves (e.g. in a container with a published port).
+
+```ts
+const client = new ReflectionClientV1('http://127.0.0.1:54321', { secret });
+await client.waitForReady();
+await client.runAction({ key: '/tool/runShell', input: { cmd: 'ls' } });
+```
+
 ## Tracing
 
 Each proxied call records a span in the caller's trace, marked with
