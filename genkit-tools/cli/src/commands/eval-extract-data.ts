@@ -29,9 +29,11 @@ import {
 import * as clc from 'colorette';
 import { Command } from 'commander';
 import { writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import { NO_AUTH_OPTION_HELP, runWithManager } from '../utils/manager-utils';
 
 interface EvalDatasetOptions {
+  /** False with --no-auth. */
+  auth?: boolean;
   output?: string;
   maxRows: string;
   label?: string;
@@ -47,6 +49,7 @@ export const evalExtractData = new Command('eval:extractData')
   )
   .option('--maxRows <maxRows>', 'maximum number of rows', '100')
   .option('--label [label]', 'label flow run in this batch')
+  .option('--no-auth', NO_AUTH_OPTION_HELP)
   .action(async (flowName: string, options: EvalDatasetOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
@@ -121,7 +124,10 @@ export const evalExtractData = new Command('eval:extractData')
       }
     };
 
-    await runWithManager(projectRoot, runAction, { runtimeCommand });
+    await runWithManager(projectRoot, runAction, {
+      runtimeCommand,
+      auth: options.auth,
+    });
   });
 
 function toArray(input: any) {

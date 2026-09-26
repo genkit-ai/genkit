@@ -30,6 +30,8 @@ export const ReflectionRegisterParamsSchema = z.object({
   genkitVersion: z.string().optional(),
   reflectionApiSpecVersion: z.number().optional(),
   envs: z.array(z.string()).optional(),
+  /** Value of GENKIT_REFLECTION_SECRET_TOKEN, when the runtime has one. */
+  secret: z.string().optional(),
 });
 
 export type ReflectionRegisterParams = z.infer<

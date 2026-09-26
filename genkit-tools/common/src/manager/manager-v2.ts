@@ -37,17 +37,56 @@ import {
   ReflectionRunActionStateParamsSchema,
   ReflectionSendInputStreamChunkParamsSchema,
   ReflectionStreamChunkParamsSchema,
+  type ReflectionRegisterParams,
 } from '../types/reflection';
 import { logger } from '../utils/logger';
 import { DevToolsInfo } from '../utils/utils';
 import { BaseRuntimeManager, RuntimeManagerOptions } from './manager';
 import { ProcessManager } from './process-manager';
 import {
+  REFLECTION_AUTH_ERROR_CODE,
+  REFLECTION_SECRET_ENV,
+  REFLECTION_V2_HOST,
+  secretsEqual,
+} from './reflection-auth';
+import {
   GenkitToolsError,
   RuntimeEvent,
   RuntimeInfo,
   StreamingCallback,
 } from './types';
+
+/** How long a socket may stay open without completing `register`. */
+const REGISTER_TIMEOUT_MS = 10_000;
+
+/** WebSocket close code for policy violations (RFC 6455). */
+const WS_POLICY_VIOLATION = 1008;
+
+/**
+ * CLI-side explanation for a rejected `register`. The runtime gets a short
+ * JSON-RPC error; the person running the CLI gets the actionable version.
+ */
+function registerRejectedMessage(
+  params: ReflectionRegisterParams,
+  failure: 'missing' | 'invalid'
+): string {
+  const who = [`pid ${params.pid}`, params.genkitVersion]
+    .filter(Boolean)
+    .join(', ');
+  if (failure === 'invalid') {
+    return (
+      `Rejected runtime connection (${who}): it provided an invalid reflection secret.\n` +
+      `If you started the runtime yourself, pass it the ${REFLECTION_SECRET_ENV} this CLI uses (see --write-env-file).\n` +
+      'To skip this check, restart with --no-auth.'
+    );
+  }
+  return (
+    `Rejected runtime connection (${who}): it did not provide the reflection secret.\n` +
+    'This usually means the runtime uses an older Genkit library. Upgrade it to the latest version.\n' +
+    `If you started the runtime yourself, pass it ${REFLECTION_SECRET_ENV} (see --write-env-file).\n` +
+    'To skip this check, restart with --no-auth.'
+  );
+}
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -100,6 +139,14 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   get port(): number | undefined {
     return this._port;
   }
+
+  /** Interface the WebSocket server is bound to. Undefined before listening. */
+  get boundHost(): string | undefined {
+    const address = this.wss?.address();
+    return typeof address === 'object' && address !== null
+      ? address.address
+      : undefined;
+  }
   private pendingRequests: Map<
     number | string,
     {
@@ -115,12 +162,20 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   private eventEmitter = new EventEmitter();
   private requestIdCounter = 0;
 
+  // Sockets that have not completed `register` yet, with their deadline timer.
+  // Until a socket registers, the only message it may send is `register`.
+  private unregistered: Map<WebSocket, NodeJS.Timeout> = new Map();
+  // Rejections are logged once per pid: old runtimes reconnect with backoff
+  // and would otherwise repeat the same explanation forever.
+  private rejectedPids: Set<number> = new Set();
+
   constructor(
     telemetryServerUrl: string | undefined,
     readonly manageHealth: boolean,
     projectRoot: string,
     processManager?: ProcessManager,
-    disableRealtimeTelemetry: boolean = false
+    disableRealtimeTelemetry: boolean = false,
+    private readonly reflectionSecret?: string
   ) {
     super(
       telemetryServerUrl,
@@ -138,7 +193,8 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       options.manageHealth ?? true,
       options.projectRoot,
       options.processManager,
-      options.disableRealtimeTelemetry
+      options.disableRealtimeTelemetry,
+      options.reflectionSecret
     );
     await manager.startWebSocketServer(options.reflectionV2Port);
     return manager;
@@ -149,15 +205,40 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
    */
   private async startWebSocketServer(port?: number): Promise<{ port: number }> {
     if (!port) {
-      port = await getPort({ port: makeRange(3200, 3400) });
+      port = await getPort({
+        host: REFLECTION_V2_HOST,
+        port: makeRange(3200, 3400),
+      });
     }
-    this.wss = new WebSocketServer({ port });
+    // Loopback only: any socket that registers can be sent runAction.
+    this.wss = new WebSocketServer({ host: REFLECTION_V2_HOST, port });
+    // Resolve only once the socket is bound, so callers that hand the URL to a
+    // runtime cannot race the listen.
+    const wss = this.wss;
+    await new Promise<void>((resolve, reject) => {
+      wss.once('listening', resolve);
+      wss.once('error', reject);
+    });
 
     this._port = port;
-    logger.info(`Starting reflection server: ws://localhost:${port}`);
+    logger.info(
+      `Starting reflection server: ws://${REFLECTION_V2_HOST}:${port}`
+    );
 
     this.wss.on('connection', (ws) => {
       ws.on('error', (err) => logger.error(`WebSocket error: ${err}`));
+
+      this.unregistered.set(
+        ws,
+        setTimeout(() => {
+          if (this.unregistered.delete(ws)) {
+            logger.debug(
+              'Closing reflection connection that never registered.'
+            );
+            ws.close(WS_POLICY_VIOLATION, 'register timeout');
+          }
+        }, REGISTER_TIMEOUT_MS)
+      );
 
       ws.on('message', (data) => {
         try {
@@ -165,10 +246,14 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
           this.handleMessage(ws, message);
         } catch (error) {
           logger.error('Failed to parse WebSocket message:', error);
+          if (this.unregistered.has(ws)) {
+            this.closeUnregistered(ws, 'invalid message');
+          }
         }
       });
 
       ws.on('close', () => {
+        this.clearUnregistered(ws);
         this.handleDisconnect(ws);
       });
     });
@@ -176,11 +261,71 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   }
 
   private handleMessage(ws: WebSocket, message: JsonRpcMessage) {
+    if (this.unregistered.has(ws)) {
+      // One message before authentication, and it must be `register`.
+      if ('method' in message && message.method === 'register') {
+        this.handleRegister(ws, message as JsonRpcRequest);
+      } else {
+        this.closeUnregistered(ws, 'register required');
+      }
+      return;
+    }
     if ('method' in message) {
       this.handleRequest(ws, message as JsonRpcRequest);
     } else {
       this.handleResponse(message as JsonRpcResponse);
     }
+  }
+
+  private clearUnregistered(ws: WebSocket) {
+    const timer = this.unregistered.get(ws);
+    if (timer) clearTimeout(timer);
+    this.unregistered.delete(ws);
+  }
+
+  private closeUnregistered(ws: WebSocket, reason: string) {
+    this.clearUnregistered(ws);
+    ws.close(WS_POLICY_VIOLATION, reason);
+  }
+
+  /**
+   * Checks the secret in `register`. Returns the failure kind, or undefined
+   * when the runtime may register.
+   */
+  private checkRegisterSecret(
+    secret: string | undefined
+  ): 'missing' | 'invalid' | undefined {
+    if (this.reflectionSecret === undefined) return undefined;
+    if (!secret) return 'missing';
+    return secretsEqual(secret, this.reflectionSecret) ? undefined : 'invalid';
+  }
+
+  private rejectRegister(
+    ws: WebSocket,
+    request: JsonRpcRequest,
+    params: ReflectionRegisterParams,
+    failure: 'missing' | 'invalid'
+  ) {
+    if (!this.rejectedPids.has(params.pid)) {
+      this.rejectedPids.add(params.pid);
+      logger.error(registerRejectedMessage(params, failure));
+    }
+    if (request.id) {
+      ws.send(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: REFLECTION_AUTH_ERROR_CODE,
+            message:
+              failure === 'missing'
+                ? 'Reflection secret required. Upgrade Genkit, or restart the CLI with --no-auth.'
+                : 'Invalid reflection secret.',
+          },
+          id: request.id,
+        })
+      );
+    }
+    this.closeUnregistered(ws, 'unauthorized');
   }
 
   private handleRequest(ws: WebSocket, request: JsonRpcRequest) {
@@ -200,14 +345,27 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   }
 
   private handleRegister(ws: WebSocket, request: JsonRpcRequest) {
-    const params = ReflectionRegisterParamsSchema.parse(request.params);
+    const parsed = ReflectionRegisterParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      logger.error(`Invalid register params: ${parsed.error.message}`);
+      this.closeUnregistered(ws, 'invalid register');
+      return;
+    }
+    const params = parsed.data;
+    const failure = this.checkRegisterSecret(params.secret);
+    if (failure) {
+      this.rejectRegister(ws, request, params, failure);
+      return;
+    }
+    this.clearUnregistered(ws);
+
     const runtimeInfo: RuntimeInfo = {
       id: params.id,
       pid: params.pid,
       name: params.name,
       genkitVersion: params.genkitVersion,
       reflectionApiSpecVersion: params.reflectionApiSpecVersion,
-      reflectionServerUrl: `ws://localhost:${this.port}`, // Virtual URL for compatibility
+      reflectionServerUrl: `ws://${REFLECTION_V2_HOST}:${this.port}`, // Virtual URL for compatibility
       timestamp: new Date().toISOString(),
       projectName: path.basename(this.projectRoot), // Or derive from other means if needed
     };
@@ -463,6 +621,8 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   }
 
   async stop() {
+    for (const timer of this.unregistered.values()) clearTimeout(timer);
+    this.unregistered.clear();
     if (this.wss) {
       this.wss.close();
     }
