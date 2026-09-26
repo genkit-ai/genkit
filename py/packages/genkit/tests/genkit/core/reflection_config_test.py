@@ -103,7 +103,7 @@ def test_port_zero_is_valid_and_pinned() -> None:
     assert (config.port, config.pinned) == (0, True)
 
 
-@pytest.mark.parametrize('value', ['abc', '-1', '70000', '3100.5', ' 3100'])
+@pytest.mark.parametrize('value', ['abc', '-1', '70000', '3100.5', ' 3100', '+7', '0x10', '1e3', '1_000', '\u0663'])
 def test_invalid_port_raises_rather_than_falling_back(value: str) -> None:
     with pytest.raises(ValueError, match='GENKIT_REFLECTION_PORT'):
         resolve_reflection_config({'GENKIT_REFLECTION_PORT': value})
