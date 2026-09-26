@@ -32,16 +32,21 @@ from uuid import uuid4
 import uvicorn
 from pydantic import BaseModel
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from genkit._core._action import Action, BidiAction
 from genkit._core._constants import GENKIT_VERSION
+from genkit._core._environment import is_dev_environment
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInit, AgentInput, ModelRef
+from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
 
 logger = get_logger(__name__)
@@ -192,11 +197,38 @@ class ActionRunner:
         return StreamingResponse(gen(), media_type='text/plain' if self.stream else 'application/json', headers=headers)
 
 
+class ReflectionAuthMiddleware:
+    """Rejects requests that do not carry the configured secret.
+
+    ``/api/__health`` is exempt: it carries no registry content and is what
+    orchestrators and the CLI probe before they have any reason to know a
+    secret. The 401 body is empty on purpose.
+
+    Plain ASGI rather than ``BaseHTTPMiddleware`` so streaming ``runAction``
+    responses pass through untouched.
+    """
+
+    def __init__(self, app: ASGIApp, secret: str) -> None:
+        self._app = app
+        self._secret = secret
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] != 'http' or scope['path'] == '/api/__health':
+            await self._app(scope, receive, send)
+            return
+        provided = Headers(scope=scope).get(REFLECTION_SECRET_HEADER)
+        if not provided or not secrets_equal(provided, self._secret):
+            await Response(status_code=401)(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 def create_reflection_asgi_app(
     registry: Registry,
     on_startup: LifecycleHook | None = None,
     on_shutdown: LifecycleHook | None = None,
     version: str = GENKIT_VERSION,
+    secret: str | None = None,
 ) -> Starlette:
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
@@ -300,10 +332,24 @@ def create_reflection_asgi_app(
         if on_shutdown is not None:
             await on_shutdown()
 
+    routes = [
+        Route('/api/__health', health, methods=['GET']),
+    ]
+    # Dev only: it kills the process and answers GET, so any page that can
+    # cause a request to it could take the process down.
+    if is_dev_environment():
+        routes.append(Route('/api/__quitquitquit', terminate, methods=['GET', 'POST']))
+
+    middleware: list[Middleware] = []
+    if secret:
+        # ty (0.0.x) cannot match any factory against Starlette's ParamSpec'd
+        # `_MiddlewareFactory` protocol, including this documented form.
+        middleware.append(Middleware(ReflectionAuthMiddleware, secret=secret))  # ty: ignore[invalid-argument-type]
+
     app = Starlette(
+        middleware=middleware,
         routes=[
-            Route('/api/__health', health, methods=['GET']),
-            Route('/api/__quitquitquit', terminate, methods=['GET', 'POST']),
+            *routes,
             Route('/api/actions', actions, methods=['GET']),
             Route('/api/values', values, methods=['GET']),
             Route('/api/envs', envs, methods=['GET']),
