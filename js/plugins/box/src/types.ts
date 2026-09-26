@@ -25,6 +25,12 @@ export interface RunActionRequest {
   init?: unknown;
   context?: ActionContext;
   telemetryLabels?: Record<string, string>;
+  /**
+   * Agent session this call belongs to, when the caller knows it but the
+   * payload doesn't carry it (e.g. a turn resuming by `snapshotId` alone). A
+   * routing hint for `sessionIdOf`; never sent to the box.
+   */
+  sessionId?: string;
 }
 
 /** Streaming/cancellation/trace options threaded through a `runAction`. */
