@@ -552,39 +552,47 @@ export class ReflectionServer {
    * Stops the server and removes it from the list of running servers to clean up on exit.
    */
   async stop(): Promise<void> {
-    if (this.v2Server) {
-      await this.v2Server.stop();
-      const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
-      if (index > -1) {
-        ReflectionServer.RUNNING_SERVERS.splice(index, 1);
-      }
+    // Claim the server before the first await: stop() can race with itself
+    // (e.g. /api/__quitquitquit arriving alongside a SIGTERM), and a second
+    // caller must see nothing left to stop rather than close it twice.
+    const v2Server = this.v2Server;
+    this.v2Server = null;
+    if (v2Server) {
+      await v2Server.stop();
+      this.removeFromRunningServers();
       return;
     }
 
-    if (!this.server) {
+    const server = this.server;
+    this.server = null;
+    if (!server) {
       return;
     }
-    return new Promise<void>(async (resolve, reject) => {
-      await this.cleanupRuntimeFile();
-      this.server!.close(async (err) => {
+    await this.cleanupRuntimeFile();
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => {
         if (err) {
           logger.error(
             `Error shutting down reflection server on port ${this.port}: ${err}`
           );
           reject(err);
+          return;
         }
-        const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
-        if (index > -1) {
-          ReflectionServer.RUNNING_SERVERS.splice(index, 1);
-        }
-        logger.debug(
-          `Reflection server on port ${this.port} has successfully shut down.`
-        );
-        this.port = null;
-        this.server = null;
         resolve();
       });
     });
+    this.removeFromRunningServers();
+    logger.debug(
+      `Reflection server on port ${this.port} has successfully shut down.`
+    );
+    this.port = null;
+  }
+
+  private removeFromRunningServers() {
+    const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
+    if (index > -1) {
+      ReflectionServer.RUNNING_SERVERS.splice(index, 1);
+    }
   }
 
   /**
