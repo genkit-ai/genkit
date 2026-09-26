@@ -24,9 +24,19 @@ import { StatusCodes, statusNameToCode, type Status } from './action.js';
 import { getGenkitRuntimeConfig } from './config.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
+import {
+  DEFAULT_REFLECTION_HOST,
+  DEFAULT_REFLECTION_PORT,
+  REFLECTION_SECRET_HEADER,
+  isLoopbackHost,
+  resolveReflectionConfig,
+  secretsEqual,
+  type ReflectionConfig,
+} from './reflection-config.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
 import { flushTracing, setTelemetryServerUrl } from './tracing.js';
+import { isDevEnv } from './utils.js';
 
 // TODO: Move this to common location for schemas.
 export const RunActionResponseSchema = z.object({
@@ -41,7 +51,11 @@ export const RunActionResponseSchema = z.object({
 export type RunActionResponse = z.infer<typeof RunActionResponseSchema>;
 
 export interface ReflectionServerOptions {
-  /** Port to run the server on. Actual port may be different if chosen port is occupied. Defaults to 3100. */
+  /**
+   * Port to run the server on. Actual port may be different if chosen port is
+   * occupied. Defaults to 3100. `GENKIT_REFLECTION_PORT` overrides this, and
+   * when set the port is bound exactly with no fallback.
+   */
   port?: number;
   /** Body size limit for the server. Defaults to `30mb`. */
   bodyLimit?: string;
@@ -114,7 +128,9 @@ export class ReflectionServer {
   async findPort(): Promise<number> {
     const chosenPort = this.options.port!;
     const freePort = await getPort({
-      port: makeRange(chosenPort, chosenPort + 100),
+      // Clamped: makeRange rejects anything above 65536, which a caller
+      // starting from a high ephemeral port would otherwise hit.
+      port: makeRange(chosenPort, Math.min(chosenPort + 100, 65535)),
     });
     if (freePort !== chosenPort) {
       logger.warn(
@@ -122,6 +138,28 @@ export class ReflectionServer {
       );
     }
     return freePort;
+  }
+
+  /**
+   * Rejects a request that does not carry the configured secret.
+   *
+   * `/api/__health` is exempt: it carries no registry content and is what
+   * orchestrators and the CLI probe before they have any reason to know a
+   * secret. The 401 body is empty on purpose.
+   */
+  private authMiddleware(secret: string): express.RequestHandler {
+    return (req, res, next) => {
+      if (req.path === '/api/__health') {
+        next();
+        return;
+      }
+      const provided = req.header(REFLECTION_SECRET_HEADER);
+      if (!provided || !secretsEqual(provided, secret)) {
+        res.status(401).end();
+        return;
+      }
+      next();
+    };
   }
 
   /**
@@ -136,12 +174,34 @@ export class ReflectionServer {
       );
       return;
     }
-    if (process.env.GENKIT_REFLECTION_V2_SERVER) {
+    const resolved = resolveReflectionConfig(process.env, {
+      port: this.options.port,
+    });
+    if (resolved.kind === 'disabled') {
+      logger.debug('Reflection API disabled by GENKIT_REFLECTION_DISABLED.');
+      return;
+    }
+    // Reaching start() is itself a request for a server, so `off` (nothing in
+    // the environment asked for one) still starts with defaults. Genkit's own
+    // constructor checks the config first and does not call start() at all.
+    const config: Exclude<ReflectionConfig, { kind: 'disabled' | 'off' }> =
+      resolved.kind === 'off'
+        ? {
+            kind: 'v1',
+            host: DEFAULT_REFLECTION_HOST,
+            port: {
+              kind: 'probeFrom',
+              port: this.options.port ?? DEFAULT_REFLECTION_PORT,
+            },
+          }
+        : resolved;
+    if (config.kind === 'v2') {
       const { ReflectionServerV2 } = await import('./reflection-v2.js');
       this.v2Server = new ReflectionServerV2(this.registry, {
         configuredEnvs: this.options.configuredEnvs,
         name: this.options.name,
-        url: process.env.GENKIT_REFLECTION_V2_SERVER,
+        url: config.url,
+        secret: config.secret,
       });
       await this.v2Server.start();
       ReflectionServer.RUNNING_SERVERS.push(this);
@@ -155,6 +215,15 @@ export class ReflectionServer {
       res.header('x-genkit-version', GENKIT_VERSION);
       next();
     });
+    if (config.secret) {
+      server.use(this.authMiddleware(config.secret));
+    } else if (!isLoopbackHost(config.host)) {
+      logger.warn(
+        `Reflection API is listening on ${config.host} without authentication. ` +
+          'Anyone who can reach this port can run any registered action. Set ' +
+          'GENKIT_REFLECTION_SECRET_TOKEN, or front it with your own auth.'
+      );
+    }
 
     server.get('/api/__health', async (req, response) => {
       if (req.query['id'] && req.query['id'] !== this.runtimeId) {
@@ -165,11 +234,15 @@ export class ReflectionServer {
       response.status(200).send('OK');
     });
 
-    server.get('/api/__quitquitquit', async (_, response) => {
-      logger.debug('Received quitquitquit');
-      response.status(200).send('OK');
-      await this.stop();
-    });
+    // Dev only: it kills the server and answers GET, so any page that can
+    // cause a request to it could take the process down.
+    if (isDevEnv()) {
+      server.get('/api/__quitquitquit', async (_, response) => {
+        logger.debug('Received quitquitquit');
+        response.status(200).send('OK');
+        await this.stop();
+      });
+    }
 
     server.get('/api/values', async (req, response, next) => {
       logger.debug('Fetching values.');
@@ -442,23 +515,29 @@ export class ReflectionServer {
       res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
-    this.port = await this.findPort();
-    // Bind to loopback so the (unauthenticated) reflection server is not
-    // exposed on the network by default. `GENKIT_REFLECTION_HOST` can be set
-    // (e.g. to `0.0.0.0`) for container/remote dev scenarios.
-    const host = process.env.GENKIT_REFLECTION_HOST || '127.0.0.1';
-    await new Promise<void>((resolve) => {
-      this.server = server.listen(this.port!, host, resolve);
+    // A pinned port is a contract with whoever published it: bind exactly that
+    // port or fail. Shifting to the next free one would leave them talking to
+    // a dead port, which is worse than a clear error.
+    this.port =
+      config.port.kind === 'pinned' ? config.port.port : await this.findPort();
+    await new Promise<void>((resolve, reject) => {
+      this.server = server.listen(this.port!, config.host, resolve);
+      this.server.once('error', reject);
     });
 
     logger.debug(
-      `Reflection server (${process.pid}) running on http://localhost:${this.port}`
+      `Reflection server (${process.pid}) running on http://${config.host}:${this.port}`
     );
     ReflectionServer.RUNNING_SERVERS.push(this);
 
     try {
       await this.registry.listActions();
-      await this.writeRuntimeFile();
+      // Dev only: the file exists so a local CLI watching the same filesystem
+      // can discover this runtime. Nothing is watching in a container, and the
+      // working directory is frequently read-only.
+      if (isDevEnv()) {
+        await this.writeRuntimeFile(config.secret);
+      }
     } catch (e) {
       logger.error(`Error initializing plugins: ${e}`);
       try {
@@ -473,45 +552,53 @@ export class ReflectionServer {
    * Stops the server and removes it from the list of running servers to clean up on exit.
    */
   async stop(): Promise<void> {
-    if (this.v2Server) {
-      await this.v2Server.stop();
-      const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
-      if (index > -1) {
-        ReflectionServer.RUNNING_SERVERS.splice(index, 1);
-      }
+    // Claim the server before the first await: stop() can race with itself
+    // (e.g. /api/__quitquitquit arriving alongside a SIGTERM), and a second
+    // caller must see nothing left to stop rather than close it twice.
+    const v2Server = this.v2Server;
+    this.v2Server = null;
+    if (v2Server) {
+      await v2Server.stop();
+      this.removeFromRunningServers();
       return;
     }
 
-    if (!this.server) {
+    const server = this.server;
+    this.server = null;
+    if (!server) {
       return;
     }
-    return new Promise<void>(async (resolve, reject) => {
-      await this.cleanupRuntimeFile();
-      this.server!.close(async (err) => {
+    await this.cleanupRuntimeFile();
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => {
         if (err) {
           logger.error(
             `Error shutting down reflection server on port ${this.port}: ${err}`
           );
           reject(err);
+          return;
         }
-        const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
-        if (index > -1) {
-          ReflectionServer.RUNNING_SERVERS.splice(index, 1);
-        }
-        logger.debug(
-          `Reflection server on port ${this.port} has successfully shut down.`
-        );
-        this.port = null;
-        this.server = null;
         resolve();
       });
     });
+    this.removeFromRunningServers();
+    logger.debug(
+      `Reflection server on port ${this.port} has successfully shut down.`
+    );
+    this.port = null;
+  }
+
+  private removeFromRunningServers() {
+    const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
+    if (index > -1) {
+      ReflectionServer.RUNNING_SERVERS.splice(index, 1);
+    }
   }
 
   /**
    * Writes the runtime file to the project root.
    */
-  private async writeRuntimeFile() {
+  private async writeRuntimeFile(secret?: string) {
     try {
       const rootDir = await findProjectRoot();
       const runtimesDir = path.join(rootDir, '.genkit', 'runtimes');
@@ -531,12 +618,18 @@ export class ReflectionServer {
           timestamp,
           genkitVersion: `nodejs/${GENKIT_VERSION}`,
           reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
+          // Advertised so any local CLI process can reach this runtime, not
+          // just the one that spawned it. Dev only, and mode 0600.
+          reflectionSecret: secret,
         },
         null,
         2
       );
       await fs.mkdir(runtimesDir, { recursive: true });
-      await fs.writeFile(this.runtimeFilePath, fileContent, 'utf8');
+      await fs.writeFile(this.runtimeFilePath, fileContent, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
       logger.debug(`Runtime file written: ${this.runtimeFilePath}`);
     } catch (error) {
       logger.error(`Error writing runtime file: ${error}`);
