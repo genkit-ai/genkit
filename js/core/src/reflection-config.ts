@@ -69,7 +69,9 @@ function parsePort(raw: string | undefined): number | undefined {
   if (raw === undefined || raw === '') {
     return undefined;
   }
-  const port = Number(raw);
+  // Plain decimal digits only: Number() alone would accept "0x10", "1e3",
+  // "+7" and surrounding whitespace, silently binding a different port.
+  const port = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(
       `GENKIT_REFLECTION_PORT must be an integer between 0 and 65535, got "${raw}".`

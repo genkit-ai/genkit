@@ -127,7 +127,17 @@ describe('resolveReflectionConfig', () => {
   });
 
   it('rejects an invalid port rather than falling back', () => {
-    for (const port of ['abc', '-1', '70000', '3100.5']) {
+    for (const port of [
+      'abc',
+      '-1',
+      '70000',
+      '3100.5',
+      '+7',
+      '0x10',
+      '1e3',
+      ' 7',
+      '1_000',
+    ]) {
       assert.throws(
         () => resolveReflectionConfig({ GENKIT_REFLECTION_PORT: port }),
         /GENKIT_REFLECTION_PORT/,
