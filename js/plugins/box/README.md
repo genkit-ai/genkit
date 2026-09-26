@@ -142,6 +142,59 @@ is for trusted code and relocation, not containment. Boxes nest: a boxed agent
 can itself box a tool, each level in its own process. Call `box.close()` when
 you are done; it stops every child the runner started.
 
+### Local sandboxes: `isolate`
+
+`isolate` jails the child with an OS sandbox, without changing anything else:
+
+```ts
+import { box, execRunner, localSandbox } from '@genkit-ai/box';
+
+// seatbelt on macOS, bubblewrap on Linux; throws elsewhere (e.g. Windows)
+box(ai, { runner: execRunner({ self: true, isolate: localSandbox() }) });
+```
+
+Or pick one explicitly: `sandboxExec()` (macOS), `bubblewrap()` (Linux).
+
+### Isolation levels (read this before trusting it)
+
+The local sandboxes are **dev-time guardrails against accidents and casual
+misbehavior, not containment for hostile code.** Know exactly what each one
+restricts:
+
+| Option | FS read | FS write | Network egress | CPU/mem/syscalls |
+| --- | --- | --- | --- | --- |
+| none (no `isolate`) | full | full | full | none |
+| `sandboxExec()` (macOS) | **full** | blocked except `/tmp` | **full** | none |
+| `bubblewrap()` (Linux) | confined: ro `/usr /bin /lib /lib64 /etc` + tmpfs; home/repo/creds not present | `/tmp` tmpfs only | **full** | none |
+
+- **Network egress is open on both.** The box must reach the reflection host
+  on loopback, and the default profiles allow *all* network, not just loopback.
+  A boxed tool can call out to the internet and exfiltrate.
+- **macOS restricts writes only.** With `sandboxExec()` a boxed tool can still
+  read anything you can (`~/.aws/credentials`, `~/.ssh`, source, env-bearing
+  dotfiles). `sandbox-exec` is also deprecated by Apple (still works on current
+  macOS, prints a warning).
+- **Linux confines the filesystem view.** With `bubblewrap()` your home dir,
+  repo, and credentials are simply not mounted.
+- **No resource limits.** No CPU/memory/pid caps and no seccomp filtering. A
+  boxed tool can peg the CPU or fork-bomb.
+- **The child still inherits your environment**, API keys included. Pass a
+  separate `cmd` entry and keep secrets out of its env if that matters.
+
+Tightening the defaults:
+
+```ts
+// Linux: bind only your repo read-only, keep an ephemeral /tmp.
+bubblewrap({ roBind: ['/path/to/repo'], tmpfs: ['/tmp'] });
+
+// macOS: supply a full custom seatbelt profile.
+sandboxExec({ profile: '(version 1)\n(deny default)\n(allow network* (local ip))' });
+```
+
+`bubblewrap({ unshareNet: true })` isolates the network namespace, but that
+currently breaks the reflection dial-back (the host binds the host's loopback,
+not the namespace's), so it is not usable for local boxes yet.
+
 ## Tracing
 
 Each proxied call records a span in the caller's trace, marked with
