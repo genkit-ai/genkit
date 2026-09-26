@@ -216,8 +216,16 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     // runtime cannot race the listen.
     const wss = this.wss;
     await new Promise<void>((resolve, reject) => {
-      wss.once('listening', resolve);
-      wss.once('error', reject);
+      const onListening = () => {
+        wss.off('error', onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        wss.off('listening', onListening);
+        reject(err);
+      };
+      wss.once('listening', onListening);
+      wss.once('error', onError);
     });
 
     this._port = port;
@@ -322,8 +330,11 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
                 : 'Invalid reflection secret.',
           },
           id: request.id,
-        })
+        }),
+        // Close only after the error is flushed so the runtime sees why.
+        () => this.closeUnregistered(ws, 'unauthorized')
       );
+      return;
     }
     this.closeUnregistered(ws, 'unauthorized');
   }

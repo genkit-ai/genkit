@@ -187,9 +187,12 @@ export async function getDevEnvVars(
   }
 
   if (experimentalReflectionV2) {
-    reflectionV2Port = await getPort({ port: makeRange(3200, 3400) });
-    // Must match the interface the v2 server binds; `localhost` may resolve
-    // to ::1 first and miss an IPv4-only listener.
+    // Probe and URL must both match the interface the v2 server binds;
+    // `localhost` may resolve to ::1 first and miss an IPv4-only listener.
+    reflectionV2Port = await getPort({
+      port: makeRange(3200, 3400),
+      host: REFLECTION_V2_HOST,
+    });
     envVars.GENKIT_REFLECTION_V2_SERVER = `ws://${REFLECTION_V2_HOST}:${reflectionV2Port}`;
   }
 
