@@ -127,6 +127,11 @@ export class ReflectionServer {
    */
   async findPort(): Promise<number> {
     const chosenPort = this.options.port!;
+    // 0 means "let the OS pick"; makeRange rejects it, and there is nothing to
+    // probe anyway.
+    if (chosenPort === 0) {
+      return 0;
+    }
     const freePort = await getPort({
       // Clamped: makeRange rejects anything above 65536, which a caller
       // starting from a high ephemeral port would otherwise hit.
@@ -524,6 +529,12 @@ export class ReflectionServer {
       this.server = server.listen(this.port!, config.host, resolve);
       this.server.once('error', reject);
     });
+    // With port 0 the OS picked the port; record the real one so the runtime
+    // file and logs point at something reachable.
+    const address = this.server!.address();
+    if (address && typeof address === 'object') {
+      this.port = address.port;
+    }
 
     logger.debug(
       `Reflection server (${process.pid}) running on http://${config.host}:${this.port}`

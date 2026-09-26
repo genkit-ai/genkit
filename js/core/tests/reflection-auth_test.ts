@@ -132,9 +132,10 @@ describe('ReflectionServer auth', () => {
   it('fails to start when the pinned port is taken', async () => {
     const taken = http.createServer();
     const port = await getPort();
-    await new Promise<void>((resolve) =>
-      taken.listen(port, '127.0.0.1', resolve)
-    );
+    await new Promise<void>((resolve, reject) => {
+      taken.once('error', reject);
+      taken.listen(port, '127.0.0.1', resolve);
+    });
     try {
       process.env.GENKIT_REFLECTION_PORT = String(port);
       const blocked = new ReflectionServer(new Registry());
