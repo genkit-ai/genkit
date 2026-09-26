@@ -88,11 +88,10 @@ def _parse_port(raw: str | None) -> int | None:
     """
     if not raw:
         return None
-    try:
-        port = int(raw)
-    except ValueError:
-        port = -1
-    if port < 0 or port > 65535 or raw.strip() != raw:
+    # ASCII digits only: int() would also accept '+7', '1_000', ' 7' and
+    # non-ASCII digits, all of which are more likely typos than intent.
+    port = int(raw) if raw.isascii() and raw.isdigit() else -1
+    if port < 0 or port > 65535:
         raise ValueError(f'GENKIT_REFLECTION_PORT must be an integer between 0 and 65535, got {raw!r}')
     return port
 
