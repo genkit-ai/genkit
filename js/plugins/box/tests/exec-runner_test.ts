@@ -126,6 +126,35 @@ describe('execRunner (integration)', () => {
     assert.ok(text.includes('echo:'), `unexpected agent reply: ${text}`);
   });
 
+  it('defineAgent: a registered boxed agent keeps its session across turns', async () => {
+    const ai = genkit({});
+    const b = box(ai, { runner: execRunner({ cmd: `${TSX} ${boxedEntry}` }) });
+    runners.push(b);
+    const echo = b.defineAgent({
+      name: 'echoAgent',
+      stateManagement: 'server',
+    });
+
+    const chat = echo.chat();
+    await chat.send('one');
+    const second = await chat.send('two');
+    // The second turn resumed the first turn's snapshot inside the box, so the
+    // conversation holds both exchanges.
+    const texts = second.messages.map((m) =>
+      m.content.map((p) => p.text ?? '').join('')
+    );
+    assert.ok(texts.includes('one') && texts.includes('two'), `${texts}`);
+
+    // How the Dev UI drives it over reflection: run() with an init.
+    const res = await echo.run(
+      { message: { role: 'user', content: [{ text: 'three' }] } },
+      { init: { snapshotId: chat.snapshotId } }
+    );
+    assert.ok(res.telemetry.traceId, 'caller-side trace id');
+    const reply = res.result.message?.content.map((p) => p.text).join('');
+    assert.ok(reply?.startsWith('echo:'), `unexpected reply: ${reply}`);
+  });
+
   it('overrides a reflection secret inherited from the caller', async () => {
     // Under `genkit start` the caller carries the CLI's secret; the box must
     // present its own host's secret instead, or registration is rejected.
