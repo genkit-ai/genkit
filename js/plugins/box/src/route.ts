@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Retention, RouteFn } from './types.js';
+import type { Retention, RouteFn, RunActionRequest } from './types.js';
 
 /**
  * Route functions may advertise a sensible default retention via this symbol.
@@ -49,6 +49,48 @@ export const perRequest: PresetRouteFn = Object.assign(
   (): string => randomUUID(),
   { [RETENTION]: { idle: 0 } satisfies Retention }
 );
+
+function stringField(value: unknown, field: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v: unknown = Reflect.get(value, field);
+  return typeof v === 'string' && v !== '' ? v : undefined;
+}
+
+/**
+ * The agent session a request belongs to: the request's `sessionId` routing
+ * hint, else a turn's `init.sessionId` (server-managed) or
+ * `init.state.sessionId` (client-managed), else a snapshot lookup's
+ * `sessionId`. Undefined for everything else, including a first turn that
+ * lets the box mint the id.
+ *
+ * ```ts
+ * box(ai, {
+ *   runner,
+ *   route: (req, ctx) => String(ctx?.sessionId ?? sessionIdOf(req) ?? 'default'),
+ * });
+ * ```
+ *
+ * Agents registered with `defineAgent` fill in the hint for calls that only
+ * carry a `snapshotId`, from the outputs they have seen.
+ */
+export function sessionIdOf(req: RunActionRequest): string | undefined {
+  if (req.sessionId) return req.sessionId;
+  if (req.key.startsWith('/agent/')) {
+    return (
+      stringField(req.init, 'sessionId') ??
+      stringField(
+        typeof req.init === 'object' && req.init !== null
+          ? Reflect.get(req.init, 'state')
+          : undefined,
+        'sessionId'
+      )
+    );
+  }
+  if (req.key.startsWith('/agent-snapshot/')) {
+    return stringField(req.input, 'sessionId');
+  }
+  return undefined;
+}
 
 /** Resolves the effective retention for a box from its options + route. */
 export function resolveRetention(

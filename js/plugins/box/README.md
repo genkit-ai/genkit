@@ -58,15 +58,58 @@ The `define*` variants (`defineTool(spec)`, `defineFromTool(action, { name })`,
 ...) also register the proxy so it shows up in the Dev UI. `defineFrom*`
 proxies must be renamed, since the original already occupies its name.
 
-A boxed agent is available as an `AgentAPI`:
+## Agents
+
+Box a whole agent (model calls, tools, conversation state) and register it,
+so it is visible and chattable in the Dev UI like a local one:
 
 ```ts
-const agent = myBox.agent<CodingState>({
+// The agent lives only in the box (separate entry, or another language):
+// declare what the Dev UI needs to know.
+export const codingAgent = myBox.defineAgent<CodingState>({
   name: 'codingAgent',
-  context: { sessionId },
+  stateManagement: 'server', // must match the boxed agent (has a store)
+  abortable: true,
+  stateSchema: CodingStateSchema,
 });
-const res = await agent.chat({ sessionId }).send('fix the failing test');
+
+// Same language: hand over the real agent; its metadata is copied.
+export const boxedCoder = myBox.defineFromAgent(codingAgent, {
+  name: 'boxedCoder',
+});
+
+// Either way you get an Agent<State>:
+const res = await codingAgent.chat({ sessionId }).send('fix the failing test');
 ```
+
+`defineAgent` registers `/agent/<name>` with its `agent-snapshot` and
+`agent-abort` companions. Each input is one boxed turn. When a caller streams
+several inputs into one invocation, the proxy runs them turn by turn and
+threads the snapshot (or client state) between them; the box then records one
+trace per turn.
+
+For an unregistered handle, `myBox.agent({ name, context })` returns just the
+`AgentAPI`.
+
+### One box per session
+
+Route agent calls by session with `sessionIdOf`. It reads the session from the
+agent's init (what the Dev UI and `chat({ sessionId })` send) and from
+snapshot lookups:
+
+```ts
+import { box, execRunner, sessionIdOf } from '@genkit-ai/box';
+
+const agentBox = box(ai, {
+  runner: execRunner({ cmd: 'tsx src/boxed-agent.ts' }),
+  route: (req, ctx) => String(ctx?.sessionId ?? sessionIdOf(req) ?? 'new'),
+  retention: { idle: 10 * 60_000 },
+});
+```
+
+Calls that only carry a `snapshotId` (a resume, a snapshot read, an abort)
+still land on the session's box: a registered agent remembers which session
+each snapshot it returned belongs to.
 
 ## Lifecycle: route + retention
 
