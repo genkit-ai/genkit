@@ -30,17 +30,21 @@ import type {
 import type { SessionSnapshot } from '@genkit-ai/ai/session';
 import { runFlow, streamFlow } from './client.js';
 
-// Re-export the transport-agnostic agent-client surface so existing imports
-// from `genkit/beta/client` keep working.
+// Re-export the transport-agnostic agent-client surface, including the pieces
+// needed to build an `AgentAPI` over a custom transport (`createAgentAPI`,
+// `AgentTransport`, `SnapshotLookup`).
 export {
   AgentError,
+  createAgentAPI,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
   type DetachedTask,
+  type SnapshotLookup,
 } from '@genkit-ai/ai/agent-core';
 
 // Re-export the JSON Patch helper so apps can apply a chunk's `customPatch` to
