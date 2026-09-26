@@ -112,8 +112,9 @@ func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectio
 	if envPort != "" {
 		// An invalid value fails startup rather than falling back to probing:
 		// a typo in a deployment config should be loud.
+		// Atoi alone accepts a leading sign ("+7"); require plain decimal digits.
 		port, err := strconv.Atoi(envPort)
-		if err != nil || port < 0 || port > 65535 {
+		if !isDecimalDigits(envPort) || err != nil || port < 0 || port > 65535 {
 			return reflectionConfig{}, fmt.Errorf(
 				"GENKIT_REFLECTION_PORT must be an integer between 0 and 65535, got %q", envPort)
 		}
@@ -121,6 +122,19 @@ func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectio
 		cfg.pinned = true
 	}
 	return cfg, nil
+}
+
+// isDecimalDigits reports whether s is non-empty and made only of ASCII digits.
+func isDecimalDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // requireReflectionSecret rejects requests that do not carry secret.
