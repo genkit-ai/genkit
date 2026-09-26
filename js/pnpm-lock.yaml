@@ -332,10 +332,16 @@ importers:
       genkit:
         specifier: workspace:^
         version: link:../../genkit
+      ws:
+        specifier: ^8.18.0
+        version: 8.20.1
     devDependencies:
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
       npm-run-all:
         specifier: ^4.1.5
         version: 4.1.5
@@ -16382,7 +16388,7 @@ snapshots:
       google-auth-library: 10.6.1
       p-retry: 4.6.2
       protobufjs: 7.5.4
-      ws: 8.19.0
+      ws: 8.20.1
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.1.13)
     transitivePeerDependencies:
@@ -28492,8 +28498,7 @@ snapshots:
 
   ws@8.19.0: {}
 
-  ws@8.20.1:
-    optional: true
+  ws@8.20.1: {}
 
   wsl-utils@0.3.1:
     dependencies:
