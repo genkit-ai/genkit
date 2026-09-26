@@ -120,6 +120,28 @@ await client.waitForReady();
 await client.runAction({ key: '/tool/runShell', input: { cmd: 'ls' } });
 ```
 
+## Subprocesses: `execRunner()`
+
+Runs each box as a local child process that dials back into a per-runner
+reflection host.
+
+```ts
+import { box, execRunner } from '@genkit-ai/box';
+
+// Self mode: re-run *this same program* as the box. One file defines the tool
+// and boxes it; the body runs in the child.
+const myBox = box(ai, { runner: execRunner({ self: true }) });
+const boxedRunShell = myBox.fromTool(runShell);
+
+// Separate entry: stronger code isolation, and it can be another language.
+box(ai, { runner: execRunner({ cmd: 'tsx src/boxed.ts' }) });
+```
+
+The child inherits your environment (API keys included), so a plain subprocess
+is for trusted code and relocation, not containment. Boxes nest: a boxed agent
+can itself box a tool, each level in its own process. Call `box.close()` when
+you are done; it stops every child the runner started.
+
 ## Tracing
 
 Each proxied call records a span in the caller's trace, marked with

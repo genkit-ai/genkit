@@ -17,6 +17,14 @@
 export { createAgentProxy } from './agent-proxy.js';
 export { Box, box, type BoxCreateOptions, type ProxySpec } from './box.js';
 export { BOX_SELF_ID_ENV } from './env.js';
+export { SubprocessProvider } from './providers/subprocess.js';
+export type {
+  PreparedSpawn,
+  ReflectHost,
+  SandboxProvider,
+  SpawnHandle,
+  SpawnSpec,
+} from './providers/types.js';
 export {
   actionKeyFor,
   createProxyAction,
@@ -42,6 +50,11 @@ export {
   resolveRetention,
   singleton,
 } from './route.js';
+export {
+  ExecRunner,
+  execRunner,
+  type ExecRunnerOptions,
+} from './runners/exec-runner.js';
 export type {
   BoxConnection,
   BoxOptions,
