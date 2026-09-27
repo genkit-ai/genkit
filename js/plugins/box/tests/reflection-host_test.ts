@@ -272,6 +272,24 @@ describe('ReflectionHost', () => {
     rt.close();
   });
 
+  it('fails in-flight requests when their runtime drops', async () => {
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    const rt = new FakeRuntime(host, 'rt1', {
+      // Never answers: only the disconnect can settle the call.
+      runAction: () => {
+        started();
+        return new Promise(() => {});
+      },
+    });
+    await host.waitForRuntime('rt1');
+    await rt.ready;
+    const call = host.runAction('rt1', { key: '/tool/t', input: {} });
+    await running;
+    rt.close();
+    await assert.rejects(call, /disconnected before responding/);
+  });
+
   it('emits disconnect when a runtime drops', async () => {
     const rt = new FakeRuntime(host, 'rt1');
     await host.waitForRuntime('rt1');

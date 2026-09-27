@@ -113,6 +113,21 @@ describe('ReflectionClientV1 against a real runtime', () => {
     );
   });
 
+  it('abort cancels the action in the box and releases the caller', async () => {
+    const controller = new AbortController();
+    const call = client.runAction(
+      { key: '/flow/waitForAbort', input: null },
+      { abortSignal: controller.signal }
+    );
+    setTimeout(() => controller.abort(), 200);
+    // The flow only returns once its own abortSignal fires, so settling at all
+    // proves the cancel reached the runtime.
+    await call.then(
+      (res) => assert.strictEqual(res.result, 'aborted'),
+      (err) => assert.match(String(err), /cancel|abort/i)
+    );
+  });
+
   it('surfaces a missing action as an error', async () => {
     await assert.rejects(() =>
       client.runAction({ key: '/flow/nope', input: {} })

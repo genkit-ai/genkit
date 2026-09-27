@@ -45,5 +45,14 @@ ai.defineFlow(
   }
 );
 
+// Runs until aborted, so the client test can prove cancellation reaches here.
+ai.defineFlow(
+  { name: 'waitForAbort', outputSchema: z.string() },
+  (_, { abortSignal }) =>
+    new Promise((resolve) => {
+      abortSignal.addEventListener('abort', () => resolve('aborted'));
+    })
+);
+
 // Keep the process alive serving reflection requests.
 setInterval(() => {}, 1 << 30);
