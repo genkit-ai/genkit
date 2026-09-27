@@ -121,7 +121,7 @@ function nextInit(
   stateManagement: 'server' | 'client'
 ): AgentInit {
   if (stateManagement === 'client') {
-    return output.state ? { state: output.state } : prev;
+    return output.state !== undefined ? { state: output.state } : prev;
   }
   const sessionId = output.sessionId ?? prev.sessionId;
   return output.snapshotId
@@ -286,16 +286,26 @@ function agentProxyAction(
     run,
     stream,
     streamBidi(init?: AgentInit, o?: AgentRunOptions) {
-      const inputs = new Channel<AgentInput>();
+      // With a caller-supplied inputStream, inputs come from there; send() and
+      // close() would silently go nowhere, so they throw instead.
+      const inputs = o?.inputStream ? undefined : new Channel<AgentInput>();
       const res = stream(undefined, {
         ...o,
         init,
         inputStream: o?.inputStream ?? inputs,
       });
+      const own = (op: string) => {
+        if (!inputs) {
+          throw new Error(
+            `streamBidi: ${op}() is unavailable when an inputStream is passed.`
+          );
+        }
+        return inputs;
+      };
       return {
         ...res,
-        send: (chunk: AgentInput) => inputs.send(chunk),
-        close: () => inputs.close(),
+        send: (chunk: AgentInput) => own('send').send(chunk),
+        close: () => own('close').close(),
       };
     },
   });
@@ -334,9 +344,21 @@ function companionAction<I extends z.ZodTypeAny, O>(
       metadata: { box: dispatcher.boxId ?? true },
     },
     run,
+    // Companions don't stream: the stream just ends (or fails) with the call.
     stream: (input: z.infer<I>, o?: AgentRunOptions) => {
-      const output = callable(input, o);
-      return { stream: new Channel<never>(), output };
+      const chunks = new Channel<never>();
+      const output = callable(input, o).then(
+        (r) => {
+          chunks.close();
+          return r;
+        },
+        (e) => {
+          chunks.error(e);
+          throw e;
+        }
+      );
+      output.catch(() => {});
+      return { stream: chunks, output };
     },
   });
 }
