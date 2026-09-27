@@ -129,6 +129,16 @@ describe('ReflectionServer auth', () => {
     assert.strictEqual((server as any).server.address().port, port);
   });
 
+  it('probes from the default port when options.port is undefined', async () => {
+    // What `genkit({})` passes: an explicit undefined that overrides the
+    // constructor default.
+    process.env.GENKIT_ENV = 'dev';
+    server = new ReflectionServer(new Registry(), { port: undefined });
+    await server.start();
+    const bound = (server as any).server.address().port;
+    assert.ok(bound >= 3100 && bound <= 3200, `bound to ${bound}`);
+  });
+
   it('fails to start when the pinned port is taken', async () => {
     const taken = http.createServer();
     const port = await getPort();

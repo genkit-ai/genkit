@@ -123,10 +123,16 @@ export class ReflectionServer {
   }
 
   /**
-   * Finds a free port to run the server on based on the original chosen port and environment.
+   * Finds a free port, probing upward from `startPort`.
+   *
+   * `start()` passes the port from the resolved config. `options.port` can be
+   * `undefined` even though the constructor defaults it: a caller spreading
+   * `{ port: undefined }` overrides the default.
    */
-  async findPort(): Promise<number> {
-    const chosenPort = this.options.port!;
+  async findPort(
+    startPort: number = this.options.port ?? DEFAULT_REFLECTION_PORT
+  ): Promise<number> {
+    const chosenPort = startPort;
     // 0 means "let the OS pick"; makeRange rejects it, and there is nothing to
     // probe anyway.
     if (chosenPort === 0) {
@@ -524,7 +530,9 @@ export class ReflectionServer {
     // port or fail. Shifting to the next free one would leave them talking to
     // a dead port, which is worse than a clear error.
     this.port =
-      config.port.kind === 'pinned' ? config.port.port : await this.findPort();
+      config.port.kind === 'pinned'
+        ? config.port.port
+        : await this.findPort(config.port.port);
     await new Promise<void>((resolve, reject) => {
       this.server = server.listen(this.port!, config.host, resolve);
       this.server.once('error', reject);
