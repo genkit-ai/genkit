@@ -126,6 +126,30 @@ describe('execRunner (integration)', () => {
     assert.ok(text.includes('echo:'), `unexpected agent reply: ${text}`);
   });
 
+  it('accepts cmd as an argv array', async () => {
+    const runner = track(execRunner({ cmd: [TSX, boxedEntry] }));
+    const conn = await runner.acquire('singleton');
+    const res = await conn.runAction<{ out: string }>({
+      key: '/tool/shout',
+      input: { text: 'argv' },
+    });
+    assert.strictEqual(res.result?.out, 'ARGV');
+  });
+
+  it('fails fast when the command cannot be spawned', async () => {
+    const runner = track(execRunner({ cmd: 'definitely-not-a-real-binary' }));
+    const started = Date.now();
+    await assert.rejects(runner.acquire('k'), /failed to start/);
+    assert.ok(Date.now() - started < 5_000, 'no readiness timeout');
+  });
+
+  it('fails fast when the box exits before it is ready', async () => {
+    const runner = track(
+      execRunner({ cmd: [process.execPath, '-e', 'process.exit(3)'] })
+    );
+    await assert.rejects(runner.acquire('k'), /exited before it was ready/);
+  });
+
   it('overrides a reflection secret inherited from the caller', async () => {
     // Under `genkit start` the caller carries the CLI's secret; the box must
     // present its own host's secret instead, or registration is rejected.
@@ -156,7 +180,8 @@ describe('execRunner (integration)', () => {
       });
       let buf = '';
       child.stdout.on('data', (d) => (buf += d.toString()));
-      child.on('exit', () => resolve(buf));
+      // 'close', not 'exit': stdout may still be flushing when 'exit' fires.
+      child.on('close', () => resolve(buf));
       child.on('error', reject);
     });
     const line = out.split('\n').find((l) => l.startsWith('NESTED_RESULT:'));
