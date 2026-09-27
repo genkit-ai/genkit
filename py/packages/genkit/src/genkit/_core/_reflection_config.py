@@ -32,9 +32,11 @@ __all__ = [
     'DEFAULT_REFLECTION_HOST',
     'DEFAULT_REFLECTION_PORT',
     'REFLECTION_AUTH_ERROR_CODE',
+    'REFLECTION_PORT_AUTO',
     'REFLECTION_SECRET_ENV',
     'REFLECTION_SECRET_HEADER',
     'ReflectionConfig',
+    'advertised_reflection_host',
     'is_loopback_host',
     'reflection_enabled',
     'resolve_reflection_config',
@@ -52,6 +54,11 @@ DEFAULT_REFLECTION_HOST = '127.0.0.1'
 
 #: First port tried when none is pinned.
 DEFAULT_REFLECTION_PORT = 3100
+
+#: Programmatic port meaning "let the OS pick". Code cannot use 0 for this (it
+#: reads as unset); the environment spells the same thing
+#: ``GENKIT_REFLECTION_PORT=0``.
+REFLECTION_PORT_AUTO = -1
 
 #: JSON-RPC code the CLI returns when a v2 register fails auth. Terminal: the
 #: secret will not change, so a runtime that sees it must stop reconnecting.
@@ -97,6 +104,23 @@ def _parse_port(raw: str | None) -> int | None:
     return port
 
 
+def _resolve_port(env_port: int | None, port: int | None) -> tuple[int, bool]:
+    """Resolve ``(port, pinned)``. A chosen port is exact; only an unchosen one probes.
+
+    Raises:
+        ValueError: If ``port`` is not ``None``, ``0``, ``-1`` or 1..65535.
+    """
+    if env_port is not None:
+        return env_port, True
+    if not port:
+        return DEFAULT_REFLECTION_PORT, False
+    if port == REFLECTION_PORT_AUTO:
+        return 0, True
+    if port < 1 or port > 65535:
+        raise ValueError(f'reflection port must be -1 (OS-assigned) or an integer between 1 and 65535, got {port}')
+    return port, True
+
+
 def resolve_reflection_config(
     env: dict[str, str] | None = None,
     port: int | None = None,
@@ -119,8 +143,11 @@ def resolve_reflection_config(
 
     Args:
         env: Environment to read. Defaults to ``os.environ``.
-        port: Programmatic probe start, used only when the environment pins no
-            port.
+        port: Programmatic port, used only when the environment pins none.
+            Bound exactly; ``None`` or ``0`` means unset (probe from 3100) and
+            ``REFLECTION_PORT_AUTO`` (-1) lets the OS pick, the same as
+            ``GENKIT_REFLECTION_PORT=0``. It does not turn the server on, and
+            is validated even when unused so a bad value fails early.
         host: Programmatic interface, used only when ``GENKIT_REFLECTION_HOST``
             is unset. Unlike the variable, it does not turn the server on.
 
@@ -128,7 +155,7 @@ def resolve_reflection_config(
         The resolved configuration.
 
     Raises:
-        ValueError: If ``GENKIT_REFLECTION_PORT`` is not a valid port.
+        ValueError: If ``GENKIT_REFLECTION_PORT`` or ``port`` is not a valid port.
     """
     environ = dict(os.environ) if env is None else env
     if environ.get('GENKIT_REFLECTION_DISABLED') == 'true':
@@ -140,6 +167,7 @@ def resolve_reflection_config(
         return ReflectionConfig(mode='v2', v2_url=v2_url, secret=secret)
 
     env_port = _parse_port(environ.get('GENKIT_REFLECTION_PORT'))
+    resolved_port, pinned = _resolve_port(env_port, port)
     env_host = environ.get('GENKIT_REFLECTION_HOST')
     if env_port is None and not env_host and environ.get('GENKIT_ENV') != 'dev':
         return ReflectionConfig(mode='off')
@@ -147,8 +175,8 @@ def resolve_reflection_config(
     return ReflectionConfig(
         mode='v1',
         host=env_host or host or DEFAULT_REFLECTION_HOST,
-        port=env_port if env_port is not None else (port or DEFAULT_REFLECTION_PORT),
-        pinned=env_port is not None,
+        port=resolved_port,
+        pinned=pinned,
         secret=secret,
     )
 
@@ -164,6 +192,18 @@ def reflection_enabled() -> bool:
         return resolve_reflection_config().enabled
     except ValueError:
         return False
+
+
+def advertised_reflection_host(host: str) -> str:
+    """Host to advertise in the runtime discovery file for a server bound to ``host``.
+
+    A wildcard bind is reachable on loopback, and ``0.0.0.0`` is not a valid
+    destination everywhere, so it is advertised as ``127.0.0.1``. IPv6
+    literals are bracketed for use in a URL.
+    """
+    if host in ('0.0.0.0', '::', '[::]'):  # noqa: S104 - comparing, not binding
+        return DEFAULT_REFLECTION_HOST
+    return f'[{host}]' if ':' in host and not host.startswith('[') else host
 
 
 def is_loopback_host(host: str) -> bool:
