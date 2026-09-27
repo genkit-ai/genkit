@@ -14,12 +14,23 @@
  * limitations under the License.
  */
 
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type {
   PreparedSpawn,
   ReflectHost,
   SandboxProvider,
   SpawnSpec,
 } from './types.js';
+
+function realTmpdir(): string {
+  const dir = tmpdir();
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
 
 /** Options for {@link sandboxExec}. */
 export interface SandboxExecOptions {
@@ -56,10 +67,15 @@ export class SandboxExecProvider implements SandboxProvider {
   private defaultProfile(): string {
     const lines = ['(version 1)', '(allow default)'];
     if (this.options.denyWrite !== false) {
+      // Node's temp dir on macOS is per-user under /var/folders (os.tmpdir()),
+      // not /tmp, so it needs its own rule for fs.mkdtemp and friends. Seatbelt
+      // matches real paths, hence realpath (/var is a symlink to /private/var).
+      const writable = new Set(['/private/tmp', '/tmp', realTmpdir()]);
       lines.push(
         '(deny file-write*)',
-        '(allow file-write* (subpath "/private/tmp"))',
-        '(allow file-write* (subpath "/tmp"))'
+        ...[...writable].map(
+          (dir) => `(allow file-write* (subpath ${JSON.stringify(dir)}))`
+        )
       );
     }
     // The reflection dial-back needs loopback network access.
