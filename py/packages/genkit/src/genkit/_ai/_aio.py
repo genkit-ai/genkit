@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import anyio
+import anyio.to_thread
 import uvicorn
 from pydantic import BaseModel
 
@@ -106,7 +107,12 @@ from genkit._core._model import (
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
-from genkit._core._reflection_config import ReflectionConfig, is_loopback_host, resolve_reflection_config
+from genkit._core._reflection_config import (
+    ReflectionConfig,
+    advertised_reflection_host,
+    is_loopback_host,
+    resolve_reflection_config,
+)
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
 from genkit._core._telemetry._attrs import metadata_key
@@ -179,6 +185,7 @@ class Genkit:
     _reflection_server_spec: ServerSpec | None
     _reflection_config: ReflectionConfig
     _reflection_ready: threading.Event
+    _reflection_stopped: threading.Event
 
     if TYPE_CHECKING:
 
@@ -220,6 +227,9 @@ class Genkit:
                 host=reflection_server_spec.host if reflection_server_spec else None,
             )
             self._reflection_ready = threading.Event()
+            # Set when the reflection thread exits for any reason (v2 auth
+            # rejection, server crash), so run_main stops waiting on nothing.
+            self._reflection_stopped = threading.Event()
             self._initialize_registry(model, plugins)
             # Ensure the default generate action is registered for async usage.
             define_generate_action(self.registry)
@@ -971,8 +981,9 @@ class Genkit:
 
             assert sock is not None
             host, port = sock.getsockname()[:2]
-            # Bracket IPv6 literals so spec.url stays a valid URL.
-            spec = ServerSpec(scheme='http', host=f'[{host}]' if ':' in host else host, port=port)
+            # spec.url goes into the runtime file, so advertise a reachable,
+            # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
+            spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
             self._reflection_server_spec = spec
             sockets = [sock]
 
@@ -1031,8 +1042,14 @@ class Genkit:
                 await logger.adebug(f'Genkit Dev UI reflection server running at {spec.url}')
                 await server_task
 
+        def _thread_main() -> None:
+            try:
+                asyncio.run(_run_server())
+            finally:
+                self._reflection_stopped.set()
+
         threading.Thread(
-            target=lambda: asyncio.run(_run_server()),
+            target=_thread_main,
             daemon=True,
             name='genkit-reflection-server',
         ).start()
@@ -1066,6 +1083,9 @@ class Genkit:
 
         Blocks whenever reflection is on, not only under GENKIT_ENV=dev: the
         server lives on a daemon thread, so returning here would kill it.
+        Returns once the reflection server stops on its own (for example the
+        CLI rejected this runtime's secret), rather than blocking with nothing
+        serving.
         """
         if not self._reflection_config.enabled:
             return run_loop(coro)
@@ -1093,7 +1113,15 @@ class Genkit:
                                 tg_.cancel_scope.cancel()
                                 return
 
+                    async def _handle_reflection_stopped(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                        # abandon_on_cancel: Ctrl+C must not wait for a worker
+                        # thread still blocked in Event.wait.
+                        await anyio.to_thread.run_sync(self._reflection_stopped.wait, abandon_on_cancel=True)
+                        logger.warning('Reflection server stopped; returning from run_main.')
+                        tg_.cancel_scope.cancel()
+
                     tg.start_soon(_handle_sigterm, tg)
+                    tg.start_soon(_handle_reflection_stopped, tg)
                     await anyio.sleep_forever()
             except anyio.get_cancelled_exc_class():
                 pass

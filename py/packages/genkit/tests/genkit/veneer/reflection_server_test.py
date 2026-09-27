@@ -12,13 +12,18 @@ Covers the key invariants of the background-thread approach:
 - No server starts in production mode
 """
 
+import asyncio
+import json
 import os
 import socket
 import threading
+import time
+from typing import Any
 from unittest import mock
 
 import httpx
 import pytest
+from websockets.asyncio.server import serve
 
 from genkit import Genkit
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
@@ -152,6 +157,78 @@ def test_serves_on_ipv6_loopback() -> None:
     spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
     assert spec is not None
     assert spec.host == '[::1]'
+
+
+def test_programmatic_port_is_bound_exactly() -> None:
+    """ServerSpec(port=N) binds N, and a taken N fails instead of shifting."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
+        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        assert _wait_and_get(ai, '/api/__health').status_code == 200
+        spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+        assert spec is not None
+        assert spec.port == port
+        with pytest.raises(OSError):
+            Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+
+
+def test_run_main_returns_when_the_cli_rejects_the_runtime() -> None:
+    """A -32001 register rejection stops reflection, and run_main returns instead of hanging."""
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    stop = asyncio.Event()
+    port_box: list[int] = []
+
+    async def _reject(ws: Any) -> None:  # noqa: ANN401 - websockets connection
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg.get('method') == 'register':
+                await ws.send(
+                    json.dumps({
+                        'jsonrpc': '2.0',
+                        'id': msg['id'],
+                        'error': {'code': -32001, 'message': 'Invalid reflection secret.'},
+                    })
+                )
+                await ws.close(1008, 'unauthorized')
+                return
+
+    async def _serve() -> None:
+        async with serve(_reject, '127.0.0.1', 0) as server:
+            port_box.append(next(iter(server.sockets)).getsockname()[1])
+            started.set()
+            await stop.wait()
+
+    manager = threading.Thread(target=lambda: loop.run_until_complete(_serve()), daemon=True)
+    manager.start()
+    try:
+        assert started.wait(timeout=5)
+        env = {
+            'GENKIT_REFLECTION_V2_SERVER': f'ws://127.0.0.1:{port_box[0]}',
+            'GENKIT_REFLECTION_SECRET_TOKEN': 'wrong',
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            ai = Genkit()
+
+            async def _main() -> str:
+                return 'done'
+
+            # run_main installs a SIGTERM receiver, so it must run on the main
+            # thread. A watchdog turns a hang into a failure instead of a stuck
+            # test run: it stops reflection itself, which would also unblock
+            # run_main, so the elapsed time is what the assertion checks.
+            watchdog = threading.Timer(10, ai._reflection_stopped.set)  # pyright: ignore[reportPrivateUsage]
+            watchdog.start()
+            started_at = time.monotonic()
+            try:
+                result = ai.run_main(_main())
+            finally:
+                watchdog.cancel()
+        assert time.monotonic() - started_at < 10, 'run_main kept blocking after the CLI rejected the runtime'
+        assert result == 'done'
+    finally:
+        loop.call_soon_threadsafe(stop.set)
+        manager.join(timeout=5)
 
 
 def test_no_server_in_prod_mode() -> None:
