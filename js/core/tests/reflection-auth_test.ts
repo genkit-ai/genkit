@@ -82,11 +82,13 @@ describe('ReflectionServer auth', () => {
     if (secret) {
       process.env.GENKIT_REFLECTION_SECRET_TOKEN = secret;
     }
-    const port = await getPort();
-    process.env.GENKIT_REFLECTION_PORT = String(port);
+    // Port 0 (OS-assigned) rather than a getPort() probe: the port is now
+    // bound exactly, so a probed one could be taken by a parallel test file
+    // between the probe and the bind.
+    process.env.GENKIT_REFLECTION_PORT = '0';
     server = new ReflectionServer(new Registry());
     await server.start();
-    return port;
+    return (server as any).server.address().port;
   }
 
   it('rejects a request with no secret', async () => {
@@ -125,7 +127,10 @@ describe('ReflectionServer auth', () => {
   });
 
   it('binds the pinned port exactly', async () => {
-    const port = await startWithSecret();
+    const port = await getPort();
+    process.env.GENKIT_REFLECTION_PORT = String(port);
+    server = new ReflectionServer(new Registry());
+    await server.start();
     assert.strictEqual((server as any).server.address().port, port);
   });
 
@@ -137,6 +142,38 @@ describe('ReflectionServer auth', () => {
     await server.start();
     const bound = (server as any).server.address().port;
     assert.ok(bound >= 3100 && bound <= 3200, `bound to ${bound}`);
+  });
+
+  it('binds a programmatic port exactly', async () => {
+    process.env.GENKIT_ENV = 'dev';
+    const port = await getPort();
+    server = new ReflectionServer(new Registry(), { port });
+    await server.start();
+    assert.strictEqual((server as any).server.address().port, port);
+  });
+
+  it('fails to start when a programmatic port is taken', async () => {
+    const taken = http.createServer();
+    const port = await getPort();
+    await new Promise<void>((resolve, reject) => {
+      taken.once('error', reject);
+      taken.listen(port, '127.0.0.1', resolve);
+    });
+    try {
+      process.env.GENKIT_ENV = 'dev';
+      const blocked = new ReflectionServer(new Registry(), { port });
+      await assert.rejects(() => blocked.start(), /EADDRINUSE/);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
+  });
+
+  it('lets the OS pick with port -1', async () => {
+    process.env.GENKIT_ENV = 'dev';
+    server = new ReflectionServer(new Registry(), { port: -1 });
+    await server.start();
+    const bound = (server as any).server.address().port;
+    assert.ok(bound > 0, `bound to ${bound}`);
   });
 
   it('fails to start when the pinned port is taken', async () => {

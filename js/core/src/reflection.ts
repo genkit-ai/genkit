@@ -28,8 +28,10 @@ import {
   DEFAULT_REFLECTION_HOST,
   DEFAULT_REFLECTION_PORT,
   REFLECTION_SECRET_HEADER,
+  advertisedReflectionHost,
   isLoopbackHost,
   resolveReflectionConfig,
+  resolveReflectionPort,
   secretsEqual,
   type ReflectionConfig,
 } from './reflection-config.js';
@@ -52,9 +54,9 @@ export type RunActionResponse = z.infer<typeof RunActionResponseSchema>;
 
 export interface ReflectionServerOptions {
   /**
-   * Port to run the server on. Actual port may be different if chosen port is
-   * occupied. Defaults to 3100. `GENKIT_REFLECTION_PORT` overrides this, and
-   * when set the port is bound exactly with no fallback.
+   * Exact port to bind; fails if it is taken. `-1` lets the OS pick. When
+   * unset (or `0`), probes upward from 3100. `GENKIT_REFLECTION_PORT`
+   * overrides this.
    */
   port?: number;
   /** Body size limit for the server. Defaults to `30mb`. */
@@ -111,7 +113,6 @@ export class ReflectionServer {
   constructor(registry: Registry, options?: ReflectionServerOptions) {
     this.registry = registry;
     this.options = {
-      port: 3100,
       bodyLimit: '30mb',
       configuredEnvs: ['dev'],
       ...options,
@@ -123,21 +124,11 @@ export class ReflectionServer {
   }
 
   /**
-   * Finds a free port, probing upward from `startPort`.
-   *
-   * `start()` passes the port from the resolved config. `options.port` can be
-   * `undefined` even though the constructor defaults it: a caller spreading
-   * `{ port: undefined }` overrides the default.
+   * Finds a free port, probing upward from `startPort`. Used only when no
+   * port was chosen; a chosen port is bound exactly.
    */
-  async findPort(
-    startPort: number = this.options.port ?? DEFAULT_REFLECTION_PORT
-  ): Promise<number> {
+  async findPort(startPort: number = DEFAULT_REFLECTION_PORT): Promise<number> {
     const chosenPort = startPort;
-    // 0 means "let the OS pick"; makeRange rejects it, and there is nothing to
-    // probe anyway.
-    if (chosenPort === 0) {
-      return 0;
-    }
     const freePort = await getPort({
       // Clamped: makeRange rejects anything above 65536, which a caller
       // starting from a high ephemeral port would otherwise hit.
@@ -200,10 +191,7 @@ export class ReflectionServer {
         ? {
             kind: 'v1',
             host: DEFAULT_REFLECTION_HOST,
-            port: {
-              kind: 'probeFrom',
-              port: this.options.port ?? DEFAULT_REFLECTION_PORT,
-            },
+            port: resolveReflectionPort(undefined, this.options.port),
           }
         : resolved;
     if (config.kind === 'v2') {
@@ -526,13 +514,10 @@ export class ReflectionServer {
       res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
-    // A pinned port is a contract with whoever published it: bind exactly that
-    // port or fail. Shifting to the next free one would leave them talking to
-    // a dead port, which is worse than a clear error.
+    // A chosen port (env or code) is bound exactly or fails: shifting to the
+    // next free one would leave whoever chose it talking to a dead port.
     this.port =
-      config.port.kind === 'pinned'
-        ? config.port.port
-        : await this.findPort(config.port.port);
+      config.port.kind === 'pinned' ? config.port.port : await this.findPort();
     await new Promise<void>((resolve, reject) => {
       this.server = server.listen(this.port!, config.host, resolve);
       this.server.once('error', reject);
@@ -555,7 +540,7 @@ export class ReflectionServer {
       // can discover this runtime. Nothing is watching in a container, and the
       // working directory is frequently read-only.
       if (isDevEnv()) {
-        await this.writeRuntimeFile(config.secret);
+        await this.writeRuntimeFile(config.host, config.secret);
       }
     } catch (e) {
       logger.error(`Error initializing plugins: ${e}`);
@@ -617,7 +602,7 @@ export class ReflectionServer {
   /**
    * Writes the runtime file to the project root.
    */
-  private async writeRuntimeFile(secret?: string) {
+  private async writeRuntimeFile(host: string, secret?: string) {
     try {
       const rootDir = await findProjectRoot();
       const runtimesDir = path.join(rootDir, '.genkit', 'runtimes');
@@ -633,7 +618,7 @@ export class ReflectionServer {
           id: process.env.GENKIT_RUNTIME_ID || this.runtimeId,
           pid: process.pid,
           name: this.options.name,
-          reflectionServerUrl: `http://localhost:${this.port}`,
+          reflectionServerUrl: `http://${advertisedReflectionHost(host)}:${this.port}`,
           timestamp,
           genkitVersion: `nodejs/${GENKIT_VERSION}`,
           reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,

@@ -17,8 +17,11 @@
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 import {
+  REFLECTION_PORT_AUTO,
+  advertisedReflectionHost,
   isLoopbackHost,
   resolveReflectionConfig,
+  resolveReflectionPort,
   secretsEqual,
 } from '../src/reflection-config.js';
 
@@ -73,7 +76,7 @@ describe('resolveReflectionConfig', () => {
       {
         kind: 'v1',
         host: '0.0.0.0',
-        port: { kind: 'probeFrom', port: 3100 },
+        port: { kind: 'probe' },
         secret: undefined,
       }
     );
@@ -95,7 +98,7 @@ describe('resolveReflectionConfig', () => {
     assert.deepStrictEqual(resolveReflectionConfig({ GENKIT_ENV: 'dev' }), {
       kind: 'v1',
       host: '127.0.0.1',
-      port: { kind: 'probeFrom', port: 3100 },
+      port: { kind: 'probe' },
       secret: undefined,
     });
   });
@@ -113,7 +116,7 @@ describe('resolveReflectionConfig', () => {
     });
   });
 
-  it('uses the programmatic port as the probe start when the env has none', () => {
+  it('pins the programmatic port when the env has none', () => {
     const config = resolveReflectionConfig(
       { GENKIT_ENV: 'dev' },
       { port: 9999 }
@@ -121,9 +124,76 @@ describe('resolveReflectionConfig', () => {
     assert.deepStrictEqual(config, {
       kind: 'v1',
       host: '127.0.0.1',
-      port: { kind: 'probeFrom', port: 9999 },
+      port: { kind: 'pinned', port: 9999 },
       secret: undefined,
     });
+  });
+
+  it('does not turn the server on from a programmatic port alone', () => {
+    assert.deepStrictEqual(resolveReflectionConfig({}, { port: 9999 }), {
+      kind: 'off',
+    });
+  });
+
+  it('rejects an invalid programmatic port even when the server is off', () => {
+    for (const port of [-2, 1.5, 70000, NaN]) {
+      assert.throws(
+        () => resolveReflectionConfig({}, { port }),
+        /reflectionPort/,
+        `for ${port}`
+      );
+    }
+  });
+});
+
+describe('resolveReflectionPort', () => {
+  it('probes when nobody chose a port', () => {
+    assert.deepStrictEqual(resolveReflectionPort(undefined, undefined), {
+      kind: 'probe',
+    });
+    assert.deepStrictEqual(resolveReflectionPort(undefined, 0), {
+      kind: 'probe',
+    });
+  });
+
+  it('pins a programmatic port exactly', () => {
+    assert.deepStrictEqual(resolveReflectionPort(undefined, 4300), {
+      kind: 'pinned',
+      port: 4300,
+    });
+  });
+
+  it('maps -1 to an OS-assigned port, same as GENKIT_REFLECTION_PORT=0', () => {
+    assert.deepStrictEqual(
+      resolveReflectionPort(undefined, REFLECTION_PORT_AUTO),
+      resolveReflectionPort(0, undefined)
+    );
+    assert.deepStrictEqual(resolveReflectionPort(undefined, -1), {
+      kind: 'pinned',
+      port: 0,
+    });
+  });
+
+  it('lets the environment port win', () => {
+    assert.deepStrictEqual(resolveReflectionPort(4200, 4300), {
+      kind: 'pinned',
+      port: 4200,
+    });
+  });
+});
+
+describe('advertisedReflectionHost', () => {
+  it('advertises loopback for wildcard binds', () => {
+    for (const host of ['0.0.0.0', '::', '[::]']) {
+      assert.strictEqual(advertisedReflectionHost(host), '127.0.0.1', host);
+    }
+  });
+
+  it('keeps a specific host, bracketing IPv6', () => {
+    assert.strictEqual(advertisedReflectionHost('127.0.0.1'), '127.0.0.1');
+    assert.strictEqual(advertisedReflectionHost('192.168.1.5'), '192.168.1.5');
+    assert.strictEqual(advertisedReflectionHost('::1'), '[::1]');
+    assert.strictEqual(advertisedReflectionHost('[::1]'), '[::1]');
   });
 
   it('rejects an invalid port rather than falling back', () => {
