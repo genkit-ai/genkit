@@ -18,6 +18,7 @@ import threading
 from unittest import mock
 
 import httpx
+import pytest
 
 from genkit import Genkit
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
@@ -127,6 +128,30 @@ def test_two_instances_serve_concurrently() -> None:
 
     assert httpx.get(f'http://127.0.0.1:{port1}/api/__health', timeout=1.0).status_code == 200
     assert httpx.get(f'http://127.0.0.1:{port2}/api/__health', timeout=1.0).status_code == 200
+
+
+def test_busy_pinned_port_fails_the_constructor() -> None:
+    """A pinned port that is taken raises from Genkit(), not from the background thread."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.bind(('127.0.0.1', 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        with mock.patch.dict(os.environ, {'GENKIT_REFLECTION_PORT': str(port)}, clear=True):
+            with pytest.raises(OSError):
+                Genkit()
+
+
+def test_serves_on_ipv6_loopback() -> None:
+    """GENKIT_REFLECTION_HOST=::1 binds an IPv6 socket instead of failing to resolve."""
+    if not socket.has_ipv6:
+        pytest.skip('IPv6 not available')
+    with mock.patch.dict(os.environ, {'GENKIT_REFLECTION_HOST': '::1'}, clear=True):
+        ai = Genkit()
+        resp = _wait_and_get(ai, '/api/__health')
+    assert resp.status_code == 200
+    spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+    assert spec is not None
+    assert spec.host == '[::1]'
 
 
 def test_no_server_in_prod_mode() -> None:

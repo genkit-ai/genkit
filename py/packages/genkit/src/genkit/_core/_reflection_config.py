@@ -36,6 +36,7 @@ __all__ = [
     'REFLECTION_SECRET_HEADER',
     'ReflectionConfig',
     'is_loopback_host',
+    'reflection_enabled',
     'resolve_reflection_config',
     'secrets_equal',
 ]
@@ -99,6 +100,7 @@ def _parse_port(raw: str | None) -> int | None:
 def resolve_reflection_config(
     env: dict[str, str] | None = None,
     port: int | None = None,
+    host: str | None = None,
 ) -> ReflectionConfig:
     """Decide how the reflection API should run.
 
@@ -119,6 +121,8 @@ def resolve_reflection_config(
         env: Environment to read. Defaults to ``os.environ``.
         port: Programmatic probe start, used only when the environment pins no
             port.
+        host: Programmatic interface, used only when ``GENKIT_REFLECTION_HOST``
+            is unset. Unlike the variable, it does not turn the server on.
 
     Returns:
         The resolved configuration.
@@ -136,17 +140,30 @@ def resolve_reflection_config(
         return ReflectionConfig(mode='v2', v2_url=v2_url, secret=secret)
 
     env_port = _parse_port(environ.get('GENKIT_REFLECTION_PORT'))
-    host = environ.get('GENKIT_REFLECTION_HOST')
-    if env_port is None and not host and environ.get('GENKIT_ENV') != 'dev':
+    env_host = environ.get('GENKIT_REFLECTION_HOST')
+    if env_port is None and not env_host and environ.get('GENKIT_ENV') != 'dev':
         return ReflectionConfig(mode='off')
 
     return ReflectionConfig(
         mode='v1',
-        host=host or DEFAULT_REFLECTION_HOST,
+        host=env_host or host or DEFAULT_REFLECTION_HOST,
         port=env_port if env_port is not None else (port or DEFAULT_REFLECTION_PORT),
         pinned=env_port is not None,
         secret=secret,
     )
+
+
+def reflection_enabled() -> bool:
+    """Whether the environment turns the reflection API on, without raising.
+
+    For telemetry setup, which runs at import time. An invalid
+    ``GENKIT_REFLECTION_PORT`` counts as off here so ``import genkit`` still
+    works; ``Genkit()`` raises the real error when it resolves the config.
+    """
+    try:
+        return resolve_reflection_config().enabled
+    except ValueError:
+        return False
 
 
 def is_loopback_host(host: str) -> bool:

@@ -216,7 +216,8 @@ class Genkit:
             # when GENKIT_REFLECTION_HOST/PORT or a v2 server URL is set. Resolving
             # here keeps an invalid port a constructor-time error.
             self._reflection_config = resolve_reflection_config(
-                port=reflection_server_spec.port if reflection_server_spec else None
+                port=reflection_server_spec.port if reflection_server_spec else None,
+                host=reflection_server_spec.host if reflection_server_spec else None,
             )
             self._reflection_ready = threading.Event()
             self._initialize_registry(model, plugins)
@@ -910,20 +911,36 @@ class Genkit:
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def _bind_probing(sock: socket.socket, host: str, start_port: int) -> None:
-        """Bind the next free port at or above start_port.
+    def _bind_reflection_socket(host: str, port: int, *, pinned: bool) -> socket.socket:
+        """Bind and listen on the v1 reflection socket.
+
+        A pinned port is bound exactly. Otherwise the next free port at or above
+        ``port`` is used. The address family follows ``host``, so IPv6 hosts
+        such as ``::1`` work.
 
         Raises:
-            OSError: If no port in the probe range is free.
+            OSError: If the pinned port is taken, or no port in the probe range
+                is free.
         """
+        candidates = [port] if pinned else range(port, min(port + 100, 65536))
         last: OSError | None = None
-        for port in range(start_port, min(start_port + 100, 65536)):
+        for candidate in candidates:
+            # Resolve per candidate: bind needs the family-specific sockaddr (an
+            # IPv6 one is a 4-tuple). Prefer IPv4 when the host has both, so
+            # 'localhost' keeps binding 127.0.0.1 rather than ::1.
+            infos = socket.getaddrinfo(host, candidate, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+            family, socktype, proto, _, sockaddr = next((info for info in infos if info[0] == socket.AF_INET), infos[0])
+            sock = socket.socket(family, socktype, proto)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.bind((host, port))
-                return
+                sock.bind(sockaddr)
             except OSError as e:
+                sock.close()
                 last = e
-        raise last or OSError(f'no available port in range {start_port}-{start_port + 99}')
+                continue
+            sock.listen(2048)
+            return sock
+        raise last or OSError(f'no available port in range {port}-{port + 99}')
 
     def _start_reflection_background(self) -> None:
         """Start the Dev UI reflection server in a background daemon thread.
@@ -931,8 +948,17 @@ class Genkit:
         If GENKIT_REFLECTION_V2_SERVER is set (the CLI launches the runtime in
         v2 mode and provides a WebSocket URL), run the v2 JSON-RPC client.
         Otherwise start the v1 HTTP server.
+
+        Raises:
+            OSError: If the v1 socket cannot be bound. It is bound here, on the
+                calling thread, so a busy pinned port fails ``Genkit()`` rather
+                than a background thread nobody is watching.
         """
         config = self._reflection_config
+
+        sock: socket.socket | None = None
+        if config.mode == 'v1':
+            sock = self._bind_reflection_socket(config.host, config.port, pinned=config.pinned)
 
         async def _run_server() -> None:
             if config.mode == 'v2':
@@ -943,18 +969,10 @@ class Genkit:
                 await server_v2.run_forever()
                 return
 
-            # A pinned port is a contract with whoever published it: bind
-            # exactly that port or fail. Otherwise probe upward, which matches
-            # the other runtimes and keeps the Dev UI's 3100 convention.
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if config.pinned:
-                sock.bind((config.host, config.port))
-            else:
-                self._bind_probing(sock, config.host, config.port)
-            sock.listen(2048)
+            assert sock is not None
             host, port = sock.getsockname()[:2]
-            spec = ServerSpec(scheme='http', host=host, port=port)
+            # Bracket IPv6 literals so spec.url stays a valid URL.
+            spec = ServerSpec(scheme='http', host=f'[{host}]' if ':' in host else host, port=port)
             self._reflection_server_spec = spec
             sockets = [sock]
 

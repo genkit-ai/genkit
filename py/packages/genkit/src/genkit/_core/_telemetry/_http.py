@@ -38,7 +38,7 @@ from urllib.parse import urljoin, urlparse
 from .._environment import is_dev_environment
 from .._error import GenkitError, Interrupt
 from .._logger import get_logger
-from .._reflection_config import resolve_reflection_config
+from .._reflection_config import reflection_enabled
 from ._attrs import Attr, State, metadata_key
 from ._instrumentation import (
     Instrumentation,
@@ -361,7 +361,7 @@ def maybe_inject_dev_instrumentation() -> None:
     runtime with reflection enabled still posts traces to the server it was
     given.
     """
-    if not is_dev_environment() and not resolve_reflection_config().enabled:
+    if not is_dev_environment() and not reflection_enabled():
         return
     if is_instrumented_by(DevUIInstrumentation):
         return
