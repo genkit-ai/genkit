@@ -57,6 +57,13 @@ interface ConnectedRuntime {
   info: ConnectedRuntimeInfo;
 }
 
+/** A request awaiting its response, and the runtime it was sent to. */
+interface PendingRequest {
+  runtimeId: string;
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
+}
+
 /** An error carrying the structured `data` payload from a reflection error. */
 export class BoxRuntimeError extends Error {
   constructor(
@@ -98,10 +105,7 @@ export class ReflectionHost {
   private runtimes = new Map<string, ConnectedRuntime>();
   private emitter = new EventEmitter();
   private requestIdCounter = 0;
-  private pendingRequests = new Map<
-    string,
-    { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }
-  >();
+  private pendingRequests = new Map<string, PendingRequest>();
   private streamCallbacks = new Map<string, (chunk: unknown) => void>();
   private traceIdCallbacks = new Map<string, (traceId: string) => void>();
   /** The secret runtimes must present, or undefined when auth is off. */
@@ -250,8 +254,11 @@ export class ReflectionHost {
         `Box runtime ${params.id} (pid ${params.pid}) rejected: ` +
           `${params.secret ? 'invalid' : 'missing'} reflection secret.`
       );
+      const close = () => ws.close(WS_POLICY_VIOLATION, 'unauthorized');
       if (request.id) {
-        // The auth error code tells the runtime not to reconnect.
+        // The auth error code tells the runtime not to reconnect. Close only
+        // once it is flushed, or the runtime may see a bare disconnect and
+        // retry.
         ws.send(
           JSON.stringify({
             jsonrpc: '2.0',
@@ -260,10 +267,12 @@ export class ReflectionHost {
               message: 'Invalid reflection secret.',
             },
             id: request.id,
-          })
+          }),
+          close
         );
+      } else {
+        close();
       }
-      ws.close(WS_POLICY_VIOLATION, 'unauthorized');
       return;
     }
     const info: ConnectedRuntimeInfo = {
@@ -300,6 +309,11 @@ export class ReflectionHost {
     for (const [id, runtime] of this.runtimes.entries()) {
       if (runtime.ws === ws) {
         this.runtimes.delete(id);
+        // No response will ever arrive for requests to a gone runtime.
+        this.rejectPending(
+          id,
+          new Error(`Box runtime ${id} disconnected before responding`)
+        );
         this.emitter.emit(HostEvent.RUNTIME_DISCONNECT, runtime.info);
         logger.debug(`Box runtime disconnected: ${id}`);
         break;
@@ -307,8 +321,35 @@ export class ReflectionHost {
     }
   }
 
+  private rejectPending(runtimeId: string, error: Error) {
+    for (const [reqId, pending] of this.pendingRequests.entries()) {
+      if (pending.runtimeId === runtimeId) {
+        this.pendingRequests.delete(reqId);
+        pending.reject(error);
+      }
+    }
+  }
+
   private nextId(): string {
     return (++this.requestIdCounter).toString();
+  }
+
+  /**
+   * Registers a pending request and sends it. A send failure rejects right
+   * away rather than leaving the request waiting for a response that will
+   * never come.
+   */
+  private dispatch(
+    runtime: ConnectedRuntime,
+    message: JsonRpcRequest & { id: string },
+    pending: PendingRequest
+  ) {
+    this.pendingRequests.set(message.id, pending);
+    runtime.ws.send(JSON.stringify(message), (err) => {
+      if (err && this.pendingRequests.delete(message.id)) {
+        pending.reject(err);
+      }
+    });
   }
 
   private sendRequest(
@@ -326,23 +367,26 @@ export class ReflectionHost {
       let timer: NodeJS.Timeout | undefined;
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
-          if (this.pendingRequests.has(id)) {
-            this.pendingRequests.delete(id);
+          if (this.pendingRequests.delete(id)) {
             reject(new Error(`Box request '${method}' timed out`));
           }
         }, timeoutMs);
       }
-      this.pendingRequests.set(id, {
-        resolve: (v) => {
-          if (timer) clearTimeout(timer);
-          resolve(v);
-        },
-        reject: (e) => {
-          if (timer) clearTimeout(timer);
-          reject(e);
-        },
-      });
-      runtime.ws.send(JSON.stringify({ jsonrpc: '2.0', method, params, id }));
+      this.dispatch(
+        runtime,
+        { jsonrpc: '2.0', method, params, id },
+        {
+          runtimeId,
+          resolve: (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e);
+          },
+        }
+      );
     });
   }
 
@@ -415,27 +459,29 @@ export class ReflectionHost {
       else opts.abortSignal.addEventListener('abort', onAbort);
     }
 
-    const message: JsonRpcRequest = {
-      jsonrpc: '2.0',
-      method: 'runAction',
-      params: {
-        key: req.key,
-        input: req.input,
-        init: req.init,
-        context: req.context,
-        telemetryLabels: req.telemetryLabels,
-        stream: !!opts?.onChunk,
-        streamInput: false,
-      },
-      id,
-    };
-
     return new Promise<RunActionResult<O>>((resolve, reject) => {
-      this.pendingRequests.set(id, {
-        resolve: (v) => resolve(v as RunActionResult<O>),
-        reject,
-      });
-      runtime.ws.send(JSON.stringify(message));
+      this.dispatch(
+        runtime,
+        {
+          jsonrpc: '2.0',
+          method: 'runAction',
+          params: {
+            key: req.key,
+            input: req.input,
+            init: req.init,
+            context: req.context,
+            telemetryLabels: req.telemetryLabels,
+            stream: !!opts?.onChunk,
+            streamInput: false,
+          },
+          id,
+        },
+        {
+          runtimeId,
+          resolve: (v) => resolve(v as RunActionResult<O>),
+          reject,
+        }
+      );
     }).finally(cleanup);
   }
 

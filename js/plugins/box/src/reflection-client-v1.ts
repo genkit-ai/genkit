@@ -90,16 +90,19 @@ export class ReflectionClientV1 implements BoxConnection {
   async waitForReady(timeoutMs = 30_000, signal?: AbortSignal): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     let lastErr: unknown;
+    const aborted = () => new Error('Aborted while waiting for box.');
     while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error('Aborted while waiting for box.');
+      if (signal?.aborted) throw aborted();
       try {
+        const timeout = AbortSignal.timeout(2_000);
         const res = await fetch(`${this.baseUrl}/api/__health`, {
           headers: this.headers,
-          signal: AbortSignal.timeout(2_000),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
         if (res.ok) return;
         lastErr = new Error(`health returned ${res.status}`);
       } catch (e) {
+        if (signal?.aborted) throw aborted();
         // Connection refused until the server binds; keep polling.
         lastErr = e;
       }
@@ -130,7 +133,11 @@ export class ReflectionClientV1 implements BoxConnection {
 
     // V1 has no in-band cancel; it is a separate call keyed by trace id, which
     // we only learn from the response header. Cancels arriving before that are
-    // replayed once the id shows up.
+    // replayed once the id shows up (headers are flushed as soon as the action
+    // starts). The signal deliberately does not go to `fetch`: the v1 server
+    // does not cancel on disconnect, so aborting the request before the id
+    // arrives would leave the action running in the box with no way to stop
+    // it. The cancel makes the runtime end the response with an error.
     let traceId: string | undefined;
     let abortPending = false;
     const onAbort = () => {
