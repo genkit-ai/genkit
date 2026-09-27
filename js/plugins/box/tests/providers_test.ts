@@ -15,6 +15,9 @@
  */
 
 import * as assert from 'assert';
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
 import { describe, it } from 'node:test';
 import { bubblewrap } from '../src/providers/bubblewrap.js';
 import { localSandbox } from '../src/providers/index.js';
@@ -63,6 +66,33 @@ describe('providers', () => {
     assert.ok(!p.args.includes('--unshare-net'));
     const nodeIdx = p.args.indexOf('node');
     assert.deepStrictEqual(p.args.slice(nodeIdx), ['node', 'boxed.js']);
+  });
+
+  it('sandbox-exec lets the box write to the real os.tmpdir()', () => {
+    if (process.platform !== 'darwin') return;
+    const profile = sandboxExec().prepare(SPEC, REFLECT).args[1];
+    const tmp = realpathSync(tmpdir());
+    assert.ok(
+      profile.includes(`(allow file-write* (subpath ${JSON.stringify(tmp)}))`),
+      profile
+    );
+  });
+
+  it('bubblewrap binds the node install but not the working directory', () => {
+    const binds = (args: string[]) =>
+      args.flatMap((a, i) => (a === '--ro-bind-try' ? [args[i + 1]] : []));
+    const defaults = binds(bubblewrap().bwrapArgs());
+    const nodeDir = dirname(process.execPath);
+    assert.ok(
+      defaults.some((d) => nodeDir === d || nodeDir.startsWith(`${d}/`)),
+      `node (${nodeDir}) must be reachable: ${defaults}`
+    );
+    assert.ok(!defaults.includes(process.cwd()), 'repo stays out by default');
+
+    const withRepo = binds(
+      bubblewrap({ extraRoBind: ['/work/repo'] }).bwrapArgs()
+    );
+    assert.deepStrictEqual(withRepo, [...defaults, '/work/repo']);
   });
 
   it('localSandbox picks per-OS or hard-errors', () => {

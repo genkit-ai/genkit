@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { dirname } from 'node:path';
 import type {
   PreparedSpawn,
   ReflectHost,
@@ -21,10 +22,34 @@ import type {
   SpawnSpec,
 } from './types.js';
 
+const SYSTEM_DIRS = ['/usr', '/bin', '/lib', '/lib64', '/etc'];
+
+/**
+ * The system dirs plus the directory of the running node binary, which
+ * version managers (nvm, fnm, volta) keep under `$HOME`, outside the system
+ * binds. The working directory is deliberately not included: keeping your
+ * repo out of the box is the point. Add it (or just what the box needs) via
+ * `roBind`.
+ */
+function defaultRoBinds(): string[] {
+  const binds = [...SYSTEM_DIRS];
+  const nodeDir = dirname(process.execPath);
+  if (!binds.some((dir) => nodeDir === dir || nodeDir.startsWith(`${dir}/`))) {
+    // The install root (`.../bin/node` -> `...`), so node finds its own lib.
+    binds.push(dirname(nodeDir));
+  }
+  return binds;
+}
+
 /** Options for {@link bubblewrap}. */
 export interface BubblewrapOptions {
-  /** Read-only bind mounts. Defaults to a sensible system set. */
+  /**
+   * Read-only bind mounts. Defaults to the system dirs plus the node install,
+   * without the working directory. Setting it replaces the default.
+   */
   roBind?: string[];
+  /** Extra read-only binds added to the default (or to `roBind`). */
+  extraRoBind?: string[];
   /** tmpfs mounts (writable, ephemeral). Defaults to `/tmp`. */
   tmpfs?: string[];
   /**
@@ -62,12 +87,22 @@ export class BubblewrapProvider implements SandboxProvider {
           'a container runner, or run without isolation.'
       );
     }
-    const roBind = this.options.roBind ?? [
-      '/usr',
-      '/bin',
-      '/lib',
-      '/lib64',
-      '/etc',
+    return {
+      ...spec,
+      cmd: 'bwrap',
+      args: [...this.bwrapArgs(), spec.cmd, ...spec.args],
+      reflectUrl: reflect.url,
+    };
+  }
+
+  /**
+   * The `bwrap` flags, before the wrapped command. Pure (no platform check),
+   * so it can be unit tested anywhere.
+   */
+  bwrapArgs(): string[] {
+    const roBind = [
+      ...(this.options.roBind ?? defaultRoBinds()),
+      ...(this.options.extraRoBind ?? []),
     ];
     const tmpfs = this.options.tmpfs ?? ['/tmp'];
 
@@ -91,13 +126,7 @@ export class BubblewrapProvider implements SandboxProvider {
     if (this.options.extraArgs) {
       bwrapArgs.push(...this.options.extraArgs);
     }
-
-    return {
-      ...spec,
-      cmd: 'bwrap',
-      args: [...bwrapArgs, spec.cmd, ...spec.args],
-      reflectUrl: reflect.url,
-    };
+    return bwrapArgs;
   }
 }
 

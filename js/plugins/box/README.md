@@ -264,8 +264,8 @@ restricts:
 | Option | FS read | FS write | Network egress | CPU/mem/syscalls |
 | --- | --- | --- | --- | --- |
 | none (no `isolate`) | full | full | full | none |
-| `sandboxExec()` (macOS) | **full** | blocked except `/tmp` | **full** | none |
-| `bubblewrap()` (Linux) | confined: ro `/usr /bin /lib /lib64 /etc` + tmpfs; home/repo/creds not present | `/tmp` tmpfs only | **full** | none |
+| `sandboxExec()` (macOS) | **full** | blocked except `/tmp` and `os.tmpdir()` | **full** | none |
+| `bubblewrap()` (Linux) | confined: ro `/usr /bin /lib /lib64 /etc` + the node install + tmpfs; home/repo/creds not present | `/tmp` tmpfs only | **full** | none |
 
 - **Network egress is open on both.** The box must reach the reflection host
   on loopback, and the default profiles allow *all* network, not just loopback.
@@ -275,7 +275,10 @@ restricts:
   dotfiles). `sandbox-exec` is also deprecated by Apple (still works on current
   macOS, prints a warning).
 - **Linux confines the filesystem view.** With `bubblewrap()` your home dir,
-  repo, and credentials are simply not mounted.
+  repo, and credentials are simply not mounted. The node install is (read-only),
+  so node from nvm/fnm/volta under `$HOME` still runs. The repo is not, so a
+  `self: true` or `cmd` box that loads code from it needs
+  `extraRoBind: [process.cwd()]` (or just the paths it reads).
 - **No resource limits.** No CPU/memory/pid caps and no seccomp filtering. A
   boxed tool can peg the CPU or fork-bomb.
 - **The child still inherits your environment**, API keys included. Pass a
@@ -284,8 +287,11 @@ restricts:
 Tightening the defaults:
 
 ```ts
-// Linux: bind only your repo read-only, keep an ephemeral /tmp.
-bubblewrap({ roBind: ['/path/to/repo'], tmpfs: ['/tmp'] });
+// Linux: add your repo read-only on top of the defaults.
+bubblewrap({ extraRoBind: ['/path/to/repo'] });
+
+// Linux: or replace the defaults entirely.
+bubblewrap({ roBind: ['/usr', '/lib', '/path/to/repo'], tmpfs: ['/tmp'] });
 
 // macOS: supply a full custom seatbelt profile.
 sandboxExec({ profile: '(version 1)\n(deny default)\n(allow network* (local ip))' });
