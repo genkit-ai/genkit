@@ -28,6 +28,7 @@ import {
 import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
+import { isDevEnv } from '../utils.js';
 import {
   LogServerExporter,
   TraceServerExporter,
@@ -80,10 +81,11 @@ async function enableTelemetry(
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
   const logExporter = new LogServerExporter();
-  // Export eagerly when a telemetry server is known (the Dev UI wants logs as
-  // they happen), not merely because GENKIT_ENV=dev.
+  // Export eagerly when a Dev UI may be watching (the Dev UI wants logs as
+  // they happen). Dev alone must count: in attach mode the URL arrives later
+  // via /api/notify, after this processor is chosen.
   const defaultLogProcessor: LogRecordProcessor =
-    telemetryServerUrl || enableRealTimeTelemetry
+    isDevEnv() || telemetryServerUrl || enableRealTimeTelemetry
       ? new SimpleLogRecordProcessor(logExporter)
       : new BatchLogRecordProcessor(logExporter);
 
@@ -120,13 +122,15 @@ async function cleanUpTracing(): Promise<void> {
  */
 function createTelemetryServerProcessor(): SpanProcessor {
   const exporter = new TraceServerExporter();
-  // Keyed on a known telemetry server rather than GENKIT_ENV, so a reflection
-  // runtime that learned the URL from the CLI handshake still streams spans.
+  // A Dev UI may be watching in dev (the URL can arrive later via
+  // /api/notify) or whenever a telemetry server is already known, e.g. a
+  // non-dev reflection runtime given GENKIT_TELEMETRY_SERVER.
+  const devUiMayBeWatching = isDevEnv() || !!telemetryServerUrl;
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  if (telemetryServerUrl && enableRealTimeTelemetry) {
+  if (devUiMayBeWatching && enableRealTimeTelemetry) {
     return new RealtimeSpanProcessor(exporter);
-  } else if (telemetryServerUrl) {
+  } else if (devUiMayBeWatching) {
     return new SimpleSpanProcessor(exporter);
   }
   return new BatchSpanProcessor(exporter);
