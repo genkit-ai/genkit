@@ -153,6 +153,8 @@ describe('execRunner (integration)', () => {
     assert.ok(res.telemetry.traceId, 'caller-side trace id');
     const reply = res.result.message?.content.map((p) => p.text).join('');
     assert.ok(reply?.startsWith('echo:'), `unexpected reply: ${reply}`);
+  });
+
   it('accepts cmd as an argv array', async () => {
     const runner = track(execRunner({ cmd: [TSX, boxedEntry] }));
     const conn = await runner.acquire('singleton');

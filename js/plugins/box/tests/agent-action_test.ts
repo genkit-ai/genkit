@@ -177,6 +177,33 @@ describe('defineAgent', () => {
     assert.strictEqual(runner.calls.length, 1);
   });
 
+  it('companion streams end with the call', async () => {
+    const runner = new FakeRunner(fakeAgent());
+    const coder = box(genkit({}), { runner }).defineAgent({
+      name: 'coder',
+      stateManagement: 'server',
+    });
+    const { stream, output } = coder.getSnapshotDataAction.stream({
+      snapshotId: 'snap-1',
+    });
+    for await (const _ of stream) {
+      // completes instead of hanging
+    }
+    assert.strictEqual((await output)?.snapshotId, 'snap-1');
+  });
+
+  it('streamBidi refuses send/close with a caller inputStream', () => {
+    const coder = box(genkit({}), {
+      runner: new FakeRunner(fakeAgent()),
+    }).defineAgent({ name: 'coder', stateManagement: 'server' });
+    async function* inputs() {
+      yield user('a');
+    }
+    const bidi = coder.streamBidi({}, { inputStream: inputs() });
+    assert.throws(() => bidi.send(user('b')), /inputStream/);
+    assert.throws(() => bidi.close(), /inputStream/);
+  });
+
   it('forwards snapshot reads and aborts to the box', async () => {
     const runner = new FakeRunner(fakeAgent());
     const coder = box(genkit({}), { runner }).defineAgent({
