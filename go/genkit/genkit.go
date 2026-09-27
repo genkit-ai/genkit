@@ -105,9 +105,9 @@ type genkitOptions struct {
 	PromptFS     fs.FS        // Embedded filesystem containing prompts (alternative to PromptDir).
 	Plugins      []api.Plugin // Plugin to initialize automatically.
 	Experimental bool         // Whether the experimental genkit/exp surface is allowed to be used.
-	// ReflectionPort is the first port the reflection API tries, probing
-	// upward from there. Defaults to 3100. GENKIT_REFLECTION_PORT overrides
-	// this and is bound exactly.
+	// ReflectionPort is the exact reflection API port; 0 means unset (probe
+	// from 3100) and [ReflectionPortAuto] lets the OS pick. See
+	// [WithReflectionPort].
 	ReflectionPort int
 }
 
@@ -149,6 +149,13 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 	// harmless and idempotent rather than an error.
 	if o.Experimental {
 		gOpts.Experimental = true
+	}
+
+	if o.ReflectionPort != 0 {
+		if gOpts.ReflectionPort != 0 {
+			return errors.New("cannot set reflection port more than once (WithReflectionPort)")
+		}
+		gOpts.ReflectionPort = o.ReflectionPort
 	}
 
 	return nil
@@ -224,6 +231,18 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 // version if you build on them.
 func WithExperimental() GenkitOption {
 	return &genkitOptions{Experimental: true}
+}
+
+// WithReflectionPort sets the exact port for the Reflection API server; [Init]
+// panics if it cannot be bound. Pass [ReflectionPortAuto] to let the OS pick.
+// Without this option the server probes upward from 3100.
+//
+// The GENKIT_REFLECTION_PORT environment variable overrides this. The option
+// does not start the server by itself: the server runs under GENKIT_ENV=dev
+// or when GENKIT_REFLECTION_HOST/PORT is set.
+// This option can only be applied once.
+func WithReflectionPort(port int) GenkitOption {
+	return &genkitOptions{ReflectionPort: port}
 }
 
 // Init creates and initializes a new [Genkit] instance with the provided options.
