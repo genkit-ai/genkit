@@ -40,7 +40,7 @@ import {
   type DevToolsInfo,
 } from '../utils/utils';
 import { ProcessManager } from './process-manager';
-import { REFLECTION_SECRET_HEADER } from './reflection-auth';
+import { REFLECTION_SECRET_HEADER, secretForRuntime } from './reflection-auth';
 import {
   GenkitToolsError,
   RuntimeEvent,
@@ -765,13 +765,15 @@ export class RuntimeManager extends BaseRuntimeManager {
   }
 
   /**
-   * Reflection auth header for a runtime. The runtime's own advertised secret
-   * wins over the configured one: a dev runtime spawned by a different CLI
-   * process was started with that process's secret, not ours. Old runtimes
-   * ignore the header.
+   * Reflection auth header for a runtime (see {@link secretForRuntime}). Old
+   * runtimes ignore the header.
    */
   private authHeaders(runtime: RuntimeInfo): Record<string, string> {
-    const secret = this.runtimeSecrets[runtime.id] ?? this.reflectionSecret;
+    const secret = secretForRuntime(
+      runtime.reflectionServerUrl,
+      this.runtimeSecrets[runtime.id],
+      this.reflectionSecret
+    );
     return secret ? { [REFLECTION_SECRET_HEADER]: secret } : {};
   }
 
