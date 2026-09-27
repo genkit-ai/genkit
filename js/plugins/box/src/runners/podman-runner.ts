@@ -23,6 +23,7 @@ import { BOX_SELF_ID_ENV } from '../env.js';
 import { REFLECTION_SECRET_ENV } from '../reflection-auth.js';
 import { ReflectionClientV1 } from '../reflection-client-v1.js';
 import type { BoxConnection, BoxRunner } from '../types.js';
+import { commandArgv, untilReady } from './util.js';
 
 /**
  * The port the box's reflection server listens on *inside* the container,
@@ -44,9 +45,10 @@ export interface PodmanRunnerOptions {
   image: string;
   /**
    * Command that starts the box entry point *inside* the container, e.g.
-   * `node dist/boxed.js`. Mutually exclusive with `self`.
+   * `node dist/boxed.js`. A string is split on whitespace; pass an array when
+   * an argument contains spaces. Mutually exclusive with `self`.
    */
-  cmd?: string;
+  cmd?: string | string[];
   /**
    * Re-run the current entry point inside the container ("self-entry mode").
    * The project is mounted at its own absolute path so `process.argv` and
@@ -85,8 +87,11 @@ export interface PodmanRunnerOptions {
   env?: Record<string, string>;
   /** Extra raw `podman run` args, e.g. `['--memory=512m']`. */
   extraArgs?: string[];
-  /** Container engine binary. `docker` is CLI-compatible for what we use. */
-  engine?: 'podman' | 'docker';
+  /**
+   * Container engine binary: `podman` (default), `docker` (CLI-compatible for
+   * what we use), or a path to either.
+   */
+  engine?: 'podman' | 'docker' | (string & {});
 }
 
 /** Picks a free port on the host loopback for publishing. */
@@ -220,6 +225,11 @@ export class PodmanRunner implements BoxRunner {
           );
         }
       })();
+      // Don't cache a failure (e.g. the engine wasn't up yet): the next
+      // acquire should try again.
+      this.networkReady.catch(() => {
+        this.networkReady = undefined;
+      });
     }
     return this.networkReady;
   }
@@ -236,7 +246,7 @@ export class PodmanRunner implements BoxRunner {
         ...process.argv.slice(1),
       ];
     }
-    return this.options.cmd!.split(/\s+/).filter(Boolean);
+    return commandArgv(this.options.cmd!);
   }
 
   /**
@@ -306,8 +316,11 @@ export class PodmanRunner implements BoxRunner {
     }
 
     await this.ensureNetwork();
-    const name = `genkit-box-${randomUUID().slice(0, 12)}`;
     const hostPort = await freePort();
+    // close() may have run while we awaited; don't start a container nobody
+    // will stop.
+    if (this.closed) throw new Error('podmanRunner is closed.');
+    const name = `genkit-box-${randomUUID().slice(0, 12)}`;
     const secret = randomBytes(32).toString('base64url');
     const args = this.buildRunArgs(name, hostPort, secret);
 
@@ -318,24 +331,27 @@ export class PodmanRunner implements BoxRunner {
     const child = spawn(this.engine, args, {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
-    child.once('error', (e) =>
-      logger.error(`Box container ${name} failed to start: ${e}`)
-    );
 
     const client = new ReflectionClientV1(`http://127.0.0.1:${hostPort}`, {
       secret,
     });
     this.instances.set(key, { name, client });
 
+    // `podman run` stays in the foreground for the container's lifetime, so
+    // its exit before readiness means the container failed (bad image, bad
+    // command, crash on boot).
+    const stopWaiting = new AbortController();
     try {
-      await client.waitForReady(30_000, signal);
+      await untilReady(
+        client.waitForReady(30_000, stopWaiting.signal),
+        child,
+        `Box container ${name}`,
+        signal
+      );
     } catch (e) {
+      stopWaiting.abort();
       await this.release(key);
       throw e;
-    }
-    if (signal?.aborted) {
-      await this.release(key);
-      throw new Error('Aborted before box became ready.');
     }
     return client;
   }
