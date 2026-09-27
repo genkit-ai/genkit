@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,6 +88,109 @@ func TestReflectionServer(t *testing.T) {
 		if _, err := os.Stat(srv.RuntimeFilePath); !os.IsNotExist(err) {
 			t.Error("runtime file was not cleaned up")
 		}
+	})
+
+	t.Run("OS-assigned port is written to the runtime file", func(t *testing.T) {
+		t.Setenv("GENKIT_ENV", "dev")
+		g := Init(context.Background())
+
+		errCh := make(chan error, 1)
+		serverStartCh := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   0,
+			pinned: true,
+		}, errCh, serverStartCh)
+		if srv == nil {
+			t.Fatalf("failed to start reflection server: %v", <-errCh)
+		}
+		<-serverStartCh
+
+		data, err := os.ReadFile(srv.RuntimeFilePath)
+		if err != nil {
+			t.Fatalf("reading runtime file: %v", err)
+		}
+		var rf runtimeFileData
+		if err := json.Unmarshal(data, &rf); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(rf.ReflectionServerURL, ":0") {
+			t.Fatalf("runtime file advertises port 0: %s", rf.ReflectionServerURL)
+		}
+		res, err := http.Get(rf.ReflectionServerURL + "/api/__health")
+		if err != nil {
+			t.Fatalf("advertised URL %s is not reachable: %v", rf.ReflectionServerURL, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("a taken pinned port fails instead of shifting", func(t *testing.T) {
+		taken, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer taken.Close()
+		port := taken.Addr().(*net.TCPAddr).Port
+
+		g := Init(context.Background())
+		errCh := make(chan error, 1)
+		srv := startReflectionServer(context.Background(), g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   port,
+			pinned: true,
+		}, errCh, make(chan struct{}))
+		if srv != nil {
+			t.Fatal("expected startup to fail on a taken pinned port")
+		}
+		if err := <-errCh; err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
+
+func TestWithReflectionPort(t *testing.T) {
+	t.Run("rejects being set twice", func(t *testing.T) {
+		opts := &genkitOptions{}
+		if err := WithReflectionPort(3200).apply(opts); err != nil {
+			t.Fatal(err)
+		}
+		if err := WithReflectionPort(3300).apply(opts); err == nil {
+			t.Fatal("expected an error when set twice")
+		}
+	})
+
+	t.Run("Init binds the chosen port exactly", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+
+		t.Setenv("GENKIT_ENV", "dev")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		Init(ctx, WithReflectionPort(port))
+
+		res, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/__health", port))
+		if err != nil {
+			t.Fatalf("reflection server not on port %d: %v", port, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("Init panics on an invalid port", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected Init to panic")
+			}
+		}()
+		Init(context.Background(), WithReflectionPort(-2))
 	})
 }
 

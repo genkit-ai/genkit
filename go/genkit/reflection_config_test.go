@@ -19,6 +19,7 @@ package genkit
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -85,10 +86,22 @@ func TestResolveReflectionConfig(t *testing.T) {
 			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 4200, pinned: true},
 		},
 		{
-			name:    "option is the probe start when the env has no port",
+			name:    "option is pinned when the env has no port",
 			env:     map[string]string{"GENKIT_ENV": "dev"},
 			optPort: 9999,
-			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 9999},
+			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 9999, pinned: true},
+		},
+		{
+			name:    "option -1 is OS-assigned, same as env port 0",
+			env:     map[string]string{"GENKIT_ENV": "dev"},
+			optPort: ReflectionPortAuto,
+			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 0, pinned: true},
+		},
+		{
+			name:    "option alone does not turn the server on",
+			env:     map[string]string{},
+			optPort: 9999,
+			want:    reflectionConfig{mode: reflectionOff},
 		},
 		{
 			name: "port 0 is valid and pinned",
@@ -121,6 +134,33 @@ func TestResolveReflectionConfigInvalidPort(t *testing.T) {
 				t.Fatalf("expected an error for %q", port)
 			}
 		})
+	}
+}
+
+func TestResolveReflectionConfigInvalidOptionPort(t *testing.T) {
+	// Validated even when the environment leaves the server off, so a bad
+	// value fails at Init rather than when someone later sets GENKIT_ENV.
+	for _, port := range []int{-2, 70000} {
+		t.Run(strconv.Itoa(port), func(t *testing.T) {
+			if _, err := resolveReflectionConfig(envFunc(map[string]string{}), port); err == nil {
+				t.Fatalf("expected an error for %d", port)
+			}
+		})
+	}
+}
+
+func TestAdvertisedReflectionAddr(t *testing.T) {
+	tests := map[string]string{
+		"0.0.0.0:3100":     "127.0.0.1:3100",
+		"[::]:3100":        "127.0.0.1:3100",
+		"127.0.0.1:3100":   "127.0.0.1:3100",
+		"192.168.1.5:3100": "192.168.1.5:3100",
+		"[::1]:3100":       "[::1]:3100",
+	}
+	for in, want := range tests {
+		if got := advertisedReflectionAddr(in); got != want {
+			t.Errorf("advertisedReflectionAddr(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

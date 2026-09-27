@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,26 @@ const (
 	// that sees it must stop reconnecting.
 	reflectionAuthErrorCode = -32001
 )
+
+// ReflectionPortAuto, passed to [WithReflectionPort], lets the OS pick the
+// reflection port. Code cannot use 0 for this because 0 is the unset value;
+// the environment spells the same thing GENKIT_REFLECTION_PORT=0.
+const ReflectionPortAuto = -1
+
+// advertisedReflectionAddr is the host:port to write into the runtime
+// discovery file for a server listening on addr. A wildcard bind is reachable
+// on loopback, and 0.0.0.0 is not a valid destination everywhere, so it is
+// advertised as 127.0.0.1.
+func advertisedReflectionAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = defaultReflectionHost
+	}
+	return net.JoinHostPort(host, port)
+}
 
 // reflectionMode is how the reflection API runs, if at all.
 type reflectionMode int
@@ -80,6 +101,12 @@ type reflectionConfig struct {
 // beats optPort on purpose: whoever set the variable is typically the
 // supervisor that already published that port.
 //
+// A chosen port, from the environment or optPort, is bound exactly; only an
+// unchosen port probes upward from 3100. optPort 0 means unset and
+// [ReflectionPortAuto] (-1) lets the OS pick, the same as
+// GENKIT_REFLECTION_PORT=0. optPort does not turn the server on by itself,
+// and is validated even when unused so a bad value fails early.
+//
 // getenv is injected so this is testable without touching the process
 // environment.
 func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectionConfig, error) {
@@ -89,6 +116,10 @@ func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectio
 	secret := getenv("GENKIT_REFLECTION_SECRET_TOKEN")
 	if v2URL := getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
 		return reflectionConfig{mode: reflectionV2, v2URL: v2URL, secret: secret}, nil
+	}
+	if optPort != ReflectionPortAuto && (optPort < 0 || optPort > 65535) {
+		return reflectionConfig{}, fmt.Errorf(
+			"reflection port must be -1 (OS-assigned) or an integer between 1 and 65535, got %d", optPort)
 	}
 
 	envPort := getenv("GENKIT_REFLECTION_PORT")
@@ -100,14 +131,19 @@ func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectio
 	cfg := reflectionConfig{
 		mode:   reflectionV1,
 		host:   host,
-		port:   optPort,
+		port:   defaultReflectionPort,
 		secret: secret,
 	}
 	if cfg.host == "" {
 		cfg.host = defaultReflectionHost
 	}
-	if cfg.port == 0 {
-		cfg.port = defaultReflectionPort
+	switch optPort {
+	case 0:
+		// Unset: probe from the default.
+	case ReflectionPortAuto:
+		cfg.port, cfg.pinned = 0, true
+	default:
+		cfg.port, cfg.pinned = optPort, true
 	}
 	if envPort != "" {
 		// An invalid value fails startup rather than falling back to probing:

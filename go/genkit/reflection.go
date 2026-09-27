@@ -110,18 +110,23 @@ func (s *reflectionServer) runtimeID() string {
 	return fmt.Sprintf("%d-%s", os.Getpid(), port)
 }
 
-// findAvailablePort finds the next available port on host starting from the
-// given port number.
-func findAvailablePort(host string, startPort int) (string, error) {
-	for port := startPort; port < startPort+100 && port <= 65535; port++ {
-		addr := net.JoinHostPort(host, strconv.Itoa(port))
-		listener, err := net.Listen("tcp", addr)
-		if err == nil {
-			listener.Close()
-			return addr, nil
+// listenReflection opens the v1 listener. A pinned port is bound exactly
+// (0 lets the OS pick); otherwise the next free port at or above cfg.port is
+// used. The listener is returned rather than closed and re-bound, so there is
+// no window for another process to take the port.
+func listenReflection(cfg reflectionConfig) (net.Listener, error) {
+	if cfg.pinned {
+		// A chosen port is a contract with whoever chose it: bind exactly that
+		// port or fail. Shifting to the next free one would leave them talking
+		// to a dead port.
+		return net.Listen("tcp", net.JoinHostPort(cfg.host, strconv.Itoa(cfg.port)))
+	}
+	for port := cfg.port; port < cfg.port+100 && port <= 65535; port++ {
+		if l, err := net.Listen("tcp", net.JoinHostPort(cfg.host, strconv.Itoa(port))); err == nil {
+			return l, nil
 		}
 	}
-	return "", fmt.Errorf("no available port found in range %d-%d", startPort, startPort+99)
+	return nil, fmt.Errorf("no available port found in range %d-%d", cfg.port, cfg.port+99)
 }
 
 // startReflectionServer starts the Reflection API server using cfg, which the
@@ -133,24 +138,17 @@ func startReflectionServer(ctx context.Context, g *Genkit, cfg reflectionConfig,
 		return nil
 	}
 
-	var addr string
-	if cfg.pinned {
-		// A pinned port is a contract with whoever published it: bind exactly
-		// that port or fail. Shifting to the next free one would leave them
-		// talking to a dead port.
-		addr = net.JoinHostPort(cfg.host, strconv.Itoa(cfg.port))
-	} else {
-		var err error
-		addr, err = findAvailablePort(cfg.host, cfg.port)
-		if err != nil {
-			errCh <- fmt.Errorf("failed to find available port: %w", err)
-			return nil
-		}
+	// Listen before anything records the address: with port 0 only the
+	// listener knows the real port, and the runtime file must point at it.
+	listener, err := listenReflection(cfg)
+	if err != nil {
+		errCh <- fmt.Errorf("failed to create listener: %w", err)
+		return nil
 	}
 
 	s := &reflectionServer{
 		Server: &http.Server{
-			Addr: addr,
+			Addr: listener.Addr().String(),
 		},
 		activeActions: newActiveActionsMap(),
 	}
@@ -166,7 +164,8 @@ func startReflectionServer(ctx context.Context, g *Genkit, cfg reflectionConfig,
 	// discover this runtime. Nothing is watching in a container, the working
 	// directory is frequently read-only, and the failure here is fatal.
 	if api.CurrentEnvironment() == api.EnvironmentDev {
-		if err := s.writeRuntimeFile(s.Addr, cfg.secret); err != nil {
+		if err := s.writeRuntimeFile(advertisedReflectionAddr(s.Addr), cfg.secret); err != nil {
+			listener.Close()
 			errCh <- fmt.Errorf("failed to write runtime file: %w", err)
 			return nil
 		}
@@ -175,13 +174,6 @@ func startReflectionServer(ctx context.Context, g *Genkit, cfg reflectionConfig,
 	serverCtx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		// First check that the port is available before signaling a server start success.
-		listener, err := net.Listen("tcp", s.Addr)
-		if err != nil {
-			errCh <- fmt.Errorf("failed to create listener: %w", err)
-			return
-		}
-
 		slog.Info("reflection server listening", "addr", s.Addr)
 		close(serverStartCh)
 
