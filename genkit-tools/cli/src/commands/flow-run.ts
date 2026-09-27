@@ -19,12 +19,15 @@ import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
-import { NO_AUTH_OPTION_HELP, runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
 import { parseJson } from '../utils/option-parsers';
 
 interface FlowRunOptions {
-  /** False with --no-auth. */
-  auth?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
   stream?: boolean;
   context?: any;
@@ -51,7 +54,7 @@ export const flowRun = new Command('flow:run')
     '--output <filename>',
     'name of the output file to write the flow result'
   )
-  .option('--no-auth', NO_AUTH_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (flowName: string, data: string, options: FlowRunOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
@@ -123,6 +126,6 @@ export const flowRun = new Command('flow:run')
     await runWithManager(projectRoot, runAction, {
       runtimeCommand,
       waitForActionKeys: [`/flow/${flowName}`],
-      auth: options.auth,
+      auth: options.experimentalAuth,
     });
   });

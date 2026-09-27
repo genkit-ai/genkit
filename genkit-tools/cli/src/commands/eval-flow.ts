@@ -39,12 +39,15 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command, Option } from 'commander';
-import { NO_AUTH_OPTION_HELP, runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
 import { parseJson, parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalFlowRunCliOptions {
-  /** False with --no-auth. */
-  auth?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   input?: string;
   output?: string;
   context?: string;
@@ -103,7 +106,7 @@ export const evalFlow = new Command('eval:flow')
       .hideHelp()
   )
   .option('-f, --force', 'Automatically accept all interactive prompts')
-  .option('--no-auth', NO_AUTH_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(
     async (flowName: string, data: string, options: EvalFlowRunCliOptions) => {
       const dashDashIndex = process.argv.indexOf('--');
@@ -239,7 +242,7 @@ export const evalFlow = new Command('eval:flow')
       await runWithManager(projectRoot, runAction, {
         runtimeCommand,
         waitForActionKeys,
-        auth: options.auth,
+        auth: options.experimentalAuth,
       });
     }
   );

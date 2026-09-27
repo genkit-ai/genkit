@@ -20,15 +20,15 @@ import { Command } from 'commander';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import {
-  NO_AUTH_OPTION_HELP,
+  EXPERIMENTAL_AUTH_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
 } from '../utils/manager-utils';
 import { parsePort } from '../utils/option-parsers';
 
 interface FlutterRunOptions {
-  /** False with --no-auth. */
-  auth?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   port?: number;
   open?: boolean;
   corsOrigin?: string;
@@ -50,7 +50,7 @@ export const startFlutter = new Command('start:flutter')
     '--cors-origin <origin>',
     'specify the allowed origin for CORS requests'
   )
-  .option('--no-auth', NO_AUTH_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: FlutterRunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -64,6 +64,7 @@ export const startFlutter = new Command('start:flutter')
       await getDevEnvVars(projectRoot, {
         ...options,
         experimentalReflectionV2: true,
+        auth: options.experimentalAuth,
       });
 
     const dartDefines = Object.entries(envVars).map(

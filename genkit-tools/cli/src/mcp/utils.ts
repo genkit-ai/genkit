@@ -65,7 +65,7 @@ export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
 
-  /** @param auth `false` disables reflection auth (`--no-auth`). */
+  /** @param auth `--experimental-auth`. */
   constructor(private readonly auth?: boolean) {}
 
   async getManager(projectRoot: string) {

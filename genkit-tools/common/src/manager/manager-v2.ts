@@ -62,6 +62,8 @@ const REGISTER_TIMEOUT_MS = 10_000;
 /** WebSocket close code for policy violations (RFC 6455). */
 const WS_POLICY_VIOLATION = 1008;
 
+const SKIP_CHECK_HINT = `To skip this check, restart the CLI without --experimental-auth and with ${REFLECTION_SECRET_ENV} unset.`;
+
 /**
  * CLI-side explanation for a rejected `register`. The runtime gets a short
  * JSON-RPC error; the person running the CLI gets the actionable version.
@@ -77,14 +79,14 @@ function registerRejectedMessage(
     return (
       `Rejected runtime connection (${who}): it provided an invalid reflection secret.\n` +
       `If you started the runtime yourself, pass it the ${REFLECTION_SECRET_ENV} this CLI uses (see --write-env-file).\n` +
-      'To skip this check, restart with --no-auth.'
+      SKIP_CHECK_HINT
     );
   }
   return (
     `Rejected runtime connection (${who}): it did not provide the reflection secret.\n` +
     'This usually means the runtime uses an older Genkit library. Upgrade it to the latest version.\n' +
     `If you started the runtime yourself, pass it ${REFLECTION_SECRET_ENV} (see --write-env-file).\n` +
-    'To skip this check, restart with --no-auth.'
+    SKIP_CHECK_HINT
   );
 }
 
@@ -326,7 +328,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
             code: REFLECTION_AUTH_ERROR_CODE,
             message:
               failure === 'missing'
-                ? 'Reflection secret required. Upgrade Genkit, or restart the CLI with --no-auth.'
+                ? 'Reflection secret required. Upgrade Genkit, or restart the CLI without --experimental-auth.'
                 : 'Invalid reflection secret.',
           },
           id: request.id,

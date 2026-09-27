@@ -33,9 +33,10 @@ import {
 import { logger } from '@genkit-ai/tools-common/utils';
 import getPort, { makeRange } from 'get-port';
 
-/** Shared help text for the `--no-auth` option on every command that spawns or hosts runtimes. */
-export const NO_AUTH_OPTION_HELP =
-  'do not generate a reflection secret; lets runtimes on older Genkit versions connect';
+/** Shared help text for `--experimental-auth` on every command that spawns or hosts runtimes. */
+export const EXPERIMENTAL_AUTH_OPTION_HELP =
+  'generate a reflection API secret and require it from runtimes (experimental; ' +
+  'runtimes on older Genkit versions are rejected over the WebSocket protocol)';
 
 /**
  * Returns the telemetry server address either based on environment setup or starts one.
@@ -69,35 +70,26 @@ export async function resolveTelemetryServer(options: {
 /**
  * Resolves the reflection secret this CLI run uses.
  *
- * `auth: false` (`--no-auth`) disables it entirely. Otherwise an operator-set
- * `GENKIT_REFLECTION_SECRET_TOKEN` wins, so a CLI can share a secret with a
- * runtime it did not spawn. `generate` controls whether a fresh one is minted
- * when none is set: commands that spawn a runtime or host the v2 server
- * generate one, commands that only attach to existing v1 runtimes do not
- * (they read each runtime's secret from its discovery file).
+ * An operator-set `GENKIT_REFLECTION_SECRET_TOKEN` is always used, flag or
+ * not: nobody sets it by accident, and it is how a CLI shares a secret with a
+ * runtime it did not spawn. Otherwise a fresh secret is minted only when
+ * `auth` is on (`--experimental-auth`) and `generate` is set: commands that
+ * spawn a runtime or host the v2 server generate, commands that only attach
+ * to existing v1 runtimes do not (they read each runtime's secret from its
+ * discovery file).
  */
 export function resolveReflectionSecret(options: {
+  /** `--experimental-auth`: mint a secret when none is configured. */
   auth?: boolean;
   generate: boolean;
 }): string | undefined {
-  if (options.auth === false) {
-    return undefined;
-  }
   const fromEnv = process.env[REFLECTION_SECRET_ENV];
   if (fromEnv) {
     return fromEnv;
   }
-  return options.generate ? generateReflectionSecret() : undefined;
-}
-
-let warnedNoAuth = false;
-function warnNoAuth(auth: boolean | undefined) {
-  if (auth === false && !warnedNoAuth) {
-    warnedNoAuth = true;
-    logger.warn(
-      'Reflection API authentication is disabled (--no-auth). Any local process can run actions in your app.'
-    );
-  }
+  return options.auth && options.generate
+    ? generateReflectionSecret()
+    : undefined;
 }
 
 /**
@@ -110,16 +102,15 @@ export async function startManager(options: {
   experimentalReflectionV2?: boolean;
   reflectionV2Port?: number;
   telemetryServerUrl?: string;
-  /** `false` disables reflection auth (`--no-auth`). */
+  /** `--experimental-auth`. */
   auth?: boolean;
   /**
-   * Secret to use. When omitted, falls back to `GENKIT_REFLECTION_SECRET_TOKEN`
-   * (unless `auth` is false). v1 runtimes that wrote their own secret into
-   * their discovery file are reached with that one regardless.
+   * Secret to use. When omitted, falls back to `GENKIT_REFLECTION_SECRET_TOKEN`.
+   * v1 runtimes that wrote their own secret into their discovery file are
+   * reached with that one regardless.
    */
   reflectionSecret?: string;
 }): Promise<BaseRuntimeManager> {
-  warnNoAuth(options.auth);
   const telemetryServerUrl =
     options.telemetryServerUrl ?? (await resolveTelemetryServer(options));
   const manager = RuntimeManager.create({
@@ -146,7 +137,7 @@ export interface DevProcessManagerOptions {
   envVars?: Record<string, string>;
   reflectionV2Port?: number;
   telemetryServerUrl?: string;
-  /** `false` disables reflection auth (`--no-auth`). */
+  /** `--experimental-auth`: generate a secret and require it from runtimes. */
   auth?: boolean;
   /** Secret already resolved by {@link getDevEnvVars}; reused as-is. */
   reflectionSecret?: string;
@@ -156,7 +147,7 @@ export interface DevEnv {
   envVars: Record<string, string>;
   reflectionV2Port?: number;
   telemetryServerUrl: string;
-  /** Undefined only with `--no-auth`. */
+  /** Set with `--experimental-auth` or an operator-set token. */
   reflectionSecret?: string;
 }
 
@@ -164,7 +155,6 @@ export async function getDevEnvVars(
   projectRoot: string,
   options?: DevProcessManagerOptions
 ): Promise<DevEnv> {
-  warnNoAuth(options?.auth);
   const telemetryServerUrl = await resolveTelemetryServer({
     projectRoot,
     corsOrigin: options?.corsOrigin,
@@ -402,7 +392,7 @@ export interface RunWithManagerOptions {
    * registering the target action(s).
    */
   waitForActionKeys?: string[];
-  /** `false` disables reflection auth (`--no-auth`). */
+  /** `--experimental-auth`. */
   auth?: boolean;
 }
 
