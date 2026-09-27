@@ -170,6 +170,46 @@ describe('podmanRunner', () => {
     assert.ok(valuesFor(args, '-v').includes('/data:/data:ro'));
   });
 
+  it('passes an argv cmd through untouched (spaces included)', () => {
+    const args = podmanRunner({
+      image: 'node:22-slim',
+      cmd: ['node', 'dist/my box.js'],
+    }).buildRunArgs('box-1', 54321, 's3cret');
+    assert.deepStrictEqual(args.slice(-3), [
+      'node:22-slim',
+      'node',
+      'dist/my box.js',
+    ]);
+  });
+
+  it('fails fast, and retries setup, when the engine cannot start', async () => {
+    // A missing engine binary fails network setup; that must not be cached.
+    const runner = podmanRunner({
+      image: 'node:22-slim',
+      cmd: 'node boxed.js',
+      engine: 'definitely-not-podman',
+    });
+    const started = Date.now();
+    await assert.rejects(runner.acquire('k'));
+    await assert.rejects(runner.acquire('k'));
+    assert.ok(Date.now() - started < 5_000, 'no readiness timeout');
+    await runner.close();
+  });
+
+  it('fails fast when the container exits before it is ready', async () => {
+    // `false` stands in for an engine whose `run` exits immediately.
+    const runner = podmanRunner({
+      image: 'node:22-slim',
+      cmd: 'node boxed.js',
+      network: 'bridge',
+      engine: 'false',
+    });
+    const started = Date.now();
+    await assert.rejects(runner.acquire('k'), /exited before it was ready/);
+    assert.ok(Date.now() - started < 5_000, 'no readiness timeout');
+    await runner.close();
+  });
+
   it('puts image and command last, in that order', () => {
     const args = podmanRunner({
       image: 'node:22-slim',
