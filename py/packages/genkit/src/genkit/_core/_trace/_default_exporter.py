@@ -40,7 +40,7 @@ from pydantic import BaseModel
 from genkit._core._compat import override
 from genkit._core._environment import is_dev_environment
 from genkit._core._logger import get_logger
-from genkit._core._reflection_config import resolve_reflection_config
+from genkit._core._reflection_config import reflection_enabled
 from genkit._core._typing import (
     Annotation,
     InstrumentationLibrary,
@@ -415,6 +415,6 @@ def create_span_processor(exporter: SpanExporter) -> SpanProcessor:
     Keyed on reflection being on rather than GENKIT_ENV, so a non-dev runtime
     with reflection enabled still streams spans as they start.
     """
-    if is_dev_environment() or resolve_reflection_config().enabled:
+    if is_dev_environment() or reflection_enabled():
         return RealtimeSpanProcessor(exporter)
     return BatchSpanProcessor(exporter)

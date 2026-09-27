@@ -23,7 +23,7 @@ from opentelemetry import trace as trace_api
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
-from genkit._core._reflection_config import resolve_reflection_config
+from genkit._core._reflection_config import reflection_enabled
 
 GENKIT_OTEL_ENABLE_LOGS = 'GENKIT_OTEL_ENABLE_LOGS'
 GENKIT_TELEMETRY_SERVER = 'GENKIT_TELEMETRY_SERVER'
@@ -94,7 +94,7 @@ def enable_log_export(*, url: str) -> None:
     global _exporter
     if not url or logs_opted_out():
         return
-    if not is_dev_environment() and not resolve_reflection_config().enabled:
+    if not is_dev_environment() and not reflection_enabled():
         return
     # Late import: _default_exporter pulls get_logger, and get_logger tees here.
     from genkit._core._trace._default_exporter import resolve_telemetry_server_url

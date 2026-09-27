@@ -22,6 +22,7 @@ from genkit._core._reflection_config import (
     DEFAULT_REFLECTION_HOST,
     DEFAULT_REFLECTION_PORT,
     is_loopback_host,
+    reflection_enabled,
     resolve_reflection_config,
     secrets_equal,
 )
@@ -96,6 +97,35 @@ def test_env_port_beats_the_programmatic_one() -> None:
 def test_programmatic_port_is_the_probe_start() -> None:
     config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=9999)
     assert (config.port, config.pinned) == (9999, False)
+
+
+def test_programmatic_host_is_used_when_env_host_is_unset() -> None:
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, host=ALL_INTERFACES)
+    assert config.host == ALL_INTERFACES
+
+
+def test_env_host_beats_the_programmatic_one() -> None:
+    config = resolve_reflection_config({'GENKIT_REFLECTION_HOST': '127.0.0.2'}, host=ALL_INTERFACES)
+    assert config.host == '127.0.0.2'
+
+
+def test_programmatic_host_does_not_turn_it_on() -> None:
+    assert resolve_reflection_config({}, host=ALL_INTERFACES).mode == 'off'
+
+
+def test_reflection_enabled_does_not_raise_on_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Telemetry setup calls this at import time; Genkit() raises the real error.
+    monkeypatch.setenv('GENKIT_REFLECTION_PORT', 'abc')
+    assert reflection_enabled() is False
+
+
+def test_reflection_enabled_follows_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('GENKIT_ENV', raising=False)
+    monkeypatch.delenv('GENKIT_REFLECTION_DISABLED', raising=False)
+    monkeypatch.delenv('GENKIT_REFLECTION_V2_SERVER', raising=False)
+    monkeypatch.delenv('GENKIT_REFLECTION_HOST', raising=False)
+    monkeypatch.setenv('GENKIT_REFLECTION_PORT', '4200')
+    assert reflection_enabled() is True
 
 
 def test_port_zero_is_valid_and_pinned() -> None:
