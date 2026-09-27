@@ -212,29 +212,37 @@ describe('resolveReflectionSecret', () => {
     }
   });
 
-  it('returns nothing with --no-auth, even when the env var is set', () => {
+  it('does not generate a secret by default', () => {
+    delete process.env[REFLECTION_SECRET_ENV];
+    expect(resolveReflectionSecret({ generate: true })).toBeUndefined();
+  });
+
+  it('uses an operator-set secret even without --experimental-auth', () => {
     process.env[REFLECTION_SECRET_ENV] = 'from-env';
-    expect(
-      resolveReflectionSecret({ auth: false, generate: true })
-    ).toBeUndefined();
+    expect(resolveReflectionSecret({ generate: true })).toBe('from-env');
+    expect(resolveReflectionSecret({ generate: false })).toBe('from-env');
   });
 
   it('prefers an operator-set secret over generating one', () => {
     process.env[REFLECTION_SECRET_ENV] = 'from-env';
-    expect(resolveReflectionSecret({ generate: true })).toBe('from-env');
+    expect(resolveReflectionSecret({ auth: true, generate: true })).toBe(
+      'from-env'
+    );
   });
 
-  it('generates a fresh secret when asked and none is set', () => {
+  it('generates a fresh secret with --experimental-auth', () => {
     delete process.env[REFLECTION_SECRET_ENV];
-    const first = resolveReflectionSecret({ generate: true });
-    const second = resolveReflectionSecret({ generate: true });
+    const first = resolveReflectionSecret({ auth: true, generate: true });
+    const second = resolveReflectionSecret({ auth: true, generate: true });
     expect(first).toBeDefined();
     expect(first).not.toBe(second);
   });
 
   it('does not generate for commands that only attach to runtimes', () => {
     delete process.env[REFLECTION_SECRET_ENV];
-    expect(resolveReflectionSecret({ generate: false })).toBeUndefined();
+    expect(
+      resolveReflectionSecret({ auth: true, generate: false })
+    ).toBeUndefined();
   });
 });
 
@@ -261,15 +269,25 @@ describe('getDevEnvVars', () => {
     }
   });
 
-  it('passes a secret to the runtime it spawns', async () => {
-    const { envVars } = await getDevEnvVars('.');
-    expect(envVars[REFLECTION_SECRET_ENV]).toBeTruthy();
+  it('passes no secret by default', async () => {
+    const { envVars, reflectionSecret } = await getDevEnvVars('.');
+    expect(envVars[REFLECTION_SECRET_ENV]).toBeUndefined();
+    expect(reflectionSecret).toBeUndefined();
     expect(envVars.GENKIT_ENV).toBe('dev');
   });
 
-  it('passes no secret with --no-auth', async () => {
-    const { envVars } = await getDevEnvVars('.', { auth: false });
-    expect(envVars[REFLECTION_SECRET_ENV]).toBeUndefined();
+  it('passes a secret to the runtime it spawns with --experimental-auth', async () => {
+    const { envVars, reflectionSecret } = await getDevEnvVars('.', {
+      auth: true,
+    });
+    expect(envVars[REFLECTION_SECRET_ENV]).toBeTruthy();
+    expect(envVars[REFLECTION_SECRET_ENV]).toBe(reflectionSecret);
+  });
+
+  it('forwards an operator-set secret without --experimental-auth', async () => {
+    process.env[REFLECTION_SECRET_ENV] = 'from-env';
+    const { envVars } = await getDevEnvVars('.');
+    expect(envVars[REFLECTION_SECRET_ENV]).toBe('from-env');
   });
 
   it('points the v2 URL at loopback', async () => {

@@ -1057,8 +1057,7 @@ function unauthorizedMessage(runtime?: RuntimeInfo): string {
     `${who} rejected the reflection secret. It was started with a ` +
     'GENKIT_REFLECTION_SECRET_TOKEN this CLI does not know. Set the same ' +
     'GENKIT_REFLECTION_SECRET_TOKEN for the CLI, or restart the runtime ' +
-    'through this CLI (e.g. `genkit start -- ...`), or pass --no-auth to the ' +
-    'command that started it.'
+    'through this CLI (e.g. `genkit start -- ...`).'
   );
 }
 

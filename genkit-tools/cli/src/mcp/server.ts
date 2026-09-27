@@ -29,7 +29,7 @@ export async function startMcpServer(params: {
   projectRoot: string;
   explicitProjectRoot: boolean;
   timeout?: number;
-  /** `false` disables reflection auth (`--no-auth`). */
+  /** `--experimental-auth`. */
   auth?: boolean;
 }) {
   const { projectRoot, explicitProjectRoot, timeout, auth } = params;

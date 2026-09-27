@@ -588,7 +588,7 @@ describe('RuntimeManagerV2 reflection auth', () => {
       pid: 2,
     });
     expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
-    expect(message.error.message).toContain('--no-auth');
+    expect(message.error.message).toContain('--experimental-auth');
     expect(closeCode).toBe(1008);
     expect(manager.listRuntimes()).toEqual([]);
   });
@@ -611,11 +611,11 @@ describe('RuntimeManagerV2 reflection auth', () => {
   it('accepts a register without a secret when the manager has none', async () => {
     manager = await RuntimeManagerV2.create({ projectRoot: './' });
     const { message } = await register(manager.port!, {
-      id: 'rt-no-auth',
+      id: 'rt-unsecured',
       pid: 4,
     });
     expect(message.error).toBeUndefined();
-    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-no-auth']);
+    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-unsecured']);
   });
 
   it('closes a connection whose first message is not register', async () => {

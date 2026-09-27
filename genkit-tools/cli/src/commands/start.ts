@@ -25,15 +25,15 @@ import fs from 'fs';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import {
-  NO_AUTH_OPTION_HELP,
+  EXPERIMENTAL_AUTH_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
   startManager,
 } from '../utils/manager-utils';
 
 interface RunOptions {
-  /** False with --no-auth. */
-  auth?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   noui?: boolean;
   port?: string;
   host?: string;
@@ -71,7 +71,7 @@ export const start = new Command('start')
     '--write-env-file <file>',
     'write environment variables in .env format to the provided file'
   )
-  .option('--no-auth', NO_AUTH_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -85,7 +85,7 @@ export const start = new Command('start')
       disableRealtimeTelemetry: options.disableRealtimeTelemetry,
       corsOrigin: options.corsOrigin,
       experimentalReflectionV2: options.experimentalReflectionV2,
-      auth: options.auth,
+      auth: options.experimentalAuth,
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
 
@@ -93,7 +93,10 @@ export const start = new Command('start')
       const content = Object.entries(envVars)
         .map(([k, v]) => `${k}=${v}`)
         .join('\n');
-      fs.writeFileSync(options.writeEnvFile, content);
+      // 0600: the file may carry the reflection secret. `mode` only applies on
+      // creation, so chmod too in case the file already existed.
+      fs.writeFileSync(options.writeEnvFile, content, { mode: 0o600 });
+      fs.chmodSync(options.writeEnvFile, 0o600);
       logger.info(`Wrote environment variables to ${options.writeEnvFile}`);
     }
 
@@ -112,7 +115,7 @@ export const start = new Command('start')
           envVars,
           telemetryServerUrl,
           reflectionV2Port,
-          auth: options.auth,
+          auth: options.experimentalAuth,
         }
       );
       manager = result.manager;
@@ -125,7 +128,7 @@ export const start = new Command('start')
         experimentalReflectionV2: options.experimentalReflectionV2,
         reflectionV2Port,
         telemetryServerUrl,
-        auth: options.auth,
+        auth: options.experimentalAuth,
         // Without a spawned runtime there is nothing to hand a generated
         // secret to, so reuse the one getDevEnvVars resolved for this run.
         reflectionSecret: envVars[REFLECTION_SECRET_ENV],
