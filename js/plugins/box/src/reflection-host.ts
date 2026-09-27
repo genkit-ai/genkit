@@ -222,7 +222,9 @@ export class ReflectionHost {
    */
   waitForRuntime(
     id?: string,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    /** Stops waiting (and clears the timer) early, e.g. when the child died. */
+    signal?: AbortSignal
   ): Promise<ConnectedRuntimeInfo> {
     if (id && this.runtimes.has(id)) {
       return Promise.resolve(this.runtimes.get(id)!.info);
@@ -232,6 +234,11 @@ export class ReflectionHost {
         clearTimeout(timer);
         unsubConnect();
         unsubReject();
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        done();
+        reject(new Error('Stopped waiting for box runtime to connect'));
       };
       const timer = setTimeout(() => {
         done();
@@ -252,6 +259,8 @@ export class ReflectionHost {
           reject(new Error(rejectionMessage(info)));
         }
       });
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort);
     });
   }
 

@@ -29,14 +29,16 @@ import type {
   RunActionResult,
   RunOptions,
 } from '../types.js';
+import { commandArgv, untilReady } from './util.js';
 
 /** Options for {@link execRunner}. */
 export interface ExecRunnerOptions {
   /**
-   * Command that starts the box entry point, e.g. `tsx src/boxed.ts`. Split on
-   * whitespace into program + args. Mutually exclusive with `self`.
+   * Command that starts the box entry point, e.g. `tsx src/boxed.ts`. A string
+   * is split on whitespace; pass an array (`['tsx', 'src/my box.ts']`) when an
+   * argument contains spaces. Mutually exclusive with `self`.
    */
-  cmd?: string;
+  cmd?: string | string[];
   /**
    * Re-spawn the current entry point (`process.argv`) as the box. Convenient
    * (one file) at the cost of weaker code isolation.
@@ -84,11 +86,14 @@ function installCleanupHandlers() {
   };
   // 'exit' must be synchronous; killAll is.
   process.on('exit', killAll);
-  // Translate termination signals into a clean exit so 'exit' runs, then die.
-  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  // Installing a handler replaces the default die-on-signal, so clean up and
+  // then exit the way the signal would have (128 + signal number), which
+  // supervisors read as "terminated", not "succeeded".
+  const signalExitCodes = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 } as const;
+  for (const [sig, code] of Object.entries(signalExitCodes)) {
     process.on(sig, () => {
       killAll();
-      process.exit(0);
+      process.exit(code);
     });
   }
 }
@@ -159,8 +164,7 @@ export class ExecRunner implements BoxRunner {
         args: [...process.execArgv, ...process.argv.slice(1)],
       };
     }
-    const parts = this.options.cmd!.split(/\s+/).filter(Boolean);
-    const [program, ...args] = parts;
+    const [program, ...args] = commandArgv(this.options.cmd!);
     return { cmd: program, args };
   }
 
@@ -219,14 +223,19 @@ export class ExecRunner implements BoxRunner {
     const handle = toHandle(child);
     this.instances.set(key, { runtimeId, handle, lastUsed: Date.now() });
 
-    await this.host.waitForRuntime(runtimeId).catch((e) => {
-      handle.kill().catch(() => {});
+    const stopWaiting = new AbortController();
+    try {
+      await untilReady(
+        this.host.waitForRuntime(runtimeId, 30_000, stopWaiting.signal),
+        child,
+        `Box runtime (${prepared.cmd})`,
+        signal
+      );
+    } catch (e) {
+      stopWaiting.abort();
       this.instances.delete(key);
+      await handle.kill().catch(() => {});
       throw e;
-    });
-    if (signal?.aborted) {
-      await this.release(key);
-      throw new Error('Aborted before box became ready.');
     }
     return this.connectionFor(runtimeId, key);
   }

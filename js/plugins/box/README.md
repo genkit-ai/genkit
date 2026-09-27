@@ -209,7 +209,13 @@ const boxedRunShell = myBox.fromTool(runShell);
 
 // Separate entry: stronger code isolation, and it can be another language.
 box(ai, { runner: execRunner({ cmd: 'tsx src/boxed.ts' }) });
+
+// A string cmd is split on whitespace; use an array for paths with spaces.
+box(ai, { runner: execRunner({ cmd: ['tsx', 'src/my box.ts'] }) });
 ```
+
+A box that can't start (missing binary, crash on boot) fails `acquire` right
+away rather than at the readiness timeout.
 
 The child inherits your environment (API keys included), so a plain subprocess
 is for trusted code and relocation, not containment. Boxes nest: a boxed agent
