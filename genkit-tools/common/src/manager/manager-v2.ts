@@ -636,6 +636,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   async stop() {
     for (const timer of this.unregistered.values()) clearTimeout(timer);
     this.unregistered.clear();
+    this.rejectedPids.clear();
     if (this.wss) {
       this.wss.close();
     }

@@ -39,6 +39,38 @@ export function generateReflectionSecret(): string {
   return randomBytes(32).toString('base64url');
 }
 
+/** Whether a URL points at the local machine (localhost, 127.x, or ::1). */
+export function isLoopbackUrl(url: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return (
+    hostname === 'localhost' ||
+    hostname === '[::1]' ||
+    hostname === '::1' ||
+    /^127\.\d+\.\d+\.\d+$/.test(hostname)
+  );
+}
+
+/**
+ * Picks the secret to send to a v1 runtime.
+ *
+ * A runtime's own advertised secret always wins: a dev runtime spawned by a
+ * different CLI process enforces that process's secret, not ours. The
+ * configured secret is only offered to loopback runtimes, since a discovery
+ * file can name any URL.
+ */
+export function secretForRuntime(
+  runtimeUrl: string,
+  advertised: string | undefined,
+  configured: string | undefined
+): string | undefined {
+  return advertised ?? (isLoopbackUrl(runtimeUrl) ? configured : undefined);
+}
+
 /**
  * Constant-time secret comparison. Hashing first gives equal-length inputs,
  * which timingSafeEqual requires, without leaking the expected length.

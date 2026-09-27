@@ -27,7 +27,11 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import { RuntimeManager } from '../src/manager/manager';
-import { REFLECTION_SECRET_HEADER } from '../src/manager/reflection-auth';
+import {
+  REFLECTION_SECRET_HEADER,
+  isLoopbackUrl,
+  secretForRuntime,
+} from '../src/manager/reflection-auth';
 import { RuntimeEvent, type RuntimeInfo } from '../src/manager/types';
 
 jest.mock('chokidar', () => ({
@@ -162,5 +166,47 @@ describe('RuntimeManager reflection auth', () => {
     await expect(mgr.listActions()).rejects.toThrow(
       /GENKIT_REFLECTION_SECRET_TOKEN/
     );
+  });
+});
+
+describe('isLoopbackUrl', () => {
+  it.each([
+    'http://localhost:3100',
+    'http://127.0.0.1:3100',
+    'http://127.1.2.3:3100',
+    'http://[::1]:3100',
+    'ws://127.0.0.1:3200',
+  ])('treats %s as loopback', (url) => {
+    expect(isLoopbackUrl(url)).toBe(true);
+  });
+
+  it.each([
+    'http://0.0.0.0:3100',
+    'http://192.168.1.5:3100',
+    'http://example.com:3100',
+    'http://127.0.0.1.example.com:3100',
+    'not a url',
+  ])('does not treat %s as loopback', (url) => {
+    expect(isLoopbackUrl(url)).toBe(false);
+  });
+});
+
+describe('secretForRuntime', () => {
+  it('prefers the runtime advertised secret, wherever it points', () => {
+    expect(
+      secretForRuntime('http://192.168.1.5:3100', 'advertised', 'configured')
+    ).toBe('advertised');
+  });
+
+  it('falls back to the configured secret for loopback runtimes', () => {
+    expect(
+      secretForRuntime('http://127.0.0.1:3100', undefined, 'configured')
+    ).toBe('configured');
+  });
+
+  it('never sends the configured secret to a non-loopback runtime', () => {
+    expect(
+      secretForRuntime('http://192.168.1.5:3100', undefined, 'configured')
+    ).toBeUndefined();
   });
 });
