@@ -16,7 +16,6 @@
 
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
-import getPort from 'get-port';
 import * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { action } from '../src/action.js';
@@ -41,7 +40,9 @@ describe('ReflectionServer API', () => {
 
   beforeEach(async () => {
     registry = new Registry();
-    server = new ReflectionServer(registry, { port: await getPort() });
+    // -1: OS-assigned. A port from getPort() would now be bound exactly and
+    // could race other test files running in parallel.
+    server = new ReflectionServer(registry, { port: -1 });
     await server.start();
     port = (server as any).server.address().port;
   });

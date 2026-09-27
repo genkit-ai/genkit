@@ -158,8 +158,9 @@ export interface GenkitOptions {
   /** Additional attribution information to include in the x-goog-api-client header. */
   clientHeader?: string;
   /**
-   * First port the reflection API tries, probing upward from there. Defaults to
-   * 3100. `GENKIT_REFLECTION_PORT` overrides this and is bound exactly.
+   * Exact port for the reflection API; startup fails if it is taken. `-1`
+   * lets the OS pick. When unset, probes upward from 3100.
+   * `GENKIT_REFLECTION_PORT` overrides this.
    */
   reflectionPort?: number;
 }
@@ -209,18 +210,14 @@ export class Genkit extends GenkitAI implements HasRegistry {
         port: this.options.reflectionPort,
       });
       this.reflectionServer.start().catch((e) => {
-        // A pinned port is a deployment contract, so failing to bind it is
-        // fatal rather than a degraded start nobody notices.
-        if (
-          reflectionConfig.kind === 'v1' &&
-          reflectionConfig.port.kind === 'pinned'
-        ) {
-          logger.error(
-            `Failed to bind GENKIT_REFLECTION_PORT=${reflectionConfig.port.port}: ${e}`
-          );
-          process.exit(1);
-        }
-        logger.error(`Failed to start reflection server: ${e}`);
+        // Rethrown rather than logged: a reflection server that was asked for
+        // but cannot start must not degrade silently. start() is async, so
+        // this surfaces as an unhandled rejection, which the host app can
+        // observe and which crashes the process by default.
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `Reflection server failed to start: ${e instanceof Error ? e.message : e}`,
+        });
       });
     }
     if (options?.clientHeader) {

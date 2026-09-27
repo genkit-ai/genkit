@@ -31,10 +31,20 @@ export const DEFAULT_REFLECTION_PORT = 3100;
  */
 export const REFLECTION_AUTH_ERROR_CODE = -32001;
 
-/** Port either pinned by the environment or used as the start of a probe. */
+/**
+ * Programmatic port value meaning "let the OS pick". Code cannot use 0 for
+ * this (it is Go's zero value and falsy in Python, so it reads as "unset"
+ * there); the environment spells the same thing `GENKIT_REFLECTION_PORT=0`.
+ */
+export const REFLECTION_PORT_AUTO = -1;
+
+/**
+ * Either an exact port (0 lets the OS pick) or a probe upward from
+ * {@link DEFAULT_REFLECTION_PORT}, used only when nobody chose a port.
+ */
 export type ReflectionPort =
   | { kind: 'pinned'; port: number }
-  | { kind: 'probeFrom'; port: number };
+  | { kind: 'probe' };
 
 /**
  * How the reflection API runs, if at all.
@@ -81,6 +91,34 @@ function parsePort(raw: string | undefined): number | undefined {
 }
 
 /**
+ * Resolves the port for the v1 server. Whoever chose a port, the environment
+ * or the code, gets exactly that port; only an unchosen port is probed.
+ *
+ * Code values: `undefined` or `0` is unset, {@link REFLECTION_PORT_AUTO} (-1)
+ * lets the OS pick, 1..65535 is exact. Anything else throws.
+ */
+export function resolveReflectionPort(
+  envPort: number | undefined,
+  optionPort: number | undefined
+): ReflectionPort {
+  if (envPort !== undefined) {
+    return { kind: 'pinned', port: envPort };
+  }
+  if (optionPort === undefined || optionPort === 0) {
+    return { kind: 'probe' };
+  }
+  if (optionPort === REFLECTION_PORT_AUTO) {
+    return { kind: 'pinned', port: 0 };
+  }
+  if (!Number.isInteger(optionPort) || optionPort < 1 || optionPort > 65535) {
+    throw new Error(
+      `reflectionPort must be -1 (OS-assigned) or an integer between 1 and 65535, got ${optionPort}.`
+    );
+  }
+  return { kind: 'pinned', port: optionPort };
+}
+
+/**
  * Resolves how the reflection API should run.
  *
  * First match wins:
@@ -94,7 +132,8 @@ function parsePort(raw: string | undefined): number | undefined {
  * the server and then wonder why it did not start. The environment beats
  * `options.port` on purpose: whoever set the variable is typically the
  * supervisor that already published that port and cannot be overruled by a
- * library call they do not control.
+ * library call they do not control. `options.port` does not turn the server
+ * on by itself, and is validated even when unused so a bad value fails early.
  */
 export function resolveReflectionConfig(
   env: ReflectionEnv,
@@ -108,6 +147,7 @@ export function resolveReflectionConfig(
     return { kind: 'v2', url: env.GENKIT_REFLECTION_V2_SERVER, secret };
   }
   const envPort = parsePort(env.GENKIT_REFLECTION_PORT);
+  const port = resolveReflectionPort(envPort, options.port);
   const host = env.GENKIT_REFLECTION_HOST;
   if (envPort === undefined && !host && env.GENKIT_ENV !== 'dev') {
     return { kind: 'off' };
@@ -115,15 +155,22 @@ export function resolveReflectionConfig(
   return {
     kind: 'v1',
     host: host || DEFAULT_REFLECTION_HOST,
-    port:
-      envPort !== undefined
-        ? { kind: 'pinned', port: envPort }
-        : {
-            kind: 'probeFrom',
-            port: options.port ?? DEFAULT_REFLECTION_PORT,
-          },
+    port,
     secret,
   };
+}
+
+/**
+ * Host to advertise in the runtime discovery file for a server bound to
+ * `host`. A wildcard bind is reachable on loopback, and `0.0.0.0` is not a
+ * valid destination everywhere, so it is advertised as `127.0.0.1`. IPv6
+ * literals are bracketed for use in a URL.
+ */
+export function advertisedReflectionHost(host: string): string {
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+    return '127.0.0.1';
+  }
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 /** Whether a host is loopback, and so unreachable from other machines. */
