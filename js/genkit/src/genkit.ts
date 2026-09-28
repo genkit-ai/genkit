@@ -161,6 +161,9 @@ export interface GenkitOptions {
    * Exact port for the reflection API; startup fails if it is taken. `-1`
    * lets the OS pick. When unset, probes upward from 3100.
    * `GENKIT_REFLECTION_PORT` overrides this.
+   *
+   * Does not turn the reflection API on: it runs under `GENKIT_ENV=dev` or
+   * with `GENKIT_REFLECTION_ENABLED=true`.
    */
   reflectionPort?: number;
 }
@@ -194,10 +197,9 @@ export class Genkit extends GenkitAI implements HasRegistry {
       this.registry.context = this.options.context;
     }
     this.configure();
-    // The reflection API is no longer tied to GENKIT_ENV=dev: it also runs when
-    // GENKIT_REFLECTION_HOST/PORT or a v2 server URL is configured. Resolving
-    // here (rather than only inside the server) keeps an invalid port a
-    // constructor-time error.
+    // The reflection API runs under GENKIT_ENV=dev, or in any environment with
+    // GENKIT_REFLECTION_ENABLED=true. Resolving here (rather than only inside
+    // the server) keeps an invalid setting a constructor-time error.
     const reflectionConfig = resolveReflectionConfig(process.env, {
       port: this.options.reflectionPort,
     });

@@ -25,15 +25,14 @@ import { getGenkitRuntimeConfig } from './config.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
 import {
-  DEFAULT_REFLECTION_HOST,
   DEFAULT_REFLECTION_PORT,
   REFLECTION_SECRET_HEADER,
   advertisedReflectionHost,
   isLoopbackHost,
   resolveReflectionConfig,
-  resolveReflectionPort,
+  resolveReflectionServerConfig,
   secretsEqual,
-  type ReflectionConfig,
+  type ReflectionServerConfig,
 } from './reflection-config.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
@@ -180,19 +179,18 @@ export class ReflectionServer {
       port: this.options.port,
     });
     if (resolved.kind === 'disabled') {
-      logger.debug('Reflection API disabled by GENKIT_REFLECTION_DISABLED.');
+      logger.debug('Reflection API disabled by GENKIT_REFLECTION_ENABLED.');
       return;
     }
     // Reaching start() is itself a request for a server, so `off` (nothing in
-    // the environment asked for one) still starts with defaults. Genkit's own
-    // constructor checks the config first and does not call start() at all.
-    const config: Exclude<ReflectionConfig, { kind: 'disabled' | 'off' }> =
+    // the environment turned it on) still starts one, with the environment's
+    // host/port/v2 settings. Genkit's own constructor checks the config first
+    // and does not call start() at all.
+    const config: ReflectionServerConfig =
       resolved.kind === 'off'
-        ? {
-            kind: 'v1',
-            host: DEFAULT_REFLECTION_HOST,
-            port: resolveReflectionPort(undefined, this.options.port),
-          }
+        ? resolveReflectionServerConfig(process.env, {
+            port: this.options.port,
+          })
         : resolved;
     if (config.kind === 'v2') {
       const { ReflectionServerV2 } = await import('./reflection-v2.js');

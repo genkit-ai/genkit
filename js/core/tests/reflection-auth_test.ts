@@ -33,7 +33,7 @@ const MANAGED_ENV = [
   'GENKIT_REFLECTION_SECRET_TOKEN',
   'GENKIT_REFLECTION_PORT',
   'GENKIT_REFLECTION_HOST',
-  'GENKIT_REFLECTION_DISABLED',
+  'GENKIT_REFLECTION_ENABLED',
 ] as const;
 
 function get(
@@ -204,7 +204,7 @@ describe('ReflectionServer auth', () => {
   // matters, since it is what keeps the endpoint out of non-dev processes.
 
   it('starts nothing when disabled', async () => {
-    process.env.GENKIT_REFLECTION_DISABLED = 'true';
+    process.env.GENKIT_REFLECTION_ENABLED = 'false';
     process.env.GENKIT_ENV = 'dev';
     server = new ReflectionServer(new Registry());
     await server.start();

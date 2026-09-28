@@ -50,13 +50,18 @@ export type ReflectionPort =
  * How the reflection API runs, if at all.
  *
  * `disabled` and `off` differ by who decided. `disabled` is an explicit kill
- * switch that even a direct `ReflectionServer.start()` honours. `off` only
- * means nothing in the environment asked for a server, so an explicit start
- * still runs one with defaults.
+ * switch (`GENKIT_REFLECTION_ENABLED=false`) that even a direct
+ * `ReflectionServer.start()` honours. `off` only means nothing in the
+ * environment asked for a server, so an explicit start still runs one with
+ * defaults.
  */
 export type ReflectionConfig =
   | { kind: 'disabled' }
   | { kind: 'off' }
+  | ReflectionServerConfig;
+
+/** How a running reflection API connects: dial out (v2) or listen (v1). */
+export type ReflectionServerConfig =
   | { kind: 'v2'; url: string; secret?: string }
   | {
       kind: 'v1';
@@ -91,6 +96,22 @@ function parsePort(raw: string | undefined): number | undefined {
 }
 
 /**
+ * Parses `GENKIT_REFLECTION_ENABLED`: `true`, `false`, or unset (empty counts
+ * as unset). Anything else throws, for the same reason as {@link parsePort}.
+ */
+function parseEnabled(raw: string | undefined): boolean | undefined {
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  if (raw === 'true' || raw === 'false') {
+    return raw === 'true';
+  }
+  throw new Error(
+    `GENKIT_REFLECTION_ENABLED must be "true" or "false", got "${raw}".`
+  );
+}
+
+/**
  * Resolves the port for the v1 server. Whoever chose a port, the environment
  * or the code, gets exactly that port; only an unchosen port is probed.
  *
@@ -121,41 +142,56 @@ export function resolveReflectionPort(
 /**
  * Resolves how the reflection API should run.
  *
- * First match wins:
- * 1. `GENKIT_REFLECTION_DISABLED === 'true'` turns everything off.
- * 2. `GENKIT_REFLECTION_V2_SERVER` dials out instead of listening.
- * 3. `GENKIT_REFLECTION_PORT` or `GENKIT_REFLECTION_HOST` starts the v1 server.
- * 4. `GENKIT_ENV === 'dev'` starts the v1 server with defaults.
- * 5. Otherwise off.
+ * Whether it runs:
+ * - `GENKIT_REFLECTION_ENABLED=false` turns it off, even under dev.
+ * - `GENKIT_REFLECTION_ENABLED=true` turns it on in any environment.
+ * - Unset, it runs only under `GENKIT_ENV=dev`, as it always has.
  *
- * Setting host or port is itself the on-switch, so there is no way to configure
- * the server and then wonder why it did not start. The environment beats
- * `options.port` on purpose: whoever set the variable is typically the
- * supervisor that already published that port and cannot be overruled by a
- * library call they do not control. `options.port` does not turn the server
- * on by itself, and is validated even when unused so a bad value fails early.
+ * How it runs, once on: `GENKIT_REFLECTION_V2_SERVER` dials out; otherwise the
+ * v1 server listens on `GENKIT_REFLECTION_HOST`/`GENKIT_REFLECTION_PORT`.
+ * Those are settings, not on-switches: a stray value in a production env does
+ * not expose the API, and is not even parsed while reflection is off.
+ *
+ * The environment port beats `options.port` on purpose: whoever set the
+ * variable is typically the supervisor that already published that port.
+ * `options.port` is validated even when unused so a bad value fails early.
  */
 export function resolveReflectionConfig(
   env: ReflectionEnv,
   options: { port?: number } = {}
 ): ReflectionConfig {
-  if (env.GENKIT_REFLECTION_DISABLED === 'true') {
+  // Validated before the on/off check so a bad value fails early.
+  resolveReflectionPort(undefined, options.port);
+  const enabled = parseEnabled(env.GENKIT_REFLECTION_ENABLED);
+  if (enabled === false) {
     return { kind: 'disabled' };
   }
+  if (enabled === undefined && env.GENKIT_ENV !== 'dev') {
+    return { kind: 'off' };
+  }
+  return resolveReflectionServerConfig(env, options);
+}
+
+/**
+ * The "how it runs" half of {@link resolveReflectionConfig}, without the
+ * on/off decision. For callers that already decided to run a server, such as
+ * a direct `ReflectionServer.start()`.
+ */
+export function resolveReflectionServerConfig(
+  env: ReflectionEnv,
+  options: { port?: number } = {}
+): ReflectionServerConfig {
+  const optionPort = resolveReflectionPort(undefined, options.port);
   const secret = env.GENKIT_REFLECTION_SECRET_TOKEN || undefined;
   if (env.GENKIT_REFLECTION_V2_SERVER) {
     return { kind: 'v2', url: env.GENKIT_REFLECTION_V2_SERVER, secret };
   }
   const envPort = parsePort(env.GENKIT_REFLECTION_PORT);
-  const port = resolveReflectionPort(envPort, options.port);
-  const host = env.GENKIT_REFLECTION_HOST;
-  if (envPort === undefined && !host && env.GENKIT_ENV !== 'dev') {
-    return { kind: 'off' };
-  }
   return {
     kind: 'v1',
-    host: host || DEFAULT_REFLECTION_HOST,
-    port,
+    host: env.GENKIT_REFLECTION_HOST || DEFAULT_REFLECTION_HOST,
+    port:
+      envPort !== undefined ? { kind: 'pinned', port: envPort } : optionPort,
     secret,
   };
 }

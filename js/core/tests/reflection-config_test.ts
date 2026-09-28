@@ -30,10 +30,10 @@ describe('resolveReflectionConfig', () => {
     assert.deepStrictEqual(resolveReflectionConfig({}), { kind: 'off' });
   });
 
-  it('is disabled when GENKIT_REFLECTION_DISABLED is exactly "true"', () => {
+  it('is disabled by GENKIT_REFLECTION_ENABLED=false, even in dev', () => {
     assert.deepStrictEqual(
       resolveReflectionConfig({
-        GENKIT_REFLECTION_DISABLED: 'true',
+        GENKIT_REFLECTION_ENABLED: 'false',
         GENKIT_ENV: 'dev',
         GENKIT_REFLECTION_PORT: '3100',
         GENKIT_REFLECTION_V2_SERVER: 'ws://127.0.0.1:3200',
@@ -42,19 +42,67 @@ describe('resolveReflectionConfig', () => {
     );
   });
 
-  it('ignores other truthy spellings of disabled', () => {
-    for (const value of ['1', 'yes', 'on', 'TRUE']) {
-      const config = resolveReflectionConfig({
-        GENKIT_REFLECTION_DISABLED: value,
+  it('is on outside dev with GENKIT_REFLECTION_ENABLED=true', () => {
+    assert.deepStrictEqual(
+      resolveReflectionConfig({ GENKIT_REFLECTION_ENABLED: 'true' }),
+      {
+        kind: 'v1',
+        host: '127.0.0.1',
+        port: { kind: 'probe' },
+        secret: undefined,
+      }
+    );
+  });
+
+  it('treats an empty GENKIT_REFLECTION_ENABLED as unset', () => {
+    assert.strictEqual(
+      resolveReflectionConfig({ GENKIT_REFLECTION_ENABLED: '' }).kind,
+      'off'
+    );
+    assert.strictEqual(
+      resolveReflectionConfig({
+        GENKIT_REFLECTION_ENABLED: '',
         GENKIT_ENV: 'dev',
-      });
-      assert.strictEqual(config.kind, 'v1', `for ${value}`);
+      }).kind,
+      'v1'
+    );
+  });
+
+  it('rejects other spellings of GENKIT_REFLECTION_ENABLED', () => {
+    for (const value of ['1', '0', 'yes', 'on', 'TRUE', 'False']) {
+      assert.throws(
+        () => resolveReflectionConfig({ GENKIT_REFLECTION_ENABLED: value }),
+        /GENKIT_REFLECTION_ENABLED/,
+        `for ${value}`
+      );
     }
+  });
+
+  it('does not turn on from host, port or v2 settings alone', () => {
+    for (const env of [
+      { GENKIT_REFLECTION_HOST: '0.0.0.0' },
+      { GENKIT_REFLECTION_PORT: '4200' },
+      { GENKIT_REFLECTION_V2_SERVER: 'ws://127.0.0.1:3200' },
+    ]) {
+      assert.deepStrictEqual(
+        resolveReflectionConfig(env),
+        { kind: 'off' },
+        JSON.stringify(env)
+      );
+    }
+  });
+
+  it('does not parse the port while reflection is off', () => {
+    assert.deepStrictEqual(
+      resolveReflectionConfig({ GENKIT_REFLECTION_PORT: 'abc' }),
+      { kind: 'off' }
+    );
   });
 
   it('dials out when a v2 server is set', () => {
     assert.deepStrictEqual(
       resolveReflectionConfig({
+        GENKIT_ENV: 'dev',
         GENKIT_REFLECTION_V2_SERVER: 'ws://127.0.0.1:3200',
         GENKIT_REFLECTION_SECRET_TOKEN: 's3cret',
       }),
@@ -64,15 +112,19 @@ describe('resolveReflectionConfig', () => {
 
   it('prefers v2 over a configured v1 port', () => {
     const config = resolveReflectionConfig({
+      GENKIT_REFLECTION_ENABLED: 'true',
       GENKIT_REFLECTION_V2_SERVER: 'ws://127.0.0.1:3200',
       GENKIT_REFLECTION_PORT: '3100',
     });
     assert.strictEqual(config.kind, 'v2');
   });
 
-  it('treats a host on its own as the on-switch', () => {
+  it('uses the configured host', () => {
     assert.deepStrictEqual(
-      resolveReflectionConfig({ GENKIT_REFLECTION_HOST: '0.0.0.0' }),
+      resolveReflectionConfig({
+        GENKIT_REFLECTION_ENABLED: 'true',
+        GENKIT_REFLECTION_HOST: '0.0.0.0',
+      }),
       {
         kind: 'v1',
         host: '0.0.0.0',
@@ -82,9 +134,12 @@ describe('resolveReflectionConfig', () => {
     );
   });
 
-  it('treats a port on its own as the on-switch, and pins it', () => {
+  it('pins the configured port', () => {
     assert.deepStrictEqual(
-      resolveReflectionConfig({ GENKIT_REFLECTION_PORT: '4200' }),
+      resolveReflectionConfig({
+        GENKIT_ENV: 'dev',
+        GENKIT_REFLECTION_PORT: '4200',
+      }),
       {
         kind: 'v1',
         host: '127.0.0.1',
@@ -105,7 +160,7 @@ describe('resolveReflectionConfig', () => {
 
   it('lets the environment beat the programmatic port', () => {
     const config = resolveReflectionConfig(
-      { GENKIT_REFLECTION_PORT: '4200' },
+      { GENKIT_ENV: 'dev', GENKIT_REFLECTION_PORT: '4200' },
       { port: 9999 }
     );
     assert.deepStrictEqual(config, {
@@ -209,7 +264,11 @@ describe('advertisedReflectionHost', () => {
       '1_000',
     ]) {
       assert.throws(
-        () => resolveReflectionConfig({ GENKIT_REFLECTION_PORT: port }),
+        () =>
+          resolveReflectionConfig({
+            GENKIT_ENV: 'dev',
+            GENKIT_REFLECTION_PORT: port,
+          }),
         /GENKIT_REFLECTION_PORT/,
         `for ${port}`
       );
@@ -217,7 +276,10 @@ describe('advertisedReflectionHost', () => {
   });
 
   it('accepts port 0', () => {
-    const config = resolveReflectionConfig({ GENKIT_REFLECTION_PORT: '0' });
+    const config = resolveReflectionConfig({
+      GENKIT_ENV: 'dev',
+      GENKIT_REFLECTION_PORT: '0',
+    });
     assert.deepStrictEqual(config, {
       kind: 'v1',
       host: '127.0.0.1',
