@@ -25,9 +25,14 @@
 #
 # Env overrides for locked-down networks:
 #   JAEGER_BIN / OTEL_COLLECTOR_BIN         use an existing binary, skip download
-#   JAEGER_VERSION / OTEL_COLLECTOR_VERSION pin a release tag instead of latest
+#   JAEGER_VERSION / OTEL_COLLECTOR_VERSION download a different release tag
 
 set -euo pipefail
+
+# jaeger v2.21.0 is built on collector v0.160.0, so both read the collector
+# config the same way. bump them together.
+DEFAULT_JAEGER_VERSION=v2.21.0
+DEFAULT_OTEL_COLLECTOR_VERSION=v0.160.0
 
 JAEGER_UI_PORT=16686
 COLLECTOR_OTLP_GRPC_PORT=4317
@@ -67,22 +72,15 @@ platform_arch() {
   esac
 }
 
-latest_tag() {
-  local repo="$1"
-  local url
-  url="$(curl -fsSLI -A "$USER_AGENT" -o /dev/null -w '%{url_effective}' \
-    "https://github.com/${repo}/releases/latest")"
-  printf '%s' "${url##*/}"
-}
-
 ensure_binary() {
   local name="$1"
   local env_var="$2"
   local version_var="$3"
   local repo="$4"
   local kind="$5"
+  local default_tag="$6"
   local override="${!env_var:-}"
-  local target pinned tag version asset url tmp found
+  local target tag version asset url tmp found
 
   if [[ -n "$override" ]]; then
     echo "Using ${name} from ${env_var}=${override}" >&2
@@ -97,13 +95,8 @@ ensure_binary() {
     return
   fi
 
-  echo "${name} not found; resolving release from ${repo}..." >&2
-  pinned="${!version_var:-}"
-  if [[ -n "$pinned" ]]; then
-    tag="$pinned"
-  else
-    tag="$(latest_tag "$repo")"
-  fi
+  tag="${!version_var:-$default_tag}"
+  echo "${name} not found; downloading ${tag} from ${repo}..." >&2
 
   if [[ "$kind" == jaeger ]]; then
     [[ "$tag" == v2.* ]] || die "Need a Jaeger v2 tag (got ${tag}). Set JAEGER_VERSION=v2.x.y"
@@ -216,8 +209,9 @@ echo "Platform: ${PLAT}/${ARCH}"
 command -v curl >/dev/null || die 'curl is required to download Jaeger and otelcol-contrib.'
 
 OTELCOL_PATH="$(ensure_binary otelcol-contrib OTEL_COLLECTOR_BIN OTEL_COLLECTOR_VERSION \
-  open-telemetry/opentelemetry-collector-releases otelcol)"
-JAEGER_PATH="$(ensure_binary jaeger JAEGER_BIN JAEGER_VERSION jaegertracing/jaeger jaeger)"
+  open-telemetry/opentelemetry-collector-releases otelcol "$DEFAULT_OTEL_COLLECTOR_VERSION")"
+JAEGER_PATH="$(ensure_binary jaeger JAEGER_BIN JAEGER_VERSION jaegertracing/jaeger jaeger \
+  "$DEFAULT_JAEGER_VERSION")"
 
 pkill -f "$OTELCOL_PATH" 2>/dev/null || true
 pkill -f "$JAEGER_PATH" 2>/dev/null || true

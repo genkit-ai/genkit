@@ -62,9 +62,10 @@ yourself:
 export JAEGER_BIN=/path/to/jaeger
 export OTEL_COLLECTOR_BIN=/path/to/otelcol-contrib
 
-# ...or pin specific release tags instead of "latest":
-export JAEGER_VERSION=v2.11.0
-export OTEL_COLLECTOR_VERSION=v0.140.0
+# ...or download different release tags (defaults: Jaeger v2.21.0 with
+# otelcol-contrib v0.160.0, the collector version that Jaeger release is built on):
+export JAEGER_VERSION=v2.21.0
+export OTEL_COLLECTOR_VERSION=v0.160.0
 ```
 
 ## The instrumentation, in short
