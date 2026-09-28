@@ -25,6 +25,18 @@ export {
   type ProxyKind,
 } from './proxy.js';
 export {
+  BoxV1RuntimeError,
+  ReflectionClientV1,
+  type ReflectionClientV1Options,
+} from './reflection-client-v1.js';
+export {
+  BoxRuntimeError,
+  HostEvent,
+  ReflectionHost,
+  type ConnectedRuntimeInfo,
+  type ReflectionHostOptions,
+} from './reflection-host.js';
+export {
   SINGLETON_KEY,
   perRequest,
   resolveRetention,
