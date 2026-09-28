@@ -66,8 +66,8 @@ func configureLogging() {
 			logger.SetLevel(lvl)
 		}
 	}
-	// Keyed on reflection being on rather than GENKIT_ENV, so a runtime that
-	// only has GENKIT_REFLECTION_HOST/PORT set still streams logs to whatever
+	// Keyed on reflection being on rather than GENKIT_ENV alone, so a runtime
+	// with GENKIT_REFLECTION_ENABLED=true still streams logs to whatever
 	// telemetry server it is given.
 	cfg, err := resolveReflectionConfig(os.Getenv, 0)
 	reflectionOn := err == nil && (cfg.mode == reflectionV1 || cfg.mode == reflectionV2)
@@ -239,7 +239,7 @@ func WithExperimental() GenkitOption {
 //
 // The GENKIT_REFLECTION_PORT environment variable overrides this. The option
 // does not start the server by itself: the server runs under GENKIT_ENV=dev
-// or when GENKIT_REFLECTION_HOST/PORT is set.
+// or with GENKIT_REFLECTION_ENABLED=true.
 // This option can only be applied once.
 func WithReflectionPort(port int) GenkitOption {
 	return &genkitOptions{ReflectionPort: port}
@@ -356,9 +356,9 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	r.RegisterValue(api.PromptDirKey, gOpts.PromptDir)
 	r.RegisterValue(api.ExperimentalKey, gOpts.Experimental)
 
-	// The reflection API is no longer tied to GENKIT_ENV=dev: it also runs when
-	// GENKIT_REFLECTION_HOST/PORT or a v2 server URL is configured. An invalid
-	// port fails Init rather than silently falling back.
+	// The reflection API runs under GENKIT_ENV=dev, or in any environment with
+	// GENKIT_REFLECTION_ENABLED=true. An invalid setting fails Init rather than
+	// silently falling back.
 	reflectCfg, err := resolveReflectionConfig(os.Getenv, gOpts.ReflectionPort)
 	if err != nil {
 		panic(fmt.Errorf("genkit.Init: %w", err))

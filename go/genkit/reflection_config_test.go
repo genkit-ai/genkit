@@ -41,9 +41,9 @@ func TestResolveReflectionConfig(t *testing.T) {
 			want: reflectionConfig{mode: reflectionOff},
 		},
 		{
-			name: "disabled beats everything",
+			name: "enabled=false beats everything, even dev",
 			env: map[string]string{
-				"GENKIT_REFLECTION_DISABLED":  "true",
+				"GENKIT_REFLECTION_ENABLED":   "false",
 				"GENKIT_ENV":                  "dev",
 				"GENKIT_REFLECTION_PORT":      "3100",
 				"GENKIT_REFLECTION_V2_SERVER": "ws://127.0.0.1:3200",
@@ -51,13 +51,29 @@ func TestResolveReflectionConfig(t *testing.T) {
 			want: reflectionConfig{mode: reflectionDisabled},
 		},
 		{
-			name: "only the exact string true disables",
-			env:  map[string]string{"GENKIT_REFLECTION_DISABLED": "1", "GENKIT_ENV": "dev"},
+			name: "enabled=true turns it on outside dev",
+			env:  map[string]string{"GENKIT_REFLECTION_ENABLED": "true"},
 			want: reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: defaultReflectionPort},
+		},
+		{
+			name: "host alone does not turn it on",
+			env:  map[string]string{"GENKIT_REFLECTION_HOST": "0.0.0.0"},
+			want: reflectionConfig{mode: reflectionOff},
+		},
+		{
+			name: "port alone does not turn it on, and is not parsed",
+			env:  map[string]string{"GENKIT_REFLECTION_PORT": "abc"},
+			want: reflectionConfig{mode: reflectionOff},
+		},
+		{
+			name: "v2 URL alone does not turn it on",
+			env:  map[string]string{"GENKIT_REFLECTION_V2_SERVER": "ws://127.0.0.1:3200"},
+			want: reflectionConfig{mode: reflectionOff},
 		},
 		{
 			name: "v2 beats a configured v1 port",
 			env: map[string]string{
+				"GENKIT_REFLECTION_ENABLED":      "true",
 				"GENKIT_REFLECTION_V2_SERVER":    "ws://127.0.0.1:3200",
 				"GENKIT_REFLECTION_PORT":         "3100",
 				"GENKIT_REFLECTION_SECRET_TOKEN": "s3cret",
@@ -65,13 +81,13 @@ func TestResolveReflectionConfig(t *testing.T) {
 			want: reflectionConfig{mode: reflectionV2, v2URL: "ws://127.0.0.1:3200", secret: "s3cret"},
 		},
 		{
-			name: "host alone turns it on",
-			env:  map[string]string{"GENKIT_REFLECTION_HOST": "0.0.0.0"},
+			name: "uses the configured host",
+			env:  map[string]string{"GENKIT_REFLECTION_ENABLED": "true", "GENKIT_REFLECTION_HOST": "0.0.0.0"},
 			want: reflectionConfig{mode: reflectionV1, host: "0.0.0.0", port: defaultReflectionPort},
 		},
 		{
-			name: "port alone turns it on and pins",
-			env:  map[string]string{"GENKIT_REFLECTION_PORT": "4200"},
+			name: "pins the configured port",
+			env:  map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": "4200"},
 			want: reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 4200, pinned: true},
 		},
 		{
@@ -81,7 +97,7 @@ func TestResolveReflectionConfig(t *testing.T) {
 		},
 		{
 			name:    "env port beats the option",
-			env:     map[string]string{"GENKIT_REFLECTION_PORT": "4200"},
+			env:     map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": "4200"},
 			optPort: 9999,
 			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 4200, pinned: true},
 		},
@@ -105,7 +121,7 @@ func TestResolveReflectionConfig(t *testing.T) {
 		},
 		{
 			name: "port 0 is valid and pinned",
-			env:  map[string]string{"GENKIT_REFLECTION_PORT": "0"},
+			env:  map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": "0"},
 			want: reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 0, pinned: true},
 		},
 	}
@@ -129,9 +145,21 @@ func TestResolveReflectionConfigInvalidPort(t *testing.T) {
 	for _, port := range []string{"abc", "-1", "70000", "3100.5", " ", "+7", "0x10", "1e3", " 7", "1_000"} {
 		t.Run(port, func(t *testing.T) {
 			_, err := resolveReflectionConfig(
-				envFunc(map[string]string{"GENKIT_REFLECTION_PORT": port}), 0)
+				envFunc(map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": port}), 0)
 			if err == nil {
 				t.Fatalf("expected an error for %q", port)
+			}
+		})
+	}
+}
+
+func TestResolveReflectionConfigInvalidEnabled(t *testing.T) {
+	for _, v := range []string{"1", "0", "yes", "on", "TRUE", "False"} {
+		t.Run(v, func(t *testing.T) {
+			_, err := resolveReflectionConfig(
+				envFunc(map[string]string{"GENKIT_REFLECTION_ENABLED": v}), 0)
+			if err == nil {
+				t.Fatalf("expected an error for %q", v)
 			}
 		})
 	}
