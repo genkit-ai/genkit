@@ -11,16 +11,20 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import pytest
 
+from genkit import ActionKind
+from genkit._core._action import Action
 from genkit._core._telemetry._instrumentation import (
+    ACTION_SPAN_MARKER,
     SpanContext,
     SpanMetadata,
+    flush_instrumentations,
     is_instrumented_by,
     reset_instrumentation,
     run_in_new_span,
     set_custom_metadata_attributes,
     set_span_state,
 )
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import FlushableInstrumentation, configure_instrumentation
 
 
 class RecordedSpan:
@@ -29,14 +33,10 @@ class RecordedSpan:
         self.trace_id = trace_id
         self.span_id = span_id
         self.metadata: list[Mapping[str, object]] = []
-        self.outputs: list[object] = []
         self.states: list[str] = []
 
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         self.metadata.append(metadata)
-
-    def set_output(self, value: object) -> None:
-        self.outputs.append(value)
 
     def set_state(self, state: str) -> None:
         self.states.append(state)
@@ -56,12 +56,14 @@ class FakeInstrumentation:
         self.trace_id = trace_id
         self.span_id = span_id
         self.spans: list[RecordedSpan] = []
+        self.seen: list[SpanMetadata] = []
 
     async def run_in_new_span(
         self,
         metadata: SpanMetadata,
         next: Callable[[SpanContext], Awaitable[object]],
     ) -> object:
+        self.seen.append(metadata)
         self.log.append(f'enter:{self.label}')
         span = RecordedSpan(self.label, trace_id=self.trace_id, span_id=self.span_id)
         self.spans.append(span)
@@ -94,7 +96,6 @@ async def test_noop_span_when_nothing_configured() -> None:
     assert seen.trace_id == ''
     assert seen.span_id == ''
     seen.set_metadata({'k': 'v'})
-    seen.set_output('x')
 
 
 @pytest.mark.asyncio
@@ -144,23 +145,6 @@ async def test_set_custom_metadata_writes_to_every_backend() -> None:
     await run_in_new_span('op', body)
     assert a.spans[0].metadata == [{'hello': 'world'}]
     assert b.spans[0].metadata == [{'hello': 'world'}]
-
-
-@pytest.mark.asyncio
-async def test_set_output_writes_to_every_backend() -> None:
-    """span.set_output copies onto every configured backend."""
-    log: list[str] = []
-    a = FakeInstrumentation('a', log)
-    b = FakeInstrumentation('b', log)
-    configure_instrumentation(a)
-    configure_instrumentation(b)
-
-    async def body(span: SpanContext) -> None:
-        span.set_output({'answer': 42})
-
-    await run_in_new_span('op', body)
-    assert a.spans[0].outputs == [{'answer': 42}]
-    assert b.spans[0].outputs == [{'answer': 42}]
 
 
 @pytest.mark.asyncio
@@ -263,3 +247,72 @@ async def test_a_raised_error_still_closes_every_backend() -> None:
         await run_in_new_span('op', body)
 
     assert log == ['enter:a', 'enter:b', 'exit:b', 'exit:a']
+
+
+async def _ok() -> str:
+    return 'ok'
+
+
+@pytest.mark.asyncio
+async def test_provider_sees_real_action_kind() -> None:
+    """A provider sees action_type 'model', 'flow', 'tool.v2' for those actions."""
+    rec = FakeInstrumentation('rec', [])
+    configure_instrumentation(rec)
+
+    for name, kind in (('m', ActionKind.MODEL), ('f', ActionKind.FLOW), ('t', ActionKind.TOOL)):
+        await Action(name=name, kind=kind, fn=_ok).run()
+
+    assert [(m.name, m.action_type) for m in rec.seen] == [('m', 'model'), ('f', 'flow'), ('t', 'tool.v2')]
+
+
+@pytest.mark.asyncio
+async def test_action_marker_hidden_from_providers() -> None:
+    """A provider's metadata.attributes never contains the action marker, for actions or plain spans."""
+    rec = FakeInstrumentation('rec', [])
+    configure_instrumentation(rec)
+
+    await Action(name='labeled', kind=ActionKind.FLOW, fn=_ok, span_metadata={'k': 'v'}).run(
+        telemetry_labels={'genkitx:ignore-trace': 'true'},
+    )
+
+    async def body(_span: SpanContext) -> None:
+        return None
+
+    await run_in_new_span('plain', body, action_type='util', attributes={ACTION_SPAN_MARKER: 'true'})
+
+    assert len(rec.seen) == 2
+    for meta in rec.seen:
+        assert ACTION_SPAN_MARKER not in meta.attributes
+    assert rec.seen[0].attributes == {'genkitx:ignore-trace': 'true', 'genkit:metadata:k': 'v'}
+
+
+def test_telemetry_exports_provider_types() -> None:
+    """SpanNext, DisposableInstrumentation, FlushableInstrumentation import from genkit.telemetry."""
+    import genkit.telemetry as telemetry
+
+    for name in ('SpanNext', 'DisposableInstrumentation', 'FlushableInstrumentation'):
+        assert name in telemetry.__all__
+        assert getattr(telemetry, name) is not None
+
+
+def test_flush_instrumentations_flushes_flushable() -> None:
+    """flush_instrumentations calls flush() on a provider implementing FlushableInstrumentation."""
+
+    class Buffered(FakeInstrumentation):
+        def __init__(self) -> None:
+            super().__init__('buffered', [])
+            self.flushed = 0
+
+        def flush(self) -> None:
+            self.flushed += 1
+
+    buffered = Buffered()
+    plain = FakeInstrumentation('plain', [])
+    configure_instrumentation(buffered)
+    configure_instrumentation(plain)
+    assert isinstance(buffered, FlushableInstrumentation)
+    assert not isinstance(plain, FlushableInstrumentation)
+
+    flush_instrumentations()
+
+    assert buffered.flushed == 1

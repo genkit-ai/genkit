@@ -13,12 +13,13 @@ from collections.abc import Generator, Sequence
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind, Genkit
+from genkit import ActionKind, Genkit, Message, ModelRequest, ModelResponse, Part, Role
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import (
+    ACTION_SPAN_MARKER,
     SpanMetadata,
     parent_path_context,
     run_in_new_span,
@@ -48,44 +49,40 @@ def test_start_attributes_includes_input_excludes_outcome() -> None:
     attrs = start_attributes(
         SpanMetadata(
             name='myTool',
-            action_type='action',
-            subtype='tool.v2',
+            action_type='tool.v2',
             input='in',
-            is_root=True,
-            metadata={'key': 'value'},
+            attributes={
+                'user:label': 'x',
+                'genkit:init': '{"sessionId": "s"}',
+                'genkit:metadata:key': 'value',
+            },
         ),
         qualified_path='/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
+        is_action=True,
     )
-    assert attrs == {
-        'genkit:name': 'myTool',
-        'genkit:path': '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
-        'genkit:qualifiedPath': '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}',
-        'genkit:type': 'action',
-        'genkit:metadata:subtype': 'tool.v2',
-        'genkit:isRoot': True,
-        'genkit:metadata:key': 'value',
-        'genkit:input': '"in"',
-    }
-    for forbidden in ('genkit:state', 'genkit:output'):
+    assert list(attrs.items()) == [
+        ('user:label', 'x'),
+        ('genkit:name', 'myTool'),
+        ('genkit:path', '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}'),
+        ('genkit:qualifiedPath', '/{chatFlow,t:flow}/{myTool,t:action,s:tool.v2}'),
+        ('genkit:type', 'action'),
+        ('genkit:metadata:subtype', 'tool.v2'),
+        ('genkit:metadata:key', 'value'),
+        ('genkit:input', '"in"'),
+        ('genkit:init', '{"sessionId": "s"}'),
+    ]
+    for forbidden in ('genkit:state', 'genkit:output', 'genkit:isRoot'):
         assert forbidden not in attrs
 
 
 def test_start_attributes_json_input() -> None:
     """A dict input is JSON on genkit:input."""
     attrs = start_attributes(
-        SpanMetadata(name='echo', action_type='action', input={'msg': 'hi'}),
-        qualified_path='/{echo,t:action}',
+        SpanMetadata(name='echo', action_type='custom', input={'msg': 'hi'}),
+        qualified_path='/{echo,t:action,s:custom}',
+        is_action=True,
     )
     assert attrs['genkit:input'] == '{"msg": "hi"}'
-
-
-def test_start_attributes_json_init() -> None:
-    """Agent init (session id) is JSON on genkit:init."""
-    attrs = start_attributes(
-        SpanMetadata(name='agentRun', action_type='action', init={'sessionId': 'session-123'}),
-        qualified_path='/{agentRun,t:action}',
-    )
-    assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
 
 
 @pytest.mark.asyncio
@@ -115,25 +112,101 @@ async def test_writes_input_from_metadata(exporter) -> None:
     async def body(_span: object) -> None:
         return None
 
-    await run_in_new_span('echo', body, action_type='action', subtype='tool.v2', input=Payload(msg='hi'))
+    await run_in_new_span(
+        'echo',
+        body,
+        action_type='tool.v2',
+        input=Payload(msg='hi'),
+        attributes={ACTION_SPAN_MARKER: 'true'},
+    )
 
     span = _by_name(exporter.get_finished_spans(), 'echo')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:input'] == '{"msg":"hi"}'
     assert attrs['genkit:path'] == '/{echo,t:action,s:tool.v2}'
     assert attrs['genkit:metadata:subtype'] == 'tool.v2'
+    assert ACTION_SPAN_MARKER not in attrs
 
 
 @pytest.mark.asyncio
-async def test_writes_init_from_metadata(exporter) -> None:
-    async def body(_span: object) -> None:
-        return None
+async def test_init_reaches_dev_ui(exporter) -> None:
+    """An action run with init writes it as JSON on genkit:init."""
 
-    await run_in_new_span('agentRun', body, action_type='action', init={'sessionId': 'session-123'})
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(name='agentRun', kind=ActionKind.CUSTOM, fn=noop)
+    await action.run(init={'sessionId': 'session-123'})
 
     span = _by_name(exporter.get_finished_spans(), 'agentRun')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_action_span_attributes_unchanged(exporter) -> None:
+    """An action span shows as genkit:type=action with its kind in genkit:metadata:subtype."""
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(name='getWeather', kind=ActionKind.TOOL, fn=noop)
+    await action.run()
+
+    span = _by_name(exporter.get_finished_spans(), 'getWeather')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:type'] == 'action'
+    assert attrs['genkit:metadata:subtype'] == 'tool.v2'
+    assert attrs['genkit:path'] == '/{getWeather,t:action,s:tool.v2}'
+    assert attrs['genkit:qualifiedPath'] == '/{getWeather,t:action,s:tool.v2}'
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_plain_util_span_is_not_an_action(exporter) -> None:
+    """ai.generate()'s helper span is genkit:type=util with no subtype, even though 'util' is also an action kind."""
+    ai = Genkit(model='echoModel')
+
+    async def echo(_req: ModelRequest) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('hi')]))
+
+    ai.define_model(name='echoModel', fn=echo)
+    await ai.generate(prompt='hello')
+
+    span = _by_name(exporter.get_finished_spans(), 'generate')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:type'] == 'util'
+    assert 'genkit:metadata:subtype' not in attrs
+    assert attrs['genkit:path'] == '/{generate,t:util}'
+
+
+@pytest.mark.asyncio
+async def test_custom_metadata_keeps_string_format(exporter) -> None:
+    """A True action metadata value is written as the string "True"."""
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(name='flagged', kind=ActionKind.FLOW, fn=noop, span_metadata={'flow:beta': True})
+    await action.run()
+
+    span = _by_name(exporter.get_finished_spans(), 'flagged')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:metadata:flow:beta'] == 'True'
+
+
+@pytest.mark.asyncio
+async def test_ignore_trace_label_on_span(exporter) -> None:
+    """A run labeled genkitx:ignore-trace=true still exports that label on its span."""
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(name='playground', kind=ActionKind.EXECUTABLE_PROMPT, fn=noop)
+    await action.run(telemetry_labels={'genkitx:ignore-trace': 'true'})
+
+    span = _by_name(exporter.get_finished_spans(), 'playground')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkitx:ignore-trace'] == 'true'
 
 
 @pytest.mark.asyncio
@@ -231,35 +304,42 @@ async def test_nested_path_inherits_parent_qualified_path(exporter) -> None:
 
 
 @pytest.mark.asyncio
-async def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
-    exporter,
-) -> None:
-    async def body(_span: object) -> None:
+async def test_run_step_metadata_is_flattened(exporter) -> None:
+    """ai.run(metadata=...) lands each key as genkit:metadata:<k> with str() values."""
+    ai = Genkit()
+
+    async def step() -> None:
         return None
 
-    await run_in_new_span(
-        'step',
-        body,
-        action_type='flowStep',
-        metadata={'flow:name': 'pipeline', 'attempt': 2},
-        attributes={'genkit:custom:tag': 'foo'},
-    )
+    await ai.run(name='step', fn=step, metadata={'flow:name': 'pipeline', 'attempt': 2})
 
     span = _by_name(exporter.get_finished_spans(), 'step')
     attrs = dict(span.attributes or {})
+    assert attrs['genkit:type'] == 'flowStep'
     assert attrs['genkit:metadata:flow:name'] == 'pipeline'
     assert attrs['genkit:metadata:attempt'] == '2'
-    # Raw telemetry_labels pass through without the genkit:metadata: prefix.
+
+
+@pytest.mark.asyncio
+async def test_plain_span_attributes_pass_through(exporter) -> None:
+    """Attributes on a plain span land as-is, without the genkit:metadata: prefix."""
+
+    async def body(_span: object) -> None:
+        return None
+
+    await run_in_new_span('step', body, action_type='flowStep', attributes={'genkit:custom:tag': 'foo'})
+
+    span = _by_name(exporter.get_finished_spans(), 'step')
+    attrs = dict(span.attributes or {})
     assert attrs['genkit:custom:tag'] == 'foo'
 
 
 @pytest.mark.asyncio
 async def test_action_span_metadata_uses_short_keys(exporter) -> None:
-    """``Action.span_metadata`` uses short keys; ``run_in_new_span`` adds ``genkit:metadata:`` once.
+    """``Action.span_metadata`` uses short keys; the action runner adds ``genkit:metadata:`` once.
 
-    Locks in the simplified contract introduced alongside this refactor: framework call
-    sites (e.g. ``_flow.py``) pass short keys like ``flow:name``, and
-    the helper produces ``genkit:metadata:flow:name`` on the span.
+    Framework call sites (e.g. ``_flow.py``) pass short keys like ``flow:name``,
+    and the span gets ``genkit:metadata:flow:name``.
     """
 
     async def noop() -> str:

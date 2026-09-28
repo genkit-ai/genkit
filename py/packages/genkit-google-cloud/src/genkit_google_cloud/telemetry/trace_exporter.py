@@ -29,8 +29,7 @@ from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from genkit._core._telemetry._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
-
+from ._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 from .action import action_telemetry
 from .constants import (
     MIN_SPAN_DURATION_NS,

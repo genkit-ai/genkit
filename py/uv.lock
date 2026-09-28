@@ -1838,8 +1838,10 @@ dependencies = [
     { name = "genkit" },
     { name = "google-cloud-firestore" },
     { name = "google-cloud-logging" },
+    { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-gcp-monitoring" },
     { name = "opentelemetry-exporter-gcp-trace" },
+    { name = "opentelemetry-sdk" },
     { name = "strenum", marker = "python_full_version < '3.11'" },
 ]
 
@@ -1848,8 +1850,10 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "google-cloud-firestore", specifier = ">=2.14.0" },
     { name = "google-cloud-logging", specifier = ">=3.10.0" },
+    { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-gcp-monitoring", specifier = ">=1.9.0" },
     { name = "opentelemetry-exporter-gcp-trace", specifier = ">=1.9.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
 ]
 

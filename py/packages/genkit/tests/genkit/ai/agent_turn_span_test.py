@@ -152,6 +152,24 @@ async def test_run_turn_span_output_is_session_state_client_managed(
 
 
 @pytest.mark.asyncio
+async def test_agent_turn_output_is_the_returned_state(exporter) -> None:
+    """runTurn-N's genkit:output is exactly the session state that turn handed back to the client."""
+    registry = Registry()
+    agent = _counter_agent(registry=registry, name='turnSpanReturned', store=None)
+
+    chat = agent.chat()
+    await chat.send('one')
+    out = await chat.send('two')
+    assert out.raw.state is not None
+
+    turn_span = _by_name(exporter.get_finished_spans(), 'runTurn-1')
+    assert turn_span.attributes is not None
+    payload = json.loads(turn_span.attributes[Attr.OUTPUT])
+    assert payload == {'state': out.raw.state.model_dump(by_alias=True, exclude_none=True, mode='json')}
+    assert payload['state']['custom'] == {'count': 2}
+
+
+@pytest.mark.asyncio
 async def test_client_managed_preserves_session_id_across_turns() -> None:
     """Two send() calls on the same chat keep the same session_id."""
     registry = Registry()

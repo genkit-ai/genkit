@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._action import ActionKind
-from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit._core._telemetry._instrumentation import ACTION_SPAN_MARKER, run_in_new_span
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
 
 
@@ -62,10 +62,12 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
         async def body(_span: object) -> MultipartToolResponse:
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
 
+        # the denied call should look like the tool ran and interrupted, so the
+        # trace shows a tool span rather than a bare step.
         return await run_in_new_span(
             tool_name,
             body,
-            action_type='action',
-            subtype=ActionKind.TOOL,
+            action_type=str(ActionKind.TOOL),
             input=tool_input,
+            attributes={ACTION_SPAN_MARKER: 'true'},
         )

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,6 +24,7 @@ from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
+from genkit._core._telemetry import http as http_telemetry
 from genkit._core._telemetry._instrumentation import (
     flush_instrumentations,
     instrumentations,
@@ -32,7 +34,10 @@ from genkit._core._telemetry._instrumentation import (
 )
 from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit._core._telemetry.http import (
+    ActiveSpan,
+    CollectorHttpSink,
     GenkitBuiltinInstrumentation,
+    direct_http_for_collector,
 )
 from genkit.telemetry import configure_instrumentation
 
@@ -241,3 +246,32 @@ async def test_second_handshake_does_not_add_another_collector(
     finally:
         first_server.shutdown()
         second_server.shutdown()
+
+
+def test_poster_leaves_root_logging_alone() -> None:
+    """Constructing the Developer UI poster adds no handler to the root logger."""
+    before = list(logging.getLogger().handlers)
+    poster = direct_http_for_collector(url='http://127.0.0.1:4041')
+    try:
+        assert logging.getLogger().handlers == before
+    finally:
+        poster.dispose()
+
+
+def test_poster_reuses_one_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """200 span exports then flush(): every POST is done and one worker thread sent them all."""
+    posted: list[str] = []
+    monkeypatch.setattr(http_telemetry, 'post_json', lambda *, url, body: posted.append(body))
+    before = set(threading.enumerate())
+    sink = CollectorHttpSink('http://127.0.0.1:4041/api/otlp')
+    span = ActiveSpan(trace_id='t' * 32, span_id='s' * 16, parent_span_id=None, name='x', start_time_unix_nano=1)
+    try:
+        for _ in range(200):
+            sink.export_spans([span], resource_attributes={})
+        sink.flush()
+
+        assert len(posted) == 200
+        assert sink.queue.unfinished_tasks == 0
+        assert set(threading.enumerate()) - before == {sink.worker}
+    finally:
+        sink.shutdown()

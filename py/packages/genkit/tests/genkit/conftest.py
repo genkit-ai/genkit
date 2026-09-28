@@ -29,9 +29,6 @@ class MemoryCollectorSink:
     def export_spans(self, spans: list[ActiveSpan], *, resource_attributes: dict[str, object]) -> None:
         self._spans.extend(spans)
 
-    def export_logs(self, payload: dict[str, object]) -> None:
-        return
-
     def flush(self) -> None:
         return
 
@@ -56,9 +53,6 @@ class HexSpanContext:
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         return
 
-    def set_output(self, value: object) -> None:
-        return
-
     def set_state(self, state: str) -> None:
         return
 
@@ -76,7 +70,7 @@ class HexInstrumentation:
 
 def recording_http_instrumentation() -> tuple[DirectHttpInstrumentation, MemoryCollectorSink]:
     sink = MemoryCollectorSink()
-    return DirectHttpInstrumentation(sink, capture_logs=False), sink
+    return DirectHttpInstrumentation(sink), sink
 
 
 @pytest.fixture

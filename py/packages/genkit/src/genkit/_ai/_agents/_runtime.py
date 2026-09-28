@@ -177,12 +177,9 @@ class SessionRunner(Generic[StateT]):
                     # (messages, artifacts, custom) so a trace can show what
                     # changed without reading the client response.
                     state = await self.session.state()
-                    span.set_output({
-                        'state': state.model_dump(by_alias=True, exclude_none=True, mode='json'),
-                    })
                     if snapshot_id:
                         span.set_metadata({'agent:snapshotId': snapshot_id})
-                    return turn_result
+                    return {'state': state.model_dump(by_alias=True, exclude_none=True, mode='json')}
 
                 await run_in_new_span(
                     f'runTurn-{self.turn_index + 1}',

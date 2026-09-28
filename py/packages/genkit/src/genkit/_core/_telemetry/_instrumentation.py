@@ -32,7 +32,7 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
-from ._attrs import Attr, metadata_key
+from ._attrs import METADATA_PREFIX, Attr
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -48,18 +48,15 @@ class SpanNext(Protocol[T_co]):
 class SpanMetadata:
     """Description of a span about to be created.
 
-    Providers decide how to encode values. Extra fields beyond name / action_type
-    / input / attributes are Genkit product facts (Dev UI path, init, subtype).
+    ``action_type`` is the action kind (``'model'``, ``'flow'``, ``'tool.v2'``...)
+    for action spans, or the span's own type (``'util'``, ``'flowStep'``...)
+    for plain spans. Providers decide how to encode values.
     """
 
     name: str
     action_type: str | None = None
     input: object | None = None
     attributes: Mapping[str, str] = field(default_factory=dict)
-    subtype: str | None = None
-    init: object | None = None
-    metadata: Mapping[str, object] | None = None
-    is_root: bool | None = None
 
 
 class SpanContext(Protocol):
@@ -77,10 +74,6 @@ class SpanContext(Protocol):
 
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         """Attach custom metadata. Safe to call multiple times."""
-        ...
-
-    def set_output(self, value: object) -> None:
-        """Override genkit:output when the return value is not the span output."""
         ...
 
     def set_state(self, state: str) -> None:
@@ -103,11 +96,22 @@ class Instrumentation(Protocol):
 class DisposableInstrumentation(Protocol):
     """Optional: a provider that holds a subscription or client.
 
-    ``reset_instrumentation`` calls ``dispose`` so a log handler from the
+    ``reset_instrumentation`` calls ``dispose`` so an exporter from the
     last run cannot keep posting after tests tear down.
     """
 
     def dispose(self) -> None: ...
+
+
+@runtime_checkable
+class FlushableInstrumentation(Protocol):
+    """Optional: a provider that buffers exports.
+
+    ``flush_instrumentations`` calls ``flush`` so a trace is on the wire
+    before the Developer UI asks for it.
+    """
+
+    def flush(self) -> None: ...
 
 
 instrumentations: list[Instrumentation] = []
@@ -115,10 +119,12 @@ instrumentations: list[Instrumentation] = []
 # Active SpanContext so set_custom_metadata_attributes can reach it.
 current_span: ContextVar[SpanContext | None] = ContextVar('genkit_span_context', default=None)
 parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default='')
-# Prompt playground re-renders on each edit. Those runs are not real traces —
-# the flag stays set for the whole action so nested model/tool spans stay
-# off the Traces tab too.
-suppress_telemetry: ContextVar[bool] = ContextVar('suppress_telemetry', default=False)
+
+# an action of kind 'util' and a plain 'util' span look the same to a provider,
+# but the Traces tab draws them differently, so the poster learns which is which
+# from span_is_action and providers never see this key.
+ACTION_SPAN_MARKER = '__genkit_action_span__'
+span_is_action: ContextVar[bool] = ContextVar('genkit_span_is_action', default=False)
 
 
 def describe_value(value: object) -> str:
@@ -143,6 +149,7 @@ def start_attributes(
     metadata: SpanMetadata,
     *,
     qualified_path: str,
+    is_action: bool = False,
 ) -> dict[str, Any]:
     """Attrs known when the span begins (identity/shape + input).
 
@@ -151,27 +158,26 @@ def start_attributes(
     in-progress entry until the span ends. State/output stay out — they aren't
     known until the body finishes.
     """
-    attrs: dict[str, Any] = {}
-    if metadata.attributes:
-        attrs.update(metadata.attributes)
+    labels = dict(metadata.attributes or {})
+    init = labels.pop(Attr.INIT, None)
+    custom = {k: labels.pop(k) for k in list(labels) if k.startswith(METADATA_PREFIX)}
+    attrs: dict[str, Any] = dict(labels)
     attrs.update({
         Attr.NAME: metadata.name,
         Attr.PATH: qualified_path,
         Attr.QUALIFIED_PATH: qualified_path,
     })
-    if metadata.action_type:
+    if is_action:
+        attrs[Attr.TYPE] = 'action'
+        if metadata.action_type:
+            attrs[Attr.SUBTYPE] = metadata.action_type
+    elif metadata.action_type:
         attrs[Attr.TYPE] = metadata.action_type
-    if metadata.subtype:
-        attrs[Attr.SUBTYPE] = metadata.subtype
-    if metadata.is_root:
-        attrs[Attr.IS_ROOT] = True
-    if metadata.metadata:
-        for meta_key, meta_value in metadata.metadata.items():
-            attrs[metadata_key(meta_key)] = str(meta_value)
+    attrs.update(custom)
     if metadata.input is not None:
         attrs[Attr.INPUT] = to_json_attr(metadata.input)
-    if metadata.init is not None:
-        attrs[Attr.INIT] = to_json_attr(metadata.init)
+    if init is not None:
+        attrs[Attr.INIT] = init
     return attrs
 
 
@@ -201,9 +207,8 @@ def dispose_instrumentations() -> None:
 def flush_instrumentations() -> None:
     """Wait for in-flight exports on every configured backend."""
     for inst in instrumentations:
-        flush = getattr(inst, 'flush', None)
-        if callable(flush):
-            flush()
+        if isinstance(inst, FlushableInstrumentation):
+            inst.flush()
 
 
 def reset_instrumentation() -> None:
@@ -244,10 +249,6 @@ async def run_in_new_span(
     action_type: str | None = None,
     input: object | None = None,
     attributes: Mapping[str, str] | None = None,
-    subtype: str | None = None,
-    init: object | None = None,
-    metadata: Mapping[str, object] | None = None,
-    is_root: bool | None = None,
 ) -> T:
     """Run ``fn`` inside a new span via the configured provider chain.
 
@@ -258,15 +259,13 @@ async def run_in_new_span(
     if not inspect.iscoroutinefunction(fn):
         name = getattr(fn, '__qualname__', type(fn).__name__)
         raise TypeError(f'run_in_new_span expected an async callback, got {name}')
+    attrs: dict[str, str] = dict(attributes) if attributes else {}
+    is_action = attrs.pop(ACTION_SPAN_MARKER, None) is not None
     meta = SpanMetadata(
         name=name,
         action_type=action_type,
         input=input,
-        attributes=dict(attributes) if attributes else {},
-        subtype=subtype,
-        init=init,
-        metadata=metadata,
-        is_root=is_root,
+        attributes=attrs,
     )
     providers = list(instrumentations)
     if not providers:
@@ -285,7 +284,11 @@ async def run_in_new_span(
 
         return await providers[index].run_in_new_span(meta, nxt)
 
-    return await build(0)
+    token = span_is_action.set(is_action)
+    try:
+        return await build(0)
+    finally:
+        span_is_action.reset(token)
 
 
 async def _run_with_span(
@@ -313,15 +316,12 @@ class NoopSpanContext:
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         return
 
-    def set_output(self, value: object) -> None:
-        return
-
     def set_state(self, state: str) -> None:
         return
 
 
 class CompositeSpanContext:
-    """Fans metadata/output to every provider; ids are first non-empty."""
+    """Fans metadata/state to every provider; ids are first non-empty."""
 
     def __init__(self, spans: list[SpanContext]) -> None:
         self._spans = spans
@@ -338,11 +338,6 @@ class CompositeSpanContext:
         for span in self._spans:
             with contextlib.suppress(Exception):
                 span.set_metadata(metadata)
-
-    def set_output(self, value: object) -> None:
-        for span in self._spans:
-            with contextlib.suppress(Exception):
-                span.set_output(value)
 
     def set_state(self, state: str) -> None:
         for span in self._spans:

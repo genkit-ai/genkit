@@ -14,13 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Developer UI telemetry that POSTs OTLP/JSON. No OpenTelemetry runtime."""
+"""Developer UI trace poster that POSTs OTLP/JSON. No OpenTelemetry runtime.
+
+Logs reach the Developer UI through Genkit's own log exporter, not here.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import secrets
 import threading
@@ -29,6 +31,7 @@ import urllib.request
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from queue import Full, Queue
 from typing import TypeVar
 from urllib.parse import urljoin, urlparse
 
@@ -43,9 +46,11 @@ from ._instrumentation import (
     configure_instrumentation,
     is_instrumented_by,
     parent_path_context,
+    span_is_action,
     start_attributes,
     to_json_attr,
 )
+from ._log_exporter import QUEUE_SIZE, put_poison_pill
 from ._path import build_path
 
 logger = get_logger(__name__)
@@ -54,7 +59,9 @@ T = TypeVar('T')
 
 TRACE_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 EXPORT_TIMEOUT_SECONDS = 300
-SINK_LOGGER_NAME = 'CollectorHttpSink'
+# The Developer UI flushes right before it reads a trace. A hung collector
+# should cost it a couple of seconds, not the full export timeout.
+FLUSH_TIMEOUT_SECONDS = 2.0
 
 
 class GenkitBuiltinInstrumentation:
@@ -72,7 +79,6 @@ class ActiveSpan:
     attributes: dict[str, object] = field(default_factory=dict)
     status_code: int = 0
     status_message: str | None = None
-    output_was_set: bool = False
 
 
 PARENT_SPAN: ContextVar[ActiveSpan | None] = ContextVar('genkit_direct_http_parent', default=None)
@@ -99,10 +105,6 @@ class DirectSpanContext:
             except Exception as e:
                 encoded = f'Error encoding metadata: {e}'
             self._span.attributes[metadata_key(str(key))] = encoded
-
-    def set_output(self, value: object) -> None:
-        self._span.output_was_set = True
-        self._span.attributes[Attr.OUTPUT] = to_json_attr(value)
 
     def set_state(self, state: str) -> None:
         self._span.attributes[Attr.STATE] = state
@@ -170,42 +172,6 @@ def encode_span(span: ActiveSpan, *, resource_attributes: dict[str, object]) -> 
     }
 
 
-def encode_log(
-    *,
-    time_unix_nano: int,
-    severity_number: int,
-    severity_text: str,
-    body: object,
-    attributes: dict[str, object],
-    trace_id: str,
-    span_id: str,
-    resource_attributes: dict[str, object],
-) -> dict[str, object]:
-    record: dict[str, object] = {
-        'timeUnixNano': str(time_unix_nano),
-        'severityNumber': severity_number,
-        'severityText': severity_text,
-        'body': encode_attribute_value(body if isinstance(body, (str, bool, int, float)) else str(body)),
-        'attributes': encode_attributes(attributes),
-    }
-    if trace_id:
-        record['traceId'] = trace_id
-    if span_id:
-        record['spanId'] = span_id
-    return {
-        'resource': {
-            'attributes': encode_attributes(resource_attributes),
-            'droppedAttributesCount': 0,
-        },
-        'scopeLogs': [
-            {
-                'scope': {'name': 'genkit-python', 'version': ''},
-                'logRecords': [record],
-            }
-        ],
-    }
-
-
 def collector_otlp_url(server: str) -> str:
     return urljoin(server.rstrip('/') + '/', 'api/otlp')
 
@@ -224,57 +190,44 @@ def post_json(*, url: str, body: str) -> None:
 
 
 class CollectorHttpSink:
-    """Fire-and-forget POST of OTLP/JSON spans and logs to the collector."""
+    """POSTs OTLP/JSON spans to the collector from one background worker."""
 
     def __init__(self, url: str) -> None:
         self.url = url
         self.closed = False
-        self._inflight: list[threading.Thread] = []
-        self._lock = threading.Lock()
+        self.queue: Queue[str | None] = Queue(maxsize=QUEUE_SIZE)
+        self.worker = threading.Thread(target=self.run_worker, name='genkit-trace-export', daemon=True)
+        self.worker.start()
 
     def export_spans(self, spans: list[ActiveSpan], *, resource_attributes: dict[str, object]) -> None:
         if self.closed or not spans:
             return
         payload = {'resourceSpans': [encode_span(span, resource_attributes=resource_attributes) for span in spans]}
-        self._post(json.dumps(payload), what='spans')
+        try:
+            self.queue.put_nowait(json.dumps(payload))
+        except Full:
+            logger.debug('Developer UI trace export queue is full; dropping spans')
 
-    def export_logs(self, payload: dict[str, object]) -> None:
-        if self.closed:
-            return
-        self._post(json.dumps(payload), what='logs')
+    def run_worker(self) -> None:
+        while True:
+            body = self.queue.get()
+            try:
+                if body is None:
+                    return
+                post_json(url=self.url, body=body)
+            except Exception as e:
+                logger.debug('Failed to export spans: %s', e)
+            finally:
+                self.queue.task_done()
 
     def flush(self) -> None:
-        with self._lock:
-            threads = list(self._inflight)
-        for thread in threads:
-            thread.join(timeout=2)
+        with self.queue.all_tasks_done:
+            self.queue.all_tasks_done.wait_for(lambda: self.queue.unfinished_tasks == 0, timeout=FLUSH_TIMEOUT_SECONDS)
 
     def shutdown(self) -> None:
         self.closed = True
         self.flush()
-
-    def _post(self, body: str, *, what: str) -> None:
-        thread = threading.Thread(target=self._send, args=(body, what), daemon=True)
-        with self._lock:
-            self._inflight.append(thread)
-        thread.start()
-
-    def _send(self, body: str, what: str) -> None:
-        try:
-            post_json(url=self.url, body=body)
-        except Exception as e:
-            logger.debug('Failed to export %s: %s', what, e)
-
-
-class _LogHandler(logging.Handler):
-    def __init__(self, instrumentation: DirectHttpInstrumentation) -> None:
-        super().__init__()
-        self.instrumentation = instrumentation
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.name == SINK_LOGGER_NAME:
-            return
-        self.instrumentation.export_log_record(record)
+        put_poison_pill(queue=self.queue)
 
 
 class DirectHttpInstrumentation:
@@ -285,14 +238,9 @@ class DirectHttpInstrumentation:
         sink: CollectorHttpSink,
         *,
         resource_attributes: dict[str, object] | None = None,
-        capture_logs: bool = True,
     ) -> None:
         self.sink = sink
         self.resource_attributes = resource_attributes or {'service.name': 'genkit-python'}
-        self._handler: logging.Handler | None = None
-        if capture_logs:
-            self._handler = _LogHandler(self)
-            logging.getLogger().addHandler(self._handler)
 
     async def run_in_new_span(
         self,
@@ -300,14 +248,15 @@ class DirectHttpInstrumentation:
         next: SpanNext[T],
     ) -> T:
         parent = PARENT_SPAN.get()
-        qualified_path = build_qualified_path(metadata)
+        is_action = span_is_action.get()
+        qualified_path = build_qualified_path(metadata, is_action=is_action)
         span = ActiveSpan(
             trace_id=parent.trace_id if parent is not None else new_trace_id(),
             span_id=new_span_id(),
             parent_span_id=parent.span_id if parent is not None else None,
             name=metadata.name,
             start_time_unix_nano=now_unix_nano(),
-            attributes=start_attributes(metadata, qualified_path=qualified_path),
+            attributes=start_attributes(metadata, qualified_path=qualified_path, is_action=is_action),
         )
         self.sink.export_spans([span], resource_attributes=self.resource_attributes)
         path_token = parent_path_context.set(qualified_path)
@@ -316,7 +265,7 @@ class DirectHttpInstrumentation:
         try:
             try:
                 result = await next(ctx)
-                if not span.output_was_set and result is not None:
+                if result is not None:
                     span.attributes[Attr.OUTPUT] = to_json_attr(result)
                 if Attr.STATE not in span.attributes:
                     span.attributes[Attr.STATE] = State.SUCCESS
@@ -341,30 +290,7 @@ class DirectHttpInstrumentation:
             PARENT_SPAN.reset(parent_token)
             parent_path_context.reset(path_token)
 
-    def export_log_record(self, record: logging.LogRecord) -> None:
-        span = PARENT_SPAN.get()
-        attributes: dict[str, object] = {'loggerName': record.name}
-        if record.exc_info:
-            attributes['error'] = logging.Formatter().formatException(record.exc_info)
-        self.sink.export_logs({
-            'resourceLogs': [
-                encode_log(
-                    time_unix_nano=int(record.created * 1_000_000_000),
-                    severity_number=severity_number(record.levelno),
-                    severity_text=severity_text(record.levelno),
-                    body=record.getMessage(),
-                    attributes=attributes,
-                    trace_id=span.trace_id if span is not None else '',
-                    span_id=span.span_id if span is not None else '',
-                    resource_attributes=self.resource_attributes,
-                )
-            ]
-        })
-
     def dispose(self) -> None:
-        if self._handler is not None:
-            logging.getLogger().removeHandler(self._handler)
-            self._handler = None
         self.sink.shutdown()
 
     def flush(self) -> None:
@@ -375,37 +301,10 @@ class DirectBuiltin(DirectHttpInstrumentation, GenkitBuiltinInstrumentation):
     """The auto-injected Developer UI poster."""
 
 
-def build_qualified_path(metadata: SpanMetadata) -> str:
-    return build_path(
-        metadata.name,
-        parent_path_context.get(),
-        metadata.action_type or '',
-        metadata.subtype,
-    )
-
-
-def severity_number(levelno: int) -> int:
-    if levelno >= logging.CRITICAL:
-        return 21
-    if levelno >= logging.ERROR:
-        return 17
-    if levelno >= logging.WARNING:
-        return 13
-    if levelno >= logging.INFO:
-        return 9
-    return 5
-
-
-def severity_text(levelno: int) -> str:
-    if levelno >= logging.CRITICAL:
-        return 'FATAL'
-    if levelno >= logging.ERROR:
-        return 'ERROR'
-    if levelno >= logging.WARNING:
-        return 'WARN'
-    if levelno >= logging.INFO:
-        return 'INFO'
-    return 'DEBUG'
+def build_qualified_path(metadata: SpanMetadata, *, is_action: bool = False) -> str:
+    if is_action:
+        return build_path(metadata.name, parent_path_context.get(), 'action', metadata.action_type)
+    return build_path(metadata.name, parent_path_context.get(), metadata.action_type or '')
 
 
 def telemetry_server_url() -> str | None:

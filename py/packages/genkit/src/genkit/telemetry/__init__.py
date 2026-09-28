@@ -22,15 +22,21 @@ for a recording backend.
 """
 
 from genkit._core._telemetry._instrumentation import (
+    DisposableInstrumentation,
+    FlushableInstrumentation,
     Instrumentation,
     SpanContext,
     SpanMetadata,
+    SpanNext,
     configure_instrumentation,
 )
 
 __all__ = [
+    'DisposableInstrumentation',
+    'FlushableInstrumentation',
     'Instrumentation',
     'SpanContext',
     'SpanMetadata',
+    'SpanNext',
     'configure_instrumentation',
 ]

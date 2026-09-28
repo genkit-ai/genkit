@@ -28,6 +28,7 @@ from genkit._core._action import Action, ActionKind
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
 from genkit._core._typing import (
     ActionMetadata,
@@ -162,7 +163,7 @@ def define_evaluator(
                         body,
                         action_type='evaluator',
                         input=datapoint,
-                        metadata={'evaluator:evalRunId': req.eval_run_id},
+                        attributes={metadata_key('evaluator:evalRunId'): str(req.eval_run_id)},
                     )
                 )
             except Exception:  # noqa: S112 - intentionally continue processing other datapoints

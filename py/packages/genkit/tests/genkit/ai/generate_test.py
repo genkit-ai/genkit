@@ -6365,6 +6365,31 @@ async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_generate_marks_span_error(exporter) -> None:
+    """ai.generate() returning a failed response marks its generate span genkit:state=error."""
+
+    class Recipe(BaseModel):
+        title: str
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='give me a recipe', output_schema=Recipe)
+    assert response.error is not None
+    generate_spans = [span for span in exporter.get_finished_spans() if span.name == 'generate']
+    assert generate_spans
+    attrs = generate_spans[-1].attributes or {}
+    assert attrs.get('genkit:type') == 'util'
+    assert attrs.get('genkit:state') == 'error'
+
+
+@pytest.mark.asyncio
 async def test_generate_middleware_dropping_failure_still_keeps_closed_rounds() -> None:
     """A hook that discards an inner failure cannot discard its completed history."""
     ai = Genkit(model='programmableModel')

@@ -16,6 +16,7 @@ import os
 import threading
 import time
 from queue import Empty, Full, Queue
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -256,7 +257,7 @@ def _register_atexit() -> None:
     _atexit_registered = True
 
 
-def put_poison_pill(*, queue: Queue[dict[str, object] | None]) -> None:
+def put_poison_pill(*, queue: Queue[Any]) -> None:
     """Make sure the worker sees the stop token even when the queue is full."""
     try:
         queue.put_nowait(None)

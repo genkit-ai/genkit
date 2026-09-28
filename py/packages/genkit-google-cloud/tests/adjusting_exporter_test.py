@@ -31,12 +31,11 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from genkit_google_cloud.telemetry._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.types import Attributes
-
-from genkit._core._telemetry._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 
 
 class MockSpanExporter(SpanExporter):
