@@ -43,7 +43,8 @@ const SECRET = 'test-reflection-secret';
  * plain subprocess rather than a container, so this stays portable). Covers the
  * protocol details the podman runner depends on: GENKIT_REFLECTION_PORT being
  * honored, the secret header, chunk framing, trace headers, and error
- * envelopes. No GENKIT_ENV=dev: the pinned port alone starts the server.
+ * envelopes. No GENKIT_ENV=dev: GENKIT_REFLECTION_ENABLED=true turns the
+ * server on, the same way the podman runner starts containers.
  */
 describe('ReflectionClientV1 against a real runtime', () => {
   let child: ChildProcess;
@@ -59,6 +60,7 @@ describe('ReflectionClientV1 against a real runtime', () => {
       {
         env: {
           ...env,
+          GENKIT_REFLECTION_ENABLED: 'true',
           // The runner relies on this being honored exactly.
           GENKIT_REFLECTION_PORT: String(port),
           GENKIT_REFLECTION_SECRET_TOKEN: SECRET,

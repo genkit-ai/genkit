@@ -16,8 +16,9 @@
 
 // A minimal Genkit runtime serving the V1 reflection API. The V1 client test
 // runs it as a subprocess; the podman-runner test runs it in a container.
-// GENKIT_REFLECTION_PORT (and _HOST in a container) start the server on that
-// exact address; GENKIT_REFLECTION_SECRET_TOKEN locks it.
+// GENKIT_REFLECTION_ENABLED=true starts the server outside dev mode,
+// GENKIT_REFLECTION_PORT (and _HOST in a container) pin its address, and
+// GENKIT_REFLECTION_SECRET_TOKEN locks it.
 
 import { genkit, z } from 'genkit';
 
