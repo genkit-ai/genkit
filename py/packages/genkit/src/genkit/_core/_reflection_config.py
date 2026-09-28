@@ -18,8 +18,7 @@
 
 The reflection API used to be reachable only under ``GENKIT_ENV=dev``, which
 also turned on a pile of unrelated development behavior. These settings give it
-its own switches so it can run in production-ish settings (a container that
-publishes the reflection port) without the rest.
+its own switches, so it can run without the rest of the dev behavior.
 """
 
 import hmac
