@@ -170,6 +170,34 @@ describe('execRunner (integration)', () => {
     }
   });
 
+  it('enables reflection in the box even when the caller disabled its own', async () => {
+    // The caller's opt-out applies to its own Dev UI link, not to the box's
+    // link to our host. Outside dev mode the box would otherwise stay dark.
+    const saved = {
+      enabled: process.env.GENKIT_REFLECTION_ENABLED,
+      env: process.env.GENKIT_ENV,
+    };
+    process.env.GENKIT_REFLECTION_ENABLED = 'false';
+    delete process.env.GENKIT_ENV;
+    try {
+      const runner = track(execRunner({ cmd: `${TSX} ${boxedEntry}` }));
+      const conn = await runner.acquire('singleton');
+      const res = await conn.runAction<{ out: string }>({
+        key: '/tool/shout',
+        input: { text: 'ok' },
+      });
+      assert.strictEqual(res.result?.out, 'OK');
+    } finally {
+      for (const [key, value] of [
+        ['GENKIT_REFLECTION_ENABLED', saved.enabled],
+        ['GENKIT_ENV', saved.env],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('nests self-mode boxes (agent-box -> tool-box)', async () => {
     // Run the nested entry directly as the top manager M. It spawns C1 (box A)
     // which spawns C2 (box B) and prints the result.

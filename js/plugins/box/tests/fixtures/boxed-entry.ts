@@ -15,8 +15,9 @@
  */
 
 // A minimal real Genkit box. Spawned by the exec-runner integration test with
-// GENKIT_REFLECTION_V2_SERVER and the host's secret set, so its runtime dials
-// back into the test's reflection host. It just defines a couple of actions.
+// reflection enabled, GENKIT_REFLECTION_V2_SERVER and the host's secret set,
+// so its runtime dials back into the test's reflection host. It just defines
+// a couple of actions.
 
 import { z } from 'genkit';
 import { genkit, InMemorySessionStore } from 'genkit/beta';
