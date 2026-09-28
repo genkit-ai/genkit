@@ -79,7 +79,7 @@ class GenAiInstrumentation(Instrumentation):
     def __init__(
         self,
         *,
-        content_capturing_mode: ContentCapturingMode = 'NO_CONTENT',
+        content_capturing_mode: ContentCapturingMode | None = None,
         capture_action_io: bool = False,
         emit_tool_spans: bool = False,
         emit_metrics: bool = True,
@@ -88,7 +88,9 @@ class GenAiInstrumentation(Instrumentation):
         meter: Meter | None = None,
         otel_logger: object | None = None,
     ) -> None:
-        if content_capturing_mode == 'NO_CONTENT':
+        # an explicit NO_CONTENT is the app's PII opt-out, so only an
+        # omitted mode falls back to the env var.
+        if content_capturing_mode is None:
             self.content_capturing_mode = _content_capturing_mode_from_env()
         else:
             self.content_capturing_mode = content_capturing_mode

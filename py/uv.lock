@@ -1961,7 +1961,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "opentelemetry-api", specifier = ">=1.29.0" },
+    { name = "opentelemetry-api", specifier = ">=1.38.0" },
 ]
 
 [[package]]

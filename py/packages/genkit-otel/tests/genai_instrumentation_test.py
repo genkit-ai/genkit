@@ -16,6 +16,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from typing import get_args
 
 import pytest
 from genkit_otel import GenAiInstrumentation
@@ -33,13 +34,13 @@ from genkit.model import Candidate, Message, ModelRequest, ModelResponse, ModelU
 from genkit.telemetry import SpanMetadata, SpanNext
 
 
-def test_content_capturing_mode_is_not_on_the_package_door() -> None:
-    """from genkit_otel import is GenAiInstrumentation; ContentCapturingMode is ImportError."""
+def test_content_capturing_mode_is_on_the_package_door() -> None:
+    """from genkit_otel import gives GenAiInstrumentation and the ContentCapturingMode type."""
     import genkit_otel
+    from genkit_otel import ContentCapturingMode
 
-    assert genkit_otel.__all__ == ['GenAiInstrumentation']
-    with pytest.raises(ImportError):
-        from genkit_otel import ContentCapturingMode  # noqa: F401  # ty: ignore[unresolved-import]
+    assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation']
+    assert get_args(ContentCapturingMode) == ('NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT')
 
 
 def _model_request(
@@ -458,6 +459,22 @@ async def test_explicit_mode_overrides_env(harness, monkeypatch: pytest.MonkeyPa
     span = harness.span_named('chat gemini-flash-latest')
     assert span is not None
     assert 'secret' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
+    assert GEN_AI_OPERATION_DETAILS_EVENT not in _event_names(harness)
+
+
+@pytest.mark.asyncio
+async def test_explicit_no_content_overrides_env(harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'SPAN_AND_EVENT')
+    instr = harness.instrumentation(content_capturing_mode='NO_CONTENT')
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('secret')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
     assert GEN_AI_OPERATION_DETAILS_EVENT not in _event_names(harness)
 
 

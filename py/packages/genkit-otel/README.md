@@ -82,7 +82,16 @@ export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 GenAiInstrumentation()
 ```
 
-A token on the constructor wins over the env var. Garbage in the env var warns and stays `NO_CONTENT`.
+A token on the constructor wins over the env var, including an explicit
+`NO_CONTENT`. Garbage in the env var warns and stays `NO_CONTENT`.
+
+To annotate a config field or variable, import the type:
+
+```python
+from genkit_otel import ContentCapturingMode
+
+mode: ContentCapturingMode = 'SPAN_ONLY'
+```
 
 > `EVENT_ONLY` emits content on the OpenTelemetry logs signal (a
 > `gen_ai.client.inference.operation.details` log record), not on the span.
@@ -95,7 +104,7 @@ A token on the constructor wins over the env var. Garbage in the env var warns a
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `content_capturing_mode` | `NO_CONTENT` | Where spec-shaped `gen_ai.*` message content is recorded. |
+| `content_capturing_mode` | env var, else `NO_CONTENT` | Where spec-shaped `gen_ai.*` message content is recorded. |
 | `capture_action_io` | `False` | Capture raw Genkit input/output as `genkit.input`/`genkit.output` on every span (debugging / Dev UI). |
 | `emit_metrics` | `True` | Emit token-usage and operation-duration metrics. |
 | `emit_tool_spans` | `False` | Emit `execute_tool` spans for tool actions. |

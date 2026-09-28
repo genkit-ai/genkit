@@ -41,7 +41,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit>=0.12.0",
-  "opentelemetry-api>=1.29.0",
+  "opentelemetry-api>=1.38.0",
 ]
 description = "OpenTelemetry GenAI semantic-conventions instrumentation for Genkit (traces, metrics, and message-content capture)."
 keywords = [
