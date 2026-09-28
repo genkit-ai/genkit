@@ -20,7 +20,10 @@ import { randomUUID } from 'node:crypto';
 import { BOX_SELF_ID_ENV } from '../env.js';
 import { SubprocessProvider } from '../providers/subprocess.js';
 import type { SandboxProvider, SpawnHandle } from '../providers/types.js';
-import { REFLECTION_SECRET_ENV } from '../reflection-auth.js';
+import {
+  REFLECTION_ENABLED_ENV,
+  REFLECTION_SECRET_ENV,
+} from '../reflection-auth.js';
 import { ReflectionHost } from '../reflection-host.js';
 import type {
   BoxConnection,
@@ -202,12 +205,14 @@ export class ExecRunner implements BoxRunner {
     // it runs in the same mode as its caller. Reflection settings are the
     // exception and must be overridden after the spread: under `genkit start`
     // we inherit the CLI's secret and v2 URL, which belong to the CLI, not to
-    // our host. The v2 URL alone starts the box's reflection client, so no
-    // GENKIT_ENV=dev is needed.
+    // our host. Reflection is forced on for the same reason: a caller running
+    // without dev mode, or with its own reflection turned off, still needs
+    // working boxes. No GENKIT_ENV=dev is needed.
     const child = spawn(prepared.cmd, prepared.args, {
       env: {
         ...process.env,
         ...prepared.env,
+        [REFLECTION_ENABLED_ENV]: 'true',
         GENKIT_REFLECTION_V2_SERVER: prepared.reflectUrl,
         [REFLECTION_SECRET_ENV]: this.host.secret ?? '',
       },
