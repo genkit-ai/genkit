@@ -63,7 +63,8 @@ func advertisedReflectionAddr(addr string) string {
 type reflectionMode int
 
 const (
-	// reflectionDisabled is an explicit kill switch, honoured everywhere.
+	// reflectionDisabled is an explicit kill switch
+	// (GENKIT_REFLECTION_ENABLED=false), honoured everywhere.
 	reflectionDisabled reflectionMode = iota
 	// reflectionOff means nothing asked for a server.
 	reflectionOff
@@ -89,45 +90,50 @@ type reflectionConfig struct {
 
 // resolveReflectionConfig decides how the reflection API should run.
 //
-// First match wins:
-//  1. GENKIT_REFLECTION_DISABLED == "true" turns everything off.
-//  2. GENKIT_REFLECTION_V2_SERVER dials out instead of listening.
-//  3. GENKIT_REFLECTION_PORT or GENKIT_REFLECTION_HOST starts the v1 server.
-//  4. GENKIT_ENV == "dev" starts the v1 server with defaults.
-//  5. Otherwise off.
+// Whether it runs:
+//   - GENKIT_REFLECTION_ENABLED=false turns it off, even under dev.
+//   - GENKIT_REFLECTION_ENABLED=true turns it on in any environment.
+//   - Unset, it runs only under GENKIT_ENV=dev, as it always has.
 //
-// Setting a host or port is itself the on-switch, so there is no way to
-// configure a server and then wonder why it never started. The environment
-// beats optPort on purpose: whoever set the variable is typically the
-// supervisor that already published that port.
+// How it runs, once on: GENKIT_REFLECTION_V2_SERVER dials out; otherwise the
+// v1 server listens on GENKIT_REFLECTION_HOST/GENKIT_REFLECTION_PORT. Those
+// are settings, not on-switches: a stray value in a production env does not
+// expose the API, and is not even parsed while reflection is off.
 //
 // A chosen port, from the environment or optPort, is bound exactly; only an
-// unchosen port probes upward from 3100. optPort 0 means unset and
-// [ReflectionPortAuto] (-1) lets the OS pick, the same as
-// GENKIT_REFLECTION_PORT=0. optPort does not turn the server on by itself,
-// and is validated even when unused so a bad value fails early.
+// unchosen port probes upward from 3100. The environment beats optPort on
+// purpose: whoever set the variable is typically the supervisor that already
+// published that port. optPort 0 means unset and [ReflectionPortAuto] (-1)
+// lets the OS pick, the same as GENKIT_REFLECTION_PORT=0. optPort is
+// validated even when unused so a bad value fails early.
 //
 // getenv is injected so this is testable without touching the process
 // environment.
 func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectionConfig, error) {
-	if getenv("GENKIT_REFLECTION_DISABLED") == "true" {
-		return reflectionConfig{mode: reflectionDisabled}, nil
-	}
-	secret := getenv("GENKIT_REFLECTION_SECRET_TOKEN")
-	if v2URL := getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
-		return reflectionConfig{mode: reflectionV2, v2URL: v2URL, secret: secret}, nil
-	}
 	if optPort != ReflectionPortAuto && (optPort < 0 || optPort > 65535) {
 		return reflectionConfig{}, fmt.Errorf(
 			"reflection port must be -1 (OS-assigned) or an integer between 1 and 65535, got %d", optPort)
 	}
+	switch enabled := getenv("GENKIT_REFLECTION_ENABLED"); enabled {
+	case "false":
+		return reflectionConfig{mode: reflectionDisabled}, nil
+	case "true":
+	case "":
+		if getenv("GENKIT_ENV") != "dev" {
+			return reflectionConfig{mode: reflectionOff}, nil
+		}
+	default:
+		return reflectionConfig{}, fmt.Errorf(
+			"GENKIT_REFLECTION_ENABLED must be \"true\" or \"false\", got %q", enabled)
+	}
+
+	secret := getenv("GENKIT_REFLECTION_SECRET_TOKEN")
+	if v2URL := getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
+		return reflectionConfig{mode: reflectionV2, v2URL: v2URL, secret: secret}, nil
+	}
 
 	envPort := getenv("GENKIT_REFLECTION_PORT")
 	host := getenv("GENKIT_REFLECTION_HOST")
-	if envPort == "" && host == "" && getenv("GENKIT_ENV") != "dev" {
-		return reflectionConfig{mode: reflectionOff}, nil
-	}
-
 	cfg := reflectionConfig{
 		mode:   reflectionV1,
 		host:   host,
