@@ -27,14 +27,11 @@ from genkit._core._model import (
     ModelConfig,
     ModelRef,
     ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
     ModelUsage,
 )
 from genkit._core._typing import (
     Constrained,
     Error as OperationError,
-    FinishReason,
     ModelInfo,
     Operation,
     Stage,
@@ -45,15 +42,12 @@ from genkit._core._typing import (
 )
 
 __all__ = [
-    # Request/Response types
+    # Request types
     'BackgroundAction',
     'ModelRequest',
-    'ModelResponse',
-    'ModelResponseChunk',
     # Usage and metadata
     'ModelUsage',
     'Candidate',
-    'FinishReason',
     # Long-running operations
     'Operation',
     'OperationError',

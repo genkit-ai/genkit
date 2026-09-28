@@ -47,6 +47,8 @@
 
 ::: genkit.ExecutablePrompt
 
+::: genkit.PromptGenerateOptions
+
 ::: genkit.GenkitError
 
 ::: genkit.PublicError
@@ -61,15 +63,9 @@
 
 ::: genkit.model.ModelRequest
 
-::: genkit.model.ModelResponse
-
-::: genkit.model.ModelResponseChunk
-
 ::: genkit.model.ModelUsage
 
 ::: genkit.model.Candidate
-
-::: genkit.model.FinishReason
 
 ::: genkit.model.Operation
 

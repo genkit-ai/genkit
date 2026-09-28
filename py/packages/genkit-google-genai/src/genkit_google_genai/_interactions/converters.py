@@ -60,10 +60,8 @@ from google.genai.interactions import (
 )
 from pydantic import BaseModel
 
-from genkit import GenkitError, Media, Message, Part
+from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Part
 from genkit.model import (
-    FinishReason,
-    ModelResponse,
     ModelUsage,
     Operation,
     OperationError,

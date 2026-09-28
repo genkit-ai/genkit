@@ -38,6 +38,7 @@ from genkit._ai._aio import Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
+    PromptGenerateOptions,
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
@@ -51,15 +52,11 @@ from genkit._ai._tools import (
 from genkit._core._action import Action as Flow, ActionRunContext
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._error import GenkitError, Interrupt, PublicError
-from genkit._core._model import Document, Message, Part
+from genkit._core._model import Document, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._core._typing import (
+    FinishReason,
     Media,
     Role,
-)
-from genkit.model import (
-    FinishReason,
-    ModelResponse,
-    ModelResponseChunk,
 )
 
 __all__ = [
@@ -88,6 +85,7 @@ __all__ = [
     'Flow',
     'ActionRunContext',
     'ExecutablePrompt',
+    'PromptGenerateOptions',
     'GenkitError',
     'PublicError',
     # HTTP request context for flow handlers

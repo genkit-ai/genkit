@@ -27,8 +27,8 @@ from typing import Any
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 
-from genkit import ActionRunContext, Message, ModelResponse, Part, Role
-from genkit.model import FinishReason, ModelInfo, ModelRequest, Supports
+from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import ModelInfo, ModelRequest, Supports
 from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
 
 # GPT Image 1 has a different configuration surface from DALL-E models.

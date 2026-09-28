@@ -46,6 +46,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.ExecutablePrompt
 
+::: genkit.PromptGenerateOptions
+
 ::: genkit.GenkitError
 
 ::: genkit.PublicError
@@ -60,15 +62,9 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.model.ModelRequest
 
-::: genkit.model.ModelResponse
-
-::: genkit.model.ModelResponseChunk
-
 ::: genkit.model.ModelUsage
 
 ::: genkit.model.Candidate
-
-::: genkit.model.FinishReason
 
 ::: genkit.model.Operation
 
