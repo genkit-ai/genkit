@@ -141,7 +141,8 @@ def test_busy_pinned_port_fails_the_constructor() -> None:
         taken.bind(('127.0.0.1', 0))
         taken.listen()
         port = taken.getsockname()[1]
-        with mock.patch.dict(os.environ, {'GENKIT_REFLECTION_PORT': str(port)}, clear=True):
+        env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(port)}
+        with mock.patch.dict(os.environ, env, clear=True):
             with pytest.raises(OSError):
                 Genkit()
 
@@ -150,7 +151,8 @@ def test_serves_on_ipv6_loopback() -> None:
     """GENKIT_REFLECTION_HOST=::1 binds an IPv6 socket instead of failing to resolve."""
     if not socket.has_ipv6:
         pytest.skip('IPv6 not available')
-    with mock.patch.dict(os.environ, {'GENKIT_REFLECTION_HOST': '::1'}, clear=True):
+    env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_HOST': '::1'}
+    with mock.patch.dict(os.environ, env, clear=True):
         ai = Genkit()
         resp = _wait_and_get(ai, '/api/__health')
     assert resp.status_code == 200
@@ -204,6 +206,7 @@ def test_run_main_returns_when_the_cli_rejects_the_runtime() -> None:
     try:
         assert started.wait(timeout=5)
         env = {
+            'GENKIT_REFLECTION_ENABLED': 'true',
             'GENKIT_REFLECTION_V2_SERVER': f'ws://127.0.0.1:{port_box[0]}',
             'GENKIT_REFLECTION_SECRET_TOKEN': 'wrong',
         }
@@ -236,4 +239,15 @@ def test_no_server_in_prod_mode() -> None:
     with mock.patch.dict(os.environ, {}, clear=True):
         ai = Genkit()
 
+    assert not ai._reflection_ready.is_set()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_no_server_from_host_or_port_alone() -> None:
+    """Outside dev, host/port are settings, not on-switches (same as before this change)."""
+    port = _find_free_port()
+    env = {'GENKIT_REFLECTION_HOST': '127.0.0.1', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env, clear=True):
+        ai = Genkit()
+
+    assert not ai._reflection_config.enabled  # pyright: ignore[reportPrivateUsage]
     assert not ai._reflection_ready.is_set()  # pyright: ignore[reportPrivateUsage]

@@ -23,6 +23,7 @@ import inspect
 import logging
 import signal
 import socket
+import sys
 import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
@@ -219,9 +220,9 @@ class Genkit:
             configure_logging()
             self.registry = Registry()
             self._reflection_server_spec = reflection_server_spec
-            # The reflection API is no longer tied to GENKIT_ENV=dev: it also runs
-            # when GENKIT_REFLECTION_HOST/PORT or a v2 server URL is set. Resolving
-            # here keeps an invalid port a constructor-time error.
+            # The reflection API runs under GENKIT_ENV=dev, or in any environment
+            # with GENKIT_REFLECTION_ENABLED=true. Resolving here keeps an invalid
+            # setting a constructor-time error.
             self._reflection_config = resolve_reflection_config(
                 port=reflection_server_spec.port if reflection_server_spec else None,
                 host=reflection_server_spec.host if reflection_server_spec else None,
@@ -941,7 +942,14 @@ class Genkit:
             infos = socket.getaddrinfo(host, candidate, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
             family, socktype, proto, _, sockaddr = next((info for info in infos if info[0] == socket.AF_INET), infos[0])
             sock = socket.socket(family, socktype, proto)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # POSIX: SO_REUSEADDR only allows rebinding a port in TIME_WAIT
+            # (fast restarts). Windows: it allows binding a port that is
+            # already in use, which would break probing and pinned-port
+            # failure, so claim the port exclusively instead.
+            if sys.platform == 'win32':
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 sock.bind(sockaddr)
             except OSError as e:

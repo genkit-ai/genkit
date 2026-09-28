@@ -38,9 +38,9 @@ def test_off_when_nothing_is_set() -> None:
     assert not resolve_reflection_config({}).enabled
 
 
-def test_disabled_beats_everything() -> None:
+def test_enabled_false_beats_everything_even_dev() -> None:
     config = resolve_reflection_config({
-        'GENKIT_REFLECTION_DISABLED': 'true',
+        'GENKIT_REFLECTION_ENABLED': 'false',
         'GENKIT_ENV': 'dev',
         'GENKIT_REFLECTION_PORT': '3100',
         'GENKIT_REFLECTION_V2_SERVER': 'ws://127.0.0.1:3200',
@@ -49,14 +49,46 @@ def test_disabled_beats_everything() -> None:
     assert not config.enabled
 
 
-@pytest.mark.parametrize('value', ['1', 'yes', 'on', 'TRUE'])
-def test_only_exact_true_disables(value: str) -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_DISABLED': value, 'GENKIT_ENV': 'dev'})
-    assert config.mode == 'v1'
+def test_enabled_true_turns_it_on_outside_dev() -> None:
+    config = resolve_reflection_config({'GENKIT_REFLECTION_ENABLED': 'true'})
+    assert (config.mode, config.host, config.port, config.pinned) == (
+        'v1',
+        DEFAULT_REFLECTION_HOST,
+        DEFAULT_REFLECTION_PORT,
+        False,
+    )
+
+
+def test_empty_enabled_is_unset() -> None:
+    assert resolve_reflection_config({'GENKIT_REFLECTION_ENABLED': ''}).mode == 'off'
+    assert resolve_reflection_config({'GENKIT_REFLECTION_ENABLED': '', 'GENKIT_ENV': 'dev'}).mode == 'v1'
+
+
+@pytest.mark.parametrize('value', ['1', '0', 'yes', 'on', 'TRUE', 'False'])
+def test_invalid_enabled_raises(value: str) -> None:
+    with pytest.raises(ValueError, match='GENKIT_REFLECTION_ENABLED'):
+        resolve_reflection_config({'GENKIT_REFLECTION_ENABLED': value})
+
+
+@pytest.mark.parametrize(
+    'env',
+    [
+        {'GENKIT_REFLECTION_HOST': ALL_INTERFACES},
+        {'GENKIT_REFLECTION_PORT': '4200'},
+        {'GENKIT_REFLECTION_V2_SERVER': 'ws://127.0.0.1:3200'},
+    ],
+)
+def test_settings_alone_do_not_turn_it_on(env: dict[str, str]) -> None:
+    assert resolve_reflection_config(env).mode == 'off'
+
+
+def test_port_is_not_parsed_while_off() -> None:
+    assert resolve_reflection_config({'GENKIT_REFLECTION_PORT': 'abc'}).mode == 'off'
 
 
 def test_v2_beats_a_configured_v1_port() -> None:
     config = resolve_reflection_config({
+        'GENKIT_REFLECTION_ENABLED': 'true',
         'GENKIT_REFLECTION_V2_SERVER': 'ws://127.0.0.1:3200',
         'GENKIT_REFLECTION_PORT': '3100',
         'GENKIT_REFLECTION_SECRET_TOKEN': 's3cret',
@@ -66,8 +98,8 @@ def test_v2_beats_a_configured_v1_port() -> None:
     assert config.secret == 's3cret'
 
 
-def test_host_alone_turns_it_on() -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_HOST': ALL_INTERFACES})
+def test_uses_the_configured_host() -> None:
+    config = resolve_reflection_config({'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_HOST': ALL_INTERFACES})
     assert (config.mode, config.host, config.port, config.pinned) == (
         'v1',
         ALL_INTERFACES,
@@ -76,8 +108,8 @@ def test_host_alone_turns_it_on() -> None:
     )
 
 
-def test_port_alone_turns_it_on_and_pins() -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_PORT': '4200'})
+def test_pins_the_configured_port() -> None:
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '4200'})
     assert (config.mode, config.host, config.port, config.pinned) == ('v1', DEFAULT_REFLECTION_HOST, 4200, True)
 
 
@@ -92,7 +124,7 @@ def test_dev_probes_from_3100() -> None:
 
 
 def test_env_port_beats_the_programmatic_one() -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_PORT': '4200'}, port=9999)
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '4200'}, port=9999)
     assert (config.port, config.pinned) == (4200, True)
 
 
@@ -109,7 +141,7 @@ def test_unset_programmatic_port_probes_from_3100(port: int | None) -> None:
 
 def test_programmatic_auto_matches_env_zero() -> None:
     auto = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=REFLECTION_PORT_AUTO)
-    env_zero = resolve_reflection_config({'GENKIT_REFLECTION_PORT': '0'})
+    env_zero = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '0'})
     assert (auto.port, auto.pinned) == (env_zero.port, env_zero.pinned) == (0, True)
 
 
@@ -144,7 +176,10 @@ def test_programmatic_host_is_used_when_env_host_is_unset() -> None:
 
 
 def test_env_host_beats_the_programmatic_one() -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_HOST': '127.0.0.2'}, host=ALL_INTERFACES)
+    config = resolve_reflection_config(
+        {'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_HOST': '127.0.0.2'},
+        host=ALL_INTERFACES,
+    )
     assert config.host == '127.0.0.2'
 
 
@@ -152,30 +187,41 @@ def test_programmatic_host_does_not_turn_it_on() -> None:
     assert resolve_reflection_config({}, host=ALL_INTERFACES).mode == 'off'
 
 
-def test_reflection_enabled_does_not_raise_on_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    'env',
+    [
+        {'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': 'abc'},
+        {'GENKIT_REFLECTION_ENABLED': 'yes'},
+    ],
+)
+def test_reflection_enabled_does_not_raise_on_invalid_settings(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+) -> None:
     # Telemetry setup calls this at import time; Genkit() raises the real error.
-    monkeypatch.setenv('GENKIT_REFLECTION_PORT', 'abc')
+    monkeypatch.delenv('GENKIT_ENV', raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     assert reflection_enabled() is False
 
 
 def test_reflection_enabled_follows_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('GENKIT_ENV', raising=False)
-    monkeypatch.delenv('GENKIT_REFLECTION_DISABLED', raising=False)
     monkeypatch.delenv('GENKIT_REFLECTION_V2_SERVER', raising=False)
     monkeypatch.delenv('GENKIT_REFLECTION_HOST', raising=False)
-    monkeypatch.setenv('GENKIT_REFLECTION_PORT', '4200')
+    monkeypatch.delenv('GENKIT_REFLECTION_PORT', raising=False)
+    monkeypatch.setenv('GENKIT_REFLECTION_ENABLED', 'true')
     assert reflection_enabled() is True
 
 
 def test_port_zero_is_valid_and_pinned() -> None:
-    config = resolve_reflection_config({'GENKIT_REFLECTION_PORT': '0'})
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '0'})
     assert (config.port, config.pinned) == (0, True)
 
 
 @pytest.mark.parametrize('value', ['abc', '-1', '70000', '3100.5', ' 3100', '+7', '0x10', '1e3', '1_000', '\u0663'])
 def test_invalid_port_raises_rather_than_falling_back(value: str) -> None:
     with pytest.raises(ValueError, match='GENKIT_REFLECTION_PORT'):
-        resolve_reflection_config({'GENKIT_REFLECTION_PORT': value})
+        resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': value})
 
 
 @pytest.mark.parametrize('host', ['127.0.0.1', '127.1.2.3', 'localhost', '::1', '[::1]'])
