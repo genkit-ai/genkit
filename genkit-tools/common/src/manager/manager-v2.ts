@@ -44,9 +44,11 @@ import { DevToolsInfo } from '../utils/utils';
 import { BaseRuntimeManager, RuntimeManagerOptions } from './manager';
 import { ProcessManager } from './process-manager';
 import {
+  DEFAULT_REFLECTION_V2_HOST,
   REFLECTION_AUTH_ERROR_CODE,
   REFLECTION_SECRET_ENV,
-  REFLECTION_V2_HOST,
+  isLoopbackHost,
+  reflectionV2Url,
   secretsEqual,
 } from './reflection-auth';
 import {
@@ -198,22 +200,32 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       options.disableRealtimeTelemetry,
       options.reflectionSecret
     );
-    await manager.startWebSocketServer(options.reflectionV2Port);
+    await manager.startWebSocketServer(
+      options.reflectionV2Port,
+      options.reflectionV2Host
+    );
     return manager;
   }
 
   /**
    * Starts a WebSocket server.
    */
-  private async startWebSocketServer(port?: number): Promise<{ port: number }> {
+  private async startWebSocketServer(
+    port?: number,
+    host: string = DEFAULT_REFLECTION_V2_HOST
+  ): Promise<{ port: number }> {
     if (!port) {
-      port = await getPort({
-        host: REFLECTION_V2_HOST,
-        port: makeRange(3200, 3400),
-      });
+      port = await getPort({ host, port: makeRange(3200, 3400) });
     }
-    // Loopback only: any socket that registers can be sent runAction.
-    this.wss = new WebSocketServer({ host: REFLECTION_V2_HOST, port });
+    if (!this.reflectionSecret && !isLoopbackHost(host)) {
+      logger.warn(
+        `Reflection server is listening on ${host} without authentication. ` +
+          'Anyone who can reach this port and register can be sent runAction. ' +
+          'Consider --experimental-auth.'
+      );
+    }
+    // Loopback by default: any socket that registers can be sent runAction.
+    this.wss = new WebSocketServer({ host, port });
     // Resolve only once the socket is bound, so callers that hand the URL to a
     // runtime cannot race the listen.
     const wss = this.wss;
@@ -231,9 +243,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     });
 
     this._port = port;
-    logger.info(
-      `Starting reflection server: ws://${REFLECTION_V2_HOST}:${port}`
-    );
+    logger.info(`Starting reflection server: ${reflectionV2Url(host, port)}`);
 
     this.wss.on('connection', (ws) => {
       ws.on('error', (err) => logger.error(`WebSocket error: ${err}`));
@@ -378,7 +388,10 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       name: params.name,
       genkitVersion: params.genkitVersion,
       reflectionApiSpecVersion: params.reflectionApiSpecVersion,
-      reflectionServerUrl: `ws://${REFLECTION_V2_HOST}:${this.port}`, // Virtual URL for compatibility
+      reflectionServerUrl: reflectionV2Url(
+        this.boundHost ?? DEFAULT_REFLECTION_V2_HOST,
+        this.port!
+      ), // Virtual URL for compatibility
       timestamp: new Date().toISOString(),
       projectName: path.basename(this.projectRoot), // Or derive from other means if needed
     };

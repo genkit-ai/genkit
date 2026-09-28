@@ -559,9 +559,23 @@ describe('RuntimeManagerV2 reflection auth', () => {
     await manager.stop();
   });
 
-  it('binds loopback only', async () => {
+  it('binds loopback by default', async () => {
     manager = await RuntimeManagerV2.create({ projectRoot: './' });
     expect(manager.boundHost).toBe('127.0.0.1');
+  });
+
+  it('binds the configured reflectionV2Host', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionV2Host: '0.0.0.0',
+      reflectionSecret: SECRET,
+    });
+    expect(manager.boundHost).toBe('0.0.0.0');
+    // Reachable on loopback, and the runtime is advertised there.
+    await register(manager.port!, { id: 'rt-any', pid: 1, secret: SECRET });
+    expect(manager.listRuntimes()[0].reflectionServerUrl).toBe(
+      `ws://127.0.0.1:${manager.port}`
+    );
   });
 
   it('accepts a register carrying the right secret', async () => {

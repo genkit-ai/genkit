@@ -29,10 +29,37 @@ export const REFLECTION_SECRET_ENV = 'GENKIT_REFLECTION_SECRET_TOKEN';
 export const REFLECTION_AUTH_ERROR_CODE = -32001;
 
 /**
- * Interface the v2 WebSocket server binds. Loopback only: a registered socket
- * can be sent runAction, so it must not be reachable from other hosts.
+ * Default interface the v2 WebSocket server binds. Loopback: a registered
+ * socket can be sent runAction, so it is not reachable from other hosts unless
+ * `--reflection-v2-host` says otherwise.
  */
-export const REFLECTION_V2_HOST = '127.0.0.1';
+export const DEFAULT_REFLECTION_V2_HOST = '127.0.0.1';
+
+/** Whether a bind host is loopback, and so unreachable from other machines. */
+export function isLoopbackHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
+/**
+ * URL a spawned runtime dials for a v2 server bound to `host`. A wildcard bind
+ * is reachable on loopback, and `0.0.0.0` is not a valid destination
+ * everywhere, so it is advertised as `127.0.0.1`. Runtimes elsewhere (another
+ * container, a device) rewrite the host themselves, e.g. from the env file.
+ */
+export function reflectionV2Url(host: string, port: number): string {
+  let advertised = host;
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+    advertised = DEFAULT_REFLECTION_V2_HOST;
+  } else if (host.includes(':') && !host.startsWith('[')) {
+    advertised = `[${host}]`;
+  }
+  return `ws://${advertised}:${port}`;
+}
 
 /** Generates a fresh, per-run reflection secret. */
 export function generateReflectionSecret(): string {
