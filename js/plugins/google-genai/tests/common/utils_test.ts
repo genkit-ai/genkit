@@ -34,11 +34,13 @@ import {
   extractText,
   extractVersion,
   httpStatusToGenkitStatus,
+  interactionProcessStream,
   modelName,
   parseRetryAfterMs,
   parseStreamErrorText,
   processStream,
 } from '../../src/common/utils.js';
+import { InteractionSseEvent } from '../../src/googleai/interaction-types.js';
 
 const { aggregateResponses } = TEST_ONLY;
 
@@ -1044,6 +1046,201 @@ describe('Common Utils', () => {
         });
 
         // Give any pending microtasks/rejections a chance to surface.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.strictEqual(
+          rejections.length,
+          0,
+          `Expected no unhandled rejections, got: ${rejections}`
+        );
+      } finally {
+        process.off('unhandledRejection', onRejection);
+      }
+    });
+  });
+
+  describe('interactionProcessStream', () => {
+    it('throws if response body is not found', () => {
+      const mockResponse = new Response(null);
+      assert.throws(
+        () => interactionProcessStream(mockResponse),
+        /Error processing stream because response.body not found/
+      );
+    });
+
+    it('processes a valid stream into async generator and final aggregated response (happy path)', async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        'event: interaction.created\ndata: {"event_type":"interaction.created","interaction":{"id":"int-1","status":"in_progress"}}\n\n',
+        'event: step.start\ndata: {"event_type":"step.start","index":0,"step":{"type":"model_output","content":[]}}\n\n',
+        'event: step.delta\ndata: {"event_type":"step.delta","index":0,"delta":{"type":"text","text":"Hello"}}\n\n',
+        'event: step.delta\ndata: {"event_type":"step.delta","index":0,"delta":{"type":"text","text":" World"}}\n\n',
+        'event: step.stop\ndata: {"event_type":"step.stop","index":0}\n\n',
+        'event: interaction.completed\ndata: {"event_type":"interaction.completed","interaction":{"id":"int-1","status":"completed"}}\n\n',
+      ];
+
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      });
+
+      const mockResponse = new Response(stream);
+      const { stream: asyncStream, response } =
+        interactionProcessStream(mockResponse);
+
+      const events: InteractionSseEvent[] = [];
+      for await (const event of asyncStream) {
+        events.push(event);
+      }
+
+      assert.strictEqual(events.length, 6);
+      assert.strictEqual(events[0].event_type, 'interaction.created');
+      assert.strictEqual(events[2].event_type, 'step.delta');
+
+      const finalInteraction = await response;
+      assert.strictEqual(finalInteraction.id, 'int-1');
+      assert.strictEqual(finalInteraction.status, 'completed');
+      assert.strictEqual(finalInteraction.steps?.length, 1);
+      assert.deepStrictEqual(finalInteraction.steps?.[0], {
+        type: 'model_output',
+        content: [
+          { type: 'text', text: 'Hello' },
+          { type: 'text', text: ' World' },
+        ],
+      });
+    });
+
+    it('surfaces an error event in final response', async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        'event: error\ndata: {"event_type":"error","error":{"code":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}\n\n',
+      ];
+
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      });
+
+      const mockResponse = new Response(stream);
+      const { stream: asyncStream, response } =
+        interactionProcessStream(mockResponse);
+
+      for await (const _ of asyncStream) {
+      }
+
+      await assert.rejects(
+        async () => {
+          await response;
+        },
+        (err: any) => {
+          assert.ok(err instanceof GenkitError);
+          assert.strictEqual(err.status, 'INTERNAL');
+          assert.ok(
+            err.message.includes('[RESOURCE_EXHAUSTED] Quota exceeded')
+          );
+          return true;
+        }
+      );
+    });
+
+    it('surfaces a JSON error body (HTTP 200 with error) using parseStreamErrorText', async () => {
+      const encoder = new TextEncoder();
+      const errorBody = JSON.stringify({
+        error: {
+          code: 503,
+          message: 'The model is overloaded. Please try again later.',
+          status: 'UNAVAILABLE',
+        },
+      });
+
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(errorBody));
+          controller.close();
+        },
+      });
+
+      const mockResponse = new Response(stream);
+      const { stream: asyncStream, response } =
+        interactionProcessStream(mockResponse);
+      response.catch(() => {});
+
+      try {
+        for await (const _ of asyncStream) {
+        }
+        assert.fail('Should have thrown on error body');
+      } catch (err: any) {
+        assert.ok(err instanceof GenkitError);
+        assert.strictEqual(err.status, 'UNAVAILABLE');
+        assert.ok(err.message.includes('overloaded'));
+      }
+    });
+
+    it('reassembles arguments_delta across step.delta events and parses JSON at step.stop', async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        'event: step.start\ndata: {"event_type":"step.start","index":0,"step":{"type":"function_call","name":"getWeather","id":"call-1"}}\n\n',
+        'event: step.delta\ndata: {"event_type":"step.delta","index":0,"delta":{"type":"arguments_delta","arguments":"{\\"city\\": "}}\n\n',
+        'event: step.delta\ndata: {"event_type":"step.delta","index":0,"delta":{"type":"arguments_delta","arguments":"\\"Seattle\\"}"}}\n\n',
+        'event: step.stop\ndata: {"event_type":"step.stop","index":0}\n\n',
+      ];
+
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      });
+
+      const mockResponse = new Response(stream);
+      const { stream: asyncStream, response } =
+        interactionProcessStream(mockResponse);
+
+      for await (const _ of asyncStream) {
+      }
+
+      const finalInteraction = await response;
+      assert.strictEqual(finalInteraction.steps?.length, 1);
+      const step: any = finalInteraction.steps?.[0];
+      assert.strictEqual(step.type, 'function_call');
+      assert.deepStrictEqual(step.arguments, { city: 'Seattle' });
+    });
+
+    it('does not cause an unhandled rejection when only the stream is consumed on error', async () => {
+      const encoder = new TextEncoder();
+      const errorBody = JSON.stringify({
+        error: { code: 503, message: 'overloaded', status: 'UNAVAILABLE' },
+      });
+
+      const rejections: unknown[] = [];
+      const onRejection = (reason: unknown) => rejections.push(reason);
+      process.on('unhandledRejection', onRejection);
+
+      try {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(errorBody));
+            controller.close();
+          },
+        });
+
+        const mockResponse = new Response(stream);
+        const { stream: asyncStream } = interactionProcessStream(mockResponse);
+
+        await assert.rejects(async () => {
+          for await (const _ of asyncStream) {
+          }
+        });
+
         await new Promise((resolve) => setTimeout(resolve, 10));
         assert.strictEqual(
           rejections.length,

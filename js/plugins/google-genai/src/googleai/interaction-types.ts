@@ -455,7 +455,11 @@ export declare interface DeepResearchAgentConfig {
 /**
  * Service Tier
  */
-export declare type ServiceTier = 'flex' | 'standard' | 'priority' | (string & {});
+export declare type ServiceTier =
+  | 'flex'
+  | 'standard'
+  | 'priority'
+  | (string & {});
 
 /**
  * Configuration for the agent.

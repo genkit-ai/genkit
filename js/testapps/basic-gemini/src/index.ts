@@ -86,6 +86,103 @@ ai.defineFlow('deep-research-code-execution', async (_, { sendChunk }) => {
   return operation.output?.message?.content;
 });
 
+ai.defineFlow(
+  'deep-research-mcp',
+  async (
+    input:
+      | {
+          prompt?: string;
+          serverUrl?: string;
+          allowedTools?: string[];
+        }
+      | undefined,
+    { sendChunk }
+  ) => {
+    const prompt =
+      input?.prompt ??
+      'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
+    const serverUrl =
+      input?.serverUrl ?? 'https://mcpplaygroundonline.com/mcp-complex-server';
+    const allowedTools = input?.allowedTools ?? ['analyze_data'];
+
+    let { operation } = await ai.generate({
+      model: googleAI.model('deep-research-preview-04-2026'),
+      prompt,
+      config: {
+        mcpServers: [
+          {
+            name: 'complex_server',
+            url: serverUrl,
+            allowedTools,
+          },
+        ],
+      },
+    });
+
+    if (!operation) throw new Error('No operation returned');
+
+    while (!operation.done) {
+      sendChunk('check status of operation ' + operation.id);
+      operation = await ai.checkOperation(operation);
+      await new Promise((resolve) => setTimeout(resolve, 30000));
+    }
+
+    return operation.output?.message?.content;
+  }
+);
+
+ai.defineFlow(
+  'deep-research-mcp-with-mode',
+  async (
+    input:
+      | {
+          prompt?: string;
+          serverUrl?: string;
+          mode?: 'auto' | 'any' | 'none' | 'validated';
+          tools?: string[];
+        }
+      | undefined,
+    { sendChunk }
+  ) => {
+    const prompt =
+      input?.prompt ??
+      'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
+    const serverUrl =
+      input?.serverUrl ?? 'https://mcpplaygroundonline.com/mcp-complex-server';
+    const mode = input?.mode ?? 'validated';
+    const tools = input?.tools ?? ['analyze_data'];
+
+    let { operation } = await ai.generate({
+      model: googleAI.model('deep-research-preview-04-2026'),
+      prompt,
+      config: {
+        mcpServers: [
+          {
+            name: 'complex_server',
+            url: serverUrl,
+            allowedTools: [
+              {
+                mode,
+                tools,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    if (!operation) throw new Error('No operation returned');
+
+    while (!operation.done) {
+      sendChunk('check status of operation ' + operation.id);
+      operation = await ai.checkOperation(operation);
+      await new Promise((resolve) => setTimeout(resolve, 30000));
+    }
+
+    return operation.output?.message?.content;
+  }
+);
+
 ai.defineFlow('maps-grounding', async () => {
   const { text, raw } = await ai.generate({
     model: googleAI.model('gemini-3.1-pro-preview'),

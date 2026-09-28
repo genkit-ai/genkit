@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-import { GenerateResponseData, MessageData, Operation, Part, z } from 'genkit';
+import {
+  GenerateResponseData,
+  GenkitError,
+  MessageData,
+  Operation,
+  Part,
+  z,
+} from 'genkit';
 import { ToolDefinition } from 'genkit/model';
 import { extractMimeType } from '../common/utils.js';
 import {
@@ -249,9 +256,17 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
         `Invalid configuration for mcpServer tool: Expected object or true, got ${typeof config}`
       );
     }
+    const snakeConfig = toSnakeCaseObj(config);
+    if (
+      Array.isArray(snakeConfig.allowed_tools) &&
+      snakeConfig.allowed_tools.length > 0 &&
+      typeof snakeConfig.allowed_tools[0] === 'string'
+    ) {
+      snakeConfig.allowed_tools = [{ tools: snakeConfig.allowed_tools }];
+    }
     return {
       type: 'mcp_server',
-      ...toSnakeCaseObj(config),
+      ...snakeConfig,
     };
   }
 
@@ -583,10 +598,22 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
           result = { result: result };
         }
 
+        let parsedResult:
+          | Record<string, unknown>
+          | string
+          | (ImageContent | TextContent)[];
+        try {
+          parsedResult = RecordUnknownOrStringOrArraySchema.parse(result ?? {});
+        } catch {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: `Tool output for ${part.toolResponse.name} may only contain text or image content.`,
+          });
+        }
         steps.push({
           type: 'function_result',
           name: part.toolResponse.name,
-          result: RecordUnknownOrStringOrArraySchema.parse(result ?? {}),
+          result: parsedResult,
           call_id: part.toolResponse.ref || '',
         });
       } else if (part.custom?.googleSearchCall) {
@@ -708,7 +735,18 @@ export function fromInteractionDelta(delta: StepDeltaData): Part[] {
       return [part];
     }
     case 'thought_summary':
-      return delta.content ? [fromInteractionContent(delta.content)] : [];
+      if (!delta.content) return [];
+      if (delta.content.type === 'text') {
+        return [
+          {
+            reasoning: delta.content.text || '',
+            ...(delta.content.annotations
+              ? { metadata: { annotations: delta.content.annotations } }
+              : {}),
+          },
+        ];
+      }
+      return [fromInteractionContent(delta.content)];
     case 'thought_signature':
       return [
         {
