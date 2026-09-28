@@ -68,9 +68,10 @@ REFLECTION_AUTH_ERROR_CODE = -32001
 class ReflectionConfig:
     """Resolved reflection API configuration.
 
-    ``mode`` is ``disabled`` when explicitly switched off (honoured everywhere),
-    ``off`` when nothing asked for a server, ``v1`` when listening, and ``v2``
-    when dialing out to the CLI.
+    ``mode`` is ``disabled`` when explicitly switched off with
+    ``GENKIT_REFLECTION_ENABLED=false`` (honoured everywhere), ``off`` when
+    nothing turned it on, ``v1`` when listening, and ``v2`` when dialing out to
+    the CLI.
     """
 
     mode: Literal['disabled', 'off', 'v1', 'v2']
@@ -103,6 +104,18 @@ def _parse_port(raw: str | None) -> int | None:
     return port
 
 
+def _parse_enabled(raw: str | None) -> bool | None:
+    """Parse GENKIT_REFLECTION_ENABLED: ``true``, ``false``, or unset (empty is unset).
+
+    Anything else raises, for the same reason as ``_parse_port``.
+    """
+    if not raw:
+        return None
+    if raw in ('true', 'false'):
+        return raw == 'true'
+    raise ValueError(f'GENKIT_REFLECTION_ENABLED must be "true" or "false", got {raw!r}')
+
+
 def _resolve_port(env_port: int | None, port: int | None) -> tuple[int, bool]:
     """Resolve ``(port, pinned)``. A chosen port is exact; only an unchosen one probes.
 
@@ -127,18 +140,19 @@ def resolve_reflection_config(
 ) -> ReflectionConfig:
     """Decide how the reflection API should run.
 
-    First match wins:
+    Whether it runs:
 
-    1. ``GENKIT_REFLECTION_DISABLED == 'true'`` turns everything off.
-    2. ``GENKIT_REFLECTION_V2_SERVER`` dials out instead of listening.
-    3. ``GENKIT_REFLECTION_PORT`` or ``GENKIT_REFLECTION_HOST`` starts v1.
-    4. ``GENKIT_ENV == 'dev'`` starts v1 with defaults.
-    5. Otherwise off.
+    - ``GENKIT_REFLECTION_ENABLED=false`` turns it off, even under dev.
+    - ``GENKIT_REFLECTION_ENABLED=true`` turns it on in any environment.
+    - Unset, it runs only under ``GENKIT_ENV=dev``, as it always has.
 
-    Setting a host or port is itself the on-switch, so there is no way to
-    configure a server and then wonder why it never started. The environment
-    beats ``port`` on purpose: whoever set the variable is typically the
-    supervisor that already published that port.
+    How it runs, once on: ``GENKIT_REFLECTION_V2_SERVER`` dials out; otherwise
+    the v1 server listens on ``GENKIT_REFLECTION_HOST``/``GENKIT_REFLECTION_PORT``.
+    Those are settings, not on-switches: a stray value in a production env does
+    not expose the API, and is not even parsed while reflection is off.
+
+    The environment port beats ``port`` on purpose: whoever set the variable is
+    typically the supervisor that already published that port.
 
     Args:
         env: Environment to read. Defaults to ``os.environ``.
@@ -148,17 +162,23 @@ def resolve_reflection_config(
             ``GENKIT_REFLECTION_PORT=0``. It does not turn the server on, and
             is validated even when unused so a bad value fails early.
         host: Programmatic interface, used only when ``GENKIT_REFLECTION_HOST``
-            is unset. Unlike the variable, it does not turn the server on.
+            is unset. It does not turn the server on.
 
     Returns:
         The resolved configuration.
 
     Raises:
-        ValueError: If ``GENKIT_REFLECTION_PORT`` or ``port`` is not a valid port.
+        ValueError: If ``GENKIT_REFLECTION_ENABLED`` is not ``true``/``false``,
+            or ``GENKIT_REFLECTION_PORT`` or ``port`` is not a valid port.
     """
     environ = dict(os.environ) if env is None else env
-    if environ.get('GENKIT_REFLECTION_DISABLED') == 'true':
+    # Validated before the on/off check so a bad value fails early.
+    option_port, option_pinned = _resolve_port(None, port)
+    enabled = _parse_enabled(environ.get('GENKIT_REFLECTION_ENABLED'))
+    if enabled is False:
         return ReflectionConfig(mode='disabled')
+    if enabled is None and environ.get('GENKIT_ENV') != 'dev':
+        return ReflectionConfig(mode='off')
 
     secret = environ.get(REFLECTION_SECRET_ENV) or None
     v2_url = environ.get('GENKIT_REFLECTION_V2_SERVER')
@@ -166,14 +186,10 @@ def resolve_reflection_config(
         return ReflectionConfig(mode='v2', v2_url=v2_url, secret=secret)
 
     env_port = _parse_port(environ.get('GENKIT_REFLECTION_PORT'))
-    resolved_port, pinned = _resolve_port(env_port, port)
-    env_host = environ.get('GENKIT_REFLECTION_HOST')
-    if env_port is None and not env_host and environ.get('GENKIT_ENV') != 'dev':
-        return ReflectionConfig(mode='off')
-
+    resolved_port, pinned = (env_port, True) if env_port is not None else (option_port, option_pinned)
     return ReflectionConfig(
         mode='v1',
-        host=env_host or host or DEFAULT_REFLECTION_HOST,
+        host=environ.get('GENKIT_REFLECTION_HOST') or host or DEFAULT_REFLECTION_HOST,
         port=resolved_port,
         pinned=pinned,
         secret=secret,
@@ -183,9 +199,9 @@ def resolve_reflection_config(
 def reflection_enabled() -> bool:
     """Whether the environment turns the reflection API on, without raising.
 
-    For telemetry setup, which runs at import time. An invalid
-    ``GENKIT_REFLECTION_PORT`` counts as off here so ``import genkit`` still
-    works; ``Genkit()`` raises the real error when it resolves the config.
+    For telemetry setup, which runs at import time. An invalid setting counts
+    as off here so ``import genkit`` still works; ``Genkit()`` raises the real
+    error when it resolves the config.
     """
     try:
         return resolve_reflection_config().enabled
