@@ -178,7 +178,9 @@ interface BoxRunner {
 ```
 
 Runners don't speak reflection themselves; they hand the core a
-`BoxConnection` built from one of two shared clients:
+`BoxConnection` built from one of two shared clients. Either way the runtime
+must have reflection turned on; outside `GENKIT_ENV=dev` that takes
+`GENKIT_REFLECTION_ENABLED=true`, which the built-in runners always set.
 
 - `ReflectionHost`: the reflection **v2** manager. Runtimes dial in over
   WebSocket (`GENKIT_REFLECTION_V2_SERVER`) and must present its per-host

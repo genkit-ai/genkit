@@ -20,6 +20,13 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 
+/**
+ * Env var that turns a runtime's reflection API on outside `GENKIT_ENV=dev`.
+ * Runners always set it to `true`: the box's link to its host is not the
+ * Dev UI's, so it must not depend on the caller's dev mode or opt-out.
+ */
+export const REFLECTION_ENABLED_ENV = 'GENKIT_REFLECTION_ENABLED';
+
 /** Env var a runtime reads its reflection secret from. */
 export const REFLECTION_SECRET_ENV = 'GENKIT_REFLECTION_SECRET_TOKEN';
 
