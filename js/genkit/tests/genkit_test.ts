@@ -53,6 +53,7 @@ describe('genkit', () => {
           env: {
             ...process.env,
             GENKIT_ENV: 'dev',
+            GENKIT_REFLECTION_ENABLED: '',
             GENKIT_REFLECTION_PORT: '',
             TAKEN_PORT: String(address.port),
           },
