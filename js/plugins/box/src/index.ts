@@ -17,7 +17,16 @@
 export { createAgentProxy } from './agent-proxy.js';
 export { Box, box, type BoxCreateOptions, type ProxySpec } from './box.js';
 export { BOX_SELF_ID_ENV } from './env.js';
-export { SubprocessProvider } from './providers/subprocess.js';
+export {
+  BubblewrapProvider,
+  SandboxExecProvider,
+  SubprocessProvider,
+  bubblewrap,
+  localSandbox,
+  sandboxExec,
+  type BubblewrapOptions,
+  type SandboxExecOptions,
+} from './providers/index.js';
 export type {
   PreparedSpawn,
   ReflectHost,
