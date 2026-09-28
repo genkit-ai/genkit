@@ -162,7 +162,8 @@ class Genkit(StableGenkit):
         ``chunk.custom`` come back as that model instead of a dict.
 
         Example:
-            from genkit.exp import Genkit, InMemorySessionStore
+            from genkit.exp import Genkit
+            from genkit.exp.agent import InMemorySessionStore
             from genkit_google_genai import GoogleAI
 
             ai = Genkit(plugins=[GoogleAI()])

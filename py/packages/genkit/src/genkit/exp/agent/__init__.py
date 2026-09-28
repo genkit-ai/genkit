@@ -17,7 +17,8 @@
 """Agent types. Experimental — import the instance from ``genkit.exp``.
 
 ```python
-from genkit.exp import Genkit, InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])

@@ -17,7 +17,8 @@
 """Experimental APIs. Agents stay here even after Genkit Python is GA.
 
 ```python
-from genkit.exp import Genkit, InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -31,81 +32,7 @@ agent = ai.define_agent(
 """
 
 from genkit.exp._api import Genkit
-from genkit.exp.agent import (
-    Agent,
-    AgentChat,
-    AgentChunk,
-    AgentClient,
-    AgentError,
-    AgentFinishReason,
-    AgentFn,
-    AgentInit,
-    AgentInitError,
-    AgentInput,
-    AgentInterrupt,
-    AgentOutput,
-    AgentResponse,
-    AgentResult,
-    AgentStreamChunk,
-    AgentTransport,
-    AgentTurn,
-    Artifact,
-    ChunkTransform,
-    DetachedTask,
-    FileSessionStore,
-    HttpAgentTransport,
-    InMemorySessionStore,
-    Session,
-    SessionRunner,
-    SessionSnapshot,
-    SessionState,
-    SessionStore,
-    SnapshotStatus,
-    SnapshotStatusStream,
-    SnapshotSubscriber,
-    StateTransform,
-    TurnContext,
-    TurnEnd,
-    TurnResult,
-    remote_agent,
-)
 
 __all__ = [
     'Genkit',
-    'Agent',
-    'AgentClient',
-    'AgentChat',
-    'AgentTurn',
-    'AgentChunk',
-    'AgentError',
-    'AgentInitError',
-    'AgentInterrupt',
-    'AgentResponse',
-    'DetachedTask',
-    'AgentTransport',
-    'HttpAgentTransport',
-    'remote_agent',
-    'AgentFn',
-    'SessionRunner',
-    'TurnContext',
-    'TurnResult',
-    'Session',
-    'SessionStore',
-    'SnapshotStatusStream',
-    'SnapshotSubscriber',
-    'InMemorySessionStore',
-    'FileSessionStore',
-    'StateTransform',
-    'ChunkTransform',
-    'AgentFinishReason',
-    'AgentInit',
-    'AgentInput',
-    'AgentOutput',
-    'AgentResult',
-    'AgentStreamChunk',
-    'Artifact',
-    'SessionSnapshot',
-    'SessionState',
-    'SnapshotStatus',
-    'TurnEnd',
 ]

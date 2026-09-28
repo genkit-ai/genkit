@@ -34,9 +34,9 @@ from genkit._core._typing import (
     FinishReason,
     Role,
 )
-from genkit.exp import (
+from genkit.exp import Genkit
+from genkit.exp.agent import (
     FileSessionStore,
-    Genkit,
     InMemorySessionStore,
     SessionRunner,
     TurnContext,

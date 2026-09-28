@@ -33,7 +33,8 @@ import random
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit.exp import Genkit, InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
 
 class WeatherInput(BaseModel):
