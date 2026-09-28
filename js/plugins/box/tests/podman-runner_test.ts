@@ -69,12 +69,27 @@ describe('podmanRunner', () => {
       }).buildRunArgs('box-1', 54321, 's3cret'),
       '-e'
     );
+    // Reflection is opted into explicitly; no dev mode in the box.
+    assert.ok(env.includes('GENKIT_REFLECTION_ENABLED=true'));
+    assert.ok(!env.some((e) => e.startsWith('GENKIT_ENV=')));
     // Published ports land on eth0, so a loopback bind would be unreachable.
     assert.ok(env.includes('GENKIT_REFLECTION_HOST=0.0.0.0'));
     assert.ok(env.includes('GENKIT_REFLECTION_PORT=3100'));
     assert.ok(env.includes('GENKIT_REFLECTION_SECRET_TOKEN=s3cret'));
-    // The pinned port starts the server; no dev mode in the box.
-    assert.ok(!env.some((e) => e.startsWith('GENKIT_ENV=')));
+  });
+
+  it('does not let user env turn reflection off', () => {
+    const env = valuesFor(
+      podmanRunner({
+        image: 'node:22-slim',
+        cmd: 'node boxed.js',
+        env: { GENKIT_REFLECTION_ENABLED: 'false', API_URL: 'http://x' },
+      }).buildRunArgs('box-1', 54321, 's3cret'),
+      '-e'
+    );
+    assert.ok(env.includes('GENKIT_REFLECTION_ENABLED=true'));
+    assert.ok(!env.includes('GENKIT_REFLECTION_ENABLED=false'));
+    assert.ok(env.includes('API_URL=http://x'));
   });
 
   it('does not leak host env into the box', () => {
