@@ -22,12 +22,13 @@ import {
 import type { Status } from '@genkit-ai/tools-common';
 import {
   BaseRuntimeManager,
+  DEFAULT_REFLECTION_V2_HOST,
   ProcessManager,
   REFLECTION_SECRET_ENV,
-  REFLECTION_V2_HOST,
   RuntimeEvent,
   RuntimeManager,
   generateReflectionSecret,
+  reflectionV2Url,
   type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
@@ -37,6 +38,12 @@ import getPort, { makeRange } from 'get-port';
 export const EXPERIMENTAL_AUTH_OPTION_HELP =
   'generate a reflection API secret and require it from runtimes (experimental; ' +
   'runtimes on older Genkit versions are rejected over the WebSocket protocol)';
+
+/** Shared help text for `--reflection-v2-host`. */
+export const REFLECTION_V2_HOST_OPTION_HELP =
+  'host/interface to bind the reflection v2 (WebSocket) server to (defaults to ' +
+  '127.0.0.1). Use 0.0.0.0 when the runtime runs elsewhere, e.g. in a container ' +
+  'or on a device; pair it with --experimental-auth.';
 
 /**
  * Returns the telemetry server address either based on environment setup or starts one.
@@ -101,6 +108,8 @@ export async function startManager(options: {
   corsOrigin?: string;
   experimentalReflectionV2?: boolean;
   reflectionV2Port?: number;
+  /** `--reflection-v2-host`. */
+  reflectionV2Host?: string;
   telemetryServerUrl?: string;
   /** `--experimental-auth`. */
   auth?: boolean;
@@ -119,6 +128,7 @@ export async function startManager(options: {
     projectRoot: options.projectRoot,
     experimentalReflectionV2: options.experimentalReflectionV2,
     reflectionV2Port: options.reflectionV2Port,
+    reflectionV2Host: options.reflectionV2Host,
     reflectionSecret:
       options.reflectionSecret ??
       resolveReflectionSecret({ auth: options.auth, generate: false }),
@@ -136,6 +146,8 @@ export interface DevProcessManagerOptions {
   experimentalReflectionV2?: boolean;
   envVars?: Record<string, string>;
   reflectionV2Port?: number;
+  /** `--reflection-v2-host`: interface the v2 server binds. */
+  reflectionV2Host?: string;
   telemetryServerUrl?: string;
   /** `--experimental-auth`: generate a secret and require it from runtimes. */
   auth?: boolean;
@@ -179,11 +191,12 @@ export async function getDevEnvVars(
   if (experimentalReflectionV2) {
     // Probe and URL must both match the interface the v2 server binds;
     // `localhost` may resolve to ::1 first and miss an IPv4-only listener.
-    reflectionV2Port = await getPort({
-      port: makeRange(3200, 3400),
-      host: REFLECTION_V2_HOST,
-    });
-    envVars.GENKIT_REFLECTION_V2_SERVER = `ws://${REFLECTION_V2_HOST}:${reflectionV2Port}`;
+    const host = options?.reflectionV2Host ?? DEFAULT_REFLECTION_V2_HOST;
+    reflectionV2Port = await getPort({ port: makeRange(3200, 3400), host });
+    envVars.GENKIT_REFLECTION_V2_SERVER = reflectionV2Url(
+      host,
+      reflectionV2Port
+    );
   }
 
   if (!disableRealtimeTelemetry) {
@@ -225,6 +238,7 @@ export async function startDevProcessManager(
     disableRealtimeTelemetry,
     experimentalReflectionV2,
     reflectionV2Port,
+    reflectionV2Host: options?.reflectionV2Host,
     reflectionSecret,
   });
   const processPromise = processManager.start({ ...options });

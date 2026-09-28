@@ -26,6 +26,7 @@ import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
+  REFLECTION_V2_HOST_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
   startManager,
@@ -35,6 +36,8 @@ import { parsePort } from '../utils/option-parsers';
 interface RunOptions {
   /** --experimental-auth. */
   experimentalAuth?: boolean;
+  /** --reflection-v2-host. */
+  reflectionV2Host?: string;
   noui?: boolean;
   port?: number;
   host?: string;
@@ -73,6 +76,7 @@ export const start = new Command('start')
     '--write-env-file <file>',
     'write environment variables in .env format to the provided file'
   )
+  .option('--reflection-v2-host <host>', REFLECTION_V2_HOST_OPTION_HELP)
   .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
@@ -82,11 +86,17 @@ export const start = new Command('start')
           'Please make sure that you current working directory is correct.'
       );
     }
+    if (options.reflectionV2Host && !options.experimentalReflectionV2) {
+      logger.warn(
+        '--reflection-v2-host has no effect without --experimental-reflection-v2.'
+      );
+    }
 
     const devEnv = await getDevEnvVars(projectRoot, {
       disableRealtimeTelemetry: options.disableRealtimeTelemetry,
       corsOrigin: options.corsOrigin,
       experimentalReflectionV2: options.experimentalReflectionV2,
+      reflectionV2Host: options.reflectionV2Host,
       auth: options.experimentalAuth,
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
@@ -117,6 +127,7 @@ export const start = new Command('start')
           envVars,
           telemetryServerUrl,
           reflectionV2Port,
+          reflectionV2Host: options.reflectionV2Host,
           auth: options.experimentalAuth,
         }
       );
@@ -129,6 +140,7 @@ export const start = new Command('start')
         corsOrigin: options.corsOrigin,
         experimentalReflectionV2: options.experimentalReflectionV2,
         reflectionV2Port,
+        reflectionV2Host: options.reflectionV2Host,
         telemetryServerUrl,
         auth: options.experimentalAuth,
         // Without a spawned runtime there is nothing to hand a generated

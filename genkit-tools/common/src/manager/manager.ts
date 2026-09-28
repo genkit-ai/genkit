@@ -67,6 +67,8 @@ export interface RuntimeManagerOptions {
   experimentalReflectionV2?: boolean;
   /** Reflection V2 Port */
   reflectionV2Port?: number;
+  /** Interface the Reflection V2 server binds. Defaults to `127.0.0.1`. */
+  reflectionV2Host?: string;
   /**
    * Shared secret for the reflection API. v1: sent as
    * `x-genkit-reflection-secret` to runtimes that don't advertise their own.

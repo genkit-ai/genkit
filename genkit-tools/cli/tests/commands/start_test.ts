@@ -103,6 +103,7 @@ describe('start command', () => {
       corsOrigin: undefined,
       experimentalReflectionV2: undefined,
       reflectionV2Port: 3200,
+      reflectionV2Host: undefined,
       telemetryServerUrl: 'http://localhost:4033',
       auth: undefined,
       reflectionSecret: undefined,

@@ -21,6 +21,7 @@ import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
+  REFLECTION_V2_HOST_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
 } from '../utils/manager-utils';
@@ -29,6 +30,8 @@ import { parsePort } from '../utils/option-parsers';
 interface FlutterRunOptions {
   /** --experimental-auth. */
   experimentalAuth?: boolean;
+  /** --reflection-v2-host. */
+  reflectionV2Host?: string;
   port?: number;
   open?: boolean;
   corsOrigin?: string;
@@ -50,6 +53,7 @@ export const startFlutter = new Command('start:flutter')
     '--cors-origin <origin>',
     'specify the allowed origin for CORS requests'
   )
+  .option('--reflection-v2-host <host>', REFLECTION_V2_HOST_OPTION_HELP)
   .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: FlutterRunOptions) => {
     const projectRoot = await findProjectRoot();

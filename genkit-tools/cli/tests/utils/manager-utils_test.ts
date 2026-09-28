@@ -361,4 +361,14 @@ describe('getDevEnvVars', () => {
       /^ws:\/\/127\.0\.0\.1:\d+$/
     );
   });
+
+  it('advertises a wildcard --reflection-v2-host as loopback', async () => {
+    const { envVars } = await getDevEnvVars('.', {
+      experimentalReflectionV2: true,
+      reflectionV2Host: '0.0.0.0',
+    });
+    expect(envVars.GENKIT_REFLECTION_V2_SERVER).toMatch(
+      /^ws:\/\/127\.0\.0\.1:\d+$/
+    );
+  });
 });
