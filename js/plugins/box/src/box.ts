@@ -23,7 +23,13 @@ import type {
   ToolAction,
   z,
 } from 'genkit';
-import type { AgentAPI } from 'genkit/beta';
+import type { Agent, AgentAPI } from 'genkit/beta';
+import {
+  capabilitiesFromSpec,
+  capabilitiesOf,
+  defineBoxedAgent,
+  type BoxedAgentSpec,
+} from './agent-action.js';
 import { createAgentProxy } from './agent-proxy.js';
 import { BOX_SELF_ID_ENV } from './env.js';
 import {
@@ -368,6 +374,52 @@ export class Box {
       throw new Error('fromAgent: could not determine the agent name.');
     }
     return createAgentProxy<State>(this.dispatcher(), name, opts?.context);
+  }
+
+  /**
+   * Registered agent proxy from a spec: `/agent/<name>` plus its snapshot and
+   * abort companions, visible and chattable in the Dev UI. Use when the agent
+   * lives only in the box (a separate entry, or another language).
+   *
+   * ```ts
+   * export const codingAgent = myBox.defineAgent<CodingState>({
+   *   name: 'codingAgent',
+   *   stateManagement: 'server',
+   *   abortable: true,
+   * });
+   * await codingAgent.chat({ sessionId }).send('fix the failing test');
+   * ```
+   */
+  defineAgent<State = unknown>(spec: BoxedAgentSpec<State>): Agent<State> {
+    return defineBoxedAgent<State>(this.ai, this.dispatcher(), {
+      name: spec.name,
+      target: spec.name,
+      description: spec.description,
+      capabilities: capabilitiesFromSpec(spec),
+    });
+  }
+
+  /**
+   * Registered agent proxy from a real agent (same-language sugar); its
+   * metadata is copied, so the Dev UI renders it like the original. MUST be
+   * renamed (see {@link defineFromTool}).
+   */
+  defineFromAgent<State = unknown>(
+    agent: Agent<State>,
+    opts: { name: string }
+  ): Agent<State> {
+    if (opts.name === agent.__action.name) {
+      throw new Error(
+        `defineFromAgent: the proxy must be renamed (got '${opts.name}', same ` +
+          `as the original).`
+      );
+    }
+    return defineBoxedAgent<State>(this.ai, this.dispatcher(), {
+      name: opts.name,
+      target: agent.__action.name,
+      description: agent.__action.description,
+      capabilities: capabilitiesOf(agent),
+    });
   }
 
   /** Registers a tool proxy in the Genkit registry so the Dev UI can see it. */

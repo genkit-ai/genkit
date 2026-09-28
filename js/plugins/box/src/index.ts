@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export { type BoxedAgentSpec } from './agent-action.js';
 export { createAgentProxy } from './agent-proxy.js';
 export { Box, box, type BoxCreateOptions, type ProxySpec } from './box.js';
 export { BOX_SELF_ID_ENV } from './env.js';
@@ -57,6 +58,7 @@ export {
   SINGLETON_KEY,
   perRequest,
   resolveRetention,
+  sessionIdOf,
   singleton,
 } from './route.js';
 export {
