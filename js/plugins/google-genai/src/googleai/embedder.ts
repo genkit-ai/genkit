@@ -156,7 +156,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name) => defineEmbedder(name, options));
+  return Object.keys(ALL_MODELS).map((name) => defineEmbedder(name, options));
 }
 
 export function defineEmbedder(

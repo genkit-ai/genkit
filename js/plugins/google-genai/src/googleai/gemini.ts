@@ -23,6 +23,7 @@ import {
   modelActionMetadata,
   z,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 import {
   CandidateData,
   GenerationCommonConfigDescriptions,
@@ -59,11 +60,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
 } from './interaction-converters.js';
-import {
-  InteractionTool,
-  ModelGenerationConfig,
-  ServiceTier,
-} from './interaction-types.js';
+import { InteractionTool, ModelGenerationConfig } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -292,6 +289,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   serviceTier: z
     .union([z.enum(['standard', 'flex', 'priority']), z.string()])
     .describe('Service tier for the Gemini API.')
+    .optional(),
+  previousInteractionId: z
+    .string()
+    .describe('The ID of the previous interaction, if any.')
     .optional(),
   thinkingConfig: z
     .object({
@@ -810,18 +811,19 @@ export function defineModel(
       if (systemMessage) {
         messages.splice(messages.indexOf(systemMessage), 1);
         systemInstruction = toGeminiSystemInstruction(systemMessage);
-        if (useInteractions) {
-          if (systemMessage.content.some((c) => !c.text)) {
-            // Technically it's not the model itself, but 'useInteractions' or not,
-            // however, useInteractions is determined by which model... so
-            // this makes the most sense without dragging the user into
-            // the nitty gritty of how their stuff is going through the backend.
-            throw new GenkitError({
-              status: 'INVALID_ARGUMENT',
-              message:
-                'System message contains non-text content which is not supported for this model.',
-            });
-          }
+        if (
+          useInteractions &&
+          systemMessage.content.some((c) => c.text === undefined)
+        ) {
+          // Technically it's not the model itself, but 'useInteractions' or not,
+          // however, useInteractions is determined by which model... so
+          // this makes the most sense without dragging the user into
+          // the nitty gritty of how their stuff is going through the backend.
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message:
+              'System message contains non-text content which is not supported for this model.',
+          });
         }
         interactionsSystemInstruction = systemMessage.content
           .map((c) => c.text)
@@ -899,6 +901,23 @@ export function defineModel(
       }
 
       if (useInteractions) {
+        if (safetySettingsFromConfig && safetySettingsFromConfig.length > 0) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message:
+              'Safety settings are not supported for this model with the Interactions API.',
+          });
+        }
+        if (toolConfigConfig) {
+          logger.warn(
+            'toolConfig is not supported for this model with the Interactions API and will be ignored.'
+          );
+        }
+        if (retrievalConfig) {
+          logger.warn(
+            'retrievalConfig is not supported for this model with the Interactions API and will be ignored.'
+          );
+        }
         if (Array.isArray(toolsFromConfig)) {
           interactionsTools.push(
             ...toolsFromConfig.map(toInteractionConfigTool)
@@ -983,21 +1002,29 @@ export function defineModel(
 
       if (useInteractions) {
         if (functionCallingConfig) {
-          interactionGenerationConfig.tool_choice = {
-            allowed_tools: {
-              mode: functionCallingConfig.mode?.toLowerCase(),
-              tools: functionCallingConfig.allowedFunctionNames,
-            },
-          };
+          const mode = functionCallingConfig.mode?.toLowerCase();
+          const validMode =
+            mode && mode !== 'mode_unspecified' ? mode : undefined;
+          if (validMode || functionCallingConfig.allowedFunctionNames?.length) {
+            interactionGenerationConfig.tool_choice = {
+              allowed_tools: {
+                ...(validMode ? { mode: validMode } : {}),
+                ...(functionCallingConfig.allowedFunctionNames
+                  ? { tools: functionCallingConfig.allowedFunctionNames }
+                  : {}),
+              },
+            };
+          }
         } else if (request.toolChoice) {
+          const mode =
+            typeof request.toolChoice === 'string'
+              ? request.toolChoice === 'required'
+                ? 'any'
+                : request.toolChoice
+              : 'any';
           interactionGenerationConfig.tool_choice = {
             allowed_tools: {
-              mode:
-                typeof request.toolChoice === 'string'
-                  ? request.toolChoice === 'required'
-                    ? 'any'
-                    : request.toolChoice
-                  : 'any',
+              mode,
             },
           };
         }
@@ -1070,7 +1097,9 @@ export function defineModel(
             mime_type: 'application/json',
           };
           if (request.output?.constrained) {
-            req.response_format.schema = cleanSchema(request.output.schema);
+            req.response_format.schema = pluginOptions?.legacyResponseSchema
+              ? cleanSchema(request.output.schema)
+              : request.output.schema;
           }
         }
 

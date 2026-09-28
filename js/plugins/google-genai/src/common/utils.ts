@@ -26,6 +26,7 @@ import {
   getClientHeader as defaultGetClientHeader,
   z,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
 import { toJsonSchema } from 'genkit/schema';
 import {
@@ -378,9 +379,13 @@ export function interactionProcessStream(
   );
   const responseStream = getInteractionResponseStream(inputStream);
   const [stream1, stream2] = responseStream.tee();
+  const responsePromise = getInteractionResponsePromise(stream2);
+  // See processStream: avoid an unhandled rejection if the caller only
+  // consumes `stream` and it errors before `response` is ever awaited.
+  responsePromise.catch(() => {});
   return {
     stream: generateInteractionResponseSequence(stream1),
-    response: getInteractionResponsePromise(stream2),
+    response: responsePromise,
   };
 }
 
@@ -399,7 +404,7 @@ function getInteractionResponseStream(
             if (done) {
               reader.releaseLock();
               if (currentText.trim()) {
-                controller.error(new Error('Failed to parse stream'));
+                controller.error(parseStreamErrorText(currentText));
                 return;
               }
               controller.close();
@@ -604,7 +609,7 @@ async function getInteractionResponsePromise(
                 step.arguments = JSON.parse(argStr);
               }
             } catch (e) {
-              console.warn(
+              logger.warn(
                 'Failed to parse partial arguments JSON for function call:',
                 e
               );

@@ -365,6 +365,23 @@ describe('Interaction Converters', () => {
         my_url_param: 1,
       });
     });
+
+    it('should handle mcpServer tool configuration and normalize string array allowed_tools to objects', () => {
+      const tool = {
+        mcpServer: {
+          name: 'my-server',
+          url: 'https://mcp.example.com',
+          allowedTools: ['search', 'read_doc'],
+        },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'mcp_server',
+        name: 'my-server',
+        url: 'https://mcp.example.com',
+        allowed_tools: [{ tools: ['search', 'read_doc'] }],
+      });
+    });
   });
 
   describe('toInteractionContent', () => {
@@ -611,6 +628,42 @@ describe('Interaction Converters', () => {
           signature: 'sig',
         },
       ]);
+    });
+
+    it('throws GenkitError when tool output contains non-text/image content', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'pdfTool',
+                ref: 'call-1',
+                output: undefined,
+                content: [
+                  {
+                    media: {
+                      url: 'data:application/pdf;base64,ABC',
+                      contentType: 'application/pdf',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ];
+      assert.throws(
+        () => toInteractionSteps(messages),
+        (err: any) => {
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.strictEqual(
+            err.originalMessage,
+            'Tool output for pdfTool may only contain text or image content.'
+          );
+          return true;
+        }
+      );
     });
   });
 
@@ -919,6 +972,15 @@ describe('Interaction Converters', () => {
       };
       const result = fromInteractionDelta(delta);
       assert.deepStrictEqual(result, []);
+    });
+
+    it('should convert thought_summary delta to reasoning', () => {
+      const delta: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'text', text: 'thinking process' },
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [{ reasoning: 'thinking process' }]);
     });
   });
 

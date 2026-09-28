@@ -26,6 +26,7 @@ import {
   defineModel,
   model,
 } from '../../src/googleai/gemini.js';
+import { CreateInteractionRequest } from '../../src/googleai/interaction-types.js';
 import {
   FinishReason,
   GenerateContentRequest,
@@ -502,7 +503,9 @@ describe('Google AI Gemini', () => {
         };
         await model.run(request);
 
-        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
         assert.ok(Array.isArray(apiRequest.tools));
         assert.strictEqual(apiRequest.tools?.length, 1);
         assert.deepStrictEqual(apiRequest.tools?.[0], {
@@ -525,13 +528,37 @@ describe('Google AI Gemini', () => {
         };
         await model.run(request);
 
-        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
         assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
           allowed_tools: {
             mode: 'any',
             tools: ['myFunc'],
           },
         });
+      });
+
+      it('omits tool_choice when mode is MODE_UNSPECIFIED (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            functionCallingConfig: {
+              mode: 'MODE_UNSPECIFIED',
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generation_config?.tool_choice,
+          undefined
+        );
       });
 
       it('constructs generation_config.tool_choice for toolChoice (Interactions API)', async () => {
@@ -543,10 +570,31 @@ describe('Google AI Gemini', () => {
         };
         await model.run(request);
 
-        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
         assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
           allowed_tools: {
             mode: 'any',
+          },
+        });
+      });
+
+      it('constructs generation_config.tool_choice for toolChoice none (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          toolChoice: 'none',
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
+          allowed_tools: {
+            mode: 'none',
           },
         });
       });
@@ -562,7 +610,9 @@ describe('Google AI Gemini', () => {
         };
         await model.run(request);
 
-        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
         assert.deepStrictEqual(apiRequest.response_modalities, [
           'text',
           'audio',
@@ -686,8 +736,56 @@ describe('Google AI Gemini', () => {
         };
         await model.run(request);
 
-        const apiRequest: any = JSON.parse(fetchStub.lastCall.args[1].body);
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
         assert.strictEqual(apiRequest.service_tier, 'flex');
+      });
+
+      it('throws when safetySettings are passed to an Interactions model', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            safetySettings: [
+              {
+                category: 'HARM_CATEGORY_HATE_SPEECH',
+                threshold: 'BLOCK_NONE',
+              },
+            ],
+          },
+        };
+        await assert.rejects(
+          () => model.run(request),
+          (err: any) => {
+            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+            assert.ok(
+              err.message.includes('Safety settings are not supported')
+            );
+            return true;
+          }
+        );
+      });
+
+      it('passes previousInteractionId to the API (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            previousInteractionId: 'interaction-123',
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.previous_interaction_id,
+          'interaction-123'
+        );
       });
 
       it('passes imageConfig to the API', async () => {
@@ -809,6 +907,37 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(
           apiRequest.generationConfig?.responseJsonSchema,
           undefined
+        );
+      });
+
+      it('passes schema through untouched for Interactions API unless legacyResponseSchema is set', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(constrainedJsonRequest);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          (apiRequest.response_format as any)?.schema,
+          jsonOutputSchema
+        );
+      });
+
+      it('cleans schema for Interactions API when legacyResponseSchema is set', async () => {
+        const model = defineModel('gemini-flash-latest', {
+          ...defaultPluginOptions,
+          legacyResponseSchema: true,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run(constrainedJsonRequest);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          (apiRequest.response_format as any)?.schema,
+          jsonOutputSchema
         );
       });
 
