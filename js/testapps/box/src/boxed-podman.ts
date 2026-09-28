@@ -18,10 +18,10 @@
 // container, started by `index-podman.ts`. It defines the real `runShell`
 // implementation and nothing else. No model, no API key.
 //
-// The runner sets GENKIT_REFLECTION_HOST/PORT and a per-container secret, so
-// the V1 reflection server binds 0.0.0.0:3100 (locked by the secret) and the
-// runner publishes it to the host loopback. This process just has to stay
-// alive and serve.
+// The runner sets GENKIT_REFLECTION_ENABLED/HOST/PORT and a per-container
+// secret, so the V1 reflection server binds 0.0.0.0:3100 (locked by the
+// secret) and the runner publishes it to the host loopback. This process just
+// has to stay alive and serve.
 
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';

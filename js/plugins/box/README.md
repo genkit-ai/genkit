@@ -378,6 +378,8 @@ podman run --rm -v "$PWD:$PWD" -w "$PWD" \
 
 The runner starts each container with:
 
+- `GENKIT_REFLECTION_ENABLED=true`: turns reflection on without
+  `GENKIT_ENV=dev`, so the box keeps production defaults.
 - `GENKIT_REFLECTION_PORT=3100`: bind exactly that port (it is what the runner
   publishes).
 - `GENKIT_REFLECTION_HOST=0.0.0.0`: published ports arrive on the container's

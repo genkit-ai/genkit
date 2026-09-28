@@ -20,7 +20,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { BOX_SELF_ID_ENV } from '../env.js';
-import { REFLECTION_SECRET_ENV } from '../reflection-auth.js';
+import {
+  REFLECTION_ENABLED_ENV,
+  REFLECTION_SECRET_ENV,
+} from '../reflection-auth.js';
 import { ReflectionClientV1 } from '../reflection-client-v1.js';
 import type { BoxConnection, BoxRunner } from '../types.js';
 import { commandArgv, untilReady } from './util.js';
@@ -287,10 +290,12 @@ export class PodmanRunner implements BoxRunner {
 
     // Containers inherit nothing from process.env, so secrets stay out of the
     // box unless explicitly passed. That is a deliberate difference from the
-    // subprocess runners. The pinned port alone starts the reflection server;
-    // no GENKIT_ENV=dev, so the box runs with production defaults.
+    // subprocess runners. GENKIT_REFLECTION_ENABLED turns reflection on without
+    // GENKIT_ENV=dev, so the box runs with production defaults. Everything
+    // below is set after `options.env` so a user value can't break the link.
     const env: Record<string, string> = {
       ...this.options.env,
+      [REFLECTION_ENABLED_ENV]: 'true',
       // Published ports arrive on eth0, not loopback, so the default
       // 127.0.0.1 bind would be unreachable from the host.
       GENKIT_REFLECTION_HOST: '0.0.0.0',
