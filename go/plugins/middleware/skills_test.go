@@ -1259,8 +1259,9 @@ func TestSkillsConcurrentActivationInOneTurnLoadsOnce(t *testing.T) {
 	}
 }
 
-// Two Skills middlewares on one call each keep their own catalog. The marker
-// carries the activation tool name, so neither refresh overwrites the other.
+// Two Skills middlewares on one call each keep their own catalog. The catalog
+// part records its activation tool name, so neither refresh overwrites the
+// other.
 func TestSkillsTwoMiddlewaresKeepSeparateCatalogs(t *testing.T) {
 	tmp := t.TempDir()
 	dirA := filepath.Join(tmp, "a")
@@ -1306,8 +1307,28 @@ func TestSkillsTwoMiddlewaresKeepSeparateCatalogs(t *testing.T) {
 	}
 }
 
+// Two instances can each hold a skill of the same name from different
+// directories. Loading one must not make the other answer "already loaded".
+func TestSkillsActivationIsPerInstance(t *testing.T) {
+	tmp := t.TempDir()
+	dirA := filepath.Join(tmp, "a")
+	dirB := filepath.Join(tmp, "b")
+	writeSkill(t, dirA, "python", "---\nname: python\ndescription: d\n---\nbody for a")
+	writeSkill(t, dirB, "python", "---\nname: python\ndescription: d\n---\nbody for b")
+	a := &Skills{SkillPaths: []string{dirA}, ToolNamePrefix: "a_"}
+	b := &Skills{SkillPaths: []string{dirB}, ToolNamePrefix: "b_"}
+
+	loadedByA := ai.NewTextPart("body for a")
+	loadedByA.Metadata = a.activationMetadata("python")
+	hb := mustHooks(t, b)
+	seed(t, hb, ai.NewUserMessage(loadedByA))
+	if out := activate(t, hb, "python"); !strings.Contains(out, "body for b") {
+		t.Errorf("b_use_skill = %q, want b's python: a's activation does not load b's skill", out)
+	}
+}
+
 // A symlinked SKILL.md would read a file the skill author neither owns nor can
-// write. It is skipped, like a symlinked skill directory.
+// write. It is skipped, even though a symlinked skill directory is followed.
 func TestSkillsSkipsSymlinkedSkillMd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs elevation on Windows")
@@ -1504,31 +1525,37 @@ func TestSkillsRefreshesLegacyMarkerPart(t *testing.T) {
 		t.Errorf("the stale catalog survived: %q", text)
 	}
 
-	// Refreshing rewrites the value, so the history self-heals.
+	// Refreshing records the owner, so the history self-heals. The marker
+	// itself stays true, which is what the JS and Python runtimes look for.
 	for _, p := range findSystem(got.Messages).Content {
-		if v, ok := p.Metadata[skillsMarker]; ok && v != SkillToolName {
-			t.Errorf("marker = %v, want it upgraded to %q", v, SkillToolName)
+		if _, ok := p.Metadata[skillsMarker]; !ok {
+			continue
+		}
+		if p.Metadata[skillsMarker] != true || p.Metadata[skillsToolMetadataKey] != SkillToolName {
+			t.Errorf("metadata = %v, want marker true and owner %q", p.Metadata, SkillToolName)
 		}
 	}
 }
 
-func TestOwnsMarker(t *testing.T) {
+func TestIsCatalogPart(t *testing.T) {
 	tests := []struct {
-		name  string
-		value any
-		want  bool
+		name string
+		meta map[string]any
+		want bool
 	}{
-		{"own tool name", SkillToolName, true},
-		{"another instance", "sk_" + SkillToolName, false},
-		{"legacy bool", true, true},
-		{"legacy bool false", false, false},
-		{"absent", nil, false},
-		{"unexpected type", 1, false},
+		{"own instance", map[string]any{skillsMarker: true, skillsToolMetadataKey: SkillToolName}, true},
+		{"another instance", map[string]any{skillsMarker: true, skillsToolMetadataKey: "sk_" + SkillToolName}, false},
+		{"no owner, as JS and Python write it", map[string]any{skillsMarker: true}, true},
+		{"marker false", map[string]any{skillsMarker: false}, false},
+		{"unmarked", nil, false},
+		{"marker not a bool", map[string]any{skillsMarker: SkillToolName}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ownsMarker(tt.value, SkillToolName); got != tt.want {
-				t.Errorf("ownsMarker(%v, %q) = %v, want %v", tt.value, SkillToolName, got, tt.want)
+			p := ai.NewTextPart("catalog")
+			p.Metadata = tt.meta
+			if got := isCatalogPart(p, SkillToolName); got != tt.want {
+				t.Errorf("isCatalogPart(%v, %q) = %v, want %v", tt.meta, SkillToolName, got, tt.want)
 			}
 		})
 	}

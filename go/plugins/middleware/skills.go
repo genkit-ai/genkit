@@ -75,10 +75,18 @@ const (
 
 	// skillsMarker marks the catalog part injected by this middleware so a
 	// later tool-loop iteration refreshes it instead of appending a second
-	// copy. Its value is the middleware's activation tool name, which is what
-	// tells two Skills instances on one call apart: they must set distinct
-	// ToolNamePrefixes anyway, since duplicate tool names fail the request.
+	// copy. Its value is true, which is what the JS and Python runtimes write
+	// and look for, so a conversation can move between runtimes without
+	// gaining a second catalog.
 	skillsMarker = "skills-instructions"
+
+	// skillsToolMetadataKey records the activation tool name of the Skills
+	// instance that wrote a part. It sits beside skillsMarker on the catalog
+	// and beside SkillActivationMetadataKey on a skill's instructions, and is
+	// what tells two Skills instances on one call apart: they must set
+	// distinct ToolNamePrefixes anyway, since duplicate tool names fail the
+	// request.
+	skillsToolMetadataKey = "skillsActivationTool"
 )
 
 const (
@@ -227,7 +235,7 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 
 	preload := s.resolvePreload(ctx, info)
 
-	act := &activationSet{loaded: map[string]bool{}}
+	act := &activationSet{tool: s.toolName(SkillToolName), loaded: map[string]bool{}}
 	available := availableSkillsSentence(info)
 
 	// Registering the activation tool with nothing left to activate would offer
@@ -361,7 +369,7 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 			}
 			return &ai.MultipartToolResponse{
 				Output:   content,
-				Metadata: map[string]any{SkillActivationMetadataKey: si.Name},
+				Metadata: s.activationMetadata(si.Name),
 			}, nil
 		},
 		ai.WithOutputSchema(map[string]any{"type": "string"}),
@@ -389,14 +397,24 @@ func (s *Skills) skillContent(ctx context.Context, si skillInfo, body []byte) st
 	return wrapSkillContent(si, string(body), resources)
 }
 
+// activationMetadata returns the metadata stamped on a part carrying the
+// instructions of the named skill.
+func (s *Skills) activationMetadata(name string) map[string]any {
+	return map[string]any{
+		SkillActivationMetadataKey: name,
+		skillsToolMetadataKey:      s.toolName(SkillToolName),
+	}
+}
+
 // activationSet is the per-call view of which skills are already loaded into
-// the conversation.
+// the conversation by the instance whose activation tool is named tool.
 //
 // claim takes the whole check-and-set under one lock. A turn runs its tool
 // calls concurrently, so a split check and mark would let two calls for the
 // same skill both pass and both return the body. The returned release undoes
 // the reservation, so a failed read leaves the skill loadable.
 type activationSet struct {
+	tool   string
 	mu     sync.Mutex
 	loaded map[string]bool
 }
@@ -420,7 +438,7 @@ func (a *activationSet) claim(name string) (bool, func()) {
 func (a *activationSet) reset(msgs []*ai.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.loaded = activatedSkills(msgs)
+	a.loaded = activatedSkills(msgs, a.tool)
 }
 
 // lookupSkill resolves a model-supplied skill name. The catalog prints each
@@ -1121,10 +1139,13 @@ func linksToRegularFile(dir, rel string, d fs.DirEntry) bool {
 	return err == nil && st.Mode().IsRegular()
 }
 
-// activatedSkills returns the set of skills whose instructions are present in
-// msgs. It is rebuilt from the conversation on every turn, so it never reports
-// a skill as loaded once context management has dropped the part carrying it.
-func activatedSkills(msgs []*ai.Message) map[string]bool {
+// activatedSkills returns the set of skills whose instructions the instance
+// with activation tool tool placed in msgs. It is rebuilt from the
+// conversation on every turn, so it never reports a skill as loaded once
+// context management has dropped the part carrying it. Two instances can each
+// hold a skill of the same name from different directories, so a part loaded
+// by the other instance does not count.
+func activatedSkills(msgs []*ai.Message, tool string) map[string]bool {
 	activated := map[string]bool{}
 	for _, msg := range msgs {
 		if msg == nil {
@@ -1134,7 +1155,8 @@ func activatedSkills(msgs []*ai.Message) map[string]bool {
 			if part == nil || part.Metadata == nil {
 				continue
 			}
-			if name, ok := part.Metadata[SkillActivationMetadataKey].(string); ok && name != "" {
+			name, ok := part.Metadata[SkillActivationMetadataKey].(string)
+			if ok && name != "" && ownsPart(part.Metadata, tool) {
 				activated[name] = true
 			}
 		}
@@ -1159,7 +1181,7 @@ func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog
 		return &newReq
 	}
 
-	present := activatedSkills(newReq.Messages)
+	present := activatedSkills(newReq.Messages, s.toolName(SkillToolName))
 	var parts []*ai.Part
 	for _, name := range slices.Sorted(maps.Keys(preload)) {
 		if present[name] {
@@ -1167,7 +1189,7 @@ func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog
 		}
 		si := preload[name]
 		p := ai.NewTextPart(s.skillContent(ctx, si, si.body))
-		p.Metadata = map[string]any{SkillActivationMetadataKey: name}
+		p.Metadata = s.activationMetadata(name)
 		parts = append(parts, p)
 	}
 	if len(parts) > 0 {
@@ -1179,13 +1201,13 @@ func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog
 // injectCatalogPart places catalog in this middleware's marked part, replacing
 // an existing one in place, or adding a new part when there is none.
 func (s *Skills) injectCatalogPart(req *ai.ModelRequest, catalog string) {
-	marker := s.toolName(SkillToolName)
+	tool := s.toolName(SkillToolName)
 	for i, msg := range req.Messages {
 		if msg == nil {
 			continue
 		}
 		for j, part := range msg.Content {
-			if part == nil || !part.IsText() || !ownsMarker(part.Metadata[skillsMarker], marker) {
+			if part == nil || !part.IsText() || !isCatalogPart(part, tool) {
 				continue
 			}
 			if part.Text == catalog {
@@ -1215,32 +1237,35 @@ func appendToSystemMessage(req *ai.ModelRequest, parts ...*ai.Part) {
 	req.Messages = append([]*ai.Message{ai.NewSystemMessage(parts...)}, req.Messages...)
 }
 
-// ownsMarker reports whether a skillsMarker metadata value belongs to the
-// middleware whose activation tool is named marker.
+// isCatalogPart reports whether part is the skills catalog of the instance
+// whose activation tool is named tool.
+func isCatalogPart(part *ai.Part, tool string) bool {
+	marked, _ := part.Metadata[skillsMarker].(bool)
+	return marked && ownsPart(part.Metadata, tool)
+}
+
+// ownsPart reports whether a part marked by this middleware belongs to the
+// instance whose activation tool is named tool.
 //
-// A bare true is accepted from any instance. That is what this middleware wrote
-// before the value carried an instance identity, and what the JS and Python
-// runtimes write today, so a conversation persisted by an older Go build or
-// started in another runtime has its catalog refreshed rather than gaining a
-// second, stale copy. Refreshing rewrites the value, so a history self-heals on
-// its first turn. Two instances would both claim such a part, but two instances
-// could not have produced one: before the identity existed they collided on the
+// A part without skillsToolMetadataKey is claimed by any instance. The JS and
+// Python runtimes, and earlier Go builds, mark the catalog without it, so a
+// conversation started there has its catalog refreshed rather than gaining a
+// second, stale copy. Refreshing adds the key, so a history self-heals on its
+// first turn. Two instances would both claim such a part, but two instances
+// could not have produced one: before the key existed they collided on the
 // tool name and failed the request outright.
-func ownsMarker(value any, marker string) bool {
-	switch v := value.(type) {
-	case string:
-		return v == marker
-	case bool:
-		return v
-	default:
-		return false
-	}
+func ownsPart(meta map[string]any, tool string) bool {
+	owner, ok := meta[skillsToolMetadataKey].(string)
+	return !ok || owner == tool
 }
 
 // newSkillsPart builds the text part that carries the skills catalog.
 func (s *Skills) newSkillsPart(text string) *ai.Part {
 	p := ai.NewTextPart(text)
-	p.Metadata = map[string]any{skillsMarker: s.toolName(SkillToolName)}
+	p.Metadata = map[string]any{
+		skillsMarker:          true,
+		skillsToolMetadataKey: s.toolName(SkillToolName),
+	}
 	return p
 }
 
