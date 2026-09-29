@@ -1075,7 +1075,7 @@ function fromThoughtContent(content: ThoughtContent): Part {
         if (c.type === 'text') return c.text;
         return '[Image]';
       })
-      .join('\n');
+      .join('');
   }
 
   return {
