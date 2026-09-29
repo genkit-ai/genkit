@@ -201,8 +201,8 @@ class TestClosedRejectSet:
             GoogleAI.gemini_model('virtual-try-on-001')
         with pytest.raises(GenkitError, match=r'GoogleAI\.gemini_image_model'):
             GoogleAI.gemini_model('imagen-4.0-generate-001')
-        with pytest.raises(GenkitError, match=r'VertexAI\.gemini_image_model'):
-            VertexAI.gemini_image_model('imagen-3.0-generate-002')
+        with pytest.raises(GenkitError, match=r'for image generation use VertexAI\.gemini_image_model\(\)'):
+            VertexAI.gemini_model('imagen-3.0-generate-002')
         with pytest.raises(GenkitError, match=r'is not a gemma model'):
             GoogleAI.gemma_model('totally-new-model')
 
@@ -303,12 +303,20 @@ class TestNoImagenSurface:
 
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
     def test_every_constructor_rejects_imagen_ids(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
-        """An imagen- id is refused by every family constructor with the image hint."""
-        for method in ('gemini_model', 'gemini_tts_model', 'gemini_image_model', 'gemma_model'):
+        """An imagen- id is refused by every other family constructor with the image hint."""
+        for method in ('gemini_model', 'gemini_tts_model', 'gemma_model'):
             with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
                 getattr(plugin, method)('imagen-4.0-generate-001')
         with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
             plugin.embedding('imagen-4.0-generate-001')
+
+    @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
+    def test_gemini_image_model_does_not_suggest_itself(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """gemini_image_model refuses an imagen- id without pointing back at itself."""
+        with pytest.raises(GenkitError) as exc_info:
+            plugin.gemini_image_model('imagen-4.0-generate-001')
+        assert 'is not a supported model' in str(exc_info.value)
+        assert 'for image generation' not in str(exc_info.value)
 
     @pytest.mark.parametrize('bad_id', ['imagegeneration@006', 'imagetext@001', 'virtual-try-on-001'])
     def test_other_unsupported_ids_omit_the_image_hint(self, bad_id: str) -> None:
