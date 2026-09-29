@@ -1242,6 +1242,7 @@ class GeminiModel:
         defs: dict[str, object] | None = None,
         *,
         strict: bool = False,
+        refs: frozenset[str] = frozenset(),
     ) -> genai_types.Schema | None:
         """Convert a JSON Schema dict into a Gemini ``Schema``.
 
@@ -1251,8 +1252,8 @@ class GeminiModel:
         to a one-value ``enum``. An ``enum`` is kept only on a STRING node
         whose members are all strings, dropping a ``null`` member; a node
         with such an ``enum`` and no ``type`` is treated as a string. Any
-        other node with no ``type`` converts to None and is left out of its
-        parent.
+        other node with no ``type``, and a ``$ref`` back to a definition that
+        contains it, converts to None and is left out of its parent.
 
         Args:
             input_schema: A JSON Schema dict.
@@ -1261,6 +1262,7 @@ class GeminiModel:
                 without a ``type``, for a required property that converts to
                 None and for a keyword value that cannot be coerced, instead
                 of leaving them out.
+            refs: Names of the definitions being expanded on the current path.
 
         Returns:
             Schema or None
@@ -1279,11 +1281,18 @@ class GeminiModel:
                 ref_name = ref_tokens[-1]
 
                 if defs is None or ref_name not in defs:
-                    raise ValueError(f'Failed to resolve schema for {ref_name}')
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{self._version}: schema $ref {ref_path!r} cannot be resolved',
+                    )
+                if ref_name in refs:
+                    return None
 
                 ref_schema = defs[ref_name]
                 if isinstance(ref_schema, dict):
-                    schema = self._convert_schema_property(cast(dict[str, object], ref_schema), defs, strict=strict)
+                    schema = self._convert_schema_property(
+                        cast(dict[str, object], ref_schema), defs, strict=strict, refs=refs | {ref_name}
+                    )
                 else:
                     schema = None
 
@@ -1295,14 +1304,14 @@ class GeminiModel:
         for keyword in ('anyOf', 'oneOf'):
             branches = input_schema.get(keyword)
             if isinstance(branches, list):
-                return self._convert_union(input_schema, cast(list[object], branches), defs, strict=strict)
+                return self._convert_union(input_schema, cast(list[object], branches), defs, strict=strict, refs=refs)
 
         if 'type' not in input_schema:
             enum = input_schema.get('enum')
             if isinstance(enum, list) and self._string_enum_members(cast(list[object], enum)) is not None:
                 nullable = any(m is None for m in cast(list[object], enum))
                 typed: dict[str, object] = {**input_schema, 'type': ['string', 'null'] if nullable else 'string'}
-                return self._convert_schema_property(typed, defs, strict=strict)
+                return self._convert_schema_property(typed, defs, strict=strict, refs=refs)
             if strict:
                 unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
                 if unsupported:
@@ -1347,7 +1356,9 @@ class GeminiModel:
         if schema_type == genai_types.Type.ARRAY:
             items_value = input_schema.get('items')
             if isinstance(items_value, dict):
-                schema.items = self._convert_schema_property(cast(dict[str, object], items_value), defs, strict=strict)
+                schema.items = self._convert_schema_property(
+                    cast(dict[str, object], items_value), defs, strict=strict, refs=refs
+                )
 
         if schema_type == genai_types.Type.OBJECT:
             schema.properties = {}
@@ -1355,13 +1366,13 @@ class GeminiModel:
             if isinstance(properties_value, dict):
                 properties = cast(dict[str, dict[str, object]], properties_value)
                 for key in properties:
-                    nested_schema = self._convert_schema_property(properties[key], defs, strict=strict)
+                    nested_schema = self._convert_schema_property(properties[key], defs, strict=strict, refs=refs)
                     if nested_schema is not None:
                         schema.properties[key] = nested_schema
                     elif strict and key in (schema.required or ()):
                         raise GenkitError(
                             status='INVALID_ARGUMENT',
-                            message=f'{self._version}: required property {key} has no type and cannot be converted',
+                            message=f'{self._version}: required property {key} cannot be converted',
                         )
 
         return schema
@@ -1373,11 +1384,14 @@ class GeminiModel:
         defs: dict[str, object] | None,
         *,
         strict: bool,
+        refs: frozenset[str],
     ) -> genai_types.Schema | None:
         """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``."""
         branches = [cast(dict[str, object], b) for b in union if isinstance(b, dict)]
         typed = [b for b in branches if b.get('type') != 'null']
-        converted = [s for b in typed if (s := self._convert_schema_property(b, defs, strict=strict)) is not None]
+        converted = [
+            s for b in typed if (s := self._convert_schema_property(b, defs, strict=strict, refs=refs)) is not None
+        ]
         if not converted:
             return None
 

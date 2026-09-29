@@ -974,6 +974,11 @@ def test_gemini_model__convert_schema_property(
             {'type': 'OBJECT', 'properties': {'user': {'$ref': '#/$defs/NonExistent'}}},
             None,
         ),
+        # Test Case 13: $ref to the document root
+        (
+            {'type': 'OBJECT', 'properties': {'user': {'$ref': '#'}}},
+            None,
+        ),
     ],
 )
 def test_gemini_model__convert_schema_property_raises_exception(
@@ -982,8 +987,96 @@ def test_gemini_model__convert_schema_property_raises_exception(
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Test GeminiModel._convert_schema_property raises an exception for unresolvable schemas."""
-    with pytest.raises(ValueError, match=r'Failed to resolve schema for .*'):
+    with pytest.raises(GenkitError) as exc_info:
         gemini_model_instance._convert_schema_property(input_schema, defs)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'cannot be resolved' in exc_info.value.original_message
+
+
+class _LinkedList(BaseModel):
+    value: int
+    next: '_LinkedList | None' = None
+
+
+class _RequiredLinkedList(BaseModel):
+    value: int
+    next: '_RequiredLinkedList | None'
+
+
+class _Tree(BaseModel):
+    children: list['_Tree'] = []
+
+
+def test_gemini_model__create_tool_leaves_out_recursive_param(gemini_model_instance: GeminiModel) -> None:
+    """A property that refers back to a model that contains it is left out."""
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(_LinkedList))
+
+    declarations = gemini_model_instance._create_tool(tool).function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        title='_LinkedList',
+        required=['value'],
+        properties={'value': genai_types.Schema(type=genai_types.Type.INTEGER, title='Value')},
+    )
+
+
+def test_gemini_model__create_tool_leaves_out_recursive_items(gemini_model_instance: GeminiModel) -> None:
+    """Array items that refer back to a model that contains them are left out."""
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(_Tree))
+
+    declarations = gemini_model_instance._create_tool(tool).function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        title='_Tree',
+        properties={'children': genai_types.Schema(type=genai_types.Type.ARRAY, title='Children', default=[])},
+    )
+
+
+def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode an optional recursive property is left out rather than raising."""
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(_LinkedList), strict=True)
+
+    assert schema is not None and list(schema.properties or {}) == ['value']
+
+
+def test_gemini_model__convert_schema_property_strict_rejects_required_recursive_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a required recursive property cannot be left out, so it raises naming the property."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(_RequiredLinkedList), strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'next' in exc_info.value.original_message
+
+
+def test_gemini_model__convert_schema_property_expands_repeated_ref(gemini_model_instance: GeminiModel) -> None:
+    """A definition used by two sibling properties is expanded for both."""
+
+    class Point(BaseModel):
+        x: int
+
+    class Segment(BaseModel):
+        start: Point
+        end: Point
+
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(Segment))
+
+    assert schema is not None and schema.properties is not None
+    point = genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        title='Point',
+        required=['x'],
+        properties={'x': genai_types.Schema(type=genai_types.Type.INTEGER, title='X')},
+    )
+    assert schema.properties == {'start': point, 'end': point}
 
 
 def test_gemini_model__convert_schema_property_keeps_keywords(gemini_model_instance: GeminiModel) -> None:
