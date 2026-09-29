@@ -329,6 +329,50 @@ const response = await ai.generate({
 });
 ```
 
+## Interactions API Architecture & `response.raw`
+
+For newer Gemini models accessed through the `googleAI()` plugin, requests are routed through Google's modern **Interactions API** (`/v1beta/interactions`) rather than the legacy `generateContent` API.
+
+### Model Routing
+
+- **Interactions API Models:**
+  - `gemini-flash-latest`
+  - `gemini-pro-latest`
+  - `gemini-flash-lite-latest`
+  - `gemini-3.6-flash`
+  - `gemini-3.5-flash-lite`
+  - `gemini-3.1-flash-lite-image`
+  - Autonomous agents (`deep-research-preview-*`, `antigravity-preview-*`)
+  - Any new or unlisted future models (default backend)
+- **`generateContent` Models:**
+  - Earlier Gemini models (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, `gemini-3.1-pro-preview`, etc.)
+  - Dedicated preview TTS models (`gemini-2.5-flash-preview-tts`, etc.)
+
+### Standard Genkit Output vs. `response.raw`
+
+For common use cases, the Genkit abstraction is completely unified: `response.text`, `response.reasoning`, `response.message`, streaming (`for await (const chunk of stream)`), and tool calling work identically regardless of which API backend is used.
+
+However, if your code directly inspects the underlying provider payload via `response.raw`, be aware of the architectural difference:
+
+- **`generateContent` payload:**
+  Returns a `GenerateContentResponse` with `candidates[]`. Grounding metadata and citations are located on `candidates[0].groundingMetadata`.
+- **`Interactions API` payload:**
+  Returns a `GeminiInteraction` object with `id`, `status`, and an execution timeline array: `steps[]`.
+  - **Tool Invocations:** Intermediate server-side tool calls (such as Google Search and Code Execution) and tool results are always represented as explicit steps (`google_search_call`, `code_execution_call`, etc.).
+  - **Grounding Citations:** Search/Maps grounding citations are located inside content annotations within the `model_output` step:
+    ```typescript
+    const raw = response.raw as any;
+    const annotations = raw.steps
+      ?.find((step: any) => step.content?.some((c: any) => c.annotations))
+      ?.content.find((c: any) => c.annotations)?.annotations;
+    ```
+
+### Key Differences on the Interactions Path
+
+1. **Safety Settings:** Custom safety settings are not supported in the Interactions API. Passing `safetySettings` to an Interactions model will throw an `INVALID_ARGUMENT` error to prevent silently ignoring safety policies.
+2. **Server-Side Tool Invocations:** The Interactions API always includes intermediate tool invocations in the execution steps, so `toolConfig.includeServerSideToolInvocations` is unnecessary.
+3. **Multi-Turn State Management:** Interactions models support server-side state continuity across requests by passing `config: { previousInteractionId: "..." }`.
+
 ## Key Differences
 
 -   **`googleAI`**: Easier setup for smaller projects, great for prototyping with Google AI Studio. Uses API keys.

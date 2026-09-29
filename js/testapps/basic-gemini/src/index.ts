@@ -542,6 +542,21 @@ const getCharacterName = ai.defineTool(
   }
 );
 
+const getRecentScores = ai.defineTool(
+  {
+    name: 'getRecentScores',
+    description: 'Returns a list of recent numeric game scores for a player',
+    inputSchema: z.object({
+      player: z.string().describe('Player name'),
+    }),
+    outputSchema: z.array(z.number()),
+  },
+  async ({ player }) => {
+    // Returns a plain array of numbers
+    return [98, 100, 87, 92];
+  }
+);
+
 // Streaming tool calling test
 ai.defineFlow(
   {
@@ -613,6 +628,28 @@ ai.defineFlow(
 
     for await (const chunk of stream) {
       sendChunk(chunk.content);
+    }
+
+    return (await response).text;
+  }
+);
+
+// Flow demonstrating a tool returning a plain array
+ai.defineFlow(
+  {
+    name: 'tool-returning-array',
+    inputSchema: z.string().default('Alice'),
+    outputSchema: z.string(),
+  },
+  async (player, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: googleAI.model('gemini-flash-latest'),
+      tools: [getRecentScores],
+      prompt: `Get the recent scores for player ${player}, calculate the average score, and give me a summary.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk.text);
     }
 
     return (await response).text;

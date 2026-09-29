@@ -665,6 +665,32 @@ describe('Interaction Converters', () => {
         }
       );
     });
+
+    it('wraps plain array tool output in result object', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'listTool',
+                ref: 'call-1',
+                output: [1, 2, 3],
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'function_result',
+          name: 'listTool',
+          call_id: 'call-1',
+          result: { result: [1, 2, 3] },
+        },
+      ]);
+    });
   });
 
   describe('fromInteractionContent', () => {
@@ -799,6 +825,51 @@ describe('Interaction Converters', () => {
         toolResponse: {
           name: 'get_weather',
           output: { temperature: 20 },
+          ref: 'call_123',
+        },
+      });
+    });
+
+    it('should convert FunctionResultContent with plain array result into tool output', () => {
+      const content: Content = {
+        type: 'function_result',
+        name: 'list_items',
+        result: [1, 2, 3] as any,
+        call_id: 'call_123',
+      };
+      const result = fromInteractionContent(content);
+      assert.deepStrictEqual(result, {
+        toolResponse: {
+          name: 'list_items',
+          output: [1, 2, 3],
+          ref: 'call_123',
+        },
+      });
+    });
+
+    it('should convert FunctionResultContent with multimodal Content array into tool content', () => {
+      const content: Content = {
+        type: 'function_result',
+        name: 'multimodal_tool',
+        result: [
+          { type: 'text', text: 'description' },
+          { type: 'image', uri: 'https://example.com/img.png' },
+        ] as any,
+        call_id: 'call_123',
+      };
+      const result = fromInteractionContent(content);
+      assert.deepStrictEqual(result, {
+        toolResponse: {
+          name: 'multimodal_tool',
+          content: [
+            { text: 'description', metadata: { annotations: undefined } },
+            {
+              media: {
+                url: 'https://example.com/img.png',
+                contentType: undefined,
+              },
+            },
+          ],
           ref: 'call_123',
         },
       });

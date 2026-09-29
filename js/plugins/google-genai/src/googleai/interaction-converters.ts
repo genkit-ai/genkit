@@ -591,9 +591,8 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
           }
           result = contentParts;
         } else if (
-          typeof result !== 'object' &&
-          typeof result !== 'string' &&
-          result !== undefined
+          (typeof result !== 'object' && typeof result !== 'string') ||
+          Array.isArray(result)
         ) {
           result = { result: result };
         }
@@ -1099,8 +1098,22 @@ function fromFunctionCallContent(content: FunctionCallContent): Part {
   };
 }
 
+function isContentArray(val: unknown): val is Content[] {
+  return (
+    Array.isArray(val) &&
+    val.length > 0 &&
+    val.every(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        'type' in item &&
+        typeof (item as any).type === 'string'
+    )
+  );
+}
+
 function fromFunctionResultContent(content: FunctionResultContent): Part {
-  if (Array.isArray(content.result)) {
+  if (isContentArray(content.result)) {
     return {
       toolResponse: {
         name: content.name,
