@@ -305,6 +305,50 @@ ai.defineFlow(
   }
 );
 
+ai.defineFlow(
+  'streaming-thoughts',
+  async (promptInput: string | undefined, { sendChunk }) => {
+    const prompt =
+      promptInput ??
+      'Which is larger, 9.11 or 9.9? Explain your reasoning step by step.';
+
+    const { stream, response } = ai.generateStream({
+      model: googleAI.model('gemini-flash-latest'),
+      prompt,
+      config: {
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingLevel: 'HIGH',
+        },
+      },
+    });
+
+    let streamedReasoning = '';
+    let streamedText = '';
+
+    for await (const chunk of stream) {
+      if (chunk.reasoning) {
+        streamedReasoning += chunk.reasoning;
+        sendChunk({ type: 'thought', text: chunk.reasoning });
+      }
+      if (chunk.text) {
+        streamedText += chunk.text;
+        sendChunk({ type: 'text', text: chunk.text });
+      }
+    }
+
+    const finalResponse = await response;
+
+    return {
+      streamedReasoning,
+      streamedText,
+      finalReasoning: finalResponse.reasoning,
+      finalText: finalResponse.text,
+      reasoningMatches: streamedReasoning === finalResponse.reasoning,
+    };
+  }
+);
+
 // Multimodal input
 ai.defineFlow('multimodal-input', async () => {
   const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
