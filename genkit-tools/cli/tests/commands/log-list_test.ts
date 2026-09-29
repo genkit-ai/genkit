@@ -249,4 +249,19 @@ describe('log:list command', () => {
       expect.stringContaining('Error listing logs: Error: API failure')
     );
   });
+
+  it.each(['0', '-1', '1.5', '10abc'])(
+    'should reject invalid limit "%s" before starting manager',
+    async (limit) => {
+      const cmd = logList
+        .exitOverride()
+        .configureOutput({ writeOut: () => {}, writeErr: () => {} });
+      await expect(
+        cmd.parseAsync(['node', 'log:list', '--limit', limit])
+      ).rejects.toThrow(
+        /option '-l, --limit <number>' argument '.*' is invalid/
+      );
+      expect(runWithManager).not.toHaveBeenCalled();
+    }
+  );
 });

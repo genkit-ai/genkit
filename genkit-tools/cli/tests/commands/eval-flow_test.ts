@@ -28,4 +28,16 @@ describe('eval:flow', () => {
       command.parse(['node', 'eval:flow']);
     }).toThrowError(new Error("error: missing required argument 'flowName'"));
   });
+
+  it('fails if invalid output-format is passed', () => {
+    expect(() => {
+      command.parse(['node', 'eval:flow', 'myFlow', '--output-format', 'xml']);
+    }).toThrow(/option '--output-format <format>' argument 'xml' is invalid/);
+  });
+
+  it('fails if invalid JSON is passed to --context', () => {
+    expect(() => {
+      command.parse(['node', 'eval:flow', 'myFlow', '--context', '{bad}']);
+    }).toThrow(/option '-c, --context <JSON>' argument '\{bad\}' is invalid/);
+  });
 });

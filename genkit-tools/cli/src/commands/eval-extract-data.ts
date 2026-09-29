@@ -30,10 +30,11 @@ import * as clc from 'colorette';
 import { Command } from 'commander';
 import { writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
+import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalDatasetOptions {
   output?: string;
-  maxRows: string;
+  maxRows: number;
   label?: string;
 }
 
@@ -45,9 +46,15 @@ export const evalExtractData = new Command('eval:extractData')
     '--output <filename>',
     'name of the output file to store the extracted data'
   )
-  .option('--maxRows <maxRows>', 'maximum number of rows', '100')
-  .option('--label [label]', 'only extract traces with this batchRun label')
+  .option(
+    '--maxRows <maxRows>',
+    'maximum number of rows',
+    parsePositiveInt,
+    100
+  )
+  .option('--label <label>', 'only extract traces with this batchRun label')
   .action(async (flowName: string, options: EvalDatasetOptions) => {
+    const { maxRows } = options;
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
     if (dashDashIndex !== -1) {
@@ -62,9 +69,9 @@ export const evalExtractData = new Command('eval:extractData')
       logger.debug(`Extracting trace data '/flow/${flowName}'...`);
       let dataset: EvalInputDataset = [];
       let continuationToken = undefined;
-      while (dataset.length < Number.parseInt(options.maxRows)) {
+      while (dataset.length < maxRows) {
         const response = await manager.listTraces({
-          limit: Number.parseInt(options.maxRows),
+          limit: maxRows,
           continuationToken,
         });
         continuationToken = response.continuationToken;
@@ -99,8 +106,8 @@ export const evalExtractData = new Command('eval:extractData')
           })
           .filter((result): result is EvalInput => !!result);
         batch.forEach((d) => dataset.push(d));
-        if (dataset.length > Number.parseInt(options.maxRows)) {
-          dataset = dataset.splice(0, Number.parseInt(options.maxRows));
+        if (dataset.length > maxRows) {
+          dataset = dataset.splice(0, maxRows);
           break;
         }
         if (!continuationToken) {

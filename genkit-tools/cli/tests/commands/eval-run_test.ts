@@ -29,4 +29,16 @@ describe('eval:run', () => {
         .parse(['node', 'eval:run']);
     }).toThrowError(new Error("error: missing required argument 'dataset'"));
   });
+
+  it('fails if invalid output-format is passed', () => {
+    expect(() => {
+      evalRun
+        .exitOverride()
+        .configureOutput({
+          writeOut: () => {},
+          writeErr: () => {},
+        })
+        .parse(['node', 'eval:run', 'data.json', '--output-format', 'xml']);
+    }).toThrow(/option '--output-format <format>' argument 'xml' is invalid/);
+  });
 });

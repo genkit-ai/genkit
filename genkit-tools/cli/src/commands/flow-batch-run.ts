@@ -20,11 +20,12 @@ import * as clc from 'colorette';
 import { Command, Option } from 'commander';
 import { readFile, writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
+import { parseJson } from '../utils/option-parsers';
 
 interface FlowBatchRunOptions {
   output?: string;
   label?: string;
-  context?: string;
+  context?: any;
 }
 
 /** Command to run flows with batch input. */
@@ -44,9 +45,9 @@ export const flowBatchRun = new Command('flow:batchRun')
       .default(false)
       .hideHelp()
   )
-  .option('-c, --context <JSON>', 'JSON object passed to context', '')
+  .option('-c, --context <JSON>', 'JSON object passed to context', parseJson)
   .option('--output <filename>', 'name of the output file to store the output')
-  .option('--label [label]', 'label flow run in this batch')
+  .option('--label <label>', 'label flow run in this batch')
   .action(
     async (
       flowName: string,
@@ -93,7 +94,7 @@ export const flowBatchRun = new Command('flow:batchRun')
           const response = await manager.runAction({
             key: `/flow/${flowName}`,
             input: data,
-            context: options.context ? JSON.parse(options.context) : undefined,
+            context: options.context,
             telemetryLabels: options.label
               ? { batchRun: options.label }
               : undefined,

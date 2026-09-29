@@ -26,10 +26,11 @@ import {
   startDevProcessManager,
   startManager,
 } from '../utils/manager-utils';
+import { parsePort } from '../utils/option-parsers';
 
 interface RunOptions {
   noui?: boolean;
-  port?: string;
+  port?: number;
   host?: string;
   open?: boolean;
   disableRealtimeTelemetry?: boolean;
@@ -43,7 +44,7 @@ export const start = new Command('start')
   .usage('[options] [-- <command...>]')
   .description('runs a command in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)
-  .option('-p, --port <port>', 'port for the Dev UI')
+  .option('-p, --port <port>', 'port for the Dev UI', parsePort)
   .option(
     '--host <host>',
     'host/interface to bind the Dev UI to (defaults to 127.0.0.1). ' +
@@ -121,19 +122,19 @@ export const start = new Command('start')
       processPromise = new Promise(() => {});
     }
     if (!options.noui) {
-      let port: number;
-      if (options.port) {
-        port = Number(options.port);
-        if (isNaN(port) || port < 0) {
-          logger.error(`"${options.port}" is not a valid port number`);
-          return;
-        }
-      } else {
-        port = await getPort({ port: makeRange(4000, 4099) });
-      }
+      const port =
+        options.port ?? (await getPort({ port: makeRange(4000, 4099) }));
       startServer(manager, port, options.host);
       if (options.open) {
-        open(`http://localhost:${port}`);
+        const openHost =
+          options.host && options.host !== '0.0.0.0' && options.host !== '::'
+            ? options.host
+            : 'localhost';
+        const formattedHost =
+          openHost.includes(':') && !openHost.startsWith('[')
+            ? `[${openHost}]`
+            : openHost;
+        open(`http://${formattedHost}:${port}`);
       }
     }
     await processPromise;

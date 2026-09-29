@@ -30,8 +30,9 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalRunCliOptions {
   output?: string;
@@ -53,10 +54,10 @@ export const evalRun = new Command('eval:run')
     '--output <filename>',
     'name of the output file to write evaluation results'
   )
-  .option(
-    '--output-format <format>',
-    'The output file format (csv, json)',
-    'json'
+  .addOption(
+    new Option('--output-format <format>', 'The output file format')
+      .choices(['json', 'csv'])
+      .default('json')
   )
   .option(
     '--evaluators <evaluators>',
@@ -64,8 +65,8 @@ export const evalRun = new Command('eval:run')
   )
   .option(
     '--batchSize <batchSize>',
-    'batch size to use for parallel evals (default to 1, no parallelization)',
-    Number.parseInt
+    'batch size to use for parallel evals (defaults to 1, no parallelization)',
+    parsePositiveInt
   )
   .option('--force', 'Automatically accept all interactive prompts')
   .action(async (dataset: string, options: EvalRunCliOptions) => {
