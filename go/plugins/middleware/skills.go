@@ -150,8 +150,10 @@ const skillAlreadyLoadedStub = "Skill %q is already loaded in this conversation;
 type Skills struct {
 	// SkillPaths lists directories that are scanned for skills. Each direct
 	// subdirectory containing a SKILL.md file is exposed as a skill; scanning
-	// is one level deep and does not follow symbolic links. Relative paths
-	// resolve against the process working directory.
+	// is one level deep. A symbolic link to a skill directory is followed, as
+	// skill installers commonly create them, but a SKILL.md that is itself a
+	// symbolic link is not. Relative paths resolve against the process working
+	// directory.
 	//
 	// When two paths hold a skill of the same name the later path wins, and
 	// the shadowing is logged.
@@ -650,20 +652,7 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 			continue
 		}
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			// IsDir is false for a symbolic link, so a linked skill directory
-			// is not followed. Linking a skill in is a common way to install
-			// one, so the skip is reported rather than silent.
-			if entry.Type()&fs.ModeSymlink != 0 {
-				if st, err := os.Stat(filepath.Join(abs, entry.Name())); err == nil && st.IsDir() {
-					logger.Warn(ctx, "skill directory is a symbolic link, which is not followed; skipping",
-						"path", filepath.Join(abs, entry.Name()))
-				}
-				continue
-			}
-			if !entry.IsDir() {
+			if strings.HasPrefix(entry.Name(), ".") || !isDirEntry(abs, entry) {
 				continue
 			}
 			si, ok := readSkillDir(ctx, abs, entry.Name(), slices.Contains(retain, entry.Name()))
@@ -671,13 +660,43 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 				continue
 			}
 			if prev, dup := result[si.Name]; dup {
-				logger.Warn(ctx, "skill name found in more than one path, the later path wins",
-					"skill", si.Name, "shadowed", prev.Path, "using", si.Path)
+				// An installer that links one copy of a skill into several
+				// agents' directories makes the same skill appear twice.
+				// Nothing is shadowed then, so there is nothing to warn about.
+				if sameDir(prev.Dir, si.Dir) {
+					logger.Debug(ctx, "skill found in more than one path through a symbolic link",
+						"skill", si.Name, "paths", []string{prev.Path, si.Path})
+				} else {
+					logger.Warn(ctx, "skill name found in more than one path, the later path wins",
+						"skill", si.Name, "shadowed", prev.Path, "using", si.Path)
+				}
 			}
 			result[si.Name] = si
 		}
 	}
 	return result
+}
+
+// isDirEntry reports whether entry, listed in parent, is a directory or a
+// symbolic link to one. Following a link is safe because the target is held to
+// the same rules as any skill: its SKILL.md must be a regular file, and
+// bundled-file reads are confined to it by [os.Root].
+func isDirEntry(parent string, entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(parent, entry.Name()))
+	return err == nil && st.IsDir()
+}
+
+// sameDir reports whether a and b name the same directory.
+func sameDir(a, b string) bool {
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // readSkillDir loads one candidate skill directory, keeping the SKILL.md bytes
@@ -1046,8 +1065,17 @@ func wrapSkillContent(si skillInfo, body, resources string) string {
 // they exist without any of them being read. The optional directory names in
 // the specification are conventions, not a closed set, so everything the skill
 // ships is listed.
+//
+// The walk goes through the [os.Root] the reader uses, so it applies the same
+// containment, and so a skill directory reached through a symbolic link is
+// walked rather than reported as a single link entry.
 func listSkillResources(ctx context.Context, dir, toolName string) string {
-	root := filepath.Clean(dir)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		logger.Debug(ctx, "skill resources could not be listed", "path", dir, "error", err)
+		return ""
+	}
+	defer root.Close()
 	var (
 		files     []string
 		truncated bool
@@ -1056,17 +1084,12 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 	// so WalkDir has nothing left to return. An unreadable corner of a skill
 	// directory costs the model that listing, not the activation, which is why
 	// this degrades rather than propagating.
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			logger.Debug(ctx, "skill resource could not be listed, skipping",
-				"path", p, "error", err)
+				"path", filepath.Join(dir, filepath.FromSlash(rel)), "error", err)
 			return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
 		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
 		if rel == "." {
 			return nil
 		}
@@ -1124,17 +1147,12 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 }
 
 // linksToRegularFile reports whether d is a symbolic link that resolves, inside
-// the skill directory dir, to a regular file. It applies the containment the
-// reader applies, so the listing never advertises a link the reader refuses.
-func linksToRegularFile(dir, rel string, d fs.DirEntry) bool {
+// root, to a regular file. It applies the containment the reader applies, so
+// the listing never advertises a link the reader refuses.
+func linksToRegularFile(root *os.Root, rel string, d fs.DirEntry) bool {
 	if d.Type()&fs.ModeSymlink == 0 {
 		return false
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return false
-	}
-	defer root.Close()
 	st, err := root.Stat(filepath.FromSlash(rel))
 	return err == nil && st.Mode().IsRegular()
 }

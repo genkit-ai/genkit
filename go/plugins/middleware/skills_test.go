@@ -692,26 +692,39 @@ func TestSkillsSkipsOversizedSkillMd(t *testing.T) {
 	}
 }
 
-// A symlinked skill directory is not followed. This pins today's behavior so a
-// future change cannot start following links without a deliberate decision.
-func TestSkillsSkipsSymlinkedSkillDirectory(t *testing.T) {
+// Skill installers link one copy of a skill into each agent's directory, so a
+// symlinked skill directory is followed. Its bundled files are listed and read
+// through the link: a walk that stops at a link root would list nothing.
+func TestSkillsFollowsSymlinkedSkillDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs elevation on Windows")
 	}
 	tmp := t.TempDir()
-	real := filepath.Join(tmp, "elsewhere")
-	writeSkill(t, real, "linked", "---\nname: linked\ndescription: d\n---\nbody")
+	real := writeSkill(t, filepath.Join(tmp, "elsewhere"), "linked", "---\nname: linked\ndescription: d\n---\nbody")
+	if err := os.MkdirAll(filepath.Join(real, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "references", "api.md"), []byte("reference body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	skillsDir := filepath.Join(tmp, "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(real, "linked"), filepath.Join(skillsDir, "linked")); err != nil {
+	if err := os.Symlink(real, filepath.Join(skillsDir, "linked")); err != nil {
 		t.Fatal(err)
 	}
 
-	if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
-		t.Errorf("scanned %v, want no skills: a symlinked skill directory is not followed", sortedNames(info))
+	s := &Skills{SkillPaths: []string{skillsDir}, AllowResourceAccess: true}
+	out := callSkillTool(t, s, "linked", SkillToolName, map[string]any{"skillName": "linked"})
+	if !strings.Contains(out, "body") || !strings.Contains(out, "references/api.md") {
+		t.Errorf("activation = %q, want the body and its bundled file", out)
+	}
+	got := callSkillTool(t, s, "linked-read", SkillResourceToolName,
+		map[string]any{"skillName": "linked", "filePath": "references/api.md"})
+	if got != "reference body" {
+		t.Errorf("read = %q, want %q", got, "reference body")
 	}
 }
 
