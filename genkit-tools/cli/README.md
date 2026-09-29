@@ -20,42 +20,66 @@ To install the CLI:
 npm install -g genkit-cli
 ```
 
-Available commands:
+Available commands (run `genkit help <command>` for the options of each command):
 
-- `init [options]`
+- `start [options] [-- <command...>]`
 
-  initialize a project directory with Genkit
+  run a command in Genkit dev mode and start the Developer UI
 
-- `start [options]`
+- `start:flutter [options]`
 
-  run the app in dev mode and start a Developer UI
+  run a Flutter app in Genkit dev mode
 
-- `flow:run [options] <flowName> [data]`
+- `flow:run [options] <flowName> [data] [-- <command...>]`
 
   run a flow using provided data as input
 
-- `flow:batchRun [options] <flowName> <inputFileName>`
+- `flow:batchRun [options] <flowName> <inputFileName> [-- <command...>]`
 
   batch run a flow using provided set of data from a file as input
 
-- `flow:resume <flowName> <flowId> <data>`
-
-  resume an interrupted flow (experimental)
-
 - `eval:extractData [options] <flowName>`
 
-  extract evaludation data for a given flow from the trace store
+  extract evaluation data for a given flow from the trace store
 
-- `eval:run [options] <dataset>`
+- `eval:run [options] <dataset> [-- <command...>]`
 
   evaluate provided dataset against configured evaluators
 
-- `eval:flow [options] <flowName> [data]`
+- `eval:flow [options] <flowName> [data] [-- <command...>]`
 
   evaluate a flow against configured evaluators using provided data as input
+
+- `trace:list [options]`
+
+  list traces
+
+- `trace:get [options] <traceId>`
+
+  get a trace by id
+
+- `log:list [options]`
+
+  list logs, in reverse chronological order
+
+- `docs:list [language]`, `docs:search <query> [language]`, `docs:read <filePath>`
+
+  list, search, and read Genkit documentation
+
+- `init:ai-tools [options]`
+
+  initialize AI tools in a workspace with context about Genkit (experimental)
+
+- `mcp [options]`
+
+  run the Genkit MCP stdio server (experimental)
+
+- `dev:test-model [options] [modelOrCmd] [args...]`
+
+  test a model against the Genkit model specification
 
 - `config`
 
   set development environment configuration
 
-- `help`
+- `help [command]`

@@ -15,4 +15,4 @@ To run this example:
    ```
 
 > Note: Due to a known issue, testing of flows should be conducted via the CLI via genkit flow:run etc.
-> Tools and other actions can still be inspected in the UI with `genkit ui:start`
+> Tools and other actions can still be inspected in the Developer UI started by `genkit start`

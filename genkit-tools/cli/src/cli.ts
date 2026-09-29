@@ -146,7 +146,12 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  for (const command of commands) program.addCommand(command);
+  const deprecatedCommands = new Set([uiStart, uiStop]);
+  for (const command of commands) {
+    program.addCommand(command, {
+      hidden: deprecatedCommands.has(command),
+    });
+  }
   for (const command of await getPluginCommands()) program.addCommand(command);
 
   for (const cmd of ToolPluginSubCommandsSchema.keyof().options) {
@@ -155,11 +160,6 @@ export async function startCLI(): Promise<void> {
       program.addCommand(command);
     }
   }
-  program.addCommand(
-    new Command('help').action(() => {
-      logger.info(program.help());
-    })
-  );
   // Handle unknown commands.
   program.on('command:*', (operands) => {
     logger.error(`error: unknown command '${operands[0]}'`);

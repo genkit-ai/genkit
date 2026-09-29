@@ -33,4 +33,4 @@ ollama pull nomic-embed-text
 ollama pull phi3.5:latest
 ```
 
-Now you may start the testapp in dev with `pnpm run genkit:dev` and then `genkit ui:start`
+Now you may start the testapp and the Developer UI with `pnpm run genkit:dev`

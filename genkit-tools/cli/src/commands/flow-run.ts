@@ -17,12 +17,11 @@
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
 
 interface FlowRunOptions {
-  wait?: boolean;
   output?: string;
   stream?: boolean;
   context?: string;
@@ -30,15 +29,24 @@ interface FlowRunOptions {
 
 /** Command to run a flow. */
 export const flowRun = new Command('flow:run')
+  .usage('[options] <flowName> [data] [-- <command...>]')
   .description('run a flow using provided data as input')
   .argument('<flowName>', 'name of the flow to run')
   .argument('[data]', 'JSON data to use to start the flow')
-  .option('-w, --wait', 'Wait for the flow to complete', false)
+  // Deprecated no-op option kept for backward compatibility; flows always run to completion.
+  .addOption(
+    new Option(
+      '-w, --wait',
+      'Wait for the flow to complete (deprecated: flows always run to completion)'
+    )
+      .default(false)
+      .hideHelp()
+  )
   .option('-s, --stream', 'Stream output', false)
   .option('-c, --context <JSON>', 'JSON object passed to context', '')
   .option(
     '--output <filename>',
-    'name of the output file to store the extracted data'
+    'name of the output file to write the flow result'
   )
   .action(async (flowName: string, data: string, options: FlowRunOptions) => {
     const dashDashIndex = process.argv.indexOf('--');

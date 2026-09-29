@@ -39,14 +39,14 @@ interface EvalDatasetOptions {
 
 /** Command to extract evaluation data. */
 export const evalExtractData = new Command('eval:extractData')
-  .description('extract evaludation data for a given flow from the trace store')
-  .argument('<flowName>', 'name of the flow to run')
+  .description('extract evaluation data for a given flow from the trace store')
+  .argument('<flowName>', 'name of the flow to extract data for')
   .option(
     '--output <filename>',
     'name of the output file to store the extracted data'
   )
   .option('--maxRows <maxRows>', 'maximum number of rows', '100')
-  .option('--label [label]', 'label flow run in this batch')
+  .option('--label [label]', 'only extract traces with this batchRun label')
   .action(async (flowName: string, options: EvalDatasetOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;

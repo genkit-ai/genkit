@@ -46,7 +46,7 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
-    // Redirect logging to stdout for clean JSON
+    // Redirect logging to stderr for clean JSON
     forceStderr();
     const projectRoot = await findProjectRoot();
 

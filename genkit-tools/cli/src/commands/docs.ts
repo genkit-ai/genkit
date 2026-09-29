@@ -21,7 +21,11 @@ import { loadDocs, searchDocs } from '../utils/docs';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')
-  .argument('[language]', 'language to list docs for (js, go, python)', 'js')
+  .argument(
+    '[language]',
+    'language to list docs for (js, go, python, dart)',
+    'js'
+  )
   .action(async (language) => {
     try {
       const documents = await loadDocs();
@@ -59,7 +63,11 @@ export const docsSearch = new Command('docs:search')
     '<query>',
     'keywords to search for. For multiple keywords, enclose in quotes. E.g. "stream flows"'
   )
-  .argument('[language]', 'language to search docs for (js, go, python)', 'js')
+  .argument(
+    '[language]',
+    'language to search docs for (js, go, python, dart)',
+    'js'
+  )
   .action(async (query, language) => {
     try {
       const documents = await loadDocs();

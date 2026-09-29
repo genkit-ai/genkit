@@ -43,6 +43,7 @@ interface EvalRunCliOptions {
 
 /** Command to run evaluation on a dataset. */
 export const evalRun = new Command('eval:run')
+  .usage('[options] <dataset> [-- <command...>]')
   .description('evaluate provided dataset against configured evaluators')
   .argument(
     '<dataset>',
@@ -50,7 +51,7 @@ export const evalRun = new Command('eval:run')
   )
   .option(
     '--output <filename>',
-    'name of the output file to write evaluation results. Defaults to json output.'
+    'name of the output file to write evaluation results'
   )
   .option(
     '--output-format <format>',

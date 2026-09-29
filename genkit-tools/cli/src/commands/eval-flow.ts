@@ -60,6 +60,7 @@ enum SourceType {
 
 /** Command to run a flow and evaluate the output */
 export const evalFlow = new Command('eval:flow')
+  .usage('[options] <flowName> [data] [-- <command...>]')
   .description(
     'evaluate a flow against configured evaluators using provided data as input'
   )
@@ -72,7 +73,7 @@ export const evalFlow = new Command('eval:flow')
   .option('-c, --context <JSON>', 'JSON object passed to context', '')
   .option(
     '-o, --output <filename>',
-    'Name of the output file to write evaluation results. Defaults to json output.'
+    'Name of the output file to write evaluation results'
   )
   // TODO: Figure out why passing a new Option with choices doesn't work
   .option(
@@ -147,7 +148,7 @@ export const evalFlow = new Command('eval:flow')
               : `No evaluators found in your app`
           );
         }
-        logger.debug(
+        logger.info(
           `Using evaluators: ${evaluatorActions.map((action) => action.name).join(',')}`
         );
 

@@ -39,7 +39,7 @@ export const mcp = new Command('mcp')
   )
   .option(
     '--explicitProjectRoot',
-    'Whether runtime dependent tools need projectRoot specified. Needed for use with Google Antigravity',
+    'Require runtime-dependent tools to specify projectRoot explicitly',
     false
   )
   .description('run MCP stdio server (EXPERIMENTAL, subject to change)')

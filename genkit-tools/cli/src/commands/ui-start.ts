@@ -45,11 +45,15 @@ interface StartOptions {
 /** Command to start the Genkit Developer UI. */
 export const uiStart = new Command('ui:start')
   .description(
-    'start the Developer UI which connects to runtimes in the same directory'
+    'start the Developer UI which connects to runtimes in the same directory (deprecated: use `genkit start` instead)'
   )
-  .option('-p, --port <number>', 'Port to serve on (defaults to 4000)')
+  .option(
+    '-p, --port <number>',
+    'Port to serve on (defaults to first available in 4000-4099)'
+  )
   .option('-o, --open', 'Open the browser on UI start up')
   .action(async (options: StartOptions) => {
+    logger.warn('`genkit ui:start` is deprecated. Use `genkit start` instead.');
     let port: number;
     if (options.port) {
       port = Number(options.port);
