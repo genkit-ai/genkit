@@ -371,7 +371,7 @@ However, if your code directly inspects the underlying provider payload via `res
 
 1. **Safety Settings:** Custom safety settings are not supported in the Interactions API. Passing `safetySettings` to an Interactions model will throw an `INVALID_ARGUMENT` error to prevent silently ignoring safety policies.
 2. **Server-Side Tool Invocations:** The Interactions API always includes intermediate tool invocations in the execution steps, so `toolConfig.includeServerSideToolInvocations` is unnecessary.
-3. **Multi-Turn State Management:** Interactions models support server-side state continuity across requests by passing `config: { previousInteractionId: "..." }`.
+3. **Stateless by Default (Store Opt-In):** The upstream Interactions API defaults to storing conversations on Google's servers (`store: true`). To preserve the stateless, privacy-preserving behavior of Genkit's `generateContent`, the plugin explicitly defaults `store: false` for new interactions. Server-side storage is opt-in via request config (`config: { store: true }`) or plugin configuration (`googleAI({ store: true })`). When an interaction is stored, its ID is accessible on `response.message?.metadata?.interactionId` and can be passed to subsequent turns via `config: { previousInteractionId: "..." }` (which automatically defaults `store: true` to continue the session). Note that passing `store: false` while `previousInteractionId` is set is not supported by the API and will throw an `INVALID_ARGUMENT` error.
 
 ## Key Differences
 
