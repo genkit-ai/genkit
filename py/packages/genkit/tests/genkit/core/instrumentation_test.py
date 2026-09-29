@@ -11,7 +11,6 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import pytest
 
-from genkit import ActionKind
 from genkit._core._action import Action
 from genkit._core._telemetry._instrumentation import (
     SpanContext,
@@ -23,6 +22,7 @@ from genkit._core._telemetry._instrumentation import (
     set_custom_metadata_attributes,
     set_span_state,
 )
+from genkit.plugin_api import ActionKind
 from genkit.telemetry import FlushableInstrumentation, configure_instrumentation
 
 
