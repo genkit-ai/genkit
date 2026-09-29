@@ -277,10 +277,14 @@ func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
 			"tool", params.Tool.Name(), "error", err)
 		// The error text carries path components from disk, so it is folded
 		// like any other on-disk string before the model reads it.
-		return &ai.MultipartToolResponse{
-			Output: fmt.Sprintf("Tool %q failed: %s. %s",
-				params.Tool.Name(), catalogText(err.Error()), available),
-		}, nil
+		msg := fmt.Sprintf("Tool %q failed: %s.", params.Tool.Name(), catalogText(err.Error()))
+		// The skill list helps a model that could not name a skill to load.
+		// A failed file read already named a valid skill, so the list would
+		// only be noise.
+		if params.Tool.Name() == s.toolName(SkillToolName) {
+			msg += " " + available
+		}
+		return &ai.MultipartToolResponse{Output: msg}, nil
 	}
 
 	return &ai.Hooks{
@@ -482,7 +486,7 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 		"Read a file bundled inside a skill directory, such as a reference document or a script.",
 		func(_ *ai.ToolContext, in readSkillFileInput) (string, error) {
 			// An unknown name is an answer, not a failure, the same as for
-			// use_skill: as an error, WrapTool would repeat the skill list.
+			// use_skill, and it is the one failure the skill list helps with.
 			si, ok := lookupSkill(info, in.SkillName)
 			if !ok {
 				return unknownSkillMessage(in.SkillName, available), nil
