@@ -288,13 +288,21 @@ class TestKnownIdLiterals:
 
 
 class TestNoImagenSurface:
-    """Imagen ids have no constructor, no export, and no module."""
+    """Imagen has no export or module, and imagen_model only raises."""
 
     def test_no_imagen_exports(self) -> None:
-        """Neither the package nor the plugin classes expose an Imagen name."""
+        """The package exposes no Imagen name."""
         assert not {name for name in genkit_google_genai.__all__ if 'Imagen' in name}
-        assert not hasattr(GoogleAI, 'imagen_model')
-        assert not hasattr(VertexAI, 'imagen_model')
+
+    @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
+    def test_imagen_model_raises_with_the_image_hint(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """imagen_model raises INVALID_ARGUMENT pointing at gemini_image_model."""
+        cls = plugin.__name__
+        with pytest.raises(
+            GenkitError, match=rf'{cls}\.imagen_model: .* use {cls}\.gemini_image_model\(\)'
+        ) as exc_info:
+            plugin.imagen_model('imagen-4.0-generate-001')
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
 
     def test_no_imagen_module(self) -> None:
         """The Imagen model module is gone."""

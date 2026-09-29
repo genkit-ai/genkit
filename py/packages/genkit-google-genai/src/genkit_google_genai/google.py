@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
 from google import genai
 from google.auth import default as google_auth_default
@@ -61,7 +61,7 @@ from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai.constants as const
-from genkit import ActionRunContext, ModelResponse, Operation
+from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import (
@@ -449,6 +449,17 @@ class GoogleFamilyRefs:
             method='gemma_model',
             config_schema=GemmaConfigSchema,
             config=config,
+        )
+
+    @classmethod
+    def imagen_model(cls, name: str, *, config: object | None = None) -> NoReturn:
+        """Always raises: Imagen is no longer supported. Use ``gemini_image_model``."""
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{cls.__name__}.imagen_model: Imagen is no longer supported; '
+                f'for image generation use {cls.__name__}.gemini_image_model().'
+            ),
         )
 
     @classmethod
