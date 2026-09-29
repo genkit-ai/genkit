@@ -62,7 +62,7 @@
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
     "build:watch": "tsup-node --watch",
-    "test": "tsx --test ./tests/*_test.ts"
+    "test": "tsx --test --test-force-exit ./tests/*_test.ts"
   },
   "peerDependencies": {
     "@ai-sdk/react": "^3.0.0",
