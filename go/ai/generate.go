@@ -1593,9 +1593,9 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 }
 
 // toolStreamer lets the tools of one round, which run concurrently, stream
-// through cb with [github.com/firebase/genkit/go/ai/tool.SendPartial] (wrapped
-// partial responses) and [github.com/firebase/genkit/go/ai/tool.SendChunk]
-// (raw model response chunks). cb, the wrapped stream callback, mutates
+// through cb with [github.com/firebase/genkit/go/ai/tool.SendChunk] (model
+// response chunks) and the experimental ai/exp/tool.SendPartial (wrapped
+// partial responses). cb, the wrapped stream callback, mutates
 // shared role and index state and writes the single stream sink, neither of
 // which is safe for concurrent use, so every tool-originated send is
 // serialized under one mutex. Streaming is best effort, so a sink error is
