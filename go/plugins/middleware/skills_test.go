@@ -728,6 +728,25 @@ func TestSkillsFollowsSymlinkedSkillDirectory(t *testing.T) {
 	}
 }
 
+// The activation shows the skill directory the way SkillPaths names it, so a
+// relative entry keeps host paths out of prompts and traces, and the text is
+// the same on every machine.
+func TestSkillsActivationShowsConfiguredPath(t *testing.T) {
+	tmp := t.TempDir()
+	writeSkill(t, filepath.Join(tmp, "skills"), "python", "---\nname: python\ndescription: d\n---\nbody")
+	t.Chdir(tmp)
+
+	out := callSkillTool(t, &Skills{SkillPaths: []string{"skills"}}, "shown", SkillToolName,
+		map[string]any{"skillName": "python"})
+	want := filepath.Join("skills", "python")
+	if !strings.Contains(out, `path="`+want+`"`) {
+		t.Errorf("activation = %q, want path %q", out, want)
+	}
+	if strings.Contains(out, tmp) {
+		t.Errorf("activation leaks the absolute path %q: %q", tmp, out)
+	}
+}
+
 // Loading the same skill twice wastes context. The second call gets a stub.
 func TestSkillsRepeatActivationReturnsStub(t *testing.T) {
 	h := mustHooks(t, &Skills{SkillPaths: []string{setupSkillsDir(t)}})

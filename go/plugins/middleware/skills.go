@@ -153,7 +153,9 @@ type Skills struct {
 	// is one level deep. A symbolic link to a skill directory is followed, as
 	// skill installers commonly create them, but a SKILL.md that is itself a
 	// symbolic link is not. Relative paths resolve against the process working
-	// directory.
+	// directory, and a skill's directory is shown to the model the way its
+	// entry here names it, so a relative entry keeps host paths out of the
+	// conversation.
 	//
 	// When two paths hold a skill of the same name the later path wins, and
 	// the shadowing is logged.
@@ -195,11 +197,13 @@ type Skills struct {
 }
 
 // skillInfo records a discovered skill. Name is the directory name, which is
-// both what the catalog advertises and what the tools accept. Dir is the root
-// that bundled-file references resolve against.
+// both what the catalog advertises and what the tools accept. Dir is the
+// absolute root that bundled-file reads resolve against. ShownDir is the same
+// directory as the SkillPaths entry names it, which is what the model sees.
 type skillInfo struct {
 	Name        string
 	Dir         string
+	ShownDir    string
 	Path        string
 	Description string
 
@@ -659,6 +663,7 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 			if !ok {
 				continue
 			}
+			si.ShownDir = filepath.Join(p, entry.Name())
 			if prev, dup := result[si.Name]; dup {
 				// An installer that links one copy of a skill into several
 				// agents' directories makes the same skill appear twice.
@@ -1050,12 +1055,12 @@ func wrapSkillContent(si skillInfo, body, resources string) string {
 	// attribute, so it takes the same escaper as every other line the model
 	// reads as text.
 	var b strings.Builder
-	fmt.Fprintf(&b, "<skill_content name=\"%s\" path=\"%s\">\n", attrText(si.Name), attrText(si.Dir))
+	fmt.Fprintf(&b, "<skill_content name=\"%s\" path=\"%s\">\n", attrText(si.Name), attrText(si.ShownDir))
 	b.WriteString(body)
 	if !strings.HasSuffix(body, "\n") {
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "\nRelative paths in this skill resolve against %s\n", catalogText(si.Dir))
+	fmt.Fprintf(&b, "\nRelative paths in this skill resolve against %s\n", catalogText(si.ShownDir))
 	b.WriteString(resources)
 	b.WriteString("</skill_content>")
 	return b.String()
