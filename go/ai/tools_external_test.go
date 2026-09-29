@@ -154,13 +154,40 @@ func TestMultipartTool_AttachParts(t *testing.T) {
 	}
 }
 
-// TestTool_SendPartialNoOpWithoutStreaming confirms SendPartial is a safe no-op
+// progressChunk is the chunk a test tool streams: one line of text, marked
+// as the tool's.
+func progressChunk(text string) *ai.ModelResponseChunk {
+	return &ai.ModelResponseChunk{Role: ai.RoleTool, Content: []*ai.Part{ai.NewTextPart(text)}}
+}
+
+// toolTexts returns the text of every tool-role chunk on the stream of a
+// generation with opts, failing the test on a stream error.
+func toolTexts(t *testing.T, reg *registry.Registry, opts ...ai.GenerateOption) []string {
+	t.Helper()
+	var texts []string
+	for val, err := range ai.GenerateStream(context.Background(), reg, opts...) {
+		if err != nil {
+			t.Fatalf("GenerateStream: %v", err)
+		}
+		if val.Done || val.Chunk.Role != ai.RoleTool {
+			continue
+		}
+		for _, p := range val.Chunk.Content {
+			if p.IsText() {
+				texts = append(texts, p.Text)
+			}
+		}
+	}
+	return texts
+}
+
+// TestTool_SendChunkNoOpWithoutStreaming confirms SendChunk is a safe no-op
 // when no streaming callback is wired (here, a direct RunRaw).
-func TestTool_SendPartialNoOpWithoutStreaming(t *testing.T) {
+func TestTool_SendChunkNoOpWithoutStreaming(t *testing.T) {
 	reg := newToolTestRegistry(t)
 	tl := defineTestTool(reg, "noop", "streams when it can",
 		func(ctx context.Context, _ struct{}) (string, error) {
-			tool.SendPartial(ctx, map[string]any{"progress": 50})
+			tool.SendChunk(ctx, progressChunk("halfway"))
 			return "ok", nil
 		})
 
@@ -324,49 +351,30 @@ func TestInterrupt_NonObjectData_ReturnsClearError(t *testing.T) {
 	}
 }
 
-// TestSendPartial_StreamsPartialToolResponse asserts a tool's SendPartial calls
-// arrive on the stream as partial tool responses, distinguishable via
-// IsPartial / ToolResponses.
-func TestSendPartial_StreamsPartialToolResponse(t *testing.T) {
+// TestSendChunk_StreamsFromATool asserts a tool's SendChunk calls arrive on
+// the stream as the chunks the tool built.
+func TestSendChunk_StreamsFromATool(t *testing.T) {
 	reg := newToolTestRegistry(t)
 	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "progressTool", Input: map[string]any{}}))
-
 	defineTestTool(reg, "progressTool", "streams progress",
 		func(ctx context.Context, _ struct{}) (string, error) {
-			tool.SendPartial(ctx, map[string]any{"progress": 50})
+			tool.SendChunk(ctx, progressChunk("halfway"))
 			return "complete", nil
 		})
 
-	var partials []*ai.Part
-	for val, err := range ai.GenerateStream(context.Background(), reg,
+	got := toolTexts(t, reg,
 		ai.WithModelName("test/model"),
 		ai.WithPrompt("go"),
-		ai.WithTools(ai.ToolName("progressTool"))) {
-		if err != nil {
-			t.Fatalf("GenerateStream: %v", err)
-		}
-		if val.Done {
-			continue
-		}
-		for _, p := range val.Chunk.ToolResponses() {
-			if p.IsPartial() {
-				partials = append(partials, p)
-			}
-		}
-	}
-
-	if len(partials) == 0 {
-		t.Fatal("expected at least one partial tool response on the stream")
-	}
-	if partials[0].ToolResponse.Name != "progressTool" {
-		t.Errorf("partial tool name = %q, want %q", partials[0].ToolResponse.Name, "progressTool")
+		ai.WithTools(ai.ToolName("progressTool")))
+	if diff := cmp.Diff([]string{"halfway"}, got); diff != "" {
+		t.Errorf("tool chunks mismatch (-want +got):\n%s", diff)
 	}
 }
 
-// TestSendPartial_StreamsFromARestartedTool pins that a restarted tool
-// streams as a tool of a model turn does: its SendPartial calls arrive on the
-// resumed generation's stream, tagged with the request they belong to.
-func TestSendPartial_StreamsFromARestartedTool(t *testing.T) {
+// TestSendChunk_StreamsFromARestartedTool pins that a restarted tool streams
+// as a tool of a model turn does: its SendChunk calls arrive on the resumed
+// generation's stream.
+func TestSendChunk_StreamsFromARestartedTool(t *testing.T) {
 	reg := newToolTestRegistry(t)
 	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "progressTool", Ref: "r1", Input: map[string]any{}}))
 	progress := defineTestTool(reg, "progressTool", "streams progress after approval",
@@ -374,7 +382,7 @@ func TestSendPartial_StreamsFromARestartedTool(t *testing.T) {
 			if _, ok := tool.ResumeData[confirmation](ctx); !ok {
 				return "", tool.Interrupt(ctx, nil)
 			}
-			tool.SendPartial(ctx, map[string]any{"progress": 50})
+			tool.SendChunk(ctx, progressChunk("halfway"))
 			return "complete", nil
 		})
 
@@ -383,37 +391,19 @@ func TestSendPartial_StreamsFromARestartedTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	restart := approve(t, progress, singleInterrupt(t, resp))
-
-	var partials []*ai.Part
-	for val, err := range ai.GenerateStream(context.Background(), reg,
+	got := toolTexts(t, reg,
 		ai.WithModelName("test/model"),
 		ai.WithMessages(resp.History()...),
 		ai.WithTools(progress),
-		ai.WithToolRestarts(restart)) {
-		if err != nil {
-			t.Fatalf("GenerateStream: %v", err)
-		}
-		if val.Done {
-			continue
-		}
-		for _, p := range val.Chunk.ToolResponses() {
-			if p.IsPartial() {
-				partials = append(partials, p)
-			}
-		}
-	}
-	if len(partials) != 1 {
-		t.Fatalf("got %d partial tool responses on the stream, want 1", len(partials))
-	}
-	if got := partials[0].ToolResponse; got.Name != "progressTool" || got.Ref != "r1" {
-		t.Errorf("partial = %s#%s, want progressTool#r1", got.Name, got.Ref)
+		ai.WithToolRestarts(approve(t, progress, singleInterrupt(t, resp))))
+	if diff := cmp.Diff([]string{"halfway"}, got); diff != "" {
+		t.Errorf("tool chunks on the resumed stream mismatch (-want +got):\n%s", diff)
 	}
 }
 
 // TestConcurrentStreamingTools_NoDataRace is the regression for the streaming
 // race: when a model emits multiple tool calls in one turn and more than one
-// streams via SendPartial, the per-tool senders run on concurrent goroutines.
+// streams via SendChunk, the per-tool senders run on concurrent goroutines.
 // They must be serialized so they don't race on the shared stream callback.
 // Run under `go test -race` to detect a regression.
 func TestConcurrentStreamingTools_NoDataRace(t *testing.T) {
@@ -422,7 +412,7 @@ func TestConcurrentStreamingTools_NoDataRace(t *testing.T) {
 		ai.NewToolRequestPart(&ai.ToolRequest{Name: "toolA", Input: map[string]any{}}),
 		ai.NewToolRequestPart(&ai.ToolRequest{Name: "toolB", Input: map[string]any{}}))
 
-	// A rendezvous so both tools enter their SendPartial loops at the same
+	// A rendezvous so both tools enter their SendChunk loops at the same
 	// time, maximizing the chance of overlapping callback invocations.
 	var ready sync.WaitGroup
 	ready.Add(2)
@@ -433,7 +423,7 @@ func TestConcurrentStreamingTools_NoDataRace(t *testing.T) {
 		ready.Done()
 		<-start
 		for i := 0; i < 200; i++ {
-			tool.SendPartial(ctx, map[string]any{"n": i})
+			tool.SendChunk(ctx, progressChunk(fmt.Sprint(i)))
 		}
 		return "ok", nil
 	}

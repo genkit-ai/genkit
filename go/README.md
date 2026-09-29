@@ -711,13 +711,16 @@ fmt.Println(response.Text())
 
 A tool error fails the whole generation rather than being reported to the model, so a miss the model could work around (no such city, no rows matched) belongs in the result rather than in an `error`.
 
-The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the model and the client both, and must be media or data parts. `tool.SendPartial` streams progress to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative), and `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool built itself, for when the update is a line of prose. `*ai.ToolContext` embeds the context they take:
+The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the model and the client both, and must be media or data parts. `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool builds itself, such as progress, to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative). `*ai.ToolContext` embeds the context they take:
 
 ```go
 analyzeTool := genkit.DefineTool(g, "analyzeStock",
     "Analyzes a stock and returns a summary with a chart.",
     func(ctx *ai.ToolContext, input AnalyzeInput) (string, error) {
-        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
+        tool.SendChunk(ctx, &ai.ModelResponseChunk{
+            Role:    ai.RoleTool,
+            Content: []*ai.Part{ai.NewTextPart("fetching prices")},
+        })
 
         tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
         return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil

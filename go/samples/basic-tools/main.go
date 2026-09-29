@@ -20,15 +20,13 @@
 //   - tool.AttachParts attaches the chart, so the tool returns a plain *Rollout
 //     instead of an *[ai.MultipartToolResponse]. The signature stops having to
 //     announce that the tool sometimes has more to say.
-//   - tool.SendPartial streams structured progress while the rollout runs, so a
-//     slow tool does not look like a hang.
-//   - tool.SendChunk streams a chunk the tool builds itself, for an update that
-//     is a line of prose rather than a value.
+//   - tool.SendChunk streams progress while the rollout runs, so a slow tool
+//     does not look like a hang.
 //
-// The two streaming helpers are best-effort: with a caller that is not
-// streaming they are no-ops, so the tool still works when nobody is listening,
-// and the returned *Rollout is always the authoritative answer. Neither is
-// written to history, since progress is for showing, not for the model to read.
+// Streaming is best-effort: with a caller that is not streaming, SendChunk is a
+// no-op, so the tool still works when nobody is listening, and the returned
+// *Rollout is always the authoritative answer. Streamed chunks are not written
+// to history, since progress is for showing, not for the model to read.
 //
 // Run it:
 //
@@ -90,13 +88,6 @@ type (
 		P95Ms    float64 `json:"p95Ms" jsonschema_description:"The p95 latency after the rollout, in milliseconds"`
 	}
 
-	// Progress is what tool.SendPartial sends. It is the tool's own shape, not
-	// one the API dictates: any value that survives JSON works.
-	Progress struct {
-		Step    string `json:"step"`
-		Percent int    `json:"percent"`
-	}
-
 	// DeployRequest is what the flow takes.
 	DeployRequest struct {
 		Request string `json:"request" jsonschema:"default=Ship checkout-api to production." jsonschema_description:"What to deploy and where"`
@@ -149,23 +140,14 @@ func main() {
 			for i, stage := range rolloutStages {
 				// Sent before the work, so the client sees the step it is
 				// waiting on rather than the one already done.
-				tool.SendPartial(ctx, Progress{
-					Step:    stage.Name,
-					Percent: (i + 1) * 100 / len(rolloutStages),
-				})
+				sendProgress(ctx, fmt.Sprintf("[%3d%%] %s", (i+1)*100/len(rolloutStages), stage.Name))
 				time.Sleep(stageDuration)
 				latencies = append(latencies, stage.P95)
 			}
 
 			revision := fmt.Sprintf("%s-00042", input.Service)
 
-			// An update with no structure worth giving it. RoleTool marks the
-			// chunk as the tool's, which is how the flow below tells it from
-			// the model's own text.
-			tool.SendChunk(ctx, &ai.ModelResponseChunk{
-				Role:    ai.RoleTool,
-				Content: []*ai.Part{ai.NewTextPart(fmt.Sprintf("%s is live in %s", revision, input.Environment))},
-			})
+			sendProgress(ctx, fmt.Sprintf("%s is live in %s", revision, input.Environment))
 
 			// The model receives this as a picture, so it can describe the
 			// shape of the rollout rather than only its last number.
@@ -194,20 +176,13 @@ func main() {
 					return val.Response.Text(), nil
 				}
 				// A tool call is several turns, so the stream carries the
-				// tool's traffic as well as the model's. The tool's own text
-				// carries RoleTool like every other part of its message, so
-				// the role is what separates the two text cases below.
+				// tool's traffic as well as the model's. The tool's progress
+				// carries RoleTool, which is what separates it from the
+				// model's own text.
 				for _, part := range val.Chunk.Content {
 					switch {
-					case part.IsPartial():
-						// From tool.SendPartial. In process the value arrives
-						// as the one the tool sent; a client reading the HTTP
-						// stream gets its JSON instead.
-						if p, ok := part.ToolResponse.Output.(Progress); ok {
-							sendChunk(ctx, fmt.Sprintf("[%3d%%] %s", p.Percent, p.Step))
-						}
 					case part.IsText() && val.Chunk.Role == ai.RoleTool:
-						sendChunk(ctx, "deploy: "+part.Text) // From tool.SendChunk.
+						sendChunk(ctx, "deploy: "+part.Text) // From sendProgress.
 					case part.IsText():
 						sendChunk(ctx, part.Text) // The model writing its report.
 					}
@@ -222,6 +197,16 @@ func main() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+}
+
+// sendProgress streams one line of progress from inside the tool. RoleTool
+// marks the chunk as the tool's, which is how deployFlow tells it from the
+// model's own text.
+func sendProgress(ctx context.Context, line string) {
+	tool.SendChunk(ctx, &ai.ModelResponseChunk{
+		Role:    ai.RoleTool,
+		Content: []*ai.Part{ai.NewTextPart(line)},
+	})
 }
 
 // barChartPNG draws the values as a bar chart and returns it as a data: URI.

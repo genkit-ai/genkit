@@ -15,8 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package tool provides the runtime verbs called from inside a running tool
-// function or WrapTool hook: [Interrupt], [AttachParts], [SendPartial],
-// [SendChunk], [ResumeData], and [OriginalInput]. They take a
+// function or WrapTool hook: [Interrupt], [AttachParts], [SendChunk],
+// [ResumeData], and [OriginalInput]. They take a
 // [context.Context], so they work in every tool: [ai.ToolContext] embeds the
 // context they take.
 //
@@ -69,28 +69,10 @@ func Interrupt(ctx context.Context, data any) error {
 	return ie
 }
 
-// SendPartial streams a partial tool response during tool execution.
-// The output is arbitrary structured data (e.g., progress information)
-// that will be delivered to the client as a partial [ai.ToolResponse].
-//
-// This is best-effort: if no streaming callback is available (e.g., the
-// tool is called via a non-streaming Generate), the call is a no-op.
-// The tool's final return value is always the authoritative response.
-//
-// Example:
-//
-//	tool.SendPartial(ctx, map[string]any{"step": "uploading", "progress": 50})
-func SendPartial(ctx context.Context, output any) {
-	send := base.ToolPartialSenderKey.FromContext(ctx)
-	if send == nil {
-		return
-	}
-	send(ctx, output)
-}
-
-// SendChunk streams a raw [ai.ModelResponseChunk] during tool execution.
-// Unlike [SendPartial], which wraps arbitrary data in a partial tool response,
-// SendChunk gives the tool full control over the chunk contents.
+// SendChunk streams an [ai.ModelResponseChunk] during tool execution, e.g.
+// progress for a slow tool. The tool builds the chunk itself and has full
+// control over its contents; set its Role to [ai.RoleTool] so the client can
+// tell it from the model's own output.
 //
 // This is best-effort: if no streaming callback is available (e.g., the
 // tool is called via a non-streaming Generate), the call is a no-op.

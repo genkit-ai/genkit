@@ -346,7 +346,7 @@ func requireAnyTypeParam[T any](ctor, name, requirement string) {
 // instead of inferring them from the type parameters. Inside the function,
 // [github.com/firebase/genkit/go/ai/tool.AttachParts] adds content parts (e.g.
 // media) to the response and
-// [github.com/firebase/genkit/go/ai/tool.SendPartial] streams progress, neither
+// [github.com/firebase/genkit/go/ai/tool.SendChunk] streams progress, neither
 // of which changes the signature.
 func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolAction[In, Out] {
 	toolOpts := &toolOptions{}

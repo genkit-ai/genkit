@@ -153,19 +153,6 @@ func TestResumeData_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestSendPartial_InvokesSenderWhenPresent(t *testing.T) {
-	var got any
-	ctx := base.ToolPartialSenderKey.NewContext(context.Background(),
-		func(_ context.Context, output any) { got = output })
-	SendPartial(ctx, map[string]any{"progress": 50})
-	m, ok := got.(map[string]any)
-	if !ok || m["progress"] != 50 {
-		t.Errorf("sender received %v, want {progress:50}", got)
-	}
-	// No sender wired: no-op, no panic.
-	SendPartial(context.Background(), "ignored")
-}
-
 func TestSendChunk_InvokesSenderWhenPresent(t *testing.T) {
 	var got *ai.ModelResponseChunk
 	ctx := base.ToolChunkSenderKey.NewContext(context.Background(),
