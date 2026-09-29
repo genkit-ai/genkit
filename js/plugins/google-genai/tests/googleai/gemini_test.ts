@@ -786,6 +786,73 @@ describe('Google AI Gemini', () => {
           apiRequest.previous_interaction_id,
           'interaction-123'
         );
+        assert.strictEqual(apiRequest.store, true);
+      });
+
+      it('throws when store is false but previousInteractionId is set (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            previousInteractionId: 'interaction-123',
+            store: false,
+          },
+        };
+        await assert.rejects(
+          () => model.run(request),
+          (err: any) => {
+            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+            assert.ok(
+              err.message.includes(
+                'store must be true when previousInteractionId is set'
+              )
+            );
+            return true;
+          }
+        );
+      });
+
+      it('defaults store to false for Interactions API unless explicitly set', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.store, false);
+      });
+
+      it('passes store true when explicitly opted in (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            store: true,
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.store, true);
+      });
+
+      it('respects store from pluginOptions when set (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', {
+          ...defaultPluginOptions,
+          store: true,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.store, true);
       });
 
       it('passes imageConfig to the API', async () => {

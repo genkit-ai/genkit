@@ -183,6 +183,42 @@ ai.defineFlow(
   }
 );
 
+// Demonstrates server-side conversation state continuity via previousInteractionId
+ai.defineFlow('multi-turn-previous-interaction', async () => {
+  // Turn 1: Explicitly opt in to store: true
+  const turn1 = await ai.generate({
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'My secret code is BLUE-BANANA-42. Remember this secret code.',
+    config: {
+      store: true, // This is required if you want an interactionId
+    },
+  });
+
+  const interactionId = turn1.message?.metadata?.interactionId;
+  if (!interactionId) {
+    throw new Error(
+      'Turn 1 did not return an interaction ID in message.metadata'
+    );
+  }
+
+  // Turn 2: Reference previousInteractionId from Turn 1 (continuing the stored conversation)
+  const turn2 = await ai.generate({
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'What was my secret code?',
+    config: {
+      previousInteractionId: interactionId,
+      // store: true, // You can set it to true or omit it, but false gives errors.
+    },
+  });
+
+  return {
+    turn1InteractionId: interactionId,
+    turn1Answer: turn1.text,
+    turn2Answer: turn2.text,
+    turn2InteractionId: turn2.message?.metadata?.interactionId,
+  };
+});
+
 ai.defineFlow('maps-grounding', async () => {
   const { text, raw } = await ai.generate({
     model: googleAI.model('gemini-3.1-pro-preview'),

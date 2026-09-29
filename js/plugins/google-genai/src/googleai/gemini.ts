@@ -294,6 +294,12 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .string()
     .describe('The ID of the previous interaction, if any.')
     .optional(),
+  store: z
+    .boolean()
+    .describe(
+      'Whether to store the interaction for later retrieval. Defaults to false.'
+    )
+    .optional(),
   thinkingConfig: z
     .object({
       includeThoughts: z
@@ -860,6 +866,7 @@ export function defineModel(
         retrievalConfig,
         serviceTier,
         previousInteractionId: previousInteractionIdFromConfig,
+        store: storeFromConfig,
         responseModalities: responseModalitiesFromConfig,
         ...restOfConfigOptions
       } = requestOptions;
@@ -1063,10 +1070,21 @@ export function defineModel(
       );
 
       if (useInteractions) {
+        if (storeFromConfig === false && previousInteractionIdFromConfig) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: 'store must be true when previousInteractionId is set.',
+          });
+        }
+
+        const store =
+          storeFromConfig ??
+          pluginOptions?.store ??
+          Boolean(previousInteractionIdFromConfig);
         let previousInteractionId = previousInteractionIdFromConfig;
         let newMessages = messages;
 
-        if (!previousInteractionId) {
+        if (!previousInteractionId && store) {
           for (let i = messages.length - 1; i >= 0; i--) {
             const prevId = messages[i]?.metadata?.interactionId;
             if (
@@ -1089,6 +1107,7 @@ export function defineModel(
           stream: streamingRequested,
           input: toInteractionSteps(newMessages),
           service_tier: serviceTier,
+          store,
         };
 
         if (jsonMode) {
