@@ -1733,6 +1733,39 @@ describe('agents middleware (async)', () => {
     gate.release();
   });
 
+  it('stops a synchronous sub-agent when the delegation tool call is cancelled', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    let aborted = false;
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      onAbort: () => {
+        aborted = true;
+      },
+    });
+
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const delegate = def.tools!.find(
+      (t) => t.__action.name === 'delegate_to_researcher'
+    )!;
+    const controller = new AbortController();
+    const delegating = delegate(
+      { task: 'dig' },
+      { abortSignal: controller.signal }
+    );
+    setTimeout(() => controller.abort(), 20);
+    // A sub-agent that never sees the stop finishes once the gate opens, so a
+    // regression fails the assertion rather than hanging the test.
+    const fallback = setTimeout(gate.release, 500);
+    await delegating;
+    clearTimeout(fallback);
+    assert.ok(aborted, 'the sub-agent turn must observe the stop');
+    gate.release();
+  });
+
   it('says when an abort cannot reach the worker', async () => {
     const ai = genkit({});
     const gate = makeGate();

@@ -864,11 +864,18 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        * `detach` asks the sub-agent runtime to move the work to the background
        * at once, so the output carries the pending snapshot's ID and
        * `finishReason: 'detached'` while the sub-agent keeps working.
+       * `abortSignal` is the delegation tool call's: a stopped orchestrator
+       * stops a synchronous sub-agent with it, and the runtime ignores it once
+       * a detach is requested, so a background task outlives the call.
        */
       async function runSubAgent(
         agent: Agent,
         task: string,
-        opts: { history?: MessageData[]; detach?: boolean } = {}
+        opts: {
+          history?: MessageData[];
+          detach?: boolean;
+          abortSignal?: AbortSignal;
+        } = {}
       ): Promise<AgentOutput> {
         const init = opts.history?.length
           ? { state: { messages: opts.history } }
@@ -878,7 +885,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             message: { role: 'user' as const, content: [{ text: task }] },
             ...(opts.detach && { detach: true }),
           },
-          { init }
+          { init, abortSignal: opts.abortSignal }
         );
         return result;
       }
@@ -886,7 +893,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       /** The synchronous delegation body. */
       async function runDelegation(
         ref: NormalizedAgentRef,
-        task: string
+        task: string,
+        abortSignal?: AbortSignal
       ): Promise<DelegationResult> {
         const begun = await beginDelegation(ref);
         if ('refusal' in begun) return begun.refusal;
@@ -903,7 +911,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             stateManagementOf(agent) !== 'server'
               ? recentTextHistory(shared.conversationMessages, historyLength)
               : [];
-          const out = await runSubAgent(agent, task, { history });
+          const out = await runSubAgent(agent, task, { history, abortSignal });
           return foldDelegationOutput(ref, out, makeInvocationId(ref.name));
         } catch (e: unknown) {
           // The agent runtime resolves failures and interrupts gracefully (see
@@ -928,7 +936,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        */
       async function launchDelegation(
         ref: NormalizedAgentRef,
-        task: string
+        task: string,
+        abortSignal?: AbortSignal
       ): Promise<DelegationResult> {
         const begun = await beginDelegation(ref);
         if ('refusal' in begun) return begun.refusal;
@@ -952,7 +961,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
 
         let out: AgentOutput;
         try {
-          out = await runSubAgent(agent, task, { detach: true });
+          out = await runSubAgent(agent, task, { detach: true, abortSignal });
         } catch (e: unknown) {
           // A thrown rejection (e.g. a schema parse error on `run`) carries
           // the same status a graceful one does, so it takes the failed shape
@@ -1496,10 +1505,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             inputSchema: async ? asyncDelegateInputSchema : delegateInputSchema,
             outputSchema: delegationResultSchema,
           },
-          (input: z.infer<typeof asyncDelegateInputSchema>) =>
+          (input: z.infer<typeof asyncDelegateInputSchema>, { abortSignal }) =>
             input.background
-              ? launchDelegation(ref, input.task)
-              : runDelegation(ref, input.task)
+              ? launchDelegation(ref, input.task, abortSignal)
+              : runDelegation(ref, input.task, abortSignal)
         );
       });
 
